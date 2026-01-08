@@ -326,9 +326,6 @@ def load_portfolio():
     return pd.read_csv(FILE_PORTOFOLIU)
 
 def add_trade(s, q, p, d):
-    # Transformăm automat simbolul în MAJUSCULE (ex: oxy -> OXY)
-    s = s.upper().strip() 
-    
     df = load_portfolio()
     new_row = pd.DataFrame({"Symbol": [s], "Date": [d], "Quantity": [q], "AvgPrice": [p]})
     df = pd.concat([df, new_row], ignore_index=True)
@@ -336,27 +333,9 @@ def add_trade(s, q, p, d):
 
 @st.cache_data(ttl=300)
 def get_portfolio_history_data(tickers):
-    if not tickers:
-        return pd.DataFrame()
-    
-    # Asigură-te că lista de tickere e unică și majuscule
-    unique_tickers = list(set([t.upper() for t in tickers]))
-    
-    print(f"Descarc date portofoliu pentru: {unique_tickers}") # Debug în consolă
-    
-    try:
-        # Descărcăm datele. auto_adjust=True ajută la corectitudinea prețului
-        data = yf.download(unique_tickers, period="5y", group_by='ticker', auto_adjust=True, threads=True)
-        
-        # Dacă descărcarea eșuează total
-        if data is None or data.empty:
-            print("!!! EROARE: yf.download a returnat date goale.")
-            return pd.DataFrame()
-            
-        return data
-    except Exception as e:
-        print(f"!!! CRASH la download portofoliu: {e}")
-        return pd.DataFrame()
+    if not tickers: return pd.DataFrame()
+    data = yf.download(tickers, period="5y", group_by='ticker')
+    return data
 
 def calculate_portfolio_performance(df, history_range="1A"):
     if df.empty: return pd.DataFrame(), pd.DataFrame(), 0, 0
@@ -766,4 +745,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
