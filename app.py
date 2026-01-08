@@ -159,10 +159,12 @@ def parse_date(entry):
 def format_num(val, is_pct=False):
     if val is None: return "N/A"
     if is_pct: return f"{val * 100:.2f}%"
-    if val >= 1e12: return f"{val/1e12:.2f} T"
-    if val >= 1e9: return f"{val/1e9:.2f} B"
-    if val >= 1e6: return f"{val/1e6:.2f} M"
-    return f"{val:,.2f}"
+    if isinstance(val, (int, float)):
+        if val >= 1e12: return f"{val/1e12:.2f} T"
+        if val >= 1e9: return f"{val/1e9:.2f} B"
+        if val >= 1e6: return f"{val/1e6:.2f} M"
+        return f"{val:,.2f}"
+    return "N/A"
 
 def get_sentiment(text):
     blob = TextBlob(text)
@@ -231,8 +233,10 @@ def get_market_data():
 def calculate_alpha(stock_hist, beta):
     try:
         spy = get_market_data()
-        if spy is None or stock_hist is None: return None
+        if spy is None or stock_hist is None or stock_hist.empty: return None
         stock_close = stock_hist['Close'].iloc[-len(spy):]
+        if stock_close.empty: return None
+        
         ret_stock = (stock_close.iloc[-1] / stock_close.iloc[0]) - 1
         ret_market = (spy.iloc[-1] / spy.iloc[0]) - 1
         risk_free = 0.04
@@ -243,7 +247,7 @@ def calculate_alpha(stock_hist, beta):
 
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
-    # Inițializăm variabilele goale
+    # Funcție robustă de descărcare date
     hist = None
     info = {}
     earnings = None
@@ -251,16 +255,16 @@ def get_stock_data(symbol):
     try:
         t = yf.Ticker(symbol)
         
-        # 1. Încercăm să luăm ISTORICUL (Graficul) - Asta e prioritatea
+        # 1. Încercăm să luăm ISTORICUL (Graficul)
         try:
             hist = t.history(period="5y")
         except:
-            hist = pd.DataFrame() # Dacă eșuează, facem un tabel gol
+            hist = pd.DataFrame()
             
-        # Fallback: Dacă history e gol, încercăm metoda 'download' care uneori fentează blocajul
+        # Fallback: Dacă history e gol, încercăm metoda 'download'
         if hist is None or hist.empty:
             try:
-                hist = yf.download(symbol, period="5y", progress=False)
+                hist = yf.download(symbol, period="5y", progress=False, threads=False)
             except: 
                 pass
 
@@ -273,22 +277,19 @@ def get_stock_data(symbol):
                 if not hist_ro.empty:
                     hist = hist_ro
                     symbol = sym_ro
-                    t = t_ro # Comutăm obiectul Ticker pe cel de RO
+                    t = t_ro # Comutăm obiectul Ticker
             except: 
                 pass
 
-        # Dacă nici acum nu avem grafic, înseamnă că simbolul e chiar greșit
+        # Dacă nici acum nu avem grafic, returnăm eroare
         if hist is None or hist.empty:
             return None, {}, None, symbol
 
         # 3. Încercăm să luăm DATELE FUNDAMENTALE (Info)
-        # Aici apare des eroarea pe Cloud. O izolăm ca să nu crape tot.
         try:
             info = t.info
-            # Uneori info e None, așa că ne asigurăm că e dict
             if info is None: info = {}
         except Exception:
-            # Dacă Yahoo blochează info, continuăm fără el (graficul va merge)
             info = {} 
 
         # 4. Earnings
@@ -300,11 +301,12 @@ def get_stock_data(symbol):
         return hist, info, earnings, symbol
 
     except Exception as e:
-        print(f"Eroare majoră: {e}")
+        print(f"Eroare majoră download {symbol}: {e}")
         return None, {}, None, symbol
 
 def calculate_technical_indicators(df):
     if df is None or df.empty: return df
+    df = df.copy() # Evităm warning-uri
     df['SMA20'] = df['Close'].rolling(20).mean()
     df['SMA50'] = df['Close'].rolling(50).mean()
     df['SMA200'] = df['Close'].rolling(200).mean()
@@ -326,6 +328,8 @@ def load_portfolio():
     return pd.read_csv(FILE_PORTOFOLIU)
 
 def add_trade(s, q, p, d):
+    # Curățăm simbolul (majuscule, fără spații)
+    s = str(s).upper().strip()
     df = load_portfolio()
     new_row = pd.DataFrame({"Symbol": [s], "Date": [d], "Quantity": [q], "AvgPrice": [p]})
     df = pd.concat([df, new_row], ignore_index=True)
@@ -333,9 +337,28 @@ def add_trade(s, q, p, d):
 
 @st.cache_data(ttl=300)
 def get_portfolio_history_data(tickers):
-    if not tickers: return pd.DataFrame()
-    data = yf.download(tickers, period="5y", group_by='ticker')
-    return data
+    if not tickers:
+        return pd.DataFrame()
+    
+    # Asigurăm unicitatea și majusculele
+    unique_tickers = list(set([str(t).upper().strip() for t in tickers]))
+    
+    try:
+        # Descărcare robustă
+        data = yf.download(unique_tickers, period="5y", group_by='ticker', auto_adjust=True, threads=True)
+        
+        if data is None or data.empty:
+            return pd.DataFrame()
+            
+        # Dacă e un singur ticker, formatul e diferit și trebuie ajustat pentru consistență
+        if len(unique_tickers) == 1:
+            # Reconstruim MultiIndex-ul ca să fie compatibil cu logica de mai jos
+            data.columns = pd.MultiIndex.from_product([unique_tickers, data.columns])
+            
+        return data
+    except Exception as e:
+        print(f"Eroare download portofoliu: {e}")
+        return pd.DataFrame()
 
 def calculate_portfolio_performance(df, history_range="1A"):
     if df.empty: return pd.DataFrame(), pd.DataFrame(), 0, 0
@@ -343,25 +366,35 @@ def calculate_portfolio_performance(df, history_range="1A"):
     tickers = df['Symbol'].unique().tolist()
     hist_data = get_portfolio_history_data(tickers)
     
+    if hist_data.empty:
+        return pd.DataFrame(), pd.DataFrame(), 0, 0
+    
     current_vals = []
     total_daily_pl_abs = 0 
     
     for index, row in df.iterrows():
-        sym = row['Symbol']
+        sym = str(row['Symbol']).upper().strip()
         qty = row['Quantity']
         avg_p = row['AvgPrice']
         
+        curr_p = 0
+        prev_p = 0
+        
         try:
-            if len(tickers) == 1:
-                series = hist_data['Close']
-            else:
+            # Accesăm datele în funcție de structura DataFrame-ului
+            if sym in hist_data.columns.levels[0]:
                 series = hist_data[sym]['Close']
-            
-            curr_p = series.iloc[-1]
-            prev_p = series.iloc[-2]
-        except:
+                # Eliminăm valorile NaN
+                series = series.dropna()
+                if not series.empty:
+                    curr_p = series.iloc[-1]
+                    if len(series) > 1:
+                        prev_p = series.iloc[-2]
+                    else:
+                        prev_p = curr_p
+        except Exception as e:
+            print(f"Eroare procesare {sym}: {e}")
             curr_p = 0
-            prev_p = 0
             
         mkt_val = qty * curr_p
         inv_val = qty * avg_p
@@ -378,23 +411,21 @@ def calculate_portfolio_performance(df, history_range="1A"):
     
     df_result = pd.DataFrame(current_vals)
     
+    # Calcul curbă istorică
     portfolio_curve = None
     
     for index, row in df.iterrows():
-        sym = row['Symbol']
+        sym = str(row['Symbol']).upper().strip()
         qty = row['Quantity']
         try:
-            if len(tickers) == 1:
-                price_series = hist_data['Close']
-            else:
+            if sym in hist_data.columns.levels[0]:
                 price_series = hist_data[sym]['Close']
+                price_series = price_series.fillna(method='ffill').fillna(method='bfill')
                 
-            price_series = price_series.fillna(method='ffill').fillna(method='bfill')
-            
-            if portfolio_curve is None:
-                portfolio_curve = price_series * qty
-            else:
-                portfolio_curve = portfolio_curve.add(price_series * qty, fill_value=0)
+                if portfolio_curve is None:
+                    portfolio_curve = price_series * qty
+                else:
+                    portfolio_curve = portfolio_curve.add(price_series * qty, fill_value=0)
         except: pass
     
     if portfolio_curve is None:
@@ -402,10 +433,14 @@ def calculate_portfolio_performance(df, history_range="1A"):
 
     days_map = {"1Z": 2, "1S": 7, "1L": 30, "3L": 90, "6L": 180, "1A": 365, "3A": 1095, "5A": 1825}
     days = days_map.get(history_range, 365)
-    portfolio_curve = portfolio_curve.iloc[-days:]
     
-    total_val_now = portfolio_curve.iloc[-1] if not portfolio_curve.empty else 0
-    total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if total_val_now != 0 else 0
+    if not portfolio_curve.empty:
+        portfolio_curve = portfolio_curve.iloc[-days:]
+        total_val_now = portfolio_curve.iloc[-1]
+    else:
+        total_val_now = 0
+        
+    total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if (total_val_now - total_daily_pl_abs) != 0 else 0
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct
 
@@ -463,7 +498,7 @@ def main():
             hist, info, earn_df, real_sym = get_stock_data(sym)
             
         if hist is None or hist.empty:
-            st.error("Simbol invalid sau date indisponibile.")
+            st.error(f"Simbolul '{sym}' nu a returnat date (sau nu există).")
         else:
             st.markdown(f"## {info.get('longName', real_sym)}")
             c1, c2, c3 = st.columns(3)
@@ -481,6 +516,13 @@ def main():
             days_map = {"1 Lună": 30, "3 Luni": 90, "6 Luni": 180, "1 An": 365, "3 Ani": 1095, "5 Ani": 1825}
             subset = hist.iloc[-days_map[time_opt]:]
             
+            # Inițializare variabile defensive
+            curr_price = None
+            diff_val = 0
+            diff_pct = 0
+            day_val = 0
+            day_pct = 0
+
             if not subset.empty and len(hist) >= 2:
                 curr_price = subset['Close'].iloc[-1]
                 start_price = subset['Close'].iloc[0]
@@ -489,18 +531,16 @@ def main():
                 prev_close = hist['Close'].iloc[-2]
                 day_val = curr_price - prev_close
                 day_pct = (day_val / prev_close) * 100
-            else:
-                curr_price = 0; diff_val = 0; diff_pct = 0; day_val = 0; day_pct = 0
 
             with col_price_info:
                  m1, m2 = st.columns(2)
-                 # Verificare defensivă: dacă datele sunt invalide sau goale, afișăm N/A
-            if curr_price is not None and isinstance(curr_price, (int, float)):
-                 m1.metric(f"Interval ({time_opt})", f"{curr_price:.2f} {info.get('currency', '')}", f"{diff_val:.2f} ({diff_pct:.2f}%)")
-                 m2.metric("Evolutie Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
-            else:
-                 m1.metric(f"Interval ({time_opt})", "N/A", "0.00%")
-                 m2.metric("Evolutie Azi", "N/A", "0.00%")
+                 # PROTECȚIE ÎMPOTRIVA ERORILOR DE AFIȘARE
+                 if curr_price is not None and isinstance(curr_price, (int, float)):
+                     m1.metric(f"Interval ({time_opt})", f"{curr_price:.2f} {info.get('currency', '')}", f"{diff_val:.2f} ({diff_pct:.2f}%)")
+                     m2.metric("Evolutie Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
+                 else:
+                     m1.metric(f"Interval ({time_opt})", "N/A", "0.00%")
+                     m2.metric("Evolutie Azi", "N/A", "0.00%")
 
             rows_needed = 1
             if show_rsi: rows_needed += 1
@@ -612,8 +652,6 @@ def main():
                 
                 # --- VIZUALIZARE SCOR ANALIST ---
                 if rec_mean:
-                    # Calcul pozitie marker: (Scor - 1) / 4 * 100. Ex: Scor 2 -> (1/4)*100 = 25%
-                    # Limitam la 1-5
                     score_clamped = max(1.0, min(5.0, rec_mean))
                     pos_pct = (score_clamped - 1.0) / 4.0 * 100.0
                     
@@ -637,7 +675,7 @@ def main():
                 
             with col_an_right:
                  st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
-                 if not earn_df.empty:
+                 if earn_df is not None and not earn_df.empty:
                     earn_display = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     earn_display.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
                     def color_surprise(val):
@@ -702,7 +740,7 @@ def main():
                 fig_hist.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig_hist, use_container_width=True)
             else:
-                st.warning("Date insuficiente pentru a genera istoricul.")
+                st.warning("Date insuficiente pentru a genera istoricul. Verifică simbolurile sau conexiunea la internet.")
 
             st.markdown("---")
 
@@ -728,7 +766,7 @@ def main():
 
             with col_pie:
                 st.subheader("Alocare Active")
-                if not df_calc.empty:
+                if not df_calc.empty and df_calc['MarketValue'].sum() > 0:
                     fig_pie = go.Figure(data=[go.Pie(
                         labels=df_calc['Symbol'], 
                         values=df_calc['MarketValue'], 
@@ -738,12 +776,28 @@ def main():
                     )])
                     fig_pie.update_layout(height=500, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.caption("Nu există date de valoare pentru graficul placintă.")
+            
+            # --- MODUL EDITARE PORTOFOLIU ---
+            st.markdown("---")
+            st.subheader("📋 Registru Tranzacții (Editabil)")
+            st.info("Aici poți modifica prețuri/cantități sau șterge rânduri (selectează și apasă Delete). Apasă 'Salvează' după modificări.")
+            
+            # Încărcăm portofoliul brut pentru editare
+            df_for_edit = load_portfolio()
+            
+            edited_df = st.data_editor(
+                df_for_edit, 
+                num_rows="dynamic", 
+                key="editor_portofoliu",
+                use_container_width=True
+            )
 
-            if st.button("Șterge Portofoliu (Reset)"):
-                os.remove(FILE_PORTOFOLIU)
+            if st.button("💾 Salvează Modificările în Portofoliu", type="primary"):
+                edited_df.to_csv(FILE_PORTOFOLIU, index=False)
+                st.success("Portofoliul a fost actualizat cu succes!")
                 st.rerun()
 
 if __name__ == "__main__":
-
     main()
-
