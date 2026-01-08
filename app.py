@@ -85,11 +85,21 @@ st.markdown("""
 # --- 1. CONFIGURARE AGREGATOR ---
 RSS_CONFIG = {
     "Feeds": [
-        "https://www.zf.ro/rss", 
-        "https://www.biziday.ro/feed/",
-        "https://www.economica.net/rss",
-        "https://www.bursa.ro/_rss/?t=pcaps",
-        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US"
+        # --- ROMÂNIA (Business & Economic) ---
+        "https://www.zf.ro/rss",                   # Ziarul Financiar (deja il ai)
+        "https://www.biziday.ro/feed/",            # Biziday (deja il ai)
+        "https://www.economica.net/rss",           # Economica (deja il ai)
+        "https://www.bursa.ro/_rss/?t=pcaps",     # Bursa (deja il ai)
+        "https://www.profit.ro/rss",               # <--- NOU: Foarte bun pe fiscalitate/bursă
+        "https://www.startupcafe.ro/rss",          # <--- NOU: Focus pe antreprenoriat/fonduri
+        "https://financialintelligence.ro/feed/",  # <--- NOU: Analize piața de capital RO
+        "https://www.wall-street.ro/rss/business", # <--- NOU: Știri generale business
+
+        # --- INTERNAȚIONAL (Market Movers) ---
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US", # Yahoo (deja il ai)
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", # <--- NOU: CNBC Finance
+        "http://feeds.marketwatch.com/marketwatch/topstories", # <--- NOU: MarketWatch Top Stories
+        "https://www.investing.com/rss/news.rss"   # <--- NOU: Investing.com (General)
     ],
     "Categorii": {
         "General": [],
@@ -869,3 +879,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
