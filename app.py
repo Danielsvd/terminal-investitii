@@ -494,8 +494,13 @@ def main():
 
             with col_price_info:
                  m1, m2 = st.columns(2)
+                 # Verificare defensivă: dacă datele sunt invalide sau goale, afișăm N/A
+            if curr_price is not None and isinstance(curr_price, (int, float)):
                  m1.metric(f"Interval ({time_opt})", f"{curr_price:.2f} {info.get('currency', '')}", f"{diff_val:.2f} ({diff_pct:.2f}%)")
-                 m2.metric("Evoluție Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
+                 m2.metric("Evolutie Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
+            else:
+                 m1.metric(f"Interval ({time_opt})", "N/A", "0.00%")
+                 m2.metric("Evolutie Azi", "N/A", "0.00%")
 
             rows_needed = 1
             if show_rsi: rows_needed += 1
@@ -741,3 +746,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
