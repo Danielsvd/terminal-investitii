@@ -243,17 +243,65 @@ def calculate_alpha(stock_hist, beta):
 
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
+    # Inițializăm variabilele goale
+    hist = None
+    info = {}
+    earnings = None
+    
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="5y")
-        if hist.empty and not symbol.endswith(".RO"):
+        
+        # 1. Încercăm să luăm ISTORICUL (Graficul) - Asta e prioritatea
+        try:
+            hist = t.history(period="5y")
+        except:
+            hist = pd.DataFrame() # Dacă eșuează, facem un tabel gol
+            
+        # Fallback: Dacă history e gol, încercăm metoda 'download' care uneori fentează blocajul
+        if hist is None or hist.empty:
+            try:
+                hist = yf.download(symbol, period="5y", progress=False)
+            except: 
+                pass
+
+        # 2. Verificare pentru acțiuni românești (BVB)
+        if (hist is None or hist.empty) and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
-            hist_ro = t_ro.history(period="5y")
-            if not hist_ro.empty:
-                return hist_ro, t_ro.info, getattr(t_ro, 'earnings_history', None), sym_ro
-        return hist, t.info, getattr(t, 'earnings_history', None), symbol
-    except: return None, None, None, symbol
+            try:
+                hist_ro = t_ro.history(period="5y")
+                if not hist_ro.empty:
+                    hist = hist_ro
+                    symbol = sym_ro
+                    t = t_ro # Comutăm obiectul Ticker pe cel de RO
+            except: 
+                pass
+
+        # Dacă nici acum nu avem grafic, înseamnă că simbolul e chiar greșit
+        if hist is None or hist.empty:
+            return None, {}, None, symbol
+
+        # 3. Încercăm să luăm DATELE FUNDAMENTALE (Info)
+        # Aici apare des eroarea pe Cloud. O izolăm ca să nu crape tot.
+        try:
+            info = t.info
+            # Uneori info e None, așa că ne asigurăm că e dict
+            if info is None: info = {}
+        except Exception:
+            # Dacă Yahoo blochează info, continuăm fără el (graficul va merge)
+            info = {} 
+
+        # 4. Earnings
+        try:
+            earnings = getattr(t, 'earnings_history', None)
+        except:
+            earnings = None
+
+        return hist, info, earnings, symbol
+
+    except Exception as e:
+        print(f"Eroare majoră: {e}")
+        return None, {}, None, symbol
 
 def calculate_technical_indicators(df):
     if df is None or df.empty: return df
@@ -691,4 +739,5 @@ def main():
                 st.rerun()
 
 if __name__ == "__main__":
+
     main()
