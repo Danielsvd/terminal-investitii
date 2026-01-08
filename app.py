@@ -21,24 +21,19 @@ FILE_PORTOFOLIU = "portofoliu.csv"
 st.markdown("""
     <style>
     /* Stil general aplicație */
-    .stApp {
-        background-color: #0E1117;
-    }
+    .stApp { background-color: #0E1117; }
     
     /* Carduri Principale */
     .fin-card, .news-card {
-        background-color: #161B22; /* Dark Grey/Blueish */
+        background-color: #161B22;
         padding: 20px;
-        border-radius: 15px; /* Rotunjire mai mare */
+        border-radius: 15px;
         border: 1px solid #30363D;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         margin-bottom: 15px;
         transition: transform 0.2s;
     }
-    
-    .fin-card:hover, .news-card:hover {
-        border-color: #58A6FF; /* Highlight la hover */
-    }
+    .fin-card:hover, .news-card:hover { border-color: #58A6FF; }
 
     /* Stilizare Metrici (KPIs) */
     div[data-testid="stMetric"] {
@@ -48,72 +43,36 @@ st.markdown("""
         border: 1px solid #30363D;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
-    
-    div[data-testid="stMetricLabel"] {
-        font-size: 14px;
-        color: #8B949E;
-    }
-    
-    div[data-testid="stMetricValue"] {
-        font-size: 24px;
-        font-weight: 600;
-        color: #FFFFFF;
-    }
+    div[data-testid="stMetricLabel"] { font-size: 14px; color: #8B949E; }
+    div[data-testid="stMetricValue"] { font-size: 24px; font-weight: 600; color: #FFFFFF; }
 
     /* Stilizare Știri */
-    .news-card {
-        border-left: 5px solid #238636; /* Verde elegant */
-    }
+    .news-card { border-left: 5px solid #238636; }
     .news-title {
-        font-size: 18px;
-        font-weight: 600;
-        color: #58A6FF !important;
-        text-decoration: none;
-        margin-bottom: 8px;
-        display: block;
+        font-size: 18px; font-weight: 600; color: #58A6FF !important;
+        text-decoration: none; margin-bottom: 8px; display: block;
     }
     .news-meta {
-        font-size: 12px;
-        color: #8B949E;
-        margin-bottom: 10px;
-        border-bottom: 1px solid #30363D;
-        padding-bottom: 5px;
+        font-size: 12px; color: #8B949E; margin-bottom: 10px;
+        border-bottom: 1px solid #30363D; padding-bottom: 5px;
     }
 
     /* Bara Progres Analiști */
     .analyst-bar-container {
-        width: 100%;
-        background-color: #30363D;
-        height: 12px;
-        border-radius: 6px;
-        position: relative;
-        margin-top: 10px;
-        margin-bottom: 5px;
+        width: 100%; background-color: #30363D; height: 12px;
+        border-radius: 6px; position: relative; margin-top: 10px; margin-bottom: 5px;
     }
     .analyst-bar-gradient {
-        width: 100%;
-        height: 100%;
-        border-radius: 6px;
-        background: linear-gradient(90deg, #238636 0%, #d29922 50%, #da3633 100%);
-        opacity: 0.8;
+        width: 100%; height: 100%; border-radius: 6px;
+        background: linear-gradient(90deg, #238636 0%, #d29922 50%, #da3633 100%); opacity: 0.8;
     }
     .analyst-marker {
-        position: absolute;
-        top: -4px;
-        width: 4px;
-        height: 20px;
-        background-color: #FFFFFF;
-        border: 1px solid #000;
-        box-shadow: 0 0 5px rgba(255,255,255,0.8);
-        z-index: 10;
-        transform: translateX(-50%);
+        position: absolute; top: -4px; width: 4px; height: 20px;
+        background-color: #FFFFFF; border: 1px solid #000;
+        box-shadow: 0 0 5px rgba(255,255,255,0.8); z-index: 10; transform: translateX(-50%);
     }
     .analyst-labels {
-        display: flex;
-        justify-content: space-between;
-        font-size: 10px;
-        color: #8B949E;
-        margin-top: 5px;
+        display: flex; justify-content: space-between; font-size: 10px; color: #8B949E; margin-top: 5px;
     }
 
     /* Sentiment Tags */
@@ -243,65 +202,17 @@ def calculate_alpha(stock_hist, beta):
 
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
-    # Inițializăm variabilele goale
-    hist = None
-    info = {}
-    earnings = None
-    
     try:
         t = yf.Ticker(symbol)
-        
-        # 1. Încercăm să luăm ISTORICUL (Graficul) - Asta e prioritatea
-        try:
-            hist = t.history(period="5y")
-        except:
-            hist = pd.DataFrame() # Dacă eșuează, facem un tabel gol
-            
-        # Fallback: Dacă history e gol, încercăm metoda 'download' care uneori fentează blocajul
-        if hist is None or hist.empty:
-            try:
-                hist = yf.download(symbol, period="5y", progress=False)
-            except: 
-                pass
-
-        # 2. Verificare pentru acțiuni românești (BVB)
-        if (hist is None or hist.empty) and not symbol.endswith(".RO"):
+        hist = t.history(period="5y")
+        if hist.empty and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
-            try:
-                hist_ro = t_ro.history(period="5y")
-                if not hist_ro.empty:
-                    hist = hist_ro
-                    symbol = sym_ro
-                    t = t_ro # Comutăm obiectul Ticker pe cel de RO
-            except: 
-                pass
-
-        # Dacă nici acum nu avem grafic, înseamnă că simbolul e chiar greșit
-        if hist is None or hist.empty:
-            return None, {}, None, symbol
-
-        # 3. Încercăm să luăm DATELE FUNDAMENTALE (Info)
-        # Aici apare des eroarea pe Cloud. O izolăm ca să nu crape tot.
-        try:
-            info = t.info
-            # Uneori info e None, așa că ne asigurăm că e dict
-            if info is None: info = {}
-        except Exception:
-            # Dacă Yahoo blochează info, continuăm fără el (graficul va merge)
-            info = {} 
-
-        # 4. Earnings
-        try:
-            earnings = getattr(t, 'earnings_history', None)
-        except:
-            earnings = None
-
-        return hist, info, earnings, symbol
-
-    except Exception as e:
-        print(f"Eroare majoră: {e}")
-        return None, {}, None, symbol
+            hist_ro = t_ro.history(period="5y")
+            if not hist_ro.empty:
+                return hist_ro, t_ro.info, getattr(t_ro, 'earnings_history', None), sym_ro
+        return hist, t.info, getattr(t, 'earnings_history', None), symbol
+    except: return None, None, None, symbol
 
 def calculate_technical_indicators(df):
     if df is None or df.empty: return df
@@ -340,8 +251,11 @@ def get_portfolio_history_data(tickers):
 def calculate_portfolio_performance(df, history_range="1A"):
     if df.empty: return pd.DataFrame(), pd.DataFrame(), 0, 0
     
+    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
+    df['AvgPrice'] = pd.to_numeric(df['AvgPrice'], errors='coerce').fillna(0)
+    
     tickers = df['Symbol'].unique().tolist()
-    hist_data = get_portfolio_history_data(tickers)
+    hist_data = yf.download(tickers, period="5y", group_by='ticker', auto_adjust=True, threads=True)
     
     current_vals = []
     total_daily_pl_abs = 0 
@@ -352,14 +266,23 @@ def calculate_portfolio_performance(df, history_range="1A"):
         avg_p = row['AvgPrice']
         
         try:
-            if len(tickers) == 1:
-                series = hist_data['Close']
-            else:
+            if len(tickers) > 1:
                 series = hist_data[sym]['Close']
+            else:
+                if isinstance(hist_data.columns, pd.MultiIndex):
+                     series = hist_data[sym]['Close']
+                else:
+                     series = hist_data['Close']
             
-            curr_p = series.iloc[-1]
-            prev_p = series.iloc[-2]
-        except:
+            series = series.dropna()
+            
+            if not series.empty:
+                curr_p = series.iloc[-1]
+                prev_p = series.iloc[-2] if len(series) >= 2 else curr_p
+            else:
+                curr_p = 0
+                prev_p = 0
+        except Exception as e:
             curr_p = 0
             prev_p = 0
             
@@ -379,18 +302,19 @@ def calculate_portfolio_performance(df, history_range="1A"):
     df_result = pd.DataFrame(current_vals)
     
     portfolio_curve = None
-    
     for index, row in df.iterrows():
         sym = row['Symbol']
         qty = row['Quantity']
         try:
-            if len(tickers) == 1:
-                price_series = hist_data['Close']
-            else:
+            if len(tickers) > 1:
                 price_series = hist_data[sym]['Close']
-                
+            else:
+                if isinstance(hist_data.columns, pd.MultiIndex):
+                     price_series = hist_data[sym]['Close']
+                else:
+                     price_series = hist_data['Close']
+                     
             price_series = price_series.fillna(method='ffill').fillna(method='bfill')
-            
             if portfolio_curve is None:
                 portfolio_curve = price_series * qty
             else:
@@ -405,14 +329,93 @@ def calculate_portfolio_performance(df, history_range="1A"):
     portfolio_curve = portfolio_curve.iloc[-days:]
     
     total_val_now = portfolio_curve.iloc[-1] if not portfolio_curve.empty else 0
-    total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if total_val_now != 0 else 0
+    total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if (total_val_now - total_daily_pl_abs) != 0 else 0
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct
+
+# --- MODIFICARE NOUA: FUNCȚIE GLOBAL MARKET ---
+@st.cache_data(ttl=300)
+def get_global_market_data():
+    """
+    Preluare optimizată pentru tab-ul 4: Indici, Mărfuri, Top SUA/EU.
+    Simulează un scaner de piață folosind o listă predefinită de Blue Chips.
+    """
+    # 1. Definiții Simboluri
+    indices = {
+        'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC', 
+        'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE', 'BET (RO)': 'BET.RO'
+    }
+    commodities = {
+        'Aur (Gold)': 'GC=F', 'Argint (Silver)': 'SI=F', 
+        'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Gaz Natural': 'NG=F'
+    }
+    
+    # Watchlist pentru a simula Top Gainers/Losers (Blue Chips)
+    us_stocks = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'NFLX', 
+                 'JPM', 'V', 'PG', 'JNJ', 'XOM', 'WMT', 'KO', 'PEP', 'DIS', 'CSCO']
+    eu_stocks = ['SAP', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'SHEL.L', 'AZN.L', 'HSBA.L', 'FP.PA']
+
+    all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
+    
+    # Descărcăm datele (folosim fast_info implicit prin Tickers pentru viteză)
+    tickers = yf.Tickers(' '.join(all_symbols))
+    
+    def process_tickers(symbol_dict, is_list=False):
+        data = []
+        source = symbol_dict if is_list else symbol_dict.items()
+        
+        for item in source:
+            name = item if is_list else item[0]
+            sym = item if is_list else item[1]
+            try:
+                t = tickers.tickers[sym]
+                # fast_info este mult mai rapid decat history()
+                info = t.fast_info
+                price = info.last_price
+                prev = info.previous_close
+                if prev:
+                    change = price - prev
+                    pct = (change / prev) * 100
+                else:
+                    change = 0; pct = 0
+                
+                data.append({
+                    'Instrument': name,
+                    'Simbol': sym,
+                    'Preț': price,
+                    'Variație': change,
+                    'Variație %': pct
+                })
+            except: continue
+        return pd.DataFrame(data)
+
+    df_indices = process_tickers(indices)
+    df_commodities = process_tickers(commodities)
+    
+    # Procesare Topuri SUA
+    df_us = process_tickers(us_stocks, is_list=True)
+    if not df_us.empty:
+        us_gainers = df_us.sort_values(by='Variație %', ascending=False).head(10)
+        us_losers = df_us.sort_values(by='Variație %', ascending=True).head(10)
+    else:
+        us_gainers = us_losers = pd.DataFrame()
+        
+    # Procesare Topuri EU
+    df_eu = process_tickers(eu_stocks, is_list=True)
+    if not df_eu.empty:
+        eu_gainers = df_eu.sort_values(by='Variație %', ascending=False).head(10)
+        eu_losers = df_eu.sort_values(by='Variație %', ascending=True).head(10)
+    else:
+        eu_gainers = eu_losers = pd.DataFrame()
+
+    return df_indices, df_commodities, us_gainers, us_losers, eu_gainers, eu_losers
 
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
-    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu"])
+    # MODIFICARE NOUA: Adaugat optiunea 4
+    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală"])
     st.sidebar.markdown("---")
 
     # ==================================================
@@ -494,13 +497,8 @@ def main():
 
             with col_price_info:
                  m1, m2 = st.columns(2)
-                 # Verificare defensivă: dacă datele sunt invalide sau goale, afișăm N/A
-            if curr_price is not None and isinstance(curr_price, (int, float)):
                  m1.metric(f"Interval ({time_opt})", f"{curr_price:.2f} {info.get('currency', '')}", f"{diff_val:.2f} ({diff_pct:.2f}%)")
-                 m2.metric("Evolutie Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
-            else:
-                 m1.metric(f"Interval ({time_opt})", "N/A", "0.00%")
-                 m2.metric("Evolutie Azi", "N/A", "0.00%")
+                 m2.metric("Evoluție Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
 
             rows_needed = 1
             if show_rsi: rows_needed += 1
@@ -612,8 +610,6 @@ def main():
                 
                 # --- VIZUALIZARE SCOR ANALIST ---
                 if rec_mean:
-                    # Calcul pozitie marker: (Scor - 1) / 4 * 100. Ex: Scor 2 -> (1/4)*100 = 25%
-                    # Limitam la 1-5
                     score_clamped = max(1.0, min(5.0, rec_mean))
                     pos_pct = (score_clamped - 1.0) / 4.0 * 100.0
                     
@@ -649,99 +645,227 @@ def main():
                     st.info("Nu există date de earnings.")
 
     # ==================================================
-    # 3. PORTOFOLIU (FINALIZAT)
+    # 3. PORTOFOLIU
     # ==================================================
     elif sectiune == "3. Portofoliu":
         st.title("💼 Portofoliu Personal")
         
         with st.expander("➕ Adaugă Tranzacție Nouă"):
             with st.form("add_pf"):
-                c1, c2, c3 = st.columns(3)
-                s = c1.text_input("Simbol (ex: AAPL)").upper()
-                q = c2.number_input("Cantitate", min_value=0.01, value=1.0)
-                p = c3.number_input("Preț Achiziție", min_value=0.01, value=100.0)
+                c1, c2, c3, c4 = st.columns(4)
+                s = c1.text_input("Simbol (ex: AAPL, EUNL.DE)").upper()
+                q = c2.number_input("Cantitate", min_value=0.01, value=1.0, format="%.4f")
+                p = c3.number_input("Preț Achiziție", min_value=0.01, value=100.0, format="%.2f")
+                curr = c4.selectbox("Moneda", ["USD", "EUR"]) 
+                
                 d_acq = st.date_input("Data", datetime.today())
+                
                 if st.form_submit_button("Salvează") and s:
-                    add_trade(s, q, p, d_acq)
+                    df_new = pd.DataFrame({
+                        "Symbol": [s], 
+                        "Date": [d_acq], 
+                        "Quantity": [float(q)], 
+                        "AvgPrice": [float(p)],
+                        "Currency": [curr]
+                    })
+                    
+                    if not os.path.exists(FILE_PORTOFOLIU):
+                        df_new.to_csv(FILE_PORTOFOLIU, index=False)
+                    else:
+                        df_old = pd.read_csv(FILE_PORTOFOLIU)
+                        if "Currency" not in df_old.columns:
+                            df_old["Currency"] = "USD"
+                        
+                        df_final = pd.concat([df_old, df_new], ignore_index=True)
+                        df_final.to_csv(FILE_PORTOFOLIU, index=False)
+                        
                     st.success(f"Adăugat {s}!")
                     st.rerun()
 
-        df_pf = load_portfolio()
-        
+        if os.path.exists(FILE_PORTOFOLIU):
+            df_pf = pd.read_csv(FILE_PORTOFOLIU)
+            if "Currency" not in df_pf.columns:
+                df_pf["Currency"] = "USD"
+            df_pf['Quantity'] = pd.to_numeric(df_pf['Quantity'], errors='coerce').fillna(0)
+            df_pf['AvgPrice'] = pd.to_numeric(df_pf['AvgPrice'], errors='coerce').fillna(0)
+        else:
+            df_pf = pd.DataFrame()
+
         if df_pf.empty:
             st.info("Portofoliul este gol. Adaugă o tranzacție mai sus.")
         else:
             st.markdown("### Perioadă Analiză")
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
             
-            with st.spinner("Se calculează performanța..."):
-                df_calc, hist_curve, daily_abs, daily_pct = calculate_portfolio_performance(df_pf, hist_range)
+            tab_usd, tab_eur = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR"])
 
-            if not hist_curve.empty:
-                start_val = hist_curve.iloc[0]
-                end_val = hist_curve.iloc[-1]
-                growth_abs = end_val - start_val
-                growth_pct = (growth_abs / start_val * 100) if start_val != 0 else 0
+            def render_portfolio_tab(df_subset, currency_symbol):
+                if df_subset.empty:
+                    st.info(f"Nu ai poziții deschise în {currency_symbol}.")
+                    return
+
+                with st.spinner(f"Calculăm performanța pentru {currency_symbol}..."):
+                    df_calc, hist_curve, daily_abs, daily_pct = calculate_portfolio_performance(df_subset, hist_range)
+
+                total_invested = (df_subset['Quantity'] * df_subset['AvgPrice']).sum()
+                total_current = df_calc['MarketValue'].sum() if not df_calc.empty else 0
                 
-                col_m1, col_m2 = st.columns(2)
-                col_m1.metric(
-                    label="Valoare Totală Curentă",
-                    value=f"{end_val:,.2f}",
-                    delta=f"{daily_abs:,.2f} ({daily_pct:.2f}%) Azi"
-                )
-                col_m2.metric(
-                    label=f"Evoluție în perioada selectată ({hist_range})",
-                    value=f"{growth_abs:,.2f}",
-                    delta=f"{growth_pct:.2f}%",
-                    delta_color="normal"
-                )
-                
+                total_profit_val = total_current - total_invested
+                total_profit_pct = (total_profit_val / total_invested * 100) if total_invested != 0 else 0
+
+                c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
+                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{total_invested:,.2f} {currency_symbol}")
+                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{total_current:,.2f} {currency_symbol}")
+                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{total_profit_val:,.2f} {currency_symbol}", f"{total_profit_pct:.2f}%")
+
                 st.markdown("---")
-                fig_hist = go.Figure()
-                fig_hist.add_trace(go.Scatter(x=hist_curve.index, y=hist_curve.values, fill='tozeroy', line=dict(color='#238636'), name='Valoare Portofoliu'))
-                fig_hist.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                st.plotly_chart(fig_hist, use_container_width=True)
-            else:
-                st.warning("Date insuficiente pentru a genera istoricul.")
+                
+                if not hist_curve.empty:
+                    fig_hist = go.Figure()
+                    fig_hist.add_trace(go.Scatter(
+                        x=hist_curve.index, y=hist_curve.values, 
+                        fill='tozeroy', line=dict(color='#238636'), name=f'Valoare {currency_symbol}'
+                    ))
+                    fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_hist, use_container_width=True)
+
+                col_table, col_pie = st.columns([1.5, 1])
+                
+                with col_table:
+                    st.subheader("Detaliu Poziții")
+                    if not df_calc.empty:
+                        display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
+                        
+                        def color_profit(val):
+                            color = '#3FB950' if val >= 0 else '#F85149'
+                            return f'color: {color}'
+
+                        st.dataframe(
+                            df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
+                            .format({
+                                'Quantity': '{:.4f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
+                                'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                            }),
+                            use_container_width=True
+                        )
+
+                with col_pie:
+                    st.subheader("Alocare Active")
+                    if not df_calc.empty and df_calc['MarketValue'].sum() > 0:
+                        fig_pie = go.Figure(data=[go.Pie(
+                            labels=df_calc['Symbol'], 
+                            values=df_calc['MarketValue'], 
+                            hole=.4,
+                            textinfo='label+percent',
+                            textposition='outside'
+                        )])
+                        fig_pie.update_layout(height=400, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    else:
+                        st.caption("Graficul va apărea când valoarea portofoliului este > 0")
+
+            with tab_usd:
+                df_usd = df_pf[df_pf['Currency'] == 'USD']
+                render_portfolio_tab(df_usd, "$")
+
+            with tab_eur:
+                df_eur = df_pf[df_pf['Currency'] == 'EUR']
+                render_portfolio_tab(df_eur, "€")
 
             st.markdown("---")
-
-            col_table, col_pie = st.columns([1.5, 1])
-            
-            with col_table:
-                st.subheader("Detaliu Poziții")
-                def color_profit(val):
-                    color = '#3FB950' if val >= 0 else '#F85149'
-                    return f'color: {color}'
-
-                display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
-                if not df_calc.empty:
-                    df_show = df_calc[display_cols].copy()
-                    st.dataframe(
-                        df_show.style.map(color_profit, subset=['Profit', 'Profit %'])
-                        .format({
-                            'Quantity': '{:.2f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
-                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
-                        }),
-                        use_container_width=True
-                    )
-
-            with col_pie:
-                st.subheader("Alocare Active")
-                if not df_calc.empty:
-                    fig_pie = go.Figure(data=[go.Pie(
-                        labels=df_calc['Symbol'], 
-                        values=df_calc['MarketValue'], 
-                        hole=.4,
-                        textinfo='label+percent',
-                        textposition='outside'
-                    )])
-                    fig_pie.update_layout(height=500, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_pie, use_container_width=True)
-
-            if st.button("Șterge Portofoliu (Reset)"):
+            if st.button("⚠️ Șterge TOT Portofoliul (Reset)"):
                 os.remove(FILE_PORTOFOLIU)
                 st.rerun()
+
+    # ==================================================
+    # 4. MODIFICARE NOUA: PIAȚĂ GLOBALĂ
+    # ==================================================
+    elif sectiune == "4. Piață Globală":
+        st.title("🌐 Pulsul Pieței Globale")
+        st.caption("Date în timp real (cu întârziere minimă) furnizate via Yahoo Finance.")
+        
+        if st.button("🔄 Reîmprospătează Piața"):
+            get_global_market_data.clear()
+            st.rerun()
+
+        with st.spinner("Descărcăm datele globale..."):
+            df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
+
+        # Functie de styling pentru colorare
+        def color_change_val(val):
+            color = '#3FB950' if val >= 0 else '#F85149'
+            return f'color: {color}'
+
+        # SECTIUNEA 1: Indici & Mărfuri (Stil Yahoo - Tabele curate)
+        col_m1, col_m2 = st.columns(2)
+        
+        with col_m1:
+            st.subheader("📊 Indici Principali")
+            st.dataframe(
+                df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
+                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                use_container_width=True, hide_index=True
+            )
+            
+        with col_m2:
+            st.subheader("🛢️ Mărfuri (Commodities)")
+            st.dataframe(
+                df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
+                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                use_container_width=True, hide_index=True
+            )
+
+        st.markdown("---")
+        
+        # SECTIUNEA 2: Top Gainers/Losers SUA
+        st.subheader("🇺🇸 Top Mișcări SUA (Blue Chips)")
+        c_us1, c_us2 = st.columns(2)
+        
+        with c_us1:
+            st.markdown("**🚀 Top Creșteri (Gainers)**")
+            if not us_gain.empty:
+                st.dataframe(
+                    us_gain[['Instrument', 'Preț', 'Variație %']].style
+                    .map(color_change_val, subset=['Variație %'])
+                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    use_container_width=True, hide_index=True
+                )
+        
+        with c_us2:
+            st.markdown("**🔻 Top Scăderi (Losers)**")
+            if not us_lose.empty:
+                st.dataframe(
+                    us_lose[['Instrument', 'Preț', 'Variație %']].style
+                    .map(color_change_val, subset=['Variație %'])
+                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    use_container_width=True, hide_index=True
+                )
+
+        st.markdown("---")
+
+        # SECTIUNEA 3: Top Gainers/Losers EUROPA
+        st.subheader("🇪🇺 Top Mișcări EUROPA")
+        c_eu1, c_eu2 = st.columns(2)
+        
+        with c_eu1:
+            st.markdown("**🚀 Top Creșteri (Gainers)**")
+            if not eu_gain.empty:
+                st.dataframe(
+                    eu_gain[['Instrument', 'Preț', 'Variație %']].style
+                    .map(color_change_val, subset=['Variație %'])
+                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    use_container_width=True, hide_index=True
+                )
+        
+        with c_eu2:
+            st.markdown("**🔻 Top Scăderi (Losers)**")
+            if not eu_lose.empty:
+                st.dataframe(
+                    eu_lose[['Instrument', 'Preț', 'Variație %']].style
+                    .map(color_change_val, subset=['Variație %'])
+                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    use_container_width=True, hide_index=True
+                )
 
 if __name__ == "__main__":
     main()
