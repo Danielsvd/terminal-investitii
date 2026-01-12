@@ -246,6 +246,172 @@ def calculate_technical_indicators(df):
     df['Signal'] = df['MACD'].ewm(span=9).mean()
     return df
 
+# --- FUNCȚII NOI PENTRU REZUMAT ZILNIC (DAILY BRIEFING) ---
+
+def generate_market_narrative(ticker_data, symbol, name):
+    """Generează un text descriptiv, procentul și prețul curent."""
+    try:
+        # Extragem datele corect, gestionând MultiIndex-ul
+        if isinstance(ticker_data.columns, pd.MultiIndex):
+             # Cazul în care avem mai multe tickere descărcate
+            if symbol in ticker_data.columns.levels[0]:
+                close = ticker_data[symbol]['Close']
+            else:
+                return f"Date indisponibile pentru {name}.", 0, 0
+        else:
+             # Fallback
+            close = ticker_data['Close']
+
+        close = close.dropna()
+        if len(close) < 2: return "Date insuficiente.", 0, 0
+
+        curr = close.iloc[-1]
+        prev = close.iloc[-2]
+        change_pct = ((curr - prev) / prev) * 100
+        
+        if change_pct > 1.0:
+            trend = "o creștere puternică"
+            sentiment = "pozitiv"
+        elif change_pct > 0.2:
+            trend = "o creștere moderată"
+            sentiment = "ușor optimist"
+        elif change_pct > -0.2:
+            trend = "o evoluție stabilă"
+            sentiment = "neutru"
+        elif change_pct > -1.0:
+            trend = "o scădere moderată"
+            sentiment = "precaut"
+        else:
+            trend = "o scădere semnificativă"
+            sentiment = "negativ"
+            
+        text = f"**{name}** a înregistrat {trend} de **{change_pct:.2f}%**, închizând la {curr:,.2f}. Sentimentul pieței este {sentiment}."
+        # Returnăm ACUM și prețul curent (curr)
+        return text, change_pct, curr
+    except Exception as e:
+        return f"Nu s-au putut genera date pentru {name}.", 0, 0
+
+@st.cache_data(ttl=1800)
+def get_daily_briefing_data():
+    # 1. Date BVB (România)
+    bvb_tickers = [
+        'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
+        'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 
+        'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ARS.RO', 'BRK.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
+        'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
+    ]
+    bvb_data = yf.download(bvb_tickers, period="5d", group_by='ticker', progress=False)
+    
+    # 2. Date SUA (Wall Street - Top 20 + Indici + Sentiment)
+    # Lista extinsă: Indici, VIX (Fear Gauge), Magnificent 7, Retail, Bănci, Pharma
+    us_tickers = [
+        '^GSPC', '^DJI', '^IXIC', '^VIX', # Indici & Volatilitate
+        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', # Mag 7
+        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'WFC', 'MS', 'GS', 'V', 'INOD', 'MA', # Tech & Finance
+        'WMT', 'KO', 'PEP', 'PG', 'JNJ', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'METC', 'MP', 'LLY', 'XOM', 'CVX', # Defensive & Energy
+        'PLTR', 'MU', 'ARM', 'QCOM', 'ORCL', 'TSM', 'GS', 'MS', 'WFC', 'NVO', 'NVS', 'MCD', 'PM', 'SNY', 'MRK', 'PFE', 'C'
+    ]
+    us_data = yf.download(us_tickers, period="5d", group_by='ticker', progress=False)
+    
+    return bvb_data, us_data
+
+def get_bvb_stats(data, tickers):
+    """Calculează Top Creșteri, Scăderi și Volum (Generic pentru BVB și SUA)."""
+    stats = []
+    
+    for t in tickers:
+        # Excludem indicii (cei care încep cu ^ sau ETF-ul de index) din topul companiilor
+        if t in ['TVBETETF.RO', '^GSPC', '^DJI', '^IXIC', '^VIX']: continue 
+        
+        try:
+            # Verificare existență date în MultiIndex
+            if isinstance(data.columns, pd.MultiIndex):
+                if t not in data.columns.levels[0]: continue
+                df_t = data[t]
+            else:
+                continue
+
+            # Extragere prețuri și volum
+            series_close = df_t['Close'].dropna()
+            series_vol = df_t['Volume'].dropna()
+            
+            if len(series_close) >= 2:
+                curr = series_close.iloc[-1]
+                prev = series_close.iloc[-2]
+                pct = ((curr - prev) / prev) * 100
+                
+                # Volumul ultimei zile
+                vol = series_vol.iloc[-1] if not series_vol.empty else 0
+                
+                stats.append({
+                    'Simbol': t.replace('.RO', ''), 
+                    'Preț': curr,
+                    'Variație': pct,
+                    'Volum': vol
+                })
+        except Exception as e:
+            continue
+    
+    df = pd.DataFrame(stats)
+    if df.empty: 
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    
+    # 1. Top Creșteri (Top 10)
+    gainers = df.sort_values('Variație', ascending=False).head(10)
+    
+    # 2. Top Scăderi (Top 10)
+    losers = df.sort_values('Variație', ascending=True).head(10)
+    
+    # 3. Top Volum (Top 10)
+    volume_leaders = df.sort_values('Volum', ascending=False).head(10)
+    
+    return gainers, losers, volume_leaders
+
+# === FUNCȚIA FEAR & GREED (NOUĂ) ===
+def calculate_fear_greed_proxy(data):
+    """
+    Calculează un indicator aproximativ de Fear & Greed folosind VIX și Momentum S&P500.
+    Scara: 0 (Extreme Fear) - 100 (Extreme Greed)
+    """
+    try:
+        # 1. Componenta Volatilitate (VIX)
+        if isinstance(data.columns, pd.MultiIndex):
+             vix_series = data['^VIX']['Close'].dropna()
+             sp500_close = data['^GSPC']['Close'].dropna()
+        else:
+             return 50, "Neutral 😐", 0
+
+        if vix_series.empty or sp500_close.empty:
+             return 50, "Neutral 😐", 0
+
+        current_vix = vix_series.iloc[-1]
+        
+        # Normalizare VIX (10=Greed, 40=Fear)
+        vix_score = 100 - ((current_vix - 10) / (40 - 10) * 100)
+        vix_score = max(0, min(100, vix_score)) # Clamp între 0 și 100
+        
+        # 2. Componenta Momentum (S&P 500)
+        curr_sp = sp500_close.iloc[-1]
+        mean_5d = sp500_close.mean()
+        
+        diff_pct = (curr_sp / mean_5d) - 1
+        # Dacă e cu 2% peste medie = Extreme Greed
+        mom_score = 50 + (diff_pct * 100 * 25) 
+        mom_score = max(0, min(100, mom_score))
+        
+        # Media ponderată (60% VIX, 40% Momentum)
+        final_score = (vix_score * 0.6) + (mom_score * 0.4)
+        
+        if final_score >= 75: label = "Extreme Greed 🤑"
+        elif final_score >= 55: label = "Greed 😋"
+        elif final_score >= 45: label = "Neutral 😐"
+        elif final_score >= 25: label = "Fear 😨"
+        else: label = "Extreme Fear 😱"
+        
+        return final_score, label, current_vix
+    except Exception as e:
+        return 50, "Neutral 😐", 0
+
 # --- FUNCȚII PORTOFOLIU ---
 def load_portfolio():
     if not os.path.exists(FILE_PORTOFOLIU):
@@ -255,9 +421,8 @@ def load_portfolio():
 def add_trade(s, q, p, d, c):
     df = load_portfolio()
     new_row = pd.DataFrame({"Symbol": [s], "Date": [d], "Quantity": [q], "AvgPrice": [p], "Currency": [c]})
-    # Dacă nu există coloana Currency în CSV-ul vechi, o va crea automat la scriere, dar e bine să ne asigurăm compatibilitatea
     if 'Currency' not in df.columns and not df.empty:
-        df['Currency'] = 'USD' # Default pentru vechile intrări
+        df['Currency'] = 'USD'
     df = pd.concat([df, new_row], ignore_index=True)
     df.to_csv(FILE_PORTOFOLIU, index=False)
 
@@ -274,7 +439,6 @@ def calculate_portfolio_performance(df, history_range="1A"):
     df['AvgPrice'] = pd.to_numeric(df['AvgPrice'], errors='coerce').fillna(0)
     
     tickers = df['Symbol'].unique().tolist()
-    # Verificăm să nu fie lista goală
     if not tickers:
         return pd.DataFrame(), pd.DataFrame(), 0, 0
         
@@ -292,11 +456,10 @@ def calculate_portfolio_performance(df, history_range="1A"):
             if len(tickers) > 1:
                 series = hist_data[sym]['Close']
             else:
-                # Dacă e un singur ticker, structura e diferită
                 if isinstance(hist_data.columns, pd.MultiIndex):
-                     series = hist_data[sym]['Close']
+                      series = hist_data[sym]['Close']
                 else:
-                     series = hist_data['Close']
+                      series = hist_data['Close']
             
             series = series.dropna()
             
@@ -334,10 +497,10 @@ def calculate_portfolio_performance(df, history_range="1A"):
                 price_series = hist_data[sym]['Close']
             else:
                 if isinstance(hist_data.columns, pd.MultiIndex):
-                     price_series = hist_data[sym]['Close']
+                      price_series = hist_data[sym]['Close']
                 else:
-                     price_series = hist_data['Close']
-                     
+                      price_series = hist_data['Close']
+                      
             price_series = price_series.fillna(method='ffill').fillna(method='bfill')
             if portfolio_curve is None:
                 portfolio_curve = price_series * qty
@@ -418,7 +581,7 @@ def get_global_market_data():
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
-    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală", "5. Import Date (CSV)"])
+    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală", "5. Import Date (CSV)", "6. Rezumatul Zilei"])
     st.sidebar.markdown("---")
 
     # ==================================================
@@ -723,9 +886,7 @@ def main():
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig_hist, use_container_width=True)
 
-                # --- MODIFICARE AICI: ELEMENTE SUPRAPUSE PENTRU MOBIL ---
-                
-                # 1. Tabelul (Pe toată lățimea)
+                # --- ELEMENTE SUPRAPUSE PENTRU MOBIL ---
                 st.subheader("Detaliu Poziții")
                 if not df_calc.empty:
                     display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
@@ -743,9 +904,8 @@ def main():
                         use_container_width=True
                     )
                 
-                st.markdown("<br>", unsafe_allow_html=True) # Puțin spațiu
+                st.markdown("<br>", unsafe_allow_html=True) 
 
-                # 2. Graficul Pie (Dedesubt, pe toată lățimea)
                 st.subheader("Alocare Active")
                 if not df_calc.empty and df_calc['MarketValue'].sum() > 0:
                     fig_pie = go.Figure(data=[go.Pie(
@@ -1003,6 +1163,255 @@ def main():
                     st.error(f"Eroare Global: {e}")
             else:
                 st.warning(f"Fișierul '{FILE_GLOBAL}' nu a fost găsit.")
+
+   # ==================================================
+    # 6. REZUMATUL ZILEI (NOU & OPTIMIZAT)
+    # ==================================================
+    elif sectiune == "6. Rezumatul Zilei":
+        st.title("🗞️ Rezumatul Zilei")
+        st.markdown("Raport automat generat la închiderea piețelor.")
+        
+        now = datetime.now()
+        current_hour = now.hour
+        
+        # Obținem datele
+        with st.spinner("Generăm rezumatul pieței..."):
+            bvb_data, us_data = get_daily_briefing_data()
+        
+        # --- TABURI PENTRU PIEȚE ---
+        tab_bvb, tab_us = st.tabs(["🇷🇴 BVB (Ora 19:00)", "🇺🇸 Wall Street (Ora 23:00)"])
+        
+        # === REZUMAT BVB ===
+        with tab_bvb:
+            st.markdown(f"### 📅 Raport Bursa de Valori București - {now.strftime('%d-%m-%Y')}")
+            
+            # 1. Narrativa Principală (Indicele BET) - ACUM PRIMIM 3 VALORI
+            bet_text, bet_change, bet_price = generate_market_narrative(bvb_data, 'TVBETETF.RO', 'Indicele BET')
+            
+            # Fallback text dacă BET nu are date
+            if "Date insuficiente" in bet_text and bet_change == 0:
+                 bet_text = "Indicele BET nu a furnizat date în timp real momentan. Verificați evoluția companiilor individuale mai jos."
+                 border_color = "#30363D" # Gri neutru
+            else:
+                 border_color = "#3FB950" if bet_change >= 0 else "#F85149"
+            
+            st.markdown(f"""
+            <div style="background-color: #161B22; padding: 20px; border-radius: 10px; border-left: 5px solid {border_color}; margin-bottom: 20px;">
+                <h4 style="margin-top:0;">Evoluția Pieței Locale</h4>
+                <p style="font-size: 16px; line-height: 1.6;">{bet_text}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Calculăm statisticile extinse
+            if isinstance(bvb_data.columns, pd.MultiIndex):
+                bvb_analysis_tickers = bvb_data.columns.levels[0].tolist()
+            else:
+                bvb_analysis_tickers = []
+
+            gainers, losers, vol_leaders = get_bvb_stats(bvb_data, bvb_analysis_tickers)
+            
+            # 2. Top Movers (5 companii)
+            col_mov1, col_mov2 = st.columns(2)
+            
+            with col_mov1:
+                st.markdown("**🚀 Top 5 Creșteri**")
+                if not gainers.empty:
+                    st.dataframe(
+                        gainers[['Simbol', 'Preț', 'Variație']].style
+                        .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
+                        .map(lambda x: 'color: #3FB950', subset=['Variație']),
+                        use_container_width=True, hide_index=True
+                    )
+                else: st.info("Date indisponibile.")
+                
+            with col_mov2:
+                st.markdown("**🔻 Top 5 Scăderi**")
+                if not losers.empty:
+                    st.dataframe(
+                        losers[['Simbol', 'Preț', 'Variație']].style
+                        .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
+                        .map(lambda x: 'color: #F85149', subset=['Variație']),
+                        use_container_width=True, hide_index=True
+                    )
+                else: st.info("Date indisponibile.")
+            
+            st.markdown("---")
+            
+            # 3. Clasament Volum (Top 10)
+            st.subheader("📊 Top Lichiditate (Volume Tranzacționate)")
+            if not vol_leaders.empty:
+                def format_vol(x):
+                    if x > 1e6: return f"{x/1e6:.2f} M"
+                    if x > 1e3: return f"{x/1e3:.2f} K"
+                    return f"{x:.0f}"
+                
+                vol_display = vol_leaders.copy()
+                vol_display['Volum'] = vol_display['Volum'].apply(format_vol)
+                
+                st.dataframe(
+                    vol_display[['Simbol', 'Preț', 'Volum', 'Variație']].style
+                    .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
+                    .applymap(lambda x: 'color: #3FB950' if x > 0 else 'color: #F85149', subset=['Variație']),
+                    use_container_width=True, hide_index=True
+                )
+            else:
+                st.info("Nu există date despre volume.")
+
+            # 4. Top 5 Știri România
+            st.markdown("---")
+            st.subheader("🇷🇴 Top 5 Știri Financiare (România)")
+            
+            if 'raw_news' not in st.session_state:
+                raw_news = fetch_news_data()
+            else:
+                raw_news = st.session_state.get('raw_news', fetch_news_data())
+            
+            ro_sources = ["Ziarul Financiar", "Biziday", "Economica", "Bursa", "Profit.ro", "StartupCafe", "Financial Intelligence", "Wall-Street"]
+            ro_news = [n for n in raw_news if any(src.lower() in n['source'].lower() for src in ro_sources)]
+            if not ro_news:
+                 ro_news = filter_news(raw_news, "Financiar") + filter_news(raw_news, "Energie")
+            
+            seen = set()
+            unique_ro_news = []
+            for n in ro_news:
+                if n['title'] not in seen:
+                    unique_ro_news.append(n)
+                    seen.add(n['title'])
+            
+            if unique_ro_news:
+                news_html = ""
+                for item in unique_ro_news[:5]:
+                     news_html += f"""
+                     <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
+                        <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
+                           {item['title']}
+                        </a>
+                        <div style="font-size: 12px; color: #8B949E;">{item['source']} • {item['date_str']}</div>
+                     </div>
+                     """
+                st.markdown(news_html, unsafe_allow_html=True)
+            else:
+                st.info("Nu s-au găsit știri locale recente.")
+
+        # === REZUMAT SUA ===
+        with tab_us:
+            msg_us = ""
+            if current_hour < 16:
+                msg_us = "(Datele afișate sunt de la închiderea precedentă)"
+            
+            st.markdown(f"### 🌎 Raport Wall Street {msg_us}")
+            
+            # --- 1. Indici Principali & Fear Index ---
+            c_idx, c_fg = st.columns([2, 1])
+            
+            with c_idx:
+                # ACUM PRIMIM SI PRETUL (PRICE)
+                sp500_txt, sp500_chg, sp500_price = generate_market_narrative(us_data, '^GSPC', 'S&P 500')
+                nasdaq_txt, nasdaq_chg, nasdaq_price = generate_market_narrative(us_data, '^IXIC', 'Nasdaq')
+                dow_txt, dow_chg, dow_price = generate_market_narrative(us_data, '^DJI', 'Dow Jones')
+                
+                # Culori border
+                us_border = "#3FB950" if sp500_chg >= 0 else "#F85149"
+                
+                # Culori text (verde/rosu) pentru fiecare indice
+                c_sp = "#3FB950" if sp500_chg >= 0 else "#F85149"
+                c_nq = "#3FB950" if nasdaq_chg >= 0 else "#F85149"
+                c_dj = "#3FB950" if dow_chg >= 0 else "#F85149"
+                
+                st.markdown(f"""
+                <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {us_border};">
+                    <p style="margin:5px 0; font-size:16px;">
+                        🇺🇸 <b>S&P 500:</b> {sp500_price:,.2f} <span style="color:{c_sp}; font-weight:bold;">({sp500_chg:+.2f}%)</span>
+                    </p>
+                    <p style="margin:5px 0; font-size:16px;">
+                        💻 <b>Nasdaq:</b> {nasdaq_price:,.2f} <span style="color:{c_nq}; font-weight:bold;">({nasdaq_chg:+.2f}%)</span>
+                    </p>
+                    <p style="margin:5px 0; font-size:16px;">
+                        🏭 <b>Dow Jones:</b> {dow_price:,.2f} <span style="color:{c_dj}; font-weight:bold;">({dow_chg:+.2f}%)</span>
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with c_fg:
+                fg_score, fg_label, vix_val = calculate_fear_greed_proxy(us_data)
+                fg_color = "#F85149" if fg_score < 45 else "#3FB950" if fg_score > 55 else "#8B949E"
+                
+                st.markdown(f"""
+                <div style="text-align: center; background-color: #21262D; padding: 10px; border-radius: 10px;">
+                    <small style="color: #8B949E;">Fear & Greed (Est.)</small>
+                    <h2 style="color: {fg_color}; margin: 0;">{int(fg_score)}</h2>
+                    <div style="font-weight:bold; color: #FFFFFF;">{fg_label}</div>
+                    <small style="color: #8B949E;">VIX: {vix_val:.2f}</small>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+
+            # --- 2. Top Movers & Volume (Top 10 Companii) ---
+            if isinstance(us_data.columns, pd.MultiIndex):
+                all_us_tickers = us_data.columns.levels[0].tolist()
+            else:
+                all_us_tickers = []
+                
+            us_analysis_tickers = [t for t in all_us_tickers if not t.startswith('^')]
+            
+            us_gainers, us_losers, us_vol = get_bvb_stats(us_data, us_analysis_tickers)
+            
+            c_us1, c_us2 = st.columns(2)
+            with c_us1:
+                st.markdown("**🚀 Top Creșteri (Big Caps)**")
+                if not us_gainers.empty:
+                    st.dataframe(
+                        us_gainers[['Simbol', 'Preț', 'Variație']].style
+                        .format({'Preț': '${:.2f}', 'Variație': '{:+.2f}%'})
+                        .map(lambda x: 'color: #3FB950', subset=['Variație']),
+                        use_container_width=True, hide_index=True
+                    )
+            
+            with c_us2:
+                st.markdown("**🔻 Top Scăderi (Big Caps)**")
+                if not us_losers.empty:
+                    st.dataframe(
+                        us_losers[['Simbol', 'Preț', 'Variație']].style
+                        .format({'Preț': '${:.2f}', 'Variație': '{:+.2f}%'})
+                        .map(lambda x: 'color: #F85149', subset=['Variație']),
+                        use_container_width=True, hide_index=True
+                    )
+
+            # --- 3. Top Știri Wall Street ---
+            st.markdown("---")
+            st.subheader("🇺🇸 Top 10 Știri Wall Street")
+            
+            if 'news_cache_us' not in st.session_state:
+                 news_us_gspc = get_company_news_rss("^GSPC")
+                 news_us_ixic = get_company_news_rss("^IXIC")
+                 combined_us = news_us_gspc + news_us_ixic
+                 combined_us.sort(key=lambda x: x['date_str'], reverse=True)
+                 st.session_state['news_cache_us'] = combined_us
+            
+            final_us_news = st.session_state['news_cache_us']
+            
+            seen_us = set()
+            unique_us_news = []
+            for n in final_us_news:
+                if n['title'] not in seen_us:
+                    unique_us_news.append(n)
+                    seen_us.add(n['title'])
+
+            if unique_us_news:
+                us_news_html = ""
+                for item in unique_us_news[:10]:
+                     us_news_html += f"""
+                     <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
+                        <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
+                           {item['title']}
+                        </a>
+                        <div style="font-size: 12px; color: #8B949E;">{item['publisher']} • {item['date_str']}</div>
+                     </div>
+                     """
+                st.markdown(us_news_html, unsafe_allow_html=True)
+            else:
+                st.info("Nu s-au putut încărca știrile din SUA.")
 
 if __name__ == "__main__":
     main()
