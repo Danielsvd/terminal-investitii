@@ -252,9 +252,12 @@ def load_portfolio():
         pd.DataFrame(columns=["Symbol", "Date", "Quantity", "AvgPrice"]).to_csv(FILE_PORTOFOLIU, index=False)
     return pd.read_csv(FILE_PORTOFOLIU)
 
-def add_trade(s, q, p, d):
+def add_trade(s, q, p, d, c):
     df = load_portfolio()
-    new_row = pd.DataFrame({"Symbol": [s], "Date": [d], "Quantity": [q], "AvgPrice": [p]})
+    new_row = pd.DataFrame({"Symbol": [s], "Date": [d], "Quantity": [q], "AvgPrice": [p], "Currency": [c]})
+    # Dacă nu există coloana Currency în CSV-ul vechi, o va crea automat la scriere, dar e bine să ne asigurăm compatibilitatea
+    if 'Currency' not in df.columns and not df.empty:
+        df['Currency'] = 'USD' # Default pentru vechile intrări
     df = pd.concat([df, new_row], ignore_index=True)
     df.to_csv(FILE_PORTOFOLIU, index=False)
 
@@ -271,6 +274,10 @@ def calculate_portfolio_performance(df, history_range="1A"):
     df['AvgPrice'] = pd.to_numeric(df['AvgPrice'], errors='coerce').fillna(0)
     
     tickers = df['Symbol'].unique().tolist()
+    # Verificăm să nu fie lista goală
+    if not tickers:
+        return pd.DataFrame(), pd.DataFrame(), 0, 0
+        
     hist_data = yf.download(tickers, period="5y", group_by='ticker', auto_adjust=True, threads=True)
     
     current_vals = []
@@ -285,6 +292,7 @@ def calculate_portfolio_performance(df, history_range="1A"):
             if len(tickers) > 1:
                 series = hist_data[sym]['Close']
             else:
+                # Dacă e un singur ticker, structura e diferită
                 if isinstance(hist_data.columns, pd.MultiIndex):
                      series = hist_data[sym]['Close']
                 else:
@@ -407,70 +415,9 @@ def get_global_market_data():
 
     return df_indices, df_commodities, us_gainers, us_losers, eu_gainers, eu_losers
 
-# --- FUNCȚIE NOUĂ: PROCESARE CSV IMPORTAT ---
-def process_imported_csv(uploaded_file):
-    try:
-        # Citim fișierul - Încercăm detecția separatorului
-        try:
-            df = pd.read_csv(uploaded_file)
-            if df.shape[1] < 2:
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, sep=';')
-        except:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, sep=';', engine='python')
-
-        # Logica pentru structura BVB:
-        # Presupunem structura: Col 0 (wx - ignorata), Col 1 (Indicatori), Col 2... (Tickere)
-        
-        if df.shape[1] < 2:
-            st.error("Fișierul nu are structura așteptată.")
-            return pd.DataFrame()
-
-        # Setăm indexul pe coloana cu numele indicatorilor (presupunem a 2-a coloană)
-        df = df.set_index(df.columns[1])
-        
-        # Eliminăm prima coloană care conține gunoi (wx)
-        df = df.drop(df.columns[0], axis=1)
-        
-        # Transpunem (Tickere pe rânduri, Indicatori pe coloane)
-        df_t = df.T
-        
-        # Lista exactă de indicatori ceruți
-        required_columns = [
-            "Multipli de preț", # Poate fi un header, dar il includem
-            "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "P/S TTM", "GN",
-            "Indicatori de rentabilitate", 
-            "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)",
-            "Indicatori de profitabilitate",
-            "Marjă netă TTM", "Marjă operațională",
-            "Câștig pe acțiune (EPS)", "EPS TTM",
-            "Indicatori de indatorare",
-            "Levier financiar", "Lichiditate curentă", "Lichiditatea imediată",
-            "Net Debt/EBITDA", "Debt/EBIDTA", "Rata de îndatorare globală",
-            "Indicatori financiari",
-            "Rata de cash din capitalizare", "Rata de cash din activ net",
-            "C.A. Realizat", "P.N."
-        ]
-        
-        # Păstrăm doar coloanele care există efectiv în fișier pentru a evita erori
-        existing_cols = [col for col in required_columns if col in df_t.columns]
-        
-        if not existing_cols:
-            st.error("Nu s-au găsit indicatorii solicitați. Verifică numele rândurilor din CSV.")
-            return pd.DataFrame()
-            
-        final_df = df_t[existing_cols]
-        return final_df
-
-    except Exception as e:
-        st.error(f"Eroare la procesare: {e}")
-        return pd.DataFrame()
-
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
-    # MODIFICARE: Adăugat opțiunea 5
     sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală", "5. Import Date (CSV)"])
     st.sidebar.markdown("---")
 
@@ -587,7 +534,6 @@ def main():
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- START SECTIUNE INDICATORI FUNDAMENTALI (MODIFICAT) ---
             st.subheader("📊 Indicatori Fundamentali")
             beta_val = info.get('beta')
             alpha_val = calculate_alpha(hist, beta_val)
@@ -599,14 +545,10 @@ def main():
                 de_display = "N/A"
 
             with st.container():
-                # Aceasta linie este CRITICA - ea creeaza cele 4 coloane
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
                 
-                # Coloana 1: Evaluare (Aici adaugam GN)
                 with c_eval:
                     st.markdown("**Evaluare**")
-                    
-                    # Calcul GN (Graham Number)
                     pe_val = info.get('trailingPE')
                     pb_val = info.get('priceToBook')
                     
@@ -619,15 +561,10 @@ def main():
                     st.metric("P/E Ratio", format_num(pe_val), help="Cât plătești pentru 1$ profit.")
                     st.metric("Forward P/E", format_num(info.get('forwardPE')), help="P/E estimat pentru anul viitor.")
                     st.metric("P/BV", format_num(pb_val), help="Preț față de valoarea contabilă.")
-                    
-                    # --- NOUL INDICATOR ---
                     st.metric("GN (Graham)", gn_display, help="Produsul P/E * P/BV (Graham Number).")
-                    # ----------------------
-
                     st.metric("EPS", format_num(info.get('trailingEps')), help="Profit net pe acțiune.")
                     st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help="Valoarea activelor nete per acțiune (Book Value).")
 
-                # Coloana 2: Profitabilitate
                 with c_prof:
                     st.markdown("**Profitabilitate**")
                     st.metric("ROA", format_num(info.get('returnOnAssets'), True), help="Randamentul activelor.")
@@ -635,19 +572,16 @@ def main():
                     st.metric("Marjă Netă", format_num(info.get('profitMargins'), True), help="Profit net din venituri.")
                     st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True), help="EBIT / Venituri.")
                 
-                # Coloana 3: Indatorare
                 with c_indat:
                     st.markdown("**Îndatorare**")
                     st.metric("Datorii/Capital", de_display, help="Datorii totale la capital propriu (>100% poate indica risc).")
                     st.metric("Current Ratio", info.get('currentRatio', 'N/A'), help="Active curente / Datorii curente.")
                     st.metric("Quick Ratio", info.get('quickRatio', 'N/A'), help="Lichiditate imediată.")
                 
-                # Coloana 4: Risc
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", info.get('beta', 'N/A'), help="Volatilitatea față de piață.")
                     st.metric("Alpha (1Y)", format_num(alpha_val, True), help="Performanța peste piață (vs SPY).")
-            # --- END SECTIUNE INDICATORI FUNDAMENTALI ---
 
             st.markdown("---")
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
@@ -726,7 +660,7 @@ def main():
                     st.info("Nu există date de earnings.")
 
     # ==================================================
-    # 3. PORTOFOLIU
+    # 3. PORTOFOLIU (MODIFICAT PENTRU MOBIL)
     # ==================================================
     elif sectiune == "3. Portofoliu":
         st.title("💼 Portofoliu Personal")
@@ -789,40 +723,42 @@ def main():
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig_hist, use_container_width=True)
 
-                col_table, col_pie = st.columns([1.5, 1])
+                # --- MODIFICARE AICI: ELEMENTE SUPRAPUSE PENTRU MOBIL ---
                 
-                with col_table:
-                    st.subheader("Detaliu Poziții")
-                    if not df_calc.empty:
-                        display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
-                        
-                        def color_profit(val):
-                            color = '#3FB950' if val >= 0 else '#F85149'
-                            return f'color: {color}'
+                # 1. Tabelul (Pe toată lățimea)
+                st.subheader("Detaliu Poziții")
+                if not df_calc.empty:
+                    display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
+                    
+                    def color_profit(val):
+                        color = '#3FB950' if val >= 0 else '#F85149'
+                        return f'color: {color}'
 
-                        st.dataframe(
-                            df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
-                            .format({
-                                'Quantity': '{:.4f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
-                                'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
-                            }),
-                            use_container_width=True
-                        )
+                    st.dataframe(
+                        df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
+                        .format({
+                            'Quantity': '{:.4f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
+                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                        }),
+                        use_container_width=True
+                    )
+                
+                st.markdown("<br>", unsafe_allow_html=True) # Puțin spațiu
 
-                with col_pie:
-                    st.subheader("Alocare Active")
-                    if not df_calc.empty and df_calc['MarketValue'].sum() > 0:
-                        fig_pie = go.Figure(data=[go.Pie(
-                            labels=df_calc['Symbol'], 
-                            values=df_calc['MarketValue'], 
-                            hole=.4,
-                            textinfo='label+percent',
-                            textposition='outside'
-                        )])
-                        fig_pie.update_layout(height=400, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                    else:
-                        st.caption("Graficul va apărea când valoarea portofoliului este > 0")
+                # 2. Graficul Pie (Dedesubt, pe toată lățimea)
+                st.subheader("Alocare Active")
+                if not df_calc.empty and df_calc['MarketValue'].sum() > 0:
+                    fig_pie = go.Figure(data=[go.Pie(
+                        labels=df_calc['Symbol'], 
+                        values=df_calc['MarketValue'], 
+                        hole=.4,
+                        textinfo='label+percent',
+                        textposition='outside'
+                    )])
+                    fig_pie.update_layout(height=400, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.caption("Graficul va apărea când valoarea portofoliului este > 0")
 
             with tab_usd:
                 df_usd = df_pf[df_pf['Currency'] == 'USD']
@@ -1027,7 +963,6 @@ def main():
                     df_g.columns = df_g.columns.str.strip()
                     
                     # --- FIX: Eliminăm coloanele care încep cu "Unnamed" ---
-                    # Asta rezolvă problema cu coloanele goale din dreapta
                     df_g = df_g.loc[:, ~df_g.columns.str.contains('^Unnamed')]
 
                     # 2. Copiem dataframe-ul
