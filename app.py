@@ -102,7 +102,7 @@ RSS_CONFIG = {
         "https://www.investing.com/rss/news.rss"   
     ],
     "Categorii": {
-        "General": [], # Lasam gol pentru a afisa tot ce nu intra in alte categorii sau toate stirile
+        "General": [], 
         "Tehnologie": ["tehnologie", "tech", "it", "ai", "software", "hardware", "digital", "cyber", "apple", "microsoft", "google", "nvidia", "inodata", "crypto", "blockchain"],
         "Energie": ["energie", "petrol", "gaze", "oil", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica", "regenerabil", "eolian", "fotovoltaic"],
         "Financiar": ["banca", "bank", "credit", "bursa", "finante", "fonduri", "asigurari", "bvb", "fiscal", "profit", "taxe", "buget", "wall street", "brd", "banca transilvania", "actiuni"],
@@ -349,14 +349,9 @@ def calculate_portfolio_performance(df, history_range="1A"):
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct
 
-# --- MODIFICARE NOUA: FUNCȚIE GLOBAL MARKET ---
+# --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
-    """
-    Preluare optimizată pentru tab-ul 4: Indici, Mărfuri, Top SUA/EU.
-    Simulează un scaner de piață folosind o listă predefinită de Blue Chips.
-    """
-    # 1. Definiții Simboluri
     indices = {
         'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC', 
         'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE', 'BET (RO)': 'BET.RO'
@@ -366,72 +361,117 @@ def get_global_market_data():
         'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Gaz Natural': 'NG=F'
     }
     
-    # Watchlist pentru a simula Top Gainers/Losers (Blue Chips)
     us_stocks = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'NFLX', 
                  'JPM', 'V', 'PG', 'JNJ', 'XOM', 'WMT', 'KO', 'PEP', 'DIS', 'CSCO']
     eu_stocks = ['SAP', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 
                  'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'SHEL.L', 'AZN.L', 'HSBA.L', 'FP.PA']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
-    
-    # Descărcăm datele (folosim fast_info implicit prin Tickers pentru viteză)
     tickers = yf.Tickers(' '.join(all_symbols))
     
     def process_tickers(symbol_dict, is_list=False):
         data = []
         source = symbol_dict if is_list else symbol_dict.items()
-        
         for item in source:
             name = item if is_list else item[0]
             sym = item if is_list else item[1]
             try:
                 t = tickers.tickers[sym]
-                # fast_info este mult mai rapid decat history()
                 info = t.fast_info
                 price = info.last_price
                 prev = info.previous_close
                 if prev:
                     change = price - prev
                     pct = (change / prev) * 100
-                else:
-                    change = 0; pct = 0
+                else: change = 0; pct = 0
                 
                 data.append({
-                    'Instrument': name,
-                    'Simbol': sym,
-                    'Preț': price,
-                    'Variație': change,
-                    'Variație %': pct
+                    'Instrument': name, 'Simbol': sym, 'Preț': price, 'Variație': change, 'Variație %': pct
                 })
             except: continue
         return pd.DataFrame(data)
 
     df_indices = process_tickers(indices)
     df_commodities = process_tickers(commodities)
-    
-    # Procesare Topuri SUA
     df_us = process_tickers(us_stocks, is_list=True)
     if not df_us.empty:
         us_gainers = df_us.sort_values(by='Variație %', ascending=False).head(10)
         us_losers = df_us.sort_values(by='Variație %', ascending=True).head(10)
-    else:
-        us_gainers = us_losers = pd.DataFrame()
+    else: us_gainers = us_losers = pd.DataFrame()
         
-    # Procesare Topuri EU
     df_eu = process_tickers(eu_stocks, is_list=True)
     if not df_eu.empty:
         eu_gainers = df_eu.sort_values(by='Variație %', ascending=False).head(10)
         eu_losers = df_eu.sort_values(by='Variație %', ascending=True).head(10)
-    else:
-        eu_gainers = eu_losers = pd.DataFrame()
+    else: eu_gainers = eu_losers = pd.DataFrame()
 
     return df_indices, df_commodities, us_gainers, us_losers, eu_gainers, eu_losers
+
+# --- FUNCȚIE NOUĂ: PROCESARE CSV IMPORTAT ---
+def process_imported_csv(uploaded_file):
+    try:
+        # Citim fișierul - Încercăm detecția separatorului
+        try:
+            df = pd.read_csv(uploaded_file)
+            if df.shape[1] < 2:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, sep=';')
+        except:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep=';', engine='python')
+
+        # Logica pentru structura BVB:
+        # Presupunem structura: Col 0 (wx - ignorata), Col 1 (Indicatori), Col 2... (Tickere)
+        
+        if df.shape[1] < 2:
+            st.error("Fișierul nu are structura așteptată.")
+            return pd.DataFrame()
+
+        # Setăm indexul pe coloana cu numele indicatorilor (presupunem a 2-a coloană)
+        df = df.set_index(df.columns[1])
+        
+        # Eliminăm prima coloană care conține gunoi (wx)
+        df = df.drop(df.columns[0], axis=1)
+        
+        # Transpunem (Tickere pe rânduri, Indicatori pe coloane)
+        df_t = df.T
+        
+        # Lista exactă de indicatori ceruți
+        required_columns = [
+            "Multipli de preț", # Poate fi un header, dar il includem
+            "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "P/S TTM", "GN",
+            "Indicatori de rentabilitate", 
+            "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)",
+            "Indicatori de profitabilitate",
+            "Marjă netă TTM", "Marjă operațională",
+            "Câștig pe acțiune (EPS)", "EPS TTM",
+            "Indicatori de indatorare",
+            "Levier financiar", "Lichiditate curentă", "Lichiditatea imediată",
+            "Net Debt/EBITDA", "Debt/EBIDTA", "Rata de îndatorare globală",
+            "Indicatori financiari",
+            "Rata de cash din capitalizare", "Rata de cash din activ net",
+            "C.A. Realizat", "P.N."
+        ]
+        
+        # Păstrăm doar coloanele care există efectiv în fișier pentru a evita erori
+        existing_cols = [col for col in required_columns if col in df_t.columns]
+        
+        if not existing_cols:
+            st.error("Nu s-au găsit indicatorii solicitați. Verifică numele rândurilor din CSV.")
+            return pd.DataFrame()
+            
+        final_df = df_t[existing_cols]
+        return final_df
+
+    except Exception as e:
+        st.error(f"Eroare la procesare: {e}")
+        return pd.DataFrame()
 
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
-    # MODIFICARE NOUA: Adaugat optiunea 4
-    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală"])
+    # MODIFICARE: Adăugat opțiunea 5
+    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală", "5. Import Date (CSV)"])
     st.sidebar.markdown("---")
 
     # ==================================================
@@ -650,7 +690,6 @@ def main():
                 color_rec = "#3FB950" if "BUY" in rec else "#F85149" if "SELL" in rec else "#8B949E"
                 st.markdown(f"Recomandare: <span style='color:{color_rec}; font-weight:bold;'>{rec}</span>", unsafe_allow_html=True)
                 
-                # --- VIZUALIZARE SCOR ANALIST ---
                 if rec_mean:
                     score_clamped = max(1.0, min(5.0, rec_mean))
                     pos_pct = (score_clamped - 1.0) / 4.0 * 100.0
@@ -703,33 +742,12 @@ def main():
                 d_acq = st.date_input("Data", datetime.today())
                 
                 if st.form_submit_button("Salvează") and s:
-                    df_new = pd.DataFrame({
-                        "Symbol": [s], 
-                        "Date": [d_acq], 
-                        "Quantity": [float(q)], 
-                        "AvgPrice": [float(p)],
-                        "Currency": [curr]
-                    })
-                    
-                    if not os.path.exists(FILE_PORTOFOLIU):
-                        df_new.to_csv(FILE_PORTOFOLIU, index=False)
-                    else:
-                        df_old = pd.read_csv(FILE_PORTOFOLIU)
-                        if "Currency" not in df_old.columns:
-                            df_old["Currency"] = "USD"
-                        
-                        df_final = pd.concat([df_old, df_new], ignore_index=True)
-                        df_final.to_csv(FILE_PORTOFOLIU, index=False)
-                        
+                    add_trade(s, q, p, d_acq, curr)
                     st.success(f"Adăugat {s}!")
                     st.rerun()
 
         if os.path.exists(FILE_PORTOFOLIU):
-            df_pf = pd.read_csv(FILE_PORTOFOLIU)
-            if "Currency" not in df_pf.columns:
-                df_pf["Currency"] = "USD"
-            df_pf['Quantity'] = pd.to_numeric(df_pf['Quantity'], errors='coerce').fillna(0)
-            df_pf['AvgPrice'] = pd.to_numeric(df_pf['AvgPrice'], errors='coerce').fillna(0)
+            df_pf = load_portfolio()
         else:
             df_pf = pd.DataFrame()
 
@@ -820,7 +838,7 @@ def main():
                 st.rerun()
 
     # ==================================================
-    # 4. MODIFICARE NOUA: PIAȚĂ GLOBALĂ
+    # 4. PIAȚĂ GLOBALĂ
     # ==================================================
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
@@ -833,12 +851,10 @@ def main():
         with st.spinner("Descărcăm datele globale..."):
             df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
 
-        # Functie de styling pentru colorare
         def color_change_val(val):
             color = '#3FB950' if val >= 0 else '#F85149'
             return f'color: {color}'
 
-        # SECTIUNEA 1: Indici & Mărfuri (Stil Yahoo - Tabele curate)
         col_m1, col_m2 = st.columns(2)
         
         with col_m1:
@@ -859,7 +875,6 @@ def main():
 
         st.markdown("---")
         
-        # SECTIUNEA 2: Top Gainers/Losers SUA
         st.subheader("🇺🇸 Top Mișcări SUA (Blue Chips)")
         c_us1, c_us2 = st.columns(2)
         
@@ -885,7 +900,6 @@ def main():
 
         st.markdown("---")
 
-        # SECTIUNEA 3: Top Gainers/Losers EUROPA
         st.subheader("🇪🇺 Top Mișcări EUROPA")
         c_eu1, c_eu2 = st.columns(2)
         
@@ -908,6 +922,152 @@ def main():
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
                     use_container_width=True, hide_index=True
                 )
+
+    # ==================================================
+    # 5. IMPORT DATE (CSV) - BVB & GLOBAL (FINAL & CLEAN)
+    # ==================================================
+    elif sectiune == "5. Import Date (CSV)":
+        st.title("📂 Analiză Date din Fișiere")
+        
+        tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", "🌍 Internațional (Global)"])
+
+        # --- FUNCȚII AJUTĂTOARE ---
+        def clean_european_number(val):
+            """Transformă '1.000,50' sau '50,00%' în float 1000.50 sau 50.00"""
+            try:
+                if pd.isna(val): return 0
+                val_str = str(val).strip()
+                # Scoatem simboluri care încurcă conversia
+                for s in ['$', '€', '£', 'RON', '%', 'USD']: 
+                    val_str = val_str.replace(s, '')
+                
+                # Logică: scoatem punctele de mii, înlocuim virgula cu punct
+                val_str = val_str.replace('.', '').replace(',', '.')
+                return float(val_str)
+            except:
+                return 0 
+
+        def format_large_currency(val):
+            """Formatează Capitalizarea (T/B/M)"""
+            num = clean_european_number(val)
+            if num == 0 and val != 0: return val 
+            if num >= 1e12: return f"{num/1e12:.2f} T"
+            if num >= 1e9: return f"{num/1e9:.2f} B"
+            if num >= 1e6: return f"{num/1e6:.2f} M"
+            return f"{num:,.2f}"
+
+        # ---------------------------------------------------------
+        # TAB 1: BVB (NEMODIFICAT)
+        # ---------------------------------------------------------
+        with tab_bvb:
+            st.subheader("Import Date BVB")
+            FILE_BVB = "BVB.csv"
+
+            if os.path.exists(FILE_BVB):
+                try:
+                    try:
+                        df = pd.read_csv(FILE_BVB)
+                        if df.shape[1] < 2: df = pd.read_csv(FILE_BVB, sep=';')
+                    except:
+                        df = pd.read_csv(FILE_BVB, sep=';', engine='python')
+
+                    if df.shape[1] > 1:
+                        df = df.set_index(df.columns[1])
+                        df = df.drop(df.columns[0], axis=1)
+                        df_t = df.T
+                        df_t.columns = df_t.columns.str.strip()
+
+                        indicators_bvb = [
+                            "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "P/S TTM", "GN",
+                            "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)", "ROE",
+                            "Marjă netă TTM", "Marjă operațională", "Câștig pe acțiune (EPS)", "EPS TTM",
+                            "Levier financiar", "Lichiditate curentă", "Lichiditatea imediată", 
+                            "Net Debt/EBITDA", "Debt/EBIDTA", "Rata de îndatorare globală",
+                            "Rata de cash din capitalizare", "Rata de cash din activ net", "C.A. Realizat", "P.N. Realizat"
+                        ]
+                        
+                        existing_cols = [col for col in indicators_bvb if col in df_t.columns]
+                        
+                        if existing_cols:
+                            final_df = df_t[existing_cols].copy()
+                            for col in final_df.columns:
+                                try:
+                                    temp_col = final_df[col].astype(str).str.replace(',', '.', regex=False)
+                                    final_df[col] = pd.to_numeric(temp_col, errors='ignore')
+                                except: pass
+                            
+                            st.success(f"BVB: {len(existing_cols)} coloane procesate.")
+                            st.dataframe(final_df, height=700, use_container_width=True)
+                        else:
+                            st.error("Nu s-au găsit indicatorii în BVB.csv.")
+                    else:
+                        st.error("Structura BVB incorectă.")
+                except Exception as e:
+                    st.error(f"Eroare BVB: {e}")
+            else:
+                st.warning(f"Fișierul '{FILE_BVB}' lipsește.")
+
+        # ---------------------------------------------------------
+        # TAB 2: GLOBAL (FĂRĂ COLOANE "UNNAMED")
+        # ---------------------------------------------------------
+        with tab_global:
+            st.subheader("Import Date Internaționale")
+            FILE_GLOBAL = "GLOBAL.csv"
+
+            if os.path.exists(FILE_GLOBAL):
+                try:
+                    # 1. Citire
+                    try:
+                        df_g = pd.read_csv(FILE_GLOBAL)
+                        if df_g.shape[1] < 2: df_g = pd.read_csv(FILE_GLOBAL, sep=';')
+                    except:
+                        df_g = pd.read_csv(FILE_GLOBAL, sep=';', engine='python')
+
+                    # Eliminăm spații din numele coloanelor
+                    df_g.columns = df_g.columns.str.strip()
+                    
+                    # --- FIX: Eliminăm coloanele care încep cu "Unnamed" ---
+                    # Asta rezolvă problema cu coloanele goale din dreapta
+                    df_g = df_g.loc[:, ~df_g.columns.str.contains('^Unnamed')]
+
+                    # 2. Copiem dataframe-ul
+                    final_df_g = df_g.copy()
+
+                    # Setăm indexul
+                    if "Companii" in final_df_g.columns:
+                        final_df_g = final_df_g.set_index("Companii")
+
+                    # 3. Formatare Inteligentă
+                    for col in final_df_g.columns:
+                        if col in ["Industrie", "Recomandare", "Sector"]:
+                            continue
+                        
+                        # A. CAPITALIZARE
+                        if "Capitalizare" in col:
+                            final_df_g[col] = final_df_g[col].apply(format_large_currency)
+                        
+                        # B. PROCENTE
+                        elif any(k in col for k in ["ROA", "ROE", "Marjă", "Abatere", "Datorii", "Div Yield"]):
+                            def format_percent(val):
+                                num = clean_european_number(val)
+                                return f"{num:.2f}%"
+                            final_df_g[col] = final_df_g[col].apply(format_percent)
+
+                        # C. NUMERE STANDARD
+                        else:
+                            def clean_standard(val):
+                                try:
+                                    return clean_european_number(val)
+                                except: return val
+                            final_df_g[col] = final_df_g[col].apply(clean_standard)
+
+                    st.success(f"Global: {len(final_df_g.columns)} coloane afișate.")
+                    st.dataframe(final_df_g, height=700, use_container_width=True)
+
+                except Exception as e:
+                    st.error(f"Eroare Global: {e}")
+            else:
+                st.warning(f"Fișierul '{FILE_GLOBAL}' nu a fost găsit.")
 
 if __name__ == "__main__":
     main()
