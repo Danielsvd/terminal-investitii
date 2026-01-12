@@ -7,3 +7,4 @@ textblob
 numpy
 lxml
 requests
+matplotlib
