@@ -86,30 +86,36 @@ st.markdown("""
 RSS_CONFIG = {
     "Feeds": [
         # --- ROMÂNIA (Business & Economic) ---
-        "https://www.zf.ro/rss",                   # Ziarul Financiar (deja il ai)
-        "https://www.biziday.ro/feed/",            # Biziday (deja il ai)
-        "https://www.economica.net/rss",           # Economica (deja il ai)
-        "https://www.bursa.ro/_rss/?t=pcaps",     # Bursa (deja il ai)
-        "https://www.profit.ro/rss",               # <--- NOU: Foarte bun pe fiscalitate/bursă
-        "https://www.startupcafe.ro/rss",          # <--- NOU: Focus pe antreprenoriat/fonduri
-        "https://financialintelligence.ro/feed/",  # <--- NOU: Analize piața de capital RO
-        "https://www.wall-street.ro/rss/business", # <--- NOU: Știri generale business
+        "https://www.zf.ro/rss",                   # Ziarul Financiar
+        "https://www.biziday.ro/feed/",            # Biziday
+        "https://www.economica.net/rss",           # Economica
+        "https://www.bursa.ro/_rss/?t=pcaps",     # Bursa
+        "https://www.profit.ro/rss",               # Profit.ro
+        "https://www.startupcafe.ro/rss",          # StartupCafe
+        "https://financialintelligence.ro/feed/",  # Financial Intelligence
+        "https://www.wall-street.ro/rss/business", # Wall-Street
 
         # --- INTERNAȚIONAL (Market Movers) ---
-        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US", # Yahoo (deja il ai)
-        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", # <--- NOU: CNBC Finance
-        "http://feeds.marketwatch.com/marketwatch/topstories", # <--- NOU: MarketWatch Top Stories
-        "https://www.investing.com/rss/news.rss"   # <--- NOU: Investing.com (General)
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US", 
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+        "http://feeds.marketwatch.com/marketwatch/topstories",
+        "https://www.investing.com/rss/news.rss"   
     ],
     "Categorii": {
-        "General": [],
-        "Energie": ["energie", "petrol", "gaze", "oil", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica"],
-        "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious"],
-        "Valute": ["euro", "dolar", "ron", "curs", "valutar", "forex", "eur", "usd", "bnt", "schimb"],
-        "Șomaj/Muncă": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "hr", "munca"],
-        "Bănci": ["banca", "credit", "bcr", "brd", "revolut", "tbi", "transilvania", "raiffeisen", "cec", "bank"],
-        "Dobânzi": ["dobanda", "robor", "ircc", "interest", "fed", "bce", "inflation", "inflatie", "banci centrale"],
-        "WallStreet": ["sua", "wall street", "nasdaq", "dow jones", "sp500", "apple", "tesla", "microsoft", "nvidia", "amazon", "google"]
+        "General": [], # Lasam gol pentru a afisa tot ce nu intra in alte categorii sau toate stirile
+        "Tehnologie": ["tehnologie", "tech", "it", "ai", "software", "hardware", "digital", "cyber", "apple", "microsoft", "google", "nvidia", "inodata", "crypto", "blockchain"],
+        "Energie": ["energie", "petrol", "gaze", "oil", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica", "regenerabil", "eolian", "fotovoltaic"],
+        "Financiar": ["banca", "bank", "credit", "bursa", "finante", "fonduri", "asigurari", "bvb", "fiscal", "profit", "taxe", "buget", "wall street", "brd", "banca transilvania", "actiuni"],
+        "Farma": ["farma", "pharma", "sanatate", "medicament", "spital", "medical", "pfizer", "nvo", "sanofi", "eli lilly", "novartis", "antibiotice", "medlife", "regina maria"],
+        "Militar": ["militar", "aparare", "defense", "armata", "razboi", "nato", "arme", "securitate", "geopolitic", "taiwan", "Lockheed Martin", "raytheon", "rheinmetall", "ucraina", "rusia"],
+        "Alimentatie": ["alimentatie", "food", "retail", "agricultura", "horeca", "supermarket", "bauturi", "preturi alimente", "carrefour", "lidl", "kaufland"],
+        "Calatorii": ["turism", "calatorii", "travel", "aviatie", "aeroport", "hotel", "transport", "tarom", "wizz", "vacanta", "zbor"],
+        "Constructii": ["constructii", "imobiliare", "impact developer", "ONE united properties", "real estate", "santier", "dezvoltator", "locuinte", "ciment", "infrastructura", "drumuri", "autostrada"],
+        "Auto": ["auto", "masini", "ev", "electric", "dacia", "ford", "tesla", "volkswagen", "bmw", "mercedes", "automotive", "inmatriculari"],
+        "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "MP Materials", "otel"],
+        "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "soia", "cafea", "culturi"],
+        "Dobânzi": ["dobanda", "robor", "ircc", "interest", "fed", "bce", "inflation", "inflatie", "banci centrale", "bnr"],
+        "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "hr", "munca", "forta de munca"]
     }
 }
 
@@ -541,6 +547,7 @@ def main():
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
             st.plotly_chart(fig, use_container_width=True)
 
+            # --- START SECTIUNE INDICATORI FUNDAMENTALI (MODIFICAT) ---
             st.subheader("📊 Indicatori Fundamentali")
             beta_val = info.get('beta')
             alpha_val = calculate_alpha(hist, beta_val)
@@ -552,30 +559,55 @@ def main():
                 de_display = "N/A"
 
             with st.container():
+                # Aceasta linie este CRITICA - ea creeaza cele 4 coloane
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
+                
+                # Coloana 1: Evaluare (Aici adaugam GN)
                 with c_eval:
                     st.markdown("**Evaluare**")
-                    st.metric("P/E Ratio", format_num(info.get('trailingPE')), help="Cât plătești pentru 1$ profit.")
+                    
+                    # Calcul GN (Graham Number)
+                    pe_val = info.get('trailingPE')
+                    pb_val = info.get('priceToBook')
+                    
+                    if pe_val is not None and pb_val is not None:
+                        gn_val = pe_val * pb_val
+                        gn_display = f"{gn_val:.2f}"
+                    else:
+                        gn_display = "N/A"
+
+                    st.metric("P/E Ratio", format_num(pe_val), help="Cât plătești pentru 1$ profit.")
                     st.metric("Forward P/E", format_num(info.get('forwardPE')), help="P/E estimat pentru anul viitor.")
-                    st.metric("P/BV", format_num(info.get('priceToBook')), help="Preț față de valoarea contabilă.")
+                    st.metric("P/BV", format_num(pb_val), help="Preț față de valoarea contabilă.")
+                    
+                    # --- NOUL INDICATOR ---
+                    st.metric("GN (Graham)", gn_display, help="Produsul P/E * P/BV (Graham Number).")
+                    # ----------------------
+
                     st.metric("EPS", format_num(info.get('trailingEps')), help="Profit net pe acțiune.")
                     st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help="Valoarea activelor nete per acțiune (Book Value).")
 
+                # Coloana 2: Profitabilitate
                 with c_prof:
                     st.markdown("**Profitabilitate**")
                     st.metric("ROA", format_num(info.get('returnOnAssets'), True), help="Randamentul activelor.")
                     st.metric("ROE", format_num(info.get('returnOnEquity'), True), help="Randamentul capitalului propriu.")
                     st.metric("Marjă Netă", format_num(info.get('profitMargins'), True), help="Profit net din venituri.")
                     st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True), help="EBIT / Venituri.")
+                
+                # Coloana 3: Indatorare
                 with c_indat:
                     st.markdown("**Îndatorare**")
                     st.metric("Datorii/Capital", de_display, help="Datorii totale la capital propriu (>100% poate indica risc).")
                     st.metric("Current Ratio", info.get('currentRatio', 'N/A'), help="Active curente / Datorii curente.")
                     st.metric("Quick Ratio", info.get('quickRatio', 'N/A'), help="Lichiditate imediată.")
+                
+                # Coloana 4: Risc
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", info.get('beta', 'N/A'), help="Volatilitatea față de piață.")
                     st.metric("Alpha (1Y)", format_num(alpha_val, True), help="Performanța peste piață (vs SPY).")
+            # --- END SECTIUNE INDICATORI FUNDAMENTALI ---
 
             st.markdown("---")
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
@@ -879,4 +911,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
