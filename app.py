@@ -86,13 +86,13 @@ st.markdown("""
 RSS_CONFIG = {
     "Feeds": [
         # --- ROMÂNIA (Business & Economic) ---
-        "https://www.zf.ro/rss",                   # Ziarul Financiar
-        "https://www.biziday.ro/feed/",            # Biziday
-        "https://www.economica.net/rss",           # Economica
-        "https://www.bursa.ro/_rss/?t=pcaps",     # Bursa
-        "https://www.profit.ro/rss",               # Profit.ro
-        "https://www.startupcafe.ro/rss",          # StartupCafe
-        "https://financialintelligence.ro/feed/",  # Financial Intelligence
+        "https://www.zf.ro/rss",                    # Ziarul Financiar
+        "https://www.biziday.ro/feed/",             # Biziday
+        "https://www.economica.net/rss",            # Economica
+        "https://www.bursa.ro/_rss/?t=pcaps",      # Bursa
+        "https://www.profit.ro/rss",                # Profit.ro
+        "https://www.startupcafe.ro/rss",           # StartupCafe
+        "https://financialintelligence.ro/feed/",   # Financial Intelligence
         "https://www.wall-street.ro/rss/business", # Wall-Street
 
         # --- INTERNAȚIONAL (Market Movers) ---
@@ -1164,7 +1164,7 @@ def main():
             else:
                 st.warning(f"Fișierul '{FILE_GLOBAL}' nu a fost găsit.")
 
-   # ==================================================
+    # ==================================================
     # 6. REZUMATUL ZILEI (NOU & OPTIMIZAT)
     # ==================================================
     elif sectiune == "6. Rezumatul Zilei":
@@ -1185,20 +1185,19 @@ def main():
         with tab_bvb:
             st.markdown(f"### 📅 Raport Bursa de Valori București - {now.strftime('%d-%m-%Y')}")
             
-            # 1. Narrativa Principală (Indicele BET) - ACUM PRIMIM 3 VALORI
+            # 1. Narrativa Principală (Indicele BET) - ACUM MODIFICAT SĂ ARATE CA WALL STREET
             bet_text, bet_change, bet_price = generate_market_narrative(bvb_data, 'TVBETETF.RO', 'Indicele BET')
             
-            # Fallback text dacă BET nu are date
-            if "Date insuficiente" in bet_text and bet_change == 0:
-                 bet_text = "Indicele BET nu a furnizat date în timp real momentan. Verificați evoluția companiilor individuale mai jos."
-                 border_color = "#30363D" # Gri neutru
-            else:
-                 border_color = "#3FB950" if bet_change >= 0 else "#F85149"
+            # Determinăm culoarea în funcție de schimbare
+            c_bet = "#3FB950" if bet_change >= 0 else "#F85149"
             
+            # Afișare stil "Card" (similar cu Wall Street)
             st.markdown(f"""
-            <div style="background-color: #161B22; padding: 20px; border-radius: 10px; border-left: 5px solid {border_color}; margin-bottom: 20px;">
-                <h4 style="margin-top:0;">Evoluția Pieței Locale</h4>
-                <p style="font-size: 16px; line-height: 1.6;">{bet_text}</p>
+            <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {c_bet}; margin-bottom: 20px;">
+                <h4 style="margin-top:0;">🇷🇴 Evoluția Pieței Locale</h4>
+                <p style="margin:5px 0; font-size:18px;">
+                    📉 <b>BET (TVBETETF):</b> {bet_price:,.2f} RON <span style="color:{c_bet}; font-weight:bold;">({bet_change:+.2f}%)</span>
+                </p>
             </div>
             """, unsafe_allow_html=True)
             
@@ -1281,14 +1280,14 @@ def main():
             if unique_ro_news:
                 news_html = ""
                 for item in unique_ro_news[:5]:
-                     news_html += f"""
-                     <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
+                      news_html += f"""
+                      <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
                         <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
                            {item['title']}
                         </a>
                         <div style="font-size: 12px; color: #8B949E;">{item['source']} • {item['date_str']}</div>
-                     </div>
-                     """
+                      </div>
+                      """
                 st.markdown(news_html, unsafe_allow_html=True)
             else:
                 st.info("Nu s-au găsit știri locale recente.")
@@ -1401,14 +1400,14 @@ def main():
             if unique_us_news:
                 us_news_html = ""
                 for item in unique_us_news[:10]:
-                     us_news_html += f"""
-                     <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
+                      us_news_html += f"""
+                      <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
                         <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
                            {item['title']}
                         </a>
                         <div style="font-size: 12px; color: #8B949E;">{item['publisher']} • {item['date_str']}</div>
-                     </div>
-                     """
+                      </div>
+                      """
                 st.markdown(us_news_html, unsafe_allow_html=True)
             else:
                 st.info("Nu s-au putut încărca știrile din SUA.")
