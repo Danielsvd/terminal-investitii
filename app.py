@@ -13,7 +13,7 @@ import numpy as np
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
-socket.setdefaulttimeout(10)
+socket.setdefaulttimeout(15) # Mărit timeout-ul pentru conexiuni lente
 
 FILE_PORTOFOLIU = "portofoliu.csv"
 
@@ -85,37 +85,34 @@ st.markdown("""
 # --- 1. CONFIGURARE AGREGATOR ---
 RSS_CONFIG = {
     "Feeds": [
-        # --- ROMÂNIA (Business & Economic) ---
-        "https://www.zf.ro/rss",                    # Ziarul Financiar
-        "https://www.biziday.ro/feed/",             # Biziday
-        "https://www.economica.net/rss",            # Economica
-        "https://www.bursa.ro/_rss/?t=pcaps",      # Bursa
-        "https://www.profit.ro/rss",                # Profit.ro
-        "https://www.startupcafe.ro/rss",           # StartupCafe
-        "https://financialintelligence.ro/feed/",   # Financial Intelligence
-        "https://www.wall-street.ro/rss/business", # Wall-Street
-
-        # --- INTERNAȚIONAL (Market Movers) ---
+        "https://www.zf.ro/rss",                    
+        "https://www.biziday.ro/feed/",             
+        "https://www.economica.net/rss",            
+        "https://www.bursa.ro/_rss/?t=pcaps",      
+        "https://www.profit.ro/rss",                
+        "https://www.startupcafe.ro/rss",           
+        "https://financialintelligence.ro/feed/",   
+        "https://www.wall-street.ro/rss/business", 
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US", 
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
         "http://feeds.marketwatch.com/marketwatch/topstories",
-        "https://www.investing.com/rss/news.rss"   
+        "https://www.investing.com/rss/news.rss"    
     ],
     "Categorii": {
         "General": [], 
-        "Tehnologie": ["tehnologie", "tech", "it", "ai", "software", "hardware", "digital", "cyber", "apple", "microsoft", "google", "nvidia", "inodata", "crypto", "blockchain"],
-        "Energie": ["energie", "petrol", "gaze", "oil", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica", "regenerabil", "eolian", "fotovoltaic"],
-        "Financiar": ["banca", "bank", "credit", "bursa", "finante", "fonduri", "asigurari", "bvb", "fiscal", "profit", "taxe", "buget", "wall street", "brd", "banca transilvania", "actiuni"],
-        "Farma": ["farma", "pharma", "sanatate", "medicament", "spital", "medical", "pfizer", "nvo", "sanofi", "eli lilly", "novartis", "antibiotice", "medlife", "regina maria"],
-        "Militar": ["militar", "aparare", "defense", "armata", "razboi", "nato", "arme", "securitate", "geopolitic", "taiwan", "Lockheed Martin", "raytheon", "rheinmetall", "ucraina", "rusia"],
-        "Alimentatie": ["alimentatie", "food", "retail", "agricultura", "horeca", "supermarket", "bauturi", "preturi alimente", "carrefour", "lidl", "kaufland"],
-        "Calatorii": ["turism", "calatorii", "travel", "aviatie", "aeroport", "hotel", "transport", "tarom", "wizz", "vacanta", "zbor"],
+        "Tehnologie": ["tehnologie", "tech", "it", "ai", "software", "hardware", "digital", "cyber", "apple", "microsoft", "google", "nvidia", "oracle", "amazon", "adobe", "asml", "tsm", "palantir", "qualcomm", "Micron", "AMD", "Meta", "Broadcom", "intel", "innodata", "crypto", "blockchain"],
+        "Energie": ["energie", "petrol", "gaze", "oil", "WTI", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica", "electrica", "simtel", "transelectrica", "transgaz", "regenerabil", "eolian", "occidental petroleum", "exxon", "chevron", "devon", "centrus energy", "conocophillips", "LNG", "OKLO", "Shell", "vistra", "Totalenergies", "nuscale power", "fotovoltaic"],
+        "Financiar": ["banca", "bank", "credit", "bursa", "finante", "fonduri", "asigurari", "bvb", "fiscal", "profit", "taxe", "buget", "wall street", "brd", "banca transilvania", "aig", "bac", "wfc", "JPM", "BNP", "unicredit", "UBS", "Deutsche Bank", "MS", "GS", "BLK", "actiuni"],
+        "Farma": ["farma", "pharma", "sanatate", "medicament", "spital", "medical", "pfizer", "nvo", "sanofi", "eli lilly", "novartis", "antibiotice", "BIO", "Merk", "Biogen", "Biontech", "Medicover", "bayer", "sanofy", "Unitedhealth", "J&J", "medlife", "regina maria"],
+        "Militar": ["militar", "aparare", "defense", "armata", "razboi", "nato", "arme", "securitate", "geopolitic", "taiwan", "Lockheed Martin", "raytheon", "Bae Systems", "Leonardo", "rocket lab", "thales", "vinci", "red cat", "eutelsat", "rheinmetall", "ucraina", "rusia"],
+        "Alimentatie": ["alimentatie", "food", "retail", "agricultura", "horeca", "supermarket", "bauturi", "preturi alimente", "DPZ", "KO", "MCD", "PM", "P&G", "Colgate", "Pepsi", "Walmart", "carrefour", "lidl", "kaufland"],
+        "Calatorii": ["turism", "calatorii", "travel", "aviatie", "aeroport", "hotel", "transport", "tarom", "airbus", "boeing", "Delta", "Royal Caribbean", "Marriot", "United Airlines", "wizz", "vacanta", "zbor"],
         "Constructii": ["constructii", "imobiliare", "impact developer", "ONE united properties", "real estate", "santier", "dezvoltator", "locuinte", "ciment", "infrastructura", "drumuri", "autostrada"],
-        "Auto": ["auto", "masini", "ev", "electric", "dacia", "ford", "tesla", "volkswagen", "bmw", "mercedes", "automotive", "inmatriculari"],
-        "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "MP Materials", "otel"],
-        "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "soia", "cafea", "culturi"],
-        "Dobânzi": ["dobanda", "robor", "ircc", "interest", "fed", "bce", "inflation", "inflatie", "banci centrale", "bnr"],
-        "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "hr", "munca", "forta de munca"]
+        "Auto": ["auto", "masini", "ev", "electric", "dacia", "ford", "tesla", "volkswagen", "bmw", "mercedes", "automotive", "BYD", "Xpeng", "Nio", "Toyota", "Audi", "Ferrari", "inmatriculari"],
+        "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "Critical Matals", "Glencore", "USA Rare Earth", "MP Materials", "otel"],
+        "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "cacao", "soia", "prime materials", "gas", "cafea", "culturi"],
+        "Dobânzi": ["dobanda", "robor", "ircc", "interest", "inflation", "inflatie", "banci centrale", "FED", "BCE", "BNR"],
+        "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "PPI", "PCE", "CPI", "PMI", "NFP", "HR", "munca", "forta de munca"]
     }
 }
 
@@ -195,7 +192,7 @@ def get_company_news_rss(symbol):
     except: return []
     return news_list
 
-# --- FUNCȚII ANALIZĂ ---
+# --- FUNCȚII ANALIZĂ (Professional Update) ---
 @st.cache_data(ttl=3600)
 def get_market_data():
     try:
@@ -203,15 +200,37 @@ def get_market_data():
         return spy
     except: return None
 
+@st.cache_data(ttl=3600)
+def get_risk_free_rate():
+    """Descarcă randamentul titlurilor de stat SUA pe 10 ani (^TNX) ca proxy pentru Risk Free Rate."""
+    try:
+        tnx = yf.Ticker("^TNX").history(period="1d")
+        if not tnx.empty:
+            return tnx['Close'].iloc[-1] / 100
+    except:
+        pass
+    return 0.04 # Fallback la 4%
+
 def calculate_alpha(stock_hist, beta):
     try:
         spy = get_market_data()
         if spy is None or stock_hist is None: return None
-        stock_close = stock_hist['Close'].iloc[-len(spy):]
+        
+        # Sincronizare lungime date
+        min_len = min(len(spy), len(stock_hist))
+        stock_close = stock_hist['Close'].iloc[-min_len:]
+        spy_close = spy.iloc[-min_len:]
+        
+        # Calcul randament total
         ret_stock = (stock_close.iloc[-1] / stock_close.iloc[0]) - 1
-        ret_market = (spy.iloc[-1] / spy.iloc[0]) - 1
-        risk_free = 0.04
+        ret_market = (spy_close.iloc[-1] / spy_close.iloc[0]) - 1
+        
+        # Rata dinamică
+        risk_free = get_risk_free_rate()
+        
         if beta is None: beta = 1.0
+        
+        # Formula CAPM: Alpha = R_stock - (R_rf + Beta * (R_market - R_rf))
         alpha = ret_stock - (risk_free + beta * (ret_market - risk_free))
         return alpha
     except: return None
@@ -246,20 +265,93 @@ def calculate_technical_indicators(df):
     df['Signal'] = df['MACD'].ewm(span=9).mean()
     return df
 
+def plot_correlation_matrix(tickers):
+    """
+    Generează o matrice de corelare optimizată cu INTERPRETARE TEXTUALĂ.
+    Schimbă culorile: 
+    - Albastru = RISC (Corelare Mare)
+    - Verde = SIGURANȚĂ (Diversificare/Hedge)
+    """
+    if len(tickers) < 2: return None
+    try:
+        # Descărcare date
+        data = yf.download(tickers, period="1y", progress=False)['Close']
+        returns = data.pct_change().dropna()
+        corr_matrix = returns.corr()
+        
+        # Pregătire matrice TEXT pentru afișare (Valoare + Interpretare)
+        text_matrix = []
+        for row_idx in range(len(corr_matrix)):
+            row_text = []
+            for col_idx in range(len(corr_matrix)):
+                val = corr_matrix.iloc[row_idx, col_idx]
+                
+                # Logică interpretare (Threshold-uri profesionale)
+                if row_idx == col_idx:
+                    label = "Identic"
+                    display_text = "" # Lăsăm gol pe diagonală
+                elif val > 0.8:
+                    label = "RISC (Duplicat)"
+                    display_text = f"{val:.2f}<br>⚠️ {label}"
+                elif val > 0.5:
+                    label = "Corelat (Risc Mediu)"
+                    display_text = f"{val:.2f}<br>{label}"
+                elif val > 0.2:
+                    label = "Moderat"
+                    display_text = f"{val:.2f}<br>{label}"
+                elif val > -0.2:
+                    label = "Diversificat (BUN)"
+                    display_text = f"{val:.2f}<br>✅ {label}"
+                else:
+                    label = "Hedge (Protecție)"
+                    display_text = f"{val:.2f}<br>🛡️ {label}"
+                
+                row_text.append(display_text)
+            text_matrix.append(row_text)
+
+        # --- CONFIGURARE CULORI ---
+        # 0.0 (Minim, -1) -> Verde lime (Siguranță)
+        # 0.5 (Mijloc, 0) -> Alb (Neutru)
+        # 1.0 (Maxim, 1)  -> Albastru (Risc)
+        custom_colorscale = [
+            [0.0, 'rgb(0, 255, 0)'],   # -1: Verde lime
+            [0.5, 'rgb(255, 255, 255)'], #  0: Alb
+            [1.0, 'rgb(1, 70, 77)']      # +1: Albastru
+        ]
+
+        fig = go.Figure(data=go.Heatmap(
+            z=corr_matrix.values,
+            x=corr_matrix.columns,
+            y=corr_matrix.columns,
+            colorscale=custom_colorscale, 
+            zmin=-1, zmax=1,
+            text=text_matrix,
+            texttemplate="%{text}",
+            hovertemplate="<b>%{x} vs %{y}</b><br>Coeficient: %{z:.2f}<br><extra></extra>",
+            showscale=True,
+            colorbar=dict(title="Nivel Risc")
+        ))
+        
+        fig.update_layout(
+            title='Matrice Diversificare (Albastru = Risc Mare | Verde = Siguranță)',
+            height=550,
+            template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(size=12)
+        )
+        return fig
+    except Exception as e: return None
+
 # --- FUNCȚII NOI PENTRU REZUMAT ZILNIC (DAILY BRIEFING) ---
 
 def generate_market_narrative(ticker_data, symbol, name):
-    """Generează un text descriptiv, procentul și prețul curent."""
     try:
-        # Extragem datele corect, gestionând MultiIndex-ul
         if isinstance(ticker_data.columns, pd.MultiIndex):
-             # Cazul în care avem mai multe tickere descărcate
             if symbol in ticker_data.columns.levels[0]:
                 close = ticker_data[symbol]['Close']
             else:
                 return f"Date indisponibile pentru {name}.", 0, 0
         else:
-             # Fallback
             close = ticker_data['Close']
 
         close = close.dropna()
@@ -286,52 +378,44 @@ def generate_market_narrative(ticker_data, symbol, name):
             sentiment = "negativ"
             
         text = f"**{name}** a înregistrat {trend} de **{change_pct:.2f}%**, închizând la {curr:,.2f}. Sentimentul pieței este {sentiment}."
-        # Returnăm ACUM și prețul curent (curr)
         return text, change_pct, curr
     except Exception as e:
         return f"Nu s-au putut genera date pentru {name}.", 0, 0
 
 @st.cache_data(ttl=1800)
 def get_daily_briefing_data():
-    # 1. Date BVB (România)
     bvb_tickers = [
         'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
-        'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 
-        'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ARS.RO', 'BRK.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
+        'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 'MILK.RO', 
+        'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ARS.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
         'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
     ]
     bvb_data = yf.download(bvb_tickers, period="5d", group_by='ticker', progress=False)
     
-    # 2. Date SUA (Wall Street - Top 20 + Indici + Sentiment)
-    # Lista extinsă: Indici, VIX (Fear Gauge), Magnificent 7, Retail, Bănci, Pharma
     us_tickers = [
-        '^GSPC', '^DJI', '^IXIC', '^VIX', # Indici & Volatilitate
-        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', # Mag 7
-        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'WFC', 'MS', 'GS', 'V', 'INOD', 'MA', # Tech & Finance
-        'WMT', 'KO', 'PEP', 'PG', 'JNJ', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'METC', 'MP', 'LLY', 'XOM', 'CVX', # Defensive & Energy
-        'PLTR', 'MU', 'ARM', 'QCOM', 'ORCL', 'TSM', 'GS', 'MS', 'WFC', 'NVO', 'NVS', 'MCD', 'PM', 'SNY', 'MRK', 'PFE', 'C'
+        '^GSPC', '^DJI', '^IXIC', '^VIX', 
+        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'LNG', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
+        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'WFC', 'MS', 'GS', 'V', 'INOD', 'MA', 'QCOM', 'AIG', 'C', 'SCHW', 
+        'WMT', 'KO', 'PEP', 'PG', 'JNJ', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'MRK', 'XOM', 'CVX', 
+        'PLTR', 'MU', 'ARM', 'QCOM', 'ORCL', 'TSM', 'GS', 'MS', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'SNY', 'MRK', 'PFE', 'C'
     ]
     us_data = yf.download(us_tickers, period="5d", group_by='ticker', progress=False)
     
     return bvb_data, us_data
 
 def get_bvb_stats(data, tickers):
-    """Calculează Top Creșteri, Scăderi și Volum (Generic pentru BVB și SUA)."""
     stats = []
     
     for t in tickers:
-        # Excludem indicii (cei care încep cu ^ sau ETF-ul de index) din topul companiilor
         if t in ['TVBETETF.RO', '^GSPC', '^DJI', '^IXIC', '^VIX']: continue 
         
         try:
-            # Verificare existență date în MultiIndex
             if isinstance(data.columns, pd.MultiIndex):
                 if t not in data.columns.levels[0]: continue
                 df_t = data[t]
             else:
                 continue
 
-            # Extragere prețuri și volum
             series_close = df_t['Close'].dropna()
             series_vol = df_t['Volume'].dropna()
             
@@ -340,7 +424,6 @@ def get_bvb_stats(data, tickers):
                 prev = series_close.iloc[-2]
                 pct = ((curr - prev) / prev) * 100
                 
-                # Volumul ultimei zile
                 vol = series_vol.iloc[-1] if not series_vol.empty else 0
                 
                 stats.append({
@@ -356,25 +439,14 @@ def get_bvb_stats(data, tickers):
     if df.empty: 
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
-    # 1. Top Creșteri (Top 10)
     gainers = df.sort_values('Variație', ascending=False).head(10)
-    
-    # 2. Top Scăderi (Top 10)
     losers = df.sort_values('Variație', ascending=True).head(10)
-    
-    # 3. Top Volum (Top 10)
     volume_leaders = df.sort_values('Volum', ascending=False).head(10)
     
     return gainers, losers, volume_leaders
 
-# === FUNCȚIA FEAR & GREED (NOUĂ) ===
 def calculate_fear_greed_proxy(data):
-    """
-    Calculează un indicator aproximativ de Fear & Greed folosind VIX și Momentum S&P500.
-    Scara: 0 (Extreme Fear) - 100 (Extreme Greed)
-    """
     try:
-        # 1. Componenta Volatilitate (VIX)
         if isinstance(data.columns, pd.MultiIndex):
              vix_series = data['^VIX']['Close'].dropna()
              sp500_close = data['^GSPC']['Close'].dropna()
@@ -386,20 +458,16 @@ def calculate_fear_greed_proxy(data):
 
         current_vix = vix_series.iloc[-1]
         
-        # Normalizare VIX (10=Greed, 40=Fear)
         vix_score = 100 - ((current_vix - 10) / (40 - 10) * 100)
-        vix_score = max(0, min(100, vix_score)) # Clamp între 0 și 100
+        vix_score = max(0, min(100, vix_score))
         
-        # 2. Componenta Momentum (S&P 500)
         curr_sp = sp500_close.iloc[-1]
         mean_5d = sp500_close.mean()
         
         diff_pct = (curr_sp / mean_5d) - 1
-        # Dacă e cu 2% peste medie = Extreme Greed
         mom_score = 50 + (diff_pct * 100 * 25) 
         mom_score = max(0, min(100, mom_score))
         
-        # Media ponderată (60% VIX, 40% Momentum)
         final_score = (vix_score * 0.6) + (mom_score * 0.4)
         
         if final_score >= 75: label = "Extreme Greed 🤑"
@@ -412,7 +480,7 @@ def calculate_fear_greed_proxy(data):
     except Exception as e:
         return 50, "Neutral 😐", 0
 
-# --- FUNCȚII PORTOFOLIU ---
+# --- FUNCȚII PORTOFOLIU (UPDATED) ---
 def load_portfolio():
     if not os.path.exists(FILE_PORTOFOLIU):
         pd.DataFrame(columns=["Symbol", "Date", "Quantity", "AvgPrice"]).to_csv(FILE_PORTOFOLIU, index=False)
@@ -501,7 +569,9 @@ def calculate_portfolio_performance(df, history_range="1A"):
                 else:
                       price_series = hist_data['Close']
                       
-            price_series = price_series.fillna(method='ffill').fillna(method='bfill')
+            # FIX: Updated Pandas methods
+            price_series = price_series.ffill().bfill()
+            
             if portfolio_curve is None:
                 portfolio_curve = price_series * qty
             else:
@@ -532,10 +602,12 @@ def get_global_market_data():
         'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Gaz Natural': 'NG=F'
     }
     
-    us_stocks = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'INTC', 'NFLX', 
-                 'JPM', 'V', 'PG', 'JNJ', 'XOM', 'WMT', 'KO', 'PEP', 'DIS', 'CSCO']
-    eu_stocks = ['SAP', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'SHEL.L', 'AZN.L', 'HSBA.L', 'FP.PA']
+    us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'LNG', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
+                 'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'WFC', 'MS', 'GS', 'V', 'INOD', 'MA', 'QCOM', 'AIG', 'C', 'SCHW', 
+                 'WMT', 'KO', 'PEP', 'PG', 'JNJ', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'MRK', 'XOM', 'CVX', 
+                 'PLTR', 'MU', 'ARM', 'QCOM', 'ORCL', 'TSM', 'GS', 'MS', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'SNY', 'MRK', 'PFE', 'C']
+    eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.IT', 'ENR.DE', 'DBK.DE', 'BNP.FR', 
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLE.FR', 'MBG.DE', 'BSP.DE', 'LDO.IT', 'OR.PA', 'SHEL.L', 'RACE.IT', 'AZN.L', 'HSBA.L', 'FP.PA']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -581,7 +653,15 @@ def get_global_market_data():
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
-    sectiune = st.sidebar.radio("Mergi la:", ["1. Agregator Știri", "2. Analiză Companie", "3. Portofoliu", "4. Piață Globală", "5. Import Date (CSV)", "6. Rezumatul Zilei"])
+    sectiune = st.sidebar.radio("Mergi la:", [
+        "1. Agregator Știri", 
+        "2. Analiză Companie", 
+        "3. Portofoliu", 
+        "4. Piață Globală", 
+        "5. Import Date (CSV)", 
+        "6. Rezumatul Zilei",
+        "7. Scanner Volum (RVOL)" # Optiunea Noua
+    ])
     st.sidebar.markdown("---")
 
     # ==================================================
@@ -707,26 +787,42 @@ def main():
             else:
                 de_display = "N/A"
 
+            # --- BLOC METRICI COMPLET ȘI CORECTAT ---
             with st.container():
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
                 
                 with c_eval:
-                    st.markdown("**Evaluare**")
+                    st.markdown("**Evaluare & Dividende**")
                     pe_val = info.get('trailingPE')
                     pb_val = info.get('priceToBook')
                     
+                    # --- 1. CALCUL DIVIDEND (MANUAL PENTRU PRECIZIE) ---
+                    div_rate = info.get('dividendRate')
+                    current_price = info.get('currentPrice') or info.get('previousClose') or info.get('regularMarketPreviousClose')
+                    
+                    if div_rate is not None and current_price is not None and current_price > 0:
+                        yield_calc = (div_rate / current_price) * 100
+                        div_display = f"{div_rate} {info.get('currency', '')} ({yield_calc:.2f}%)"
+                    elif div_rate is not None:
+                        div_display = f"{div_rate} {info.get('currency', '')}"
+                    else:
+                        div_display = "N/A"
+                    # ---------------------------------------------------
+
                     if pe_val is not None and pb_val is not None:
                         gn_val = pe_val * pb_val
                         gn_display = f"{gn_val:.2f}"
                     else:
                         gn_display = "N/A"
 
+                    # Afișare metrici (Ordinea completă)
                     st.metric("P/E Ratio", format_num(pe_val), help="Cât plătești pentru 1$ profit.")
                     st.metric("Forward P/E", format_num(info.get('forwardPE')), help="P/E estimat pentru anul viitor.")
+                    st.metric("Dividend (Randament)", div_display, help="Dividendul anual și randamentul real (Div/Preț).")
                     st.metric("P/BV", format_num(pb_val), help="Preț față de valoarea contabilă.")
-                    st.metric("GN (Graham)", gn_display, help="Produsul P/E * P/BV (Graham Number).")
+                    st.metric("GN (Graham)", gn_display, help="Produsul P/E * P/BV.")
                     st.metric("EPS", format_num(info.get('trailingEps')), help="Profit net pe acțiune.")
-                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help="Valoarea activelor nete per acțiune (Book Value).")
+                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help="Valoarea activelor nete per acțiune.")
 
                 with c_prof:
                     st.markdown("**Profitabilitate**")
@@ -885,6 +981,19 @@ def main():
                     ))
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig_hist, use_container_width=True)
+
+                # --- NEW: CORRELATION MATRIX ---
+                st.markdown("---")
+                st.subheader("🧩 Analiză Diversificare (Corelare)")
+                current_tickers = df_subset['Symbol'].unique().tolist()
+                if len(current_tickers) > 1:
+                    with st.spinner("Generăm matricea de corelare..."):
+                        fig_corr = plot_correlation_matrix(current_tickers)
+                        if fig_corr:
+                            st.plotly_chart(fig_corr, use_container_width=True)
+                            st.caption("ℹ️ Notă: O corelare de **1.00** înseamnă că activele se mișcă identic. O valoare sub **0.5** sau negativă indică o diversificare bună.")
+                else:
+                    st.info("Adaugă cel puțin 2 active diferite în portofoliu pentru a vedea matricea de corelare.")
 
                 # --- ELEMENTE SUPRAPUSE PENTRU MOBIL ---
                 st.subheader("Detaliu Poziții")
@@ -1411,6 +1520,165 @@ def main():
                 st.markdown(us_news_html, unsafe_allow_html=True)
             else:
                 st.info("Nu s-au putut încărca știrile din SUA.")
+
+    # ==================================================
+    # 7. SCANNER VOLUM (RVOL) - NOU
+    # ==================================================
+    elif sectiune == "7. Scanner Volum (RVOL)":
+        st.title("📡 Scanner Volum Relativ (RVOL)")
+        st.markdown("""
+        Acest modul identifică **anomaliile de volum**. 
+        Un RVOL (Relative Volume) mai mare de **1.5** indică un interes instituțional sau o știre importantă.
+        """)
+        
+        # Slider pentru sensibilitate (Default 1.5)
+        threshold = st.slider("Arată doar acțiunile cu Volum de 'X' ori mai mare decât media:", 
+                            min_value=1.2, max_value=5.0, value=1.5, step=0.1)
+
+        # Definim listele de scanare (Extinse)
+        
+        tickers_map = {
+            "🇷🇴 BVB (România - BET)": [
+                'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
+                'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 'MILK.RO', 
+                'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ARS.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
+                'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
+            ],
+            
+            "🇺🇸 SUA - Tech & Growth (Nasdaq 100)": [
+                'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AVGO', 'COST', 'PEP', 'CSCO', 'TMUS',
+                'CMCSA', 'INTC', 'AMD', 'QCOM', 'NFLX', 'TXN', 'HON', 'AMGN', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
+                'ARM', 'BKNG', 'AT&T', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
+                'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'AFRM'
+            ],
+            
+            "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
+                'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
+                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PXD', 'OXY', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO',
+                'CAT', 'DE', 'BA', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'PFE', 'MRK', 'SNY', 'NVS',
+                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'METC', 'RIO', 'BHP', 'DHR', 'BMY', 'CVS'
+            ],
+            
+            "🇪🇺 Europa - Germania (DAX 40)": [
+                'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'AIR.DE', 'BMW.DE', 'VOW3.DE', 'MBG.DE', 'BAS.DE', 'BAYN.DE',
+                'ADS.DE', 'DHL.DE', 'DB1.DE', 'MUV2.DE', 'IFX.DE', 'EOAN.DE', 'RWE.DE', 'DTG.DE', 'HEN3.DE', 'VNA.DE',
+                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'PUM.DE', 'ZAL.DE'
+            ],
+            
+            "🇪🇺 Europa - Franța (CAC 40)": [
+                'MC.PA', 'OR.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA', 'BNP.PA', 'EL.PA', 'KER.PA',
+                'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'STLAP.PA', 'GLE.PA', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
+                'VIV.PA', 'ENG.PA', 'LR.PA', 'HO.PA', 'ML.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
+            ],
+            
+            "🇬🇧 UK & Others (FTSE/Global)": [
+                'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L', 'RIO.L', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
+                'GLEN.L', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
+                'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
+            ]
+        }
+        
+        # Funcție internă de calcul RVOL
+        def get_rvol_data(ticker_list):
+            try:
+                # Descărcăm date pe 2 luni pentru a avea o medie solidă
+                data = yf.download(ticker_list, period="2mo", group_by='ticker', progress=False)
+                results = []
+                
+                for t in ticker_list:
+                    try:
+                        # Gestionare MultiIndex vs Single Index
+                        if isinstance(data.columns, pd.MultiIndex):
+                            if t not in data.columns.levels[0]: continue
+                            df_t = data[t]
+                        else:
+                            df_t = data # Cazul unui singur ticker (rar aici)
+                        
+                        # Avem nevoie de Volum și Close
+                        vol = df_t['Volume'].dropna()
+                        close = df_t['Close'].dropna()
+                        
+                        if len(vol) < 25: continue # Nu avem destule date
+                        
+                        # 1. Volumul de AZI
+                        curr_vol = vol.iloc[-1]
+                        
+                        # 2. Media pe ultimele 20 zile (fără azi)
+                        avg_vol_20 = vol.iloc[-21:-1].mean()
+                        
+                        # FILTRU ZGOMOT: Ignorăm dacă media e sub 5000 unități
+                        if avg_vol_20 < 5000: continue
+                        
+                        # 3. Calcul RVOL
+                        rvol = curr_vol / avg_vol_20
+                        
+                        # 4. Calcul Variație Preț
+                        curr_p = close.iloc[-1]
+                        prev_p = close.iloc[-2]
+                        change_pct = ((curr_p - prev_p) / prev_p) * 100
+                        
+                        results.append({
+                            "Simbol": t.replace('.RO', ''),
+                            "Preț": curr_p,
+                            "Variație %": change_pct,
+                            "Volum Azi": curr_vol,
+                            "Volum Mediu (20z)": avg_vol_20,
+                            "RVOL": rvol
+                        })
+                    except: continue
+                    
+                return pd.DataFrame(results)
+            except: return pd.DataFrame()
+
+        # --- SELECTOR DE PIAȚĂ (DROPDOWN în loc de TABURI pentru eficiență) ---
+        market_choice = st.selectbox("Alege Piața/Sectorul de scanat:", list(tickers_map.keys()))
+        
+        # Extragem tickerii pentru selecția făcută
+        selected_tickers = tickers_map[market_choice]
+        
+        col_scan_btn, col_info = st.columns([1, 3])
+        
+        with col_scan_btn:
+            run_scan = st.button(f"🔎 Scanează {len(selected_tickers)} companii", type="primary")
+            
+        with col_info:
+            st.caption(f"Se vor analiza volumele pentru: {', '.join(selected_tickers[:5])} ... și altele.")
+
+        if run_scan:
+            with st.spinner(f"Analizăm {market_choice}... (Poate dura 10-20 secunde)"):
+                df_res = get_rvol_data(selected_tickers)
+                
+                if not df_res.empty:
+                    # Filtrare după Threshold-ul ales de user
+                    df_filtered = df_res[df_res['RVOL'] >= threshold].copy()
+                    
+                    # Sortare descrescătoare după RVOL
+                    df_filtered = df_filtered.sort_values(by="RVOL", ascending=False)
+                    
+                    if not df_filtered.empty:
+                        # Funcție de colorare
+                        def style_scanner(row):
+                            if row['Variație %'] > 0:
+                                return ['color: #3FB950'] * len(row)
+                            else:
+                                return ['color: #F85149'] * len(row)
+
+                        # Formatare
+                        df_display = df_filtered.style.apply(style_scanner, axis=1).format({
+                            "Preț": "{:.2f}",
+                            "Variație %": "{:+.2f}%",
+                            "Volum Azi": "{:,.0f}",
+                            "Volum Mediu (20z)": "{:,.0f}",
+                            "RVOL": "{:.2f}x"
+                        })
+                        
+                        st.success(f"Găsit: {len(df_filtered)} companii cu volum neobișnuit în {market_choice}.")
+                        st.dataframe(df_display, use_container_width=True, height=600)
+                        st.caption("🟢 **Verde:** Breakout | 🔴 **Roșu:** Panic Sell")
+                    else:
+                        st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
+                else:
+                    st.warning("Eroare la preluarea datelor. Yahoo Finance ar putea limita cererile.")
 
 if __name__ == "__main__":
     main()
