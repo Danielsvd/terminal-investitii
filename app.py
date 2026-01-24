@@ -1319,20 +1319,6 @@ def main():
                 
                 st.markdown("<br>", unsafe_allow_html=True) 
 
-                st.subheader("Alocare Active")
-                if not df_calc.empty and df_calc['MarketValue'].sum() > 0:
-                    fig_pie = go.Figure(data=[go.Pie(
-                        labels=df_calc['Symbol'], 
-                        values=df_calc['MarketValue'], 
-                        hole=.4,
-                        textinfo='label+percent',
-                        textposition='outside'
-                    )])
-                    fig_pie.update_layout(height=400, template="plotly_dark", margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.caption("Graficul va apărea când valoarea portofoliului este > 0")
-
             with tab_usd:
                 df_usd = df_pf[df_pf['Currency'] == 'USD']
                 render_portfolio_tab(df_usd, "$")
