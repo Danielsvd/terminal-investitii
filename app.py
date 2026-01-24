@@ -565,14 +565,14 @@ def load_portfolio():
             # Dacă foaia e goală sau apare o eroare de citire
             return pd.DataFrame()
     return pd.DataFrame() # Fallback
-# --- FUNCȚII WATCHLIST ---
+# --- FUNCȚII WATCHLIST (CORECȚIE BUG) ---
 def load_watchlist():
     """Citește datele din foaia 'watchlist'."""
-    sheet = connect_to_gsheets()
+    sheet = connect_to_gsheets() # Returnează Sheet1
     if sheet:
         try:
-            # Accesăm foaia specifică prin nume
-            ws = sheet.client.open("portofoliu_db").worksheet("watchlist")
+            # FIX: Accesăm fișierul părinte (spreadsheet) direct, apoi foaia 'watchlist'
+            ws = sheet.spreadsheet.worksheet("watchlist")
             data = ws.get_all_records()
             return pd.DataFrame(data)
         except Exception as e:
@@ -585,7 +585,8 @@ def add_to_watchlist(symbol, target, note):
     sheet = connect_to_gsheets()
     if sheet:
         try:
-            ws = sheet.client.open("portofoliu_db").worksheet("watchlist")
+            # FIX: Folosim 'spreadsheet' pentru a schimba tab-ul
+            ws = sheet.spreadsheet.worksheet("watchlist")
             ws.append_row([symbol, float(target), note])
             st.cache_data.clear() # Resetăm cache-ul
             return True
@@ -599,7 +600,7 @@ def remove_from_watchlist(symbol):
     sheet = connect_to_gsheets()
     if sheet:
         try:
-            ws = sheet.client.open("portofoliu_db").worksheet("watchlist")
+            ws = sheet.spreadsheet.worksheet("watchlist")
             cell = ws.find(symbol)
             if cell:
                 ws.delete_rows(cell.row)
@@ -1955,7 +1956,7 @@ def main():
                 st.info("Lista e goală.")
         else:
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
-            
+
 if __name__ == "__main__":
     main()
 
