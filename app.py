@@ -255,6 +255,53 @@ def calculate_alpha(stock_hist, beta):
         return alpha
     except: return None
 
+def calculate_intrinsic_value(info):
+    """
+    Calculează valoarea intrinsecă folosind Benjamin Graham și un DCF simplificat.
+    Returnează: graham_value, dcf_value, mesaj_eroare
+    """
+    try:
+        current_price = info.get('currentPrice') or info.get('previousClose')
+        eps = info.get('trailingEps')
+        book_value = info.get('bookValue')
+        
+        # --- 1. FORMULA BENJAMIN GRAHAM ---
+        # V = Sqrt(22.5 * EPS * BV)
+        graham_val = 0
+        if eps is not None and book_value is not None:
+            if eps > 0 and book_value > 0:
+                graham_val = np.sqrt(22.5 * eps * book_value)
+            else:
+                graham_val = 0 # Nu se poate calcula pentru firme pe pierdere
+        
+        # --- 2. DCF SIMPLIFICAT (Discounted Cash Flow) ---
+        # Metoda: Proiectăm EPS sau FCF pe 5 ani și actualizăm la prezent.
+        # Rata de creștere estimată (Growth Rate). Dacă Yahoo nu o dă, punem un default conservator.
+        growth_rate = info.get('earningsGrowth', 0.05) 
+        if growth_rate is None: growth_rate = 0.05 # 5% default
+        
+        # Rata de discount (WACC estimat sau Rata dorită). Punem 10% standard.
+        discount_rate = 0.10
+        terminal_multiple = 12 # P/E la care vindem peste 10 ani (conservator)
+        
+        dcf_val = 0
+        if eps is not None and eps > 0:
+            future_cash_flows = []
+            for i in range(1, 6): # 5 ani
+                fcf = eps * ((1 + growth_rate) ** i)
+                discounted_fcf = fcf / ((1 + discount_rate) ** i)
+                future_cash_flows.append(discounted_fcf)
+            
+            # Valoare terminală
+            terminal_val = (eps * ((1 + growth_rate) ** 5)) * terminal_multiple
+            discounted_terminal = terminal_val / ((1 + discount_rate) ** 5)
+            
+            dcf_val = sum(future_cash_flows) + discounted_terminal
+            
+        return graham_val, dcf_val, current_price
+    except Exception as e:
+        return 0, 0, 0
+    
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
     try:
@@ -874,7 +921,7 @@ def main():
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", info.get('beta', 'N/A'), help="Volatilitatea față de piață.")
                     st.metric("Alpha (1Y)", format_num(alpha_val, True), help="Performanța peste piață (vs SPY).")
-
+            
             st.markdown("---")
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
             company_news = get_company_news_rss(real_sym)
@@ -890,6 +937,46 @@ def main():
                     st.divider()
             else:
                 st.info(f"Nu au fost găsite știri recente pe fluxul Yahoo pentru {real_sym}.")
+
+            # --- MODUL NOU: CALCULATOR EVALUARE ---
+            st.subheader("🧮 Calculator Valoare Intrinsecă (Fair Value)")
+            
+            graham, dcf, curr_p = calculate_intrinsic_value(info)
+            
+            if curr_p and curr_p > 0:
+                # Creăm 3 coloane vizuale
+                c_val1, c_val2, c_val3 = st.columns(3)
+                
+                with c_val1:
+                    st.markdown("#### Preț Curent")
+                    st.markdown(f"<h2 style='color: #FFFFFF;'>{curr_p:.2f} {info.get('currency','')}</h2>", unsafe_allow_html=True)
+                
+                with c_val2:
+                    st.markdown("#### Benjamin Graham")
+                    if graham > 0:
+                        diff_graham = ((curr_p - graham) / graham) * 100
+                        color_g = "#F85149" if curr_p > graham else "#3FB950" # Rosu daca e scump, Verde daca e ieftin
+                        status_g = "SUPRAEVALUAT" if curr_p > graham else "SUBEVALUAT"
+                        st.markdown(f"<h2 style='color: {color_g};'>{graham:.2f}</h2>", unsafe_allow_html=True)
+                        st.caption(f"{status_g} cu {abs(diff_graham):.1f}%")
+                        st.info("Recomandat pentru: Bănci, Industrie, Energie (Active tangibile).")
+                    else:
+                        st.warning("Nu se poate calcula (EPS sau BV negativ).")
+
+                with c_val3:
+                    st.markdown("#### Model DCF (Growth)")
+                    if dcf > 0:
+                        diff_dcf = ((curr_p - dcf) / dcf) * 100
+                        color_d = "#F85149" if curr_p > dcf else "#3FB950"
+                        status_d = "SUPRAEVALUAT" if curr_p > dcf else "SUBEVALUAT"
+                        st.markdown(f"<h2 style='color: {color_d};'>{dcf:.2f}</h2>", unsafe_allow_html=True)
+                        st.caption(f"{status_d} cu {abs(diff_dcf):.1f}%")
+                        st.info("Recomandat pentru: Tech, Servicii, Growth (Flux de numerar viitor).")
+                    else:
+                        st.warning("Date insuficiente pentru proiecție.")
+                
+                st.markdown("---")
+            # --------------------------------------
 
             st.subheader("💰 Financiar & Raportări")
             st.markdown("""<div class="fin-card"><h4>Rezultate Financiare (Ultima Raportare)</h4></div>""", unsafe_allow_html=True)
@@ -1714,3 +1801,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
