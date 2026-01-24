@@ -214,6 +214,20 @@ def get_company_news_rss(symbol):
 
 # --- FUNCȚII ANALIZĂ (Professional Update) ---
 @st.cache_data(ttl=3600)
+def get_macro_data_visuals():
+    tickers = {
+        'US 10Y Yield 🇺🇸': '^TNX', 
+        'Dolar Index 💲': 'DX-Y.NYB', 
+        'Petrol WTI 🛢️': 'CL=F', 
+        'Aur 🥇': 'GC=F',
+        'EUR/RON 🇪🇺': 'EURRON=X',
+        'USD/RON 🇺🇸': 'USDRON=X'  # <--- Linia adăugată de tine (PERFECT)
+    }
+    # Descărcăm datele
+    data = yf.download(list(tickers.values()), period="1y", group_by='ticker', progress=False)
+    return tickers, data
+
+@st.cache_data(ttl=3600)
 def get_market_data():
     try:
         spy = yf.Ticker("SPY").history(period="1y")['Close']
@@ -1213,40 +1227,61 @@ def main():
             #     st.rerun()
 
     # ==================================================
-    # 4. PIAȚĂ GLOBALĂ
+    # 4. PIAȚĂ GLOBALĂ (CU DASHBOARD MACRO)
     # ==================================================
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
         st.caption("Date în timp real (cu întârziere minimă) furnizate via Yahoo Finance.")
         
+        # Buton refresh global (pentru macro + actiuni)
         if st.button("🔄 Reîmprospătează Piața"):
             get_global_market_data.clear()
+            get_macro_data_visuals.clear()
             st.rerun()
 
-        with st.spinner("Descărcăm datele globale..."):
-            df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
-
-        def color_change_val(val):
-            color = '#3FB950' if val >= 0 else '#F85149'
-            return f'color: {color}'
-
-        col_m1, col_m2 = st.columns(2)
+        # --- DASHBOARD MACROECONOMIC (PARTEA NOUĂ) ---
+        st.markdown("### 🧭 Indicatori Macroeconomici")
+        st.info("💡 **Interpretare:** Dacă **US 10Y Yield** crește brusc, acțiunile de tehnologie (Growth) tind să scadă. Dacă **Aurul** crește, indică frică în piață.")
         
-        with col_m1:
-            st.subheader("📊 Indici Principali")
-            st.dataframe(
-                df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                use_container_width=True, hide_index=True
-            )
+        # Aici apelam functia modificata de tine (cu USD/RON)
+        macro_tickers, macro_data = get_macro_data_visuals()
+        
+        # 1. Selector Grafic
+        col_sel, col_graph = st.columns([1, 3])
+        
+        with col_sel:
+            # Aici va aparea automat si USD/RON pentru ca l-ai pus in dictionar
+            selected_macro_name = st.radio("Alege Indicator:", list(macro_tickers.keys()))
+            selected_macro_sym = macro_tickers[selected_macro_name]
+        
+        with col_graph:
+            # Extragem datele pentru grafic
+            series = pd.Series() # Initializam gol
             
-        with col_m2:
-            st.subheader("🛢️ Mărfuri (Commodities)")
-            st.dataframe(
-                df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                use_container_width=True, hide_index=True
-            )
+            # Logica de extragere sigura (MultiIndex vs Single)
+            if isinstance(macro_data.columns, pd.MultiIndex):
+                try:
+                    if selected_macro_sym in macro_data.columns.levels[0]:
+                        series = macro_data[selected_macro_sym]['Close'].dropna()
+                except: pass
+            else:
+                # Fallback rareori necesar
+                series = macro_data['Close']
+
+            if not series.empty:
+                # Calculăm Delta (Schimbarea fata de ieri)
+                curr_val = series.iloc[-1]
+                prev_val = series.iloc[-2]
+                delta = curr_val - prev_val
+                pct = (delta / prev_val) * 100
+                
+                # Afișăm Metrică Mare
+                st.metric(f"{selected_macro_name}", f"{curr_val:.4f}", f"{delta:.4f} ({pct:.2f}%)")
+                
+                # Afișăm Grafic
+                st.area_chart(series, height=250, color="#58A6FF")
+            else:
+                st.warning("Date indisponibile pentru grafic momentan.")
 
         st.markdown("---")
         
