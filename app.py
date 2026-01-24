@@ -1921,27 +1921,24 @@ def main():
                 
                 df_res = pd.DataFrame(display_rows)
 
-                # 3. Stilizare (Highlight rândurile de cumpărare)
+                # 3. Stilizare și Afișare (ASCUNDEM _is_buy)
                 def highlight_buy(row):
+                    # Verificăm coloana ascunsă pentru a decide culoarea
                     if row['_is_buy']:
                         return ['background-color: rgba(63, 185, 80, 0.2); font-weight: bold'] * len(row)
                     else:
                         return [''] * len(row)
 
-                # Ascundem coloana helper '_is_buy' la afișare
-                final_view = df_res.drop(columns=['_is_buy'])
-                
                 st.dataframe(
                     df_res.style.apply(highlight_buy, axis=1)
                     .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
                     use_container_width=True,
                     height=500,
                     column_config={
-                        "Status": st.column_config.TextColumn(
-                            "Recomandare",
-                            help="Dacă prețul curent e sub țintă, apare verde.",
-                        ),
-                    }
+                        "_is_buy": None, # <--- Asta ASCUNDE coloana tehnică
+                        "Status": st.column_config.TextColumn("Recomandare"),
+                    },
+                    hide_index=True # Ascunde și indexul (0, 1, 2...) din stânga
                 )
                 
                 # Buton ștergere rapidă
