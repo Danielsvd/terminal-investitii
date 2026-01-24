@@ -10,12 +10,32 @@ from datetime import datetime, timedelta
 from textblob import TextBlob
 import socket
 import numpy as np
+# --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
 socket.setdefaulttimeout(15) # Mărit timeout-ul pentru conexiuni lente
 
-FILE_PORTOFOLIU = "portofoliu.csv"
+# --- CONFIGURARE CONEXIUNE GOOGLE SHEETS ---
+def connect_to_gsheets():
+    """Conectare securizată la Google Sheets folosind Secrets."""
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    try:
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+            client = gspread.authorize(creds)
+            # Deschidem fișierul 'portofoliu_db' din Drive-ul tău
+            sheet = client.open("portofoliu_db").sheet1
+            return sheet
+        else:
+            st.error("⚠️ Nu s-au găsit credențialele în Secrets! Verifică setările din Streamlit Cloud.")
+            return None
+    except Exception as e:
+        st.error(f"Eroare conectare Google Sheets: {e}")
+        return None
 
 # --- CSS MODERNIZAT (UI PREMIUM) ---
 st.markdown("""
@@ -480,19 +500,31 @@ def calculate_fear_greed_proxy(data):
     except Exception as e:
         return 50, "Neutral 😐", 0
 
-# --- FUNCȚII PORTOFOLIU (UPDATED) ---
+# --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
 def load_portfolio():
-    if not os.path.exists(FILE_PORTOFOLIU):
-        pd.DataFrame(columns=["Symbol", "Date", "Quantity", "AvgPrice"]).to_csv(FILE_PORTOFOLIU, index=False)
-    return pd.read_csv(FILE_PORTOFOLIU)
+    """Citește datele din Google Sheets folosind Secrets."""
+    sheet = connect_to_gsheets()
+    if sheet:
+        try:
+            # Luăm toate înregistrările
+            data = sheet.get_all_records()
+            return pd.DataFrame(data)
+        except:
+            # Dacă foaia e goală sau apare o eroare de citire
+            return pd.DataFrame()
+    return pd.DataFrame() # Fallback
 
 def add_trade(s, q, p, d, c):
-    df = load_portfolio()
-    new_row = pd.DataFrame({"Symbol": [s], "Date": [d], "Quantity": [q], "AvgPrice": [p], "Currency": [c]})
-    if 'Currency' not in df.columns and not df.empty:
-        df['Currency'] = 'USD'
-    df = pd.concat([df, new_row], ignore_index=True)
-    df.to_csv(FILE_PORTOFOLIU, index=False)
+    """Adaugă tranzacția direct în Google Sheets."""
+    sheet = connect_to_gsheets()
+    if sheet:
+        # Ordinea coloanelor trebuie să corespundă cu header-ul din Sheets: 
+        # Symbol, Date, Quantity, AvgPrice, Currency
+        # Le convertim explicit pentru a evita erori de serializare JSON
+        row = [s, str(d), float(q), float(p), c]
+        sheet.append_row(row)
+        # Invalidăm cache-ul local pentru ca datele noi să apară instant la refresh
+        st.cache_data.clear()
 
 @st.cache_data(ttl=300)
 def get_portfolio_history_data(tickers):
@@ -503,6 +535,7 @@ def get_portfolio_history_data(tickers):
 def calculate_portfolio_performance(df, history_range="1A"):
     if df.empty: return pd.DataFrame(), pd.DataFrame(), 0, 0
     
+    # Asigurăm conversia tipurilor (Google Sheets poate returna string-uri uneori)
     df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
     df['AvgPrice'] = pd.to_numeric(df['AvgPrice'], errors='coerce').fillna(0)
     
@@ -936,16 +969,14 @@ def main():
                 
                 if st.form_submit_button("Salvează") and s:
                     add_trade(s, q, p, d_acq, curr)
-                    st.success(f"Adăugat {s}!")
+                    st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
 
-        if os.path.exists(FILE_PORTOFOLIU):
-            df_pf = load_portfolio()
-        else:
-            df_pf = pd.DataFrame()
+        # Încărcăm datele din Google Sheets în loc de CSV local
+        df_pf = load_portfolio()
 
         if df_pf.empty:
-            st.info("Portofoliul este gol. Adaugă o tranzacție mai sus.")
+            st.info("Portofoliul este gol sau nu s-a putut conecta la Google Sheets.")
         else:
             st.markdown("### Perioadă Analiză")
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
@@ -1037,10 +1068,12 @@ def main():
                 df_eur = df_pf[df_pf['Currency'] == 'EUR']
                 render_portfolio_tab(df_eur, "€")
 
-            st.markdown("---")
-            if st.button("⚠️ Șterge TOT Portofoliul (Reset)"):
-                os.remove(FILE_PORTOFOLIU)
-                st.rerun()
+            # Butonul de reset nu poate șterge datele din Google Drive, doar le ignoră temporar
+            # Așa că l-am comentat sau ar trebui scos, deoarece gestionarea datelor se face acum în Sheets.
+            # st.markdown("---")
+            # if st.button("⚠️ Șterge TOT Portofoliul (Reset)"):
+            #     os.remove(FILE_PORTOFOLIU)
+            #     st.rerun()
 
     # ==================================================
     # 4. PIAȚĂ GLOBALĂ
@@ -1536,7 +1569,6 @@ def main():
                             min_value=1.2, max_value=5.0, value=1.5, step=0.1)
 
         # Definim listele de scanare (Extinse)
-        
         tickers_map = {
             "🇷🇴 BVB (România - BET)": [
                 'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
@@ -1547,7 +1579,7 @@ def main():
             
             "🇺🇸 SUA - Tech & Growth (Nasdaq 100)": [
                 'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AVGO', 'COST', 'PEP', 'CSCO', 'TMUS',
-                'CMCSA', 'INTC', 'AMD', 'CLS', 'NFLX', 'TXN', 'ANET', 'AMGN', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
+                'CMCSA', 'INTC', 'AMD', 'CLS', 'NFLX', 'TXN', 'ANET', 'NET', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
                 'ARM', 'BKNG', 'AT&T', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
                 'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'TSM', 'AFRM'
             ],
