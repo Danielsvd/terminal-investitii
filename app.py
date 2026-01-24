@@ -221,10 +221,10 @@ def get_macro_data_visuals():
         'Petrol WTI 🛢️': 'CL=F', 
         'Aur 🥇': 'GC=F',
         'EUR/RON 🇪🇺': 'EURRON=X',
-        'USD/RON 🇺🇸': 'USDRON=X'  # <--- Linia adăugată de tine (PERFECT)
+        'USD/RON 🇺🇸': 'USDRON=X'
     }
-    # Descărcăm datele
-    data = yf.download(list(tickers.values()), period="1y", group_by='ticker', progress=False)
+    # MODIFICARE: Descărcăm 5 ani (5y) pentru a avea istoric lung
+    data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False)
     return tickers, data
 
 @st.cache_data(ttl=3600)
@@ -1243,45 +1243,93 @@ def main():
         st.markdown("### 🧭 Indicatori Macroeconomici")
         st.info("💡 **Interpretare:** Dacă **US 10Y Yield** crește brusc, acțiunile de tehnologie (Growth) tind să scadă. Dacă **Aurul** crește, indică frică în piață.")
         
-        # Aici apelam functia modificata de tine (cu USD/RON)
+       # Apelăm funcția (acum descarcă 5 ani)
         macro_tickers, macro_data = get_macro_data_visuals()
         
-        # 1. Selector Grafic
-        col_sel, col_graph = st.columns([1, 3])
+        # --- 1. CONFIGURARE UI (Selectori) ---
+        c_sel1, c_sel2 = st.columns([1, 3])
         
-        with col_sel:
-            # Aici va aparea automat si USD/RON pentru ca l-ai pus in dictionar
-            selected_macro_name = st.radio("Alege Indicator:", list(macro_tickers.keys()))
+        with c_sel1:
+            st.markdown("##### 1. Alege Indicator:")
+            selected_macro_name = st.radio("Indicator", list(macro_tickers.keys()), label_visibility="collapsed")
             selected_macro_sym = macro_tickers[selected_macro_name]
-        
-        with col_graph:
-            # Extragem datele pentru grafic
-            series = pd.Series() # Initializam gol
             
-            # Logica de extragere sigura (MultiIndex vs Single)
+            st.markdown("##### 2. Perioadă:")
+            # Slider pentru timp (exact ca la portofoliu)
+            time_frame = st.select_slider("", options=["1L", "3L", "6L", "1A", "3A", "5A"], value="1A")
+
+        # --- 2. PROCESARE DATE ---
+        with c_sel2:
+            # Extragere Serie de Date
+            series = pd.Series()
             if isinstance(macro_data.columns, pd.MultiIndex):
                 try:
                     if selected_macro_sym in macro_data.columns.levels[0]:
                         series = macro_data[selected_macro_sym]['Close'].dropna()
                 except: pass
             else:
-                # Fallback rareori necesar
-                series = macro_data['Close']
+                series = macro_data['Close'] # Fallback
 
             if not series.empty:
-                # Calculăm Delta (Schimbarea fata de ieri)
-                curr_val = series.iloc[-1]
-                prev_val = series.iloc[-2]
+                # Filtrare după Slider-ul de Timp
+                days_map = {"1L": 30, "3L": 90, "6L": 180, "1A": 365, "3A": 1095, "5A": 1825}
+                days = days_map.get(time_frame, 365)
+                subset = series.iloc[-days:] # Tăiem exact cât a cerut userul
+                
+                # Calcule Metrici (Delta)
+                curr_val = subset.iloc[-1]
+                prev_val = subset.iloc[-2]
                 delta = curr_val - prev_val
                 pct = (delta / prev_val) * 100
                 
-                # Afișăm Metrică Mare
-                st.metric(f"{selected_macro_name}", f"{curr_val:.4f}", f"{delta:.4f} ({pct:.2f}%)")
+                # --- FORMATARE TEXT (Adăugare %) ---
+                # Dacă e Yield (Titluri de stat), punem % la final
+                suffix = "%" if "Yield" in selected_macro_name else ""
+                val_fmt = f"{curr_val:.4f}{suffix}"
                 
-                # Afișăm Grafic
-                st.area_chart(series, height=250, color="#58A6FF")
+                # Afișare Metrică
+                st.metric(f"{selected_macro_name}", val_fmt, f"{delta:.4f} ({pct:.2f}%)")
+                
+                # --- 3. GRAFIC PLOTLY (DETALIAT) ---
+                fig_macro = go.Figure()
+                
+                # Linie colorată și umplută (Gradient)
+                fig_macro.add_trace(go.Scatter(
+                    x=subset.index, 
+                    y=subset.values,
+                    mode='lines',
+                    fill='tozeroy', # Umple sub linie
+                    line=dict(color='#58A6FF', width=2),
+                    name=selected_macro_name
+                ))
+                
+                # TRUC: Pentru Valute (EUR/RON), "Zoom-in" pe axa Y
+                # Dacă variația e mică (sub 10%), nu porni axa de la 0, ci de la minim
+                y_min = subset.min()
+                y_max = subset.max()
+                is_stable = (y_max - y_min) / y_min < 0.1 # Variație sub 10%
+                
+                range_y = [y_min * 0.999, y_max * 1.001] if is_stable else None
+                
+                fig_macro.update_layout(
+                    height=350,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    template="plotly_dark",
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(
+                        showgrid=True, 
+                        gridcolor='#30363D',
+                        autorange=True if not range_y else False, # Auto sau Zoom forțat
+                        range=range_y
+                    )
+                )
+                
+                st.plotly_chart(fig_macro, use_container_width=True)
+
             else:
-                st.warning("Date indisponibile pentru grafic momentan.")
+                st.warning("Date indisponibile sau eroare conexiune Yahoo.")
 
         st.markdown("---")
         # ---------------------------------------------------------
