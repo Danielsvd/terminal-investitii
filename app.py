@@ -394,10 +394,10 @@ def get_daily_briefing_data():
     
     us_tickers = [
         '^GSPC', '^DJI', '^IXIC', '^VIX', 
-        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'LNG', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'WFC', 'MS', 'GS', 'V', 'INOD', 'MA', 'QCOM', 'AIG', 'C', 'SCHW', 
-        'WMT', 'KO', 'PEP', 'PG', 'JNJ', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'MRK', 'XOM', 'CVX', 
-        'PLTR', 'MU', 'ARM', 'QCOM', 'ORCL', 'TSM', 'GS', 'MS', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'SNY', 'MRK', 'PFE', 'C'
+        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
+        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
+        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
+        'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
     ]
     us_data = yf.download(us_tickers, period="5d", group_by='ticker', progress=False)
     
@@ -602,12 +602,12 @@ def get_global_market_data():
         'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Gaz Natural': 'NG=F'
     }
     
-    us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'LNG', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-                 'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'WFC', 'MS', 'GS', 'V', 'INOD', 'MA', 'QCOM', 'AIG', 'C', 'SCHW', 
-                 'WMT', 'KO', 'PEP', 'PG', 'JNJ', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'MRK', 'XOM', 'CVX', 
-                 'PLTR', 'MU', 'ARM', 'QCOM', 'ORCL', 'TSM', 'GS', 'MS', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'SNY', 'MRK', 'PFE', 'C']
+    us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
+                 'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
+                 'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
+                 'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
     eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.IT', 'ENR.DE', 'DBK.DE', 'BNP.FR', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLE.FR', 'MBG.DE', 'BSP.DE', 'LDO.IT', 'OR.PA', 'SHEL.L', 'RACE.IT', 'AZN.L', 'HSBA.L', 'FP.PA']
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLE.FR', 'MBG.DE', 'BSP.DE', 'LDO.IT', 'RNO.FR', 'SHEL.L', 'RACE.IT', 'AZN.L', 'HSBA.L', 'FP.PA']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -1547,16 +1547,16 @@ def main():
             
             "🇺🇸 SUA - Tech & Growth (Nasdaq 100)": [
                 'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AVGO', 'COST', 'PEP', 'CSCO', 'TMUS',
-                'CMCSA', 'INTC', 'AMD', 'QCOM', 'NFLX', 'TXN', 'HON', 'AMGN', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
+                'CMCSA', 'INTC', 'AMD', 'CLS', 'NFLX', 'TXN', 'ANET', 'AMGN', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
                 'ARM', 'BKNG', 'AT&T', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
-                'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'AFRM'
+                'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'TSM', 'AFRM'
             ],
             
             "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
                 'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
                 'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PXD', 'OXY', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO',
-                'CAT', 'DE', 'BA', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'PFE', 'MRK', 'SNY', 'NVS',
-                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'METC', 'RIO', 'BHP', 'DHR', 'BMY', 'CVS'
+                'CAT', 'DE', 'BA', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'AMGN', 'BIIB', 'SNY', 'NVS',
+                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'METC', 'RIO', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
             ],
             
             "🇪🇺 Europa - Germania (DAX 40)": [
