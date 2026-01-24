@@ -8,3 +8,5 @@ numpy
 lxml
 requests
 matplotlib
+gspread
+google-auth
