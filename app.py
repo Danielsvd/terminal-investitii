@@ -257,8 +257,7 @@ def calculate_alpha(stock_hist, beta):
 
 def calculate_intrinsic_value(info):
     """
-    Calculează valoarea intrinsecă folosind Benjamin Graham și un DCF simplificat.
-    Returnează: graham_value, dcf_value, mesaj_eroare
+    Calculează valoarea intrinsecă cu limite de siguranță (Capping).
     """
     try:
         current_price = info.get('currentPrice') or info.get('previousClose')
@@ -266,23 +265,29 @@ def calculate_intrinsic_value(info):
         book_value = info.get('bookValue')
         
         # --- 1. FORMULA BENJAMIN GRAHAM ---
-        # V = Sqrt(22.5 * EPS * BV)
         graham_val = 0
         if eps is not None and book_value is not None:
             if eps > 0 and book_value > 0:
                 graham_val = np.sqrt(22.5 * eps * book_value)
-            else:
-                graham_val = 0 # Nu se poate calcula pentru firme pe pierdere
+            
+        # --- 2. DCF SIMPLIFICAT (Cu SANITY CHECK) ---
+        # Pas critic: Limităm creșterea. Nicio companie matură nu crește cu 50% pe an 5 ani la rând.
+        # Yahoo poate returna valori mari, noi le plafonăm la 15% (0.15) pentru siguranță.
+        raw_growth = info.get('earningsGrowth')
         
-        # --- 2. DCF SIMPLIFICAT (Discounted Cash Flow) ---
-        # Metoda: Proiectăm EPS sau FCF pe 5 ani și actualizăm la prezent.
-        # Rata de creștere estimată (Growth Rate). Dacă Yahoo nu o dă, punem un default conservator.
-        growth_rate = info.get('earningsGrowth', 0.05) 
-        if growth_rate is None: growth_rate = 0.05 # 5% default
-        
-        # Rata de discount (WACC estimat sau Rata dorită). Punem 10% standard.
-        discount_rate = 0.10
-        terminal_multiple = 12 # P/E la care vindem peste 10 ani (conservator)
+        # Logică de siguranță pentru Growth Rate
+        if raw_growth is None:
+            growth_rate = 0.05  # 5% conservator dacă nu avem date
+        else:
+            # Plafonăm la maxim 15% (0.15) sau folosim valoarea reală dacă e mai mică
+            growth_rate = min(raw_growth, 0.15) 
+            
+            # Dacă Yahoo dă creștere negativă, folosim un minim de 2% pentru inflație
+            if growth_rate < 0.02: growth_rate = 0.02
+
+        discount_rate = 0.09 # 9% costul capitalului (standard industrie)
+        terminal_multiple = info.get('trailingPE', 15) # Folosim P/E actual, dar nu mai mult de 25
+        terminal_multiple = min(terminal_multiple, 25) 
         
         dcf_val = 0
         if eps is not None and eps > 0:
