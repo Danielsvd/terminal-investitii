@@ -221,7 +221,8 @@ def get_macro_data_visuals():
         'Petrol WTI 🛢️': 'CL=F', 
         'Aur 🥇': 'GC=F',
         'EUR/RON 🇪🇺': 'EURRON=X',
-        'USD/RON 🇺🇸': 'USDRON=X'
+        'USD/RON 🇺🇸': 'USDRON=X',
+        'Bursa RO (BET) 🇷🇴': 'TVBETETF.RO' # <--- NOU: Indicatorul economiei locale
     }
     # MODIFICARE: Descărcăm 5 ani (5y) pentru a avea istoric lung
     data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False)
@@ -2068,4 +2069,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
