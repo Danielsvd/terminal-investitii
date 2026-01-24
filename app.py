@@ -1284,6 +1284,35 @@ def main():
                 st.warning("Date indisponibile pentru grafic momentan.")
 
         st.markdown("---")
+        # ---------------------------------------------------------
+        
+        # --- TABELELE VECHI (PARTEA CARE ERA DEJA ÎN COD) ---
+        with st.spinner("Descărcăm datele acțiunilor..."):
+            df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
+
+        def color_change_val(val):
+            color = '#3FB950' if val >= 0 else '#F85149'
+            return f'color: {color}'
+
+        col_m1, col_m2 = st.columns(2)
+        
+        with col_m1:
+            st.subheader("📊 Indici Principali")
+            st.dataframe(
+                df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
+                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                use_container_width=True, hide_index=True
+            )
+            
+        with col_m2:
+            st.subheader("🛢️ Mărfuri (Commodities)")
+            st.dataframe(
+                df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
+                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                use_container_width=True, hide_index=True
+            )
+
+        st.markdown("---")
         
         st.subheader("🇺🇸 Top Mișcări SUA (Blue Chips)")
         c_us1, c_us2 = st.columns(2)
