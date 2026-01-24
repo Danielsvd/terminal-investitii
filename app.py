@@ -565,6 +565,49 @@ def load_portfolio():
             # Dacă foaia e goală sau apare o eroare de citire
             return pd.DataFrame()
     return pd.DataFrame() # Fallback
+# --- FUNCȚII WATCHLIST ---
+def load_watchlist():
+    """Citește datele din foaia 'watchlist'."""
+    sheet = connect_to_gsheets()
+    if sheet:
+        try:
+            # Accesăm foaia specifică prin nume
+            ws = sheet.client.open("portofoliu_db").worksheet("watchlist")
+            data = ws.get_all_records()
+            return pd.DataFrame(data)
+        except Exception as e:
+            # Dacă foaia nu există sau e goală
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def add_to_watchlist(symbol, target, note):
+    """Adaugă o intrare nouă în watchlist."""
+    sheet = connect_to_gsheets()
+    if sheet:
+        try:
+            ws = sheet.client.open("portofoliu_db").worksheet("watchlist")
+            ws.append_row([symbol, float(target), note])
+            st.cache_data.clear() # Resetăm cache-ul
+            return True
+        except Exception as e:
+            st.error(f"Eroare salvare: {e}")
+            return False
+    return False
+
+def remove_from_watchlist(symbol):
+    """Șterge un simbol din watchlist (căutând după nume)."""
+    sheet = connect_to_gsheets()
+    if sheet:
+        try:
+            ws = sheet.client.open("portofoliu_db").worksheet("watchlist")
+            cell = ws.find(symbol)
+            if cell:
+                ws.delete_rows(cell.row)
+                st.cache_data.clear()
+                return True
+        except:
+            pass
+    return False
 
 def add_trade(s, q, p, d, c):
     """Adaugă tranzacția direct în Google Sheets."""
@@ -745,7 +788,8 @@ def main():
         "4. Piață Globală", 
         "5. Import Date (CSV)", 
         "6. Rezumatul Zilei",
-        "7. Scanner Volum (RVOL)" # Optiunea Noua
+        "7. Scanner Volum (RVOL)",
+        "8. Watchlist 🎯" 
     ])
     st.sidebar.markdown("---")
 
@@ -1803,7 +1847,115 @@ def main():
                         st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
                 else:
                     st.warning("Eroare la preluarea datelor. Yahoo Finance ar putea limita cererile.")
+# ==================================================
+    # 8. WATCHLIST (NOU)
+    # ==================================================
+    elif sectiune == "8. Watchlist 🎯":
+        st.title("🎯 Lista de Urmărire (Watchlist)")
+        st.markdown("Monitorizează acțiunile pe care vrei să le cumperi când prețul scade.")
 
+        # --- FORMULAR ADĂUGARE ---
+        with st.expander("➕ Adaugă Alertă Nouă", expanded=False):
+            with st.form("wl_form"):
+                c1, c2, c3 = st.columns([1, 1, 2])
+                s_wl = c1.text_input("Simbol (ex: TSLA)").upper()
+                p_wl = c2.number_input("Preț Țintă (Target)", min_value=0.0, step=0.1)
+                n_wl = c3.text_input("Notă (ex: Suport major, aștept earnings)")
+                
+                if st.form_submit_button("Adaugă în Listă"):
+                    if s_wl and p_wl > 0:
+                        if add_to_watchlist(s_wl, p_wl, n_wl):
+                            st.success(f"Adăugat {s_wl} la ținta {p_wl}!")
+                            st.rerun()
+                    else:
+                        st.warning("Introdu un simbol și un preț valid.")
+
+        # --- AFIȘARE TABEL ---
+        df_wl = load_watchlist()
+        
+        if not df_wl.empty:
+            # 1. Luăm prețurile live pentru toate simbolurile din listă
+            tickers_list = df_wl['Symbol'].unique().tolist()
+            
+            if tickers_list:
+                with st.spinner("Actualizăm prețurile..."):
+                    try:
+                        live_data = yf.download(tickers_list, period="1d", progress=False)['Close'].iloc[-1]
+                    except:
+                        live_data = pd.Series()
+
+                # 2. Construim tabelul final
+                display_rows = []
+                for index, row in df_wl.iterrows():
+                    sym = row['Symbol']
+                    target = float(row['TargetPrice'])
+                    note = row['Notes']
+                    
+                    # Extragem prețul curent (gestionăm cazuri de un singur ticker vs listă)
+                    try:
+                        if len(tickers_list) == 1:
+                            curr = float(live_data) # Dacă e un singur număr
+                        else:
+                            curr = float(live_data[sym]) # Dacă e Series
+                    except:
+                        curr = 0
+
+                    # Calculăm distanța până la țintă
+                    if curr > 0:
+                        dist_pct = ((curr - target) / curr) * 100
+                        is_buy = curr <= target # E sub prețul țintă?
+                    else:
+                        dist_pct = 0
+                        is_buy = False
+                    
+                    display_rows.append({
+                        "Simbol": sym,
+                        "Preț Curent": curr,
+                        "Preț Țintă 🎯": target,
+                        "Distanță (%)": dist_pct,
+                        "Status": "✅ CUMPĂRĂ ACUM" if is_buy else "⏳ Așteaptă",
+                        "Notă": note,
+                        "_is_buy": is_buy # Coloană ascunsă pentru colorare
+                    })
+                
+                df_res = pd.DataFrame(display_rows)
+
+                # 3. Stilizare (Highlight rândurile de cumpărare)
+                def highlight_buy(row):
+                    if row['_is_buy']:
+                        return ['background-color: rgba(63, 185, 80, 0.2); font-weight: bold'] * len(row)
+                    else:
+                        return [''] * len(row)
+
+                # Ascundem coloana helper '_is_buy' la afișare
+                final_view = df_res.drop(columns=['_is_buy'])
+                
+                st.dataframe(
+                    df_res.style.apply(highlight_buy, axis=1)
+                    .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
+                    use_container_width=True,
+                    height=500,
+                    column_config={
+                        "Status": st.column_config.TextColumn(
+                            "Recomandare",
+                            help="Dacă prețul curent e sub țintă, apare verde.",
+                        ),
+                    }
+                )
+                
+                # Buton ștergere rapidă
+                with st.expander("🗑️ Șterge din listă"):
+                    del_sym = st.selectbox("Alege simbol de șters:", tickers_list)
+                    if st.button("Șterge"):
+                        if remove_from_watchlist(del_sym):
+                            st.warning(f"Șters {del_sym}.")
+                            st.rerun()
+
+            else:
+                st.info("Lista e goală.")
+        else:
+            st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
+            
 if __name__ == "__main__":
     main()
 
