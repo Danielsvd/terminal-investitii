@@ -216,15 +216,22 @@ def get_company_news_rss(symbol):
 @st.cache_data(ttl=3600)
 def get_macro_data_visuals():
     tickers = {
+        # --- Indicatori Macro (Dobânzi, Valute, Mărfuri) ---
         'US 10Y Yield 🇺🇸': '^TNX', 
         'Dolar Index 💲': 'DX-Y.NYB', 
         'Petrol WTI 🛢️': 'CL=F', 
         'Aur 🥇': 'GC=F',
         'EUR/RON 🇪🇺': 'EURRON=X',
         'USD/RON 🇺🇸': 'USDRON=X',
-        'Bursa RO (BET) 🇷🇴': 'TVBETETF.RO' # <--- NOU: Indicatorul economiei locale
+        
+        # --- Indici Bursieri Majori (NOU) ---
+        'Bursa RO (BET) 🇷🇴': 'TVBETETF.RO',
+        'S&P 500 (US) 🇺🇸': '^GSPC',
+        'Nasdaq 100 (Tech) 💻': '^NDX',
+        'Dow Jones 30 🏭': '^DJI',
+        'DAX 40 (Germania) 🇩🇪': '^GDAXI'
     }
-    # MODIFICARE: Descărcăm 5 ani (5y) pentru a avea istoric lung
+    # Descărcăm 5 ani (5y)
     data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False)
     return tickers, data
 
@@ -2069,5 +2076,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
