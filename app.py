@@ -741,6 +741,55 @@ def calculate_portfolio_performance(df, history_range="1A"):
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct
 
+def calculate_risk_metrics(portfolio_curve):
+    """Calculează Max Drawdown și Sharpe Ratio."""
+    if portfolio_curve.empty: return 0, 0
+    
+    # 1. Max Drawdown (Cea mai mare durere istorică)
+    # Calculăm maximul atins până în fiecare punct (Running Max)
+    rolling_max = portfolio_curve.cummax()
+    # Calculăm cât suntem sub maxim în fiecare zi
+    drawdown = (portfolio_curve - rolling_max) / rolling_max
+    # Luăm cea mai negativă valoare (ex: -0.20 înseamnă -20%)
+    max_dd = drawdown.min()
+    
+    # 2. Sharpe Ratio (Rentabilitate vs Risc)
+    # Calculăm randamentele zilnice
+    daily_rets = portfolio_curve.pct_change().dropna()
+    if daily_rets.std() == 0: return max_dd, 0
+    
+    # Formula anualizată (presupunem Risk Free Rate ~ 4%)
+    rf_daily = 0.04 / 252
+    excess_ret = daily_rets - rf_daily
+    sharpe = np.sqrt(252) * (excess_ret.mean() / daily_rets.std())
+    
+    return max_dd, sharpe
+
+@st.cache_data(ttl=3600)
+def get_portfolio_sectors(df_current):
+    """Grupează valoarea portofoliului pe sectoare economice."""
+    if df_current.empty: return pd.DataFrame()
+    
+    sector_map = {}
+    
+    for _, row in df_current.iterrows():
+        sym = row['Symbol']
+        val = row['MarketValue']
+        
+        # Încercăm să aflăm sectorul
+        try:
+            # Folosim fast_info sau info (optimizat)
+            t = yf.Ticker(sym)
+            sec = t.info.get('sector', 'Nedefinit')
+        except:
+            sec = 'Nedefinit'
+            
+        sector_map[sec] = sector_map.get(sec, 0) + val
+        
+    # Convertim în DataFrame pentru grafic
+    df_sec = pd.DataFrame(list(sector_map.items()), columns=['Sector', 'MarketValue'])
+    return df_sec
+
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
@@ -1171,6 +1220,71 @@ def main():
                     ))
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig_hist, use_container_width=True)
+                # --- MODUL NOU: ANALIZĂ DE RISC & SECTOARE ---
+                # 1. Calculăm Metricile de Risc
+                max_dd, sharpe = calculate_risk_metrics(hist_curve)
+                
+                st.markdown("#### 🛡️ Analiză Risc Portofoliu")
+                c_risk1, c_risk2, c_risk3 = st.columns(3)
+                
+                # Max Drawdown
+                c_risk1.metric(
+                    "Max Drawdown (Scădere Max.)", 
+                    f"{max_dd*100:.2f}%", 
+                    help="Cea mai mare scădere procentuală înregistrată de portofoliu de la un maxim istoric până la minim. Un DD de -20% înseamnă că la un moment dat portofoliul a pierdut 20% din vârf."
+                )
+                
+                # Sharpe Ratio
+                c_risk2.metric(
+                    "Sharpe Ratio", 
+                    f"{sharpe:.2f}", 
+                    help="Eficiența portofoliului. > 1 e Bun, > 2 e Excelent, < 0 e Rău. Indică cât profit faci pentru fiecare unitate de risc asumată."
+                )
+                
+                # Volatilitate (Bonus)
+                volatility = hist_curve.pct_change().std() * np.sqrt(252) * 100 if not hist_curve.empty else 0
+                c_risk3.metric(
+                    "Volatilitate Anualizată", 
+                    f"{volatility:.2f}%",
+                    help="Cât de mult fluctuează portofoliul într-un an."
+                )
+                
+                st.markdown("---")
+
+                # 2. Grafice Plăcintă: Simboluri vs Sectoare
+                st.subheader("🍰 Distribuția Activelor")
+                
+                col_pie1, col_pie2 = st.columns(2)
+                
+                with col_pie1:
+                    st.caption("**După Companie (Simbol)**")
+                    if not df_calc.empty:
+                        fig_sym = go.Figure(data=[go.Pie(
+                            labels=df_calc['Symbol'], 
+                            values=df_calc['MarketValue'], 
+                            hole=.4,
+                            textinfo='label+percent'
+                        )])
+                        fig_sym.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_sym, use_container_width=True)
+
+                with col_pie2:
+                    st.caption("**După Sector Economic**")
+                    # Calculăm alocarea pe sectoare
+                    with st.spinner("Analizăm sectoarele..."):
+                        df_sectors = get_portfolio_sectors(df_calc)
+                    
+                    if not df_sectors.empty:
+                        fig_sec = go.Figure(data=[go.Pie(
+                            labels=df_sectors['Sector'], 
+                            values=df_sectors['MarketValue'], 
+                            hole=.4,
+                            textinfo='label+percent'
+                        )])
+                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_sec, use_container_width=True)
+                    else:
+                        st.info("Nu există date suficiente pentru sectoare.")
 
                 # --- NEW: CORRELATION MATRIX ---
                 st.markdown("---")
@@ -2076,6 +2190,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
