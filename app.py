@@ -910,7 +910,7 @@ def main():
         "4. Piață Globală", 
         "5. Import Date", 
         "6. Rezumatul Zilei",
-        "7. Scanner Volum (RVOL)",
+        "7. Scanner Volum",
         "8. Watchlist 🎯" 
     ])
     st.sidebar.markdown("---")
@@ -1967,7 +1967,7 @@ def main():
     # ==================================================
     # 7. SCANNER VOLUM (RVOL) - NOU
     # ==================================================
-    elif sectiune == "7. Scanner Volum (RVOL)":
+    elif sectiune == "7. Scanner Volum":
         st.title("📡 Scanner Volum Relativ (RVOL)")
         st.markdown("""
         Acest modul identifică **anomaliile de volum**. 
