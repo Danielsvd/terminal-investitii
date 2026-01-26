@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from textblob import TextBlob
 import socket
 import numpy as np
+import re
 # --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
 import gspread
 from google.oauth2.service_account import Credentials
@@ -148,8 +149,57 @@ def parse_date(entry):
     except: pass
     return datetime.now()
 
+# --- FUNCȚIE NOUĂ DE PARSARE INTELIGENTĂ (SENIOR FIX) ---
+def smart_to_float(val):
+    """Transformă orice număr (format US sau EU) în float curat."""
+    if pd.isna(val) or val == '': return 0.0
+    s = str(val).strip()
+    # Păstrăm doar cifre, punct, virgulă și minus
+    s = re.sub(r'[^\d.,-]', '', s)
+    if not s: return 0.0
+
+    # Logică de detecție a formatului
+    if ',' in s and '.' in s:
+        if s.rfind(',') > s.rfind('.'): # Format EU: 1.000,50
+            s = s.replace('.', '').replace(',', '.')
+        else: # Format US: 1,000.50
+            s = s.replace(',', '')
+    elif ',' in s:
+        if s.count(',') > 1: # US Thousands: 1,000,000
+            s = s.replace(',', '')
+        else: # RO Decimal: 50,5
+            s = s.replace(',', '.')
+    elif '.' in s:
+        if s.count('.') > 1: # RO Thousands: 1.000.000
+            s = s.replace('.', '')
+        # Altfel e US Decimal: 50.5
+            
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+    
+def format_large_currency(val):
+    """Formatează numerele mari (Trilioane, Miliarde) pentru afișare string."""
+    try:
+        if isinstance(val, str):
+            val = smart_to_float(val)
+        
+        if val is None or val == 0: return "-"
+        if val >= 1e12: return f"$ {val/1e12:.2f} T"
+        if val >= 1e9: return f"$ {val/1e9:.2f} B"
+        if val >= 1e6: return f"$ {val/1e6:.2f} M"
+        return f"$ {val:,.2f}"
+    except:
+        return str(val)
+    
 def format_num(val, is_pct=False):
+    """Formatare afișare (folosește smart_to_float intern)"""
     if val is None: return "N/A"
+    # Asigurăm conversia dacă vine string
+    if isinstance(val, str):
+        val = smart_to_float(val)
+        
     if is_pct: return f"{val * 100:.2f}%"
     if val >= 1e12: return f"{val/1e12:.2f} T"
     if val >= 1e9: return f"{val/1e9:.2f} B"
@@ -1519,11 +1569,11 @@ def main():
                 )
 
     # ==================================================
-    # 5. IMPORT DATE (GOOGLE SHEETS) - BVB & GLOBAL
+    # 5. IMPORT DATE (GOOGLE SHEETS) - BVB EXTINS & GLOBAL FIX
     # ==================================================
     elif sectiune == "5. Import Date (CSV)":
         st.title("📂 Analiză Date (Cloud Sheets)")
-        st.caption("Datele sunt preluate direct din Google Sheets (Tab-urile 'BVB' și 'GLOBAL').")
+        st.caption("Datele sunt curățate și standardizate automat (Format RO & US).")
         
         if st.button("🔄 Reîncarcă Datele"):
             st.cache_data.clear()
@@ -1531,131 +1581,140 @@ def main():
 
         tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", "🌍 Internațional (Global)"])
 
-        # --- FUNCȚII AJUTĂTOARE ---
-        def clean_european_number(val):
-            """Transformă '1.000,50' sau '50,00%' în float 1000.50 sau 50.00"""
-            try:
-                if pd.isna(val): return 0
-                val_str = str(val).strip()
-                # Scoatem simboluri
-                for s in ['$', '€', '£', 'RON', '%', 'USD']: 
-                    val_str = val_str.replace(s, '')
-                # Logică: scoatem punctele de mii, înlocuim virgula cu punct
-                val_str = val_str.replace('.', '').replace(',', '.')
-                return float(val_str)
-            except:
-                return 0 
-
-        def format_large_currency(val):
-            """Formatează Capitalizarea (T/B/M)"""
-            num = clean_european_number(val)
-            if num == 0 and val != 0: return val 
-            if num >= 1e12: return f"{num/1e12:.2f} T"
-            if num >= 1e9: return f"{num/1e9:.2f} B"
-            if num >= 1e6: return f"{num/1e6:.2f} M"
-            return f"{num:,.2f}"
-
-        # Funcție generică de încărcare din Sheets
-        def load_analysis_sheet(sheet_name):
+        # Funcție locală de încărcare
+        def load_gsheet_data(sheet_name):
             sheet = connect_to_gsheets()
-            if sheet:
-                try:
-                    ws = sheet.spreadsheet.worksheet(sheet_name)
-                    data = ws.get_all_records()
-                    return pd.DataFrame(data)
-                except Exception as e:
-                    return pd.DataFrame()
-            return pd.DataFrame()
+            if not sheet: return pd.DataFrame()
+            try:
+                ws = sheet.spreadsheet.worksheet(sheet_name)
+                # Folosim get_all_values pt a evita erorile de header duplicate la citire
+                data = ws.get_all_values() 
+                if len(data) < 2: return pd.DataFrame()
+                # Transformăm în DataFrame folosind primul rând ca header
+                df = pd.DataFrame(data[1:], columns=data[0])
+                return df
+            except Exception as e:
+                st.error(f"Eroare citire {sheet_name}: {e}")
+                return pd.DataFrame()
 
-        # ---------------------------------------------------------
-        # TAB 1: BVB (DIN GOOGLE SHEETS)
-        # ---------------------------------------------------------
+        # --- TAB BVB (DATE EXTINSE) ---
         with tab_bvb:
-            st.subheader("Date BVB (Google Drive)")
-            
-            with st.spinner("Descărcăm datele BVB..."):
-                df_bvb = load_analysis_sheet("BVB")
+            st.subheader("Date BVB")
+            df_bvb = load_gsheet_data("BVB")
 
             if not df_bvb.empty:
                 try:
-                    # Indexăm după prima coloană (de obicei Simbol sau Nume)
-                    if df_bvb.shape[1] > 1:
-                        col_index = df_bvb.columns[1] # A doua coloană e de obicei numele indicatorilor
-                        df_bvb = df_bvb.set_index(col_index)
-                        # Ștergem prima coloană dacă e redundantă (depinde de cum ai dat paste)
-                        # df_bvb = df_bvb.drop(df_bvb.columns[0], axis=1)
-                        
-                        df_t = df_bvb.T # Transpunem (Coloane devin Rânduri)
-                        df_t.columns = df_t.columns.str.strip() # Curățăm spații
+                    col_indicators = df_bvb.columns[1] 
+                    df_bvb = df_bvb[df_bvb[col_indicators] != ""]
+                    
+                    # Eliminăm duplicatele de pe coloana indicatorilor
+                    df_bvb = df_bvb.drop_duplicates(subset=[col_indicators], keep='first')
+                    
+                    # Transpunere
+                    final_df = df_bvb.set_index(col_indicators).T
+                    final_df = final_df.loc[:, ~final_df.columns.str.contains('^Unnamed')] 
 
-                        indicators_wanted = [
-                            "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "GN",
-                            "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)",
-                            "Marjă netă TTM", "Marjă operațională", "Câștig pe acțiune (EPS)",
-                            "Levier financiar", "Lichiditate curentă", "Lichiditatea imediată", 
-                            "Net Debt/EBITDA", "Rata de îndatorare globală", "Div Yield", "Dividend Yield"
-                        ]
-                        
-                        existing_cols = [col for col in indicators_wanted if col in df_t.columns]
-                        
-                        if existing_cols:
-                            final_df = df_t[existing_cols].copy()
-                            # Conversie numerica
-                            for col in final_df.columns:
-                                try:
-                                    final_df[col] = final_df[col].astype(str).apply(clean_european_number)
-                                except: pass
+                    # === LISTA EXTINSĂ DE COLOANE NUMERICE ===
+                    cols_numeric = [
+                        "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "GN", "P/S TTM",
+                        "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)",
+                        "Marjă netă TTM", "Marjă operațională", "Câștig pe acțiune (EPS)", "EPS TTM",
+                        "Lichiditate curentă", "Lichiditatea imediată", "Levier financiar",
+                        "Div Yield", "Dividend Yield", "Net Debt/EBITDA", "Debt/EBITDA",
+                        "Rata de îndatorare globală", "Rata de cash din capitalizare", "Rata de cash din activ net"
+                    ]
+
+                    for col in final_df.columns:
+                        col_clean = col.strip()
+                        # Verificăm dacă e în listă sau conține indicii de număr
+                        if col_clean in cols_numeric or "%" in col_clean or "Ron" in col_clean or "lei" in col_clean:
+                            final_df[col] = final_df[col].apply(smart_to_float)
+
+                    st.dataframe(
+                        final_df, height=600, use_container_width=True,
+                        column_config={
+                            # Rentabilitate & Marje
+                            "Rentabilitate active (ROA)": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Rentabilitate capital (ROE)": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Marjă netă TTM": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Marjă operațională": st.column_config.NumberColumn(format="%.2f%%"),
                             
-                            st.success(f"Încărcat cu succes: {len(final_df)} companii.")
-                            st.dataframe(final_df, height=600, use_container_width=True)
-                        else:
-                            st.warning("Nu am găsit indicatorii standard. Verifică numele coloanelor în Google Sheets.")
-                            st.dataframe(df_bvb) # Fallback: arată tabelul brut
-                    else:
-                        st.dataframe(df_bvb)
+                            # Dividende
+                            "Div Yield": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Dividend Yield": st.column_config.NumberColumn(format="%.2f%%"),
+                            
+                            # EPS
+                            "Câștig pe acțiune (EPS)": st.column_config.NumberColumn(format="%.4f"),
+                            "EPS TTM": st.column_config.NumberColumn(format="%.4f"),
+                            
+                            # Lichiditate & Datorii
+                            "Lichiditate curentă": st.column_config.NumberColumn(format="%.2f"),
+                            "Lichiditatea imediată": st.column_config.NumberColumn(format="%.2f"),
+                            "Levier financiar": st.column_config.NumberColumn(format="%.2f"),
+                            "Net Debt/EBITDA": st.column_config.NumberColumn(format="%.2f"),
+                            "Debt/EBITDA": st.column_config.NumberColumn(format="%.2f"),
+                            "Rata de îndatorare globală": st.column_config.NumberColumn(format="%.2f%%"),
+                            
+                            # Cash Rates
+                            "Rata de cash din capitalizare": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Rata de cash din activ net": st.column_config.NumberColumn(format="%.2f%%"),
+                        }
+                    )
                 except Exception as e:
-                    st.error(f"Eroare procesare BVB: {e}")
-                    st.dataframe(df_bvb)
+                    st.error(f"Eroare structură BVB: {e}")
+                    st.dataframe(df_bvb.head())
             else:
-                st.warning("Foaia 'BVB' din Google Sheets este goală sau inexistentă.")
+                st.info("Foaia BVB este goală.")
 
-        # ---------------------------------------------------------
-        # TAB 2: GLOBAL (DIN GOOGLE SHEETS)
-        # ---------------------------------------------------------
+        # --- TAB GLOBAL (FORMATĂRI CORRECTE) ---
         with tab_global:
-            st.subheader("Date Internaționale (Google Drive)")
-            
-            with st.spinner("Descărcăm datele Global..."):
-                df_g = load_analysis_sheet("GLOBAL")
+            st.subheader("Date Internaționale")
+            df_g = load_gsheet_data("GLOBAL")
 
             if not df_g.empty:
                 try:
-                    # Eliminăm coloane goale sau ciudate
                     df_g = df_g.loc[:, ~df_g.columns.str.contains('^Unnamed')]
-                    
-                    final_df_g = df_g.copy()
-                    if "Companii" in final_df_g.columns:
-                        final_df_g = final_df_g.set_index("Companii")
+                    if "Companii" in df_g.columns:
+                        df_g = df_g.set_index("Companii")
 
-                    # Formatare
-                    for col in final_df_g.columns:
+                    clean_df_g = df_g.copy()
+
+                    for col in clean_df_g.columns:
                         if col in ["Industrie", "Recomandare", "Sector"]: continue
-                        
-                        if "Capitalizare" in col:
-                            final_df_g[col] = final_df_g[col].apply(format_large_currency)
-                        elif any(k in col for k in ["ROA", "ROE", "Marjă", "Abatere", "Datorii", "Div Yield"]):
-                            final_df_g[col] = final_df_g[col].apply(lambda x: f"{clean_european_number(x):.2f}%")
-                        else:
-                            final_df_g[col] = final_df_g[col].apply(clean_european_number)
+                        clean_df_g[col] = clean_df_g[col].apply(smart_to_float)
 
-                    st.success(f"Încărcat cu succes: {len(final_df_g)} companii.")
-                    st.dataframe(final_df_g, height=600, use_container_width=True)
+                    # Formatare string pentru afișare (Trilioane/Miliarde)
+                    display_df = clean_df_g.copy()
+                    if "Capitalizare" in display_df.columns:
+                        display_df["Capitalizare"] = display_df["Capitalizare"].apply(format_large_currency)
+                    if "Val. intrinsecă" in display_df.columns:
+                        display_df["Val. intrinsecă"] = display_df["Val. intrinsecă"].apply(format_large_currency)
 
+                    st.dataframe(
+                        display_df, height=600, use_container_width=True,
+                        column_config={
+                            "Capitalizare": st.column_config.TextColumn("Capitalizare", help="Valoare formatată"),
+                            
+                            # AICI E FIX-UL PENTRU PREȚ ($)
+                            "Preț acțiune": st.column_config.NumberColumn("Preț acțiune", format="$ %.2f"),
+                            "Preț țintă": st.column_config.NumberColumn("Preț țintă", format="$ %.2f"),
+                            "Dividend": st.column_config.NumberColumn("Dividend", format="$ %.2f"),
+                            "Val. intrinsecă": st.column_config.TextColumn("Val. intrinsecă"),
+                            
+                            # AICI E FIX-UL PENTRU DATORII (%)
+                            "Datorii/Ac. Net": st.column_config.NumberColumn("Datorii/Ac. Net", format="%.2f%%"),
+                            "Abatere": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Marjă P. Net": st.column_config.NumberColumn(format="%.2f%%"),
+                            "ROA": st.column_config.NumberColumn(format="%.2f%%"),
+                            "ROE": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Recomandare": st.column_config.TextColumn("Recomandare"),
+                        }
+                    )
                 except Exception as e:
                     st.error(f"Eroare procesare Global: {e}")
                     st.dataframe(df_g)
             else:
-                st.warning("Foaia 'GLOBAL' din Google Sheets este goală sau inexistentă.")
+                st.info("Foaia GLOBAL este goală.")
 
     # ==================================================
     # 6. REZUMATUL ZILEI (NOU & OPTIMIZAT)
