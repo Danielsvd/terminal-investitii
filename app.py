@@ -908,7 +908,7 @@ def main():
         "2. Analiză Companie", 
         "3. Portofoliu", 
         "4. Piață Globală", 
-        "5. Import Date (CSV)", 
+        "5. Import Date", 
         "6. Rezumatul Zilei",
         "7. Scanner Volum (RVOL)",
         "8. Watchlist 🎯" 
@@ -1571,7 +1571,7 @@ def main():
     # ==================================================
     # 5. IMPORT DATE (GOOGLE SHEETS) - BVB EXTINS & GLOBAL FIX
     # ==================================================
-    elif sectiune == "5. Import Date (CSV)":
+    elif sectiune == "5. Import Date":
         st.title("📂 Analiză Date (Cloud Sheets)")
         st.caption("Datele sunt curățate și standardizate automat (Format RO & US).")
         
