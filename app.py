@@ -858,7 +858,7 @@ def get_global_market_data():
                  'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
                  'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
     eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.MI', 'ENR.DE', 'DBK.DE', 'ULVR.L', 'REL.L', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'DGE.L', 'SHEL.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'DGE.L', 'SHEL.L', 'BA.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -2265,6 +2265,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
