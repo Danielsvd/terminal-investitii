@@ -2033,7 +2033,7 @@ def main():
             
             "🇬🇧 UK & Others (FTSE/Global)": [
                 'SHEL.L', 'AZN', 'HSBA.L', 'ULVR.L', 'BP', 'RIO', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
-                'GLNCY', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
+                'GLNCY', 'LSEG.L', 'AAL.L', 'BA.L', 'BARC.L', 'LLOY.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
                 'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
             ]
         }
@@ -2265,5 +2265,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
