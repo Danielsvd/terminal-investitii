@@ -2122,8 +2122,8 @@ def main():
                         st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
                 else:
                     st.warning("Eroare la preluarea datelor. Yahoo Finance ar putea limita cererile.")
-# ==================================================
-    # 8. WATCHLIST (NOU)
+    # ==================================================
+    # 8. WATCHLIST (FINAL FIX - TIMEZONE PROOF)
     # ==================================================
     elif sectiune == "8. Watchlist 🎯":
         st.title("🎯 Lista de Urmărire (Watchlist)")
@@ -2151,80 +2151,98 @@ def main():
         if not df_wl.empty:
             # 1. Luăm prețurile live pentru toate simbolurile din listă
             tickers_list = df_wl['Symbol'].unique().tolist()
-            
+            live_data = pd.Series()
+
             if tickers_list:
-                with st.spinner("Actualizăm prețurile..."):
+                with st.spinner("Actualizăm prețurile (Global)..."):
                     try:
-                        live_data = yf.download(tickers_list, period="1d", progress=False)['Close'].iloc[-1]
-                    except:
+                        # DESCĂRCARE DATE PE 5 ZILE (pentru siguranță)
+                        data_bulk = yf.download(tickers_list, period="5d", progress=False)['Close']
+                        
+                        # Tratare caz un singur ticker (Series -> DataFrame)
+                        if isinstance(data_bulk, pd.Series):
+                             data_bulk = data_bulk.to_frame(name=tickers_list[0])
+                        
+                        # --- LOGICĂ DE EXTRAGERE PREȚ VALID INDIFERENT DE ORĂ ---
+                        current_prices = {}
+                        
+                        for col in data_bulk.columns:
+                            # Luăm coloana și ștergem valorile goale (NaN)
+                            valid_values = data_bulk[col].dropna()
+                            
+                            if not valid_values.empty:
+                                # Luăm ultima valoare existentă (chiar dacă e de ieri)
+                                current_prices[col] = valid_values.iloc[-1]
+                            else:
+                                current_prices[col] = 0.0
+                        
+                        # Convertim înapoi în Series pentru restul codului
+                        live_data = pd.Series(current_prices)
+                        # --------------------------------------------------------
+
+                    except Exception as e:
+                        # st.error(f"Eroare date: {e}") 
                         live_data = pd.Series()
 
-                # 2. Construim tabelul final
-                display_rows = []
-                for index, row in df_wl.iterrows():
-                    sym = row['Symbol']
-                    target = float(row['TargetPrice'])
-                    note = row['Notes']
-                    
-                    # Extragem prețul curent (gestionăm cazuri de un singur ticker vs listă)
-                    try:
-                        if len(tickers_list) == 1:
-                            curr = float(live_data) # Dacă e un singur număr
-                        else:
-                            curr = float(live_data[sym]) # Dacă e Series
-                    except:
-                        curr = 0
-
-                    # Calculăm distanța până la țintă
-                    if curr > 0:
-                        dist_pct = ((curr - target) / curr) * 100
-                        is_buy = curr <= target # E sub prețul țintă?
-                    else:
-                        dist_pct = 0
-                        is_buy = False
-                    
-                    display_rows.append({
-                        "Simbol": sym,
-                        "Preț Curent": curr,
-                        "Preț Țintă 🎯": target,
-                        "Distanță (%)": dist_pct,
-                        "Status": "✅ CUMPĂRĂ ACUM" if is_buy else "⏳ Așteaptă",
-                        "Notă": note,
-                        "_is_buy": is_buy # Coloană ascunsă pentru colorare
-                    })
+            # 2. Construim tabelul final
+            display_rows = []
+            for index, row in df_wl.iterrows():
+                sym = row['Symbol']
+                target = float(row['TargetPrice'])
+                note = row['Notes']
                 
-                df_res = pd.DataFrame(display_rows)
+                # Extragem prețul curent din seria curățată
+                try:
+                    curr = float(live_data.get(sym, 0))
+                except:
+                    curr = 0
 
-                # 3. Stilizare și Afișare (ASCUNDEM _is_buy)
-                def highlight_buy(row):
-                    # Verificăm coloana ascunsă pentru a decide culoarea
-                    if row['_is_buy']:
-                        return ['background-color: rgba(63, 185, 80, 0.2); font-weight: bold'] * len(row)
-                    else:
-                        return [''] * len(row)
-
-                st.dataframe(
-                    df_res.style.apply(highlight_buy, axis=1)
-                    .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
-                    use_container_width=True,
-                    height=500,
-                    column_config={
-                        "_is_buy": None, # <--- Asta ASCUNDE coloana tehnică
-                        "Status": st.column_config.TextColumn("Recomandare"),
-                    },
-                    hide_index=True # Ascunde și indexul (0, 1, 2...) din stânga
-                )
+                # Calculăm distanța până la țintă
+                if curr > 0:
+                    dist_pct = ((curr - target) / curr) * 100
+                    is_buy = curr <= target # E sub prețul țintă?
+                else:
+                    dist_pct = 0
+                    is_buy = False
                 
-                # Buton ștergere rapidă
-                with st.expander("🗑️ Șterge din listă"):
-                    del_sym = st.selectbox("Alege simbol de șters:", tickers_list)
-                    if st.button("Șterge"):
-                        if remove_from_watchlist(del_sym):
-                            st.warning(f"Șters {del_sym}.")
-                            st.rerun()
+                display_rows.append({
+                    "Simbol": sym,
+                    "Preț Curent": curr,
+                    "Preț Țintă 🎯": target,
+                    "Distanță (%)": dist_pct,
+                    "Recomandare": "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă",
+                    "Notă": note,
+                    "_is_buy": is_buy 
+                })
+            
+            df_res = pd.DataFrame(display_rows)
 
-            else:
-                st.info("Lista e goală.")
+            # 3. Stilizare și Afișare
+            def highlight_buy(row):
+                if row['_is_buy']:
+                    return ['background-color: rgba(63, 185, 80, 0.2); font-weight: bold'] * len(row)
+                else:
+                    return [''] * len(row)
+
+            st.dataframe(
+                df_res.style.apply(highlight_buy, axis=1)
+                .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
+                use_container_width=True,
+                height=500,
+                column_config={
+                    "_is_buy": None, 
+                },
+                hide_index=True 
+            )
+            
+            # Buton ștergere
+            with st.expander("🗑️ Șterge din listă"):
+                del_sym = st.selectbox("Alege simbol de șters:", tickers_list)
+                if st.button("Șterge"):
+                    if remove_from_watchlist(del_sym):
+                        st.warning(f"Șters {del_sym}.")
+                        st.rerun()
+
         else:
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
 
