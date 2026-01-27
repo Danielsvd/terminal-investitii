@@ -857,8 +857,8 @@ def get_global_market_data():
                  'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
                  'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
                  'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
-    eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.IT', 'ENR.DE', 'DBK.DE', 'BNP.FR', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLE.FR', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'HMB.SE', 'ZAL.DE', 'LDO.IT', 'RNO.FR', 'SHEL.L', 'RACE.IT', 'AZN.L', 'HSBA.L', 'FP.PA']
+    eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.MI', 'ENR.DE', 'DBK.DE', 'ULVR.L', 'REL.L', 
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'DGE.L', 'SHEL.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -1386,7 +1386,7 @@ def main():
             #     st.rerun()
 
     # ==================================================
-    # 4. PIAȚĂ GLOBALĂ (CU DASHBOARD MACRO)
+    # 4. PIAȚĂ GLOBALĂ (CU DASHBOARD MACRO - DUAL METRICS)
     # ==================================================
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
@@ -1402,7 +1402,7 @@ def main():
         st.markdown("### 🧭 Indicatori Macroeconomici")
         st.info("💡 **Interpretare:** Dacă **US 10Y Yield** crește brusc, acțiunile de tehnologie (Growth) tind să scadă. Dacă **Aurul** crește, indică frică în piață.")
         
-       # Apelăm funcția (acum descarcă 5 ani)
+        # Apelăm funcția (acum descarcă 5 ani)
         macro_tickers, macro_data = get_macro_data_visuals()
         
         # --- 1. CONFIGURARE UI (Selectori) ---
@@ -1414,7 +1414,7 @@ def main():
             selected_macro_sym = macro_tickers[selected_macro_name]
             
             st.markdown("##### 2. Perioadă:")
-            # Slider pentru timp (exact ca la portofoliu)
+            # Slider pentru timp
             time_frame = st.select_slider("", options=["1L", "3L", "6L", "1A", "3A", "5A"], value="1A")
 
         # --- 2. PROCESARE DATE ---
@@ -1430,43 +1430,60 @@ def main():
                 series = macro_data['Close'] # Fallback
 
             if not series.empty:
-                # Filtrare după Slider-ul de Timp
+                # 1. Date pentru Interval (Subset)
                 days_map = {"1L": 30, "3L": 90, "6L": 180, "1A": 365, "3A": 1095, "5A": 1825}
                 days = days_map.get(time_frame, 365)
                 subset = series.iloc[-days:] # Tăiem exact cât a cerut userul
                 
-                # Calcule Metrici (Delta)
-                curr_val = subset.iloc[-1]
-                prev_val = subset.iloc[-2]
-                delta = curr_val - prev_val
-                pct = (delta / prev_val) * 100
+                # --- CALCULE METRICI SEPARATE (MODIFICAREA CERUTĂ) ---
                 
-                # --- FORMATARE TEXT (Adăugare %) ---
-                # Dacă e Yield (Titluri de stat), punem % la final
+                curr_val = series.iloc[-1] # Valoarea curentă (Azi)
+
+                # A. Calcul Interval (Start Slider vs Azi)
+                start_val = subset.iloc[0]
+                diff_interval = curr_val - start_val
+                pct_interval = (diff_interval / start_val) * 100 if start_val != 0 else 0
+
+                # B. Calcul Zi (Ieri vs Azi) - Folosim seria completă, nu subsetul
+                prev_day_val = series.iloc[-2] if len(series) >= 2 else curr_val
+                diff_day = curr_val - prev_day_val
+                pct_day = (diff_day / prev_day_val) * 100 if prev_day_val != 0 else 0
+                
+                # --- FORMATARE TEXT ---
                 suffix = "%" if "Yield" in selected_macro_name else ""
                 val_fmt = f"{curr_val:.4f}{suffix}"
                 
-                # Afișare Metrică
-                st.metric(f"{selected_macro_name}", val_fmt, f"{delta:.4f} ({pct:.2f}%)")
+                # --- AFIȘARE DUALĂ (2 Metric Carduri) ---
+                m1, m2 = st.columns(2)
                 
-                # --- 3. GRAFIC PLOTLY (DETALIAT) ---
+                m1.metric(
+                    f"Interval ({time_frame})", 
+                    val_fmt, 
+                    f"{diff_interval:.4f} ({pct_interval:.2f}%)"
+                )
+                
+                m2.metric(
+                    "Evoluție Azi", 
+                    val_fmt, 
+                    f"{diff_day:.4f} ({pct_day:.2f}%)"
+                )
+                
+                # --- 3. GRAFIC PLOTLY ---
                 fig_macro = go.Figure()
                 
-                # Linie colorată și umplută (Gradient)
                 fig_macro.add_trace(go.Scatter(
                     x=subset.index, 
                     y=subset.values,
                     mode='lines',
-                    fill='tozeroy', # Umple sub linie
+                    fill='tozeroy', 
                     line=dict(color='#58A6FF', width=2),
                     name=selected_macro_name
                 ))
                 
-                # TRUC: Pentru Valute (EUR/RON), "Zoom-in" pe axa Y
-                # Dacă variația e mică (sub 10%), nu porni axa de la 0, ci de la minim
+                # TRUC: Zoom-in pe axa Y pentru active stabile (Valute)
                 y_min = subset.min()
                 y_max = subset.max()
-                is_stable = (y_max - y_min) / y_min < 0.1 # Variație sub 10%
+                is_stable = (y_max - y_min) / y_min < 0.1 
                 
                 range_y = [y_min * 0.999, y_max * 1.001] if is_stable else None
                 
@@ -1480,7 +1497,7 @@ def main():
                     yaxis=dict(
                         showgrid=True, 
                         gridcolor='#30363D',
-                        autorange=True if not range_y else False, # Auto sau Zoom forțat
+                        autorange=True if not range_y else False,
                         range=range_y
                     )
                 )
@@ -1493,7 +1510,7 @@ def main():
         st.markdown("---")
         # ---------------------------------------------------------
         
-        # --- TABELELE VECHI (PARTEA CARE ERA DEJA ÎN COD) ---
+        # --- TABELELE VECHI ---
         with st.spinner("Descărcăm datele acțiunilor..."):
             df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
 
@@ -1991,13 +2008,13 @@ def main():
             "🇺🇸 SUA - Tech & Growth (Nasdaq 100)": [
                 'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AVGO', 'COST', 'PEP', 'CSCO', 'TMUS',
                 'CMCSA', 'INTC', 'AMD', 'CLS', 'NFLX', 'TXN', 'ANET', 'NET', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
-                'ARM', 'BKNG', 'AT&T', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
+                'ARM', 'BKNG', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
                 'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'TSM', 'AFRM'
             ],
             
             "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
                 'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
-                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PXD', 'OXY', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO',
+                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO',
                 'CAT', 'DE', 'BA', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'AMGN', 'BIIB', 'SNY', 'NVS',
                 'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'METC', 'RIO', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
             ],
@@ -2005,18 +2022,18 @@ def main():
             "🇪🇺 Europa - Germania (DAX 40)": [
                 'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'AIR.DE', 'BMW.DE', 'VOW3.DE', 'MBG.DE', 'BAS.DE', 'BAYN.DE',
                 'ADS.DE', 'DHL.DE', 'DB1.DE', 'MUV2.DE', 'IFX.DE', 'EOAN.DE', 'RWE.DE', 'ENR.DE', 'DTG.DE', 'BSP.DE', 'RHM.DE', 'HEN3.DE', 'VNA.DE',
-                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'RNO.DE', 'PUM.DE', 'ZAL.DE'
+                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'PUM.DE', 'ZAL.DE'
             ],
             
             "🇪🇺 Europa - Franța (CAC 40)": [
                 'MC.PA', 'OR.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA', 'BNP.PA', 'EL.PA', 'KER.PA',
-                'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'STLAP.PA', 'GLE.PA', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
-                'VIV.PA', 'ENG.PA', 'LR.PA', 'HO.PA', 'ML.PA', 'DG.FR', 'SU.FR', 'HO.FR', 'RI.PA', 'BN.PA', 'DSY.PA'
+                'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'RNO.PA', 'STLAP.PA', 'GLNCY', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
+                'VIV.PA', 'ENG.PA', 'LR.PA', 'HO.PA', 'ML.PA', 'DGE.L', 'SU.PA', 'HO.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
             ],
             
             "🇬🇧 UK & Others (FTSE/Global)": [
-                'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L', 'RIO.L', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
-                'GLEN.L', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'LDO.IT', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
+                'SHEL.L', 'AZN', 'HSBA.L', 'ULVR.L', 'BP', 'RIO', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
+                'GLNCY', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
                 'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
             ]
         }
