@@ -271,6 +271,7 @@ def get_macro_data_visuals():
         'Dolar Index 💲': 'DX-Y.NYB', 
         'Petrol WTI 🛢️': 'CL=F', 
         'Aur 🥇': 'GC=F',
+        'Copper': 'HG=F',
         'EUR/RON 🇪🇺': 'EURRON=X',
         'USD/RON 🇺🇸': 'USDRON=X',
         
@@ -845,11 +846,11 @@ def get_portfolio_sectors(df_current):
 def get_global_market_data():
     indices = {
         'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC', 
-        'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE', 'BET (RO)': 'BET.RO'
+        'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE','Bursa RO (BET) 🇷🇴': 'TVBETETF.RO'
     }
     commodities = {
         'Aur (Gold)': 'GC=F', 'Argint (Silver)': 'SI=F', 
-        'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Gaz Natural': 'NG=F'
+        'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Copper': 'HG=F', 'Gaz Natural': 'NG=F'
     }
     
     us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
@@ -857,7 +858,7 @@ def get_global_market_data():
                  'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
                  'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
     eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.IT', 'ENR.DE', 'DBK.DE', 'BNP.FR', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLE.FR', 'MBG.DE', 'BSP.DE', 'LDO.IT', 'RNO.FR', 'SHEL.L', 'RACE.IT', 'AZN.L', 'HSBA.L', 'FP.PA']
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLE.FR', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'HMB.SE', 'ZAL.DE', 'LDO.IT', 'RNO.FR', 'SHEL.L', 'RACE.IT', 'AZN.L', 'HSBA.L', 'FP.PA']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -2003,19 +2004,19 @@ def main():
             
             "🇪🇺 Europa - Germania (DAX 40)": [
                 'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'AIR.DE', 'BMW.DE', 'VOW3.DE', 'MBG.DE', 'BAS.DE', 'BAYN.DE',
-                'ADS.DE', 'DHL.DE', 'DB1.DE', 'MUV2.DE', 'IFX.DE', 'EOAN.DE', 'RWE.DE', 'DTG.DE', 'HEN3.DE', 'VNA.DE',
-                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'PUM.DE', 'ZAL.DE'
+                'ADS.DE', 'DHL.DE', 'DB1.DE', 'MUV2.DE', 'IFX.DE', 'EOAN.DE', 'RWE.DE', 'ENR.DE', 'DTG.DE', 'BSP.DE', 'RHM.DE', 'HEN3.DE', 'VNA.DE',
+                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'RNO.DE', 'PUM.DE', 'ZAL.DE'
             ],
             
             "🇪🇺 Europa - Franța (CAC 40)": [
                 'MC.PA', 'OR.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA', 'BNP.PA', 'EL.PA', 'KER.PA',
                 'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'STLAP.PA', 'GLE.PA', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
-                'VIV.PA', 'ENG.PA', 'LR.PA', 'HO.PA', 'ML.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
+                'VIV.PA', 'ENG.PA', 'LR.PA', 'HO.PA', 'ML.PA', 'DG.FR', 'SU.FR', 'HO.FR', 'RI.PA', 'BN.PA', 'DSY.PA'
             ],
             
             "🇬🇧 UK & Others (FTSE/Global)": [
                 'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'BP.L', 'RIO.L', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
-                'GLEN.L', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
+                'GLEN.L', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'LDO.IT', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
                 'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
             ]
         }
