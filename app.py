@@ -272,6 +272,7 @@ def get_macro_data_visuals():
         'Petrol WTI 🛢️': 'CL=F', 
         'Aur 🥇': 'GC=F',
         'Copper': 'HG=F',
+        'EUR/USD 🇪🇺': 'EURUSD=X',
         'EUR/RON 🇪🇺': 'EURRON=X',
         'USD/RON 🇺🇸': 'USDRON=X',
         
@@ -2265,6 +2266,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
