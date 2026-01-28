@@ -381,19 +381,34 @@ def calculate_intrinsic_value(info):
     except Exception as e:
         return 0, 0, 0
     
+# --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
     try:
+        # NU mai creăm sesiune manuală. Lăsăm yfinance să folosească curl_cffi intern.
+        
+        # 1. Încercăm descărcarea directă
         t = yf.Ticker(symbol)
         hist = t.history(period="5y")
+        
+        # 2. Fallback pentru BVB (.RO)
         if hist.empty and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
             hist_ro = t_ro.history(period="5y")
+            
             if not hist_ro.empty:
                 return hist_ro, t_ro.info, getattr(t_ro, 'earnings_history', None), sym_ro
+        
+        if hist.empty:
+            return None, None, None, symbol
+
         return hist, t.info, getattr(t, 'earnings_history', None), symbol
-    except: return None, None, None, symbol
+
+    except Exception as e:
+        # Păstrăm afișarea erorii pentru siguranță
+        # st.error(f"Eroare: {e}") 
+        return None, None, None, symbol
 
 def calculate_technical_indicators(df):
     if df is None or df.empty: return df
@@ -859,7 +874,7 @@ def get_global_market_data():
                  'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
                  'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
     eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.MI', 'ENR.DE', 'DBK.DE', 'ULVR.L', 'REL.L', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'DGE.L', 'SHEL.L', 'BA.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
+                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'BA.L', 'DGE.L', 'SHEL.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -2034,7 +2049,7 @@ def main():
             
             "🇬🇧 UK & Others (FTSE/Global)": [
                 'SHEL.L', 'AZN', 'HSBA.L', 'ULVR.L', 'BP', 'RIO', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
-                'GLNCY', 'LSEG.L', 'AAL.L', 'BA.L', 'BARC.L', 'LLOY.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
+                'GLNCY', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'BA.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
                 'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
             ]
         }
@@ -2266,8 +2281,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
 
 
