@@ -133,6 +133,7 @@ RSS_CONFIG = {
         "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "Critical Matals", "Glencore", "USA Rare Earth", "MP Materials", "otel"],
         "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "cacao", "soia", "prime materials", "gas", "cafea", "culturi"],
         "Dobânzi": ["dobanda", "robor", "ircc", "interest", "inflation", "inflatie", "banci centrale", "FED", "BCE", "BNR"],
+        "Asia": ["BOJ", "Japonia", "China", "Taiwan", "rate japan", "dobanda japonia", "banca centrala a japoniei", "banca japoniei", "guvernul japoniei", "Bank of China", "the government of Japan", "Bank of Japan", "insulele", "Virus", "Nipah"],
         "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "PPI", "PCE", "CPI", "PMI", "NFP", "HR", "munca", "forta de munca"]
     }
 }
@@ -2281,6 +2282,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
