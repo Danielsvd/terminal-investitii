@@ -113,7 +113,12 @@ RSS_CONFIG = {
         "https://www.profit.ro/rss",                
         "https://www.startupcafe.ro/rss",           
         "https://financialintelligence.ro/feed/",   
-        "https://www.wall-street.ro/rss/business", 
+        "https://www.wall-street.ro/rss/business",
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910", # CNBC Asia-Pacific
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19832390", # CNBC Asia News
+        "http://feeds.bbci.co.uk/news/world/asia/rss.xml", # BBC Asia
+        "https://www.scmp.com/rss/91/feed", # South China Morning Post (Excelent pt China/HK)
+        "https://asia.nikkei.com/rss/feed/nar", # Nikkei Asia (Excelent pt Japonia) 
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US", 
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
         "http://feeds.marketwatch.com/marketwatch/topstories",
@@ -133,7 +138,7 @@ RSS_CONFIG = {
         "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "Critical Matals", "Glencore", "USA Rare Earth", "MP Materials", "otel"],
         "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "cacao", "soia", "prime materials", "gas", "cafea", "culturi"],
         "Dobânzi": ["dobanda", "robor", "ircc", "interest", "inflation", "inflatie", "banci centrale", "FED", "BCE", "BNR"],
-        "Asia": ["BOJ", "Japonia", "China", "Taiwan", "Nikkei", "Topix", "Hang Seng", "banca japoniei", "guvernul japoniei", "Bank of China", "Shanghai Composite", "Bank of Japan", "Nifty", "KOSPI", "Nipah"],
+        "Asia": ["BOJ", "Japonia", "China", "Taiwan", "Nikkei", "Topix", "Hang Seng", "banca japoniei", "guvernul japoniei", "Bank of China", "Shanghai Composite", "Bank of Japan", "Nifty", "Beijing", "yuan", "India", "yen", "KOSPI", "Nipah"],
         "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "PPI", "PCE", "CPI", "PMI", "NFP", "HR", "munca", "forta de munca"]
     }
 }
@@ -386,29 +391,27 @@ def calculate_intrinsic_value(info):
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
     try:
-        # NU mai creăm sesiune manuală. Lăsăm yfinance să folosească curl_cffi intern.
-        
-        # 1. Încercăm descărcarea directă
+        # FĂRĂ requests.Session, FĂRĂ curl_cffi forțat.
+        # yfinance va alege singur cea mai bună metodă.
+
         t = yf.Ticker(symbol)
         hist = t.history(period="5y")
-        
-        # 2. Fallback pentru BVB (.RO)
+
+        # Fallback BVB
         if hist.empty and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
             hist_ro = t_ro.history(period="5y")
-            
             if not hist_ro.empty:
                 return hist_ro, t_ro.info, getattr(t_ro, 'earnings_history', None), sym_ro
-        
+
         if hist.empty:
             return None, None, None, symbol
 
         return hist, t.info, getattr(t, 'earnings_history', None), symbol
 
     except Exception as e:
-        # Păstrăm afișarea erorii pentru siguranță
-        # st.error(f"Eroare: {e}") 
+        print(f"Eroare: {e}")
         return None, None, None, symbol
 
 def calculate_technical_indicators(df):
@@ -557,8 +560,8 @@ def get_daily_briefing_data():
     us_tickers = [
         '^GSPC', '^DJI', '^IXIC', '^VIX', 
         'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
-        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'T', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
+        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'T', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
+        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
         'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
     ]
     us_data = yf.download(us_tickers, period="5d", group_by='ticker', progress=False)
@@ -2031,9 +2034,9 @@ def main():
             
             "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
                 'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
-                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO',
+                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO', 'T',
                 'CAT', 'DE', 'BA', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'AMGN', 'BIIB', 'SNY', 'NVS',
-                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'METC', 'RIO', 'T', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
+                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'METC', 'RIO', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
             ],
             
             "🇪🇺 Europa - Germania (DAX 40)": [
@@ -2282,8 +2285,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
 
 
