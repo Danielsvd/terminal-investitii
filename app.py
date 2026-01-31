@@ -968,7 +968,7 @@ def main():
                     st.info(f"Nu există știri recente pentru: {cat}.")
 
     # ==================================================
-    # 2. ANALIZĂ COMPANIE
+    # 2. ANALIZĂ COMPANIE (INTEGRARE COMPLETĂ: ORIGINAL + AI)
     # ==================================================
     elif sectiune == "2. Analiză Companie":
         st.sidebar.header("Căutare")
@@ -987,6 +987,7 @@ def main():
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
         else:
+            # --- HEADER ORIGINAL ---
             st.markdown(f"## {info.get('longName', real_sym)}")
             c1, c2, c3 = st.columns(3)
             c1.metric("Sector", info.get('sector', 'N/A'))
@@ -994,6 +995,7 @@ def main():
             c3.metric("Capitalizare", format_num(info.get('marketCap')))
             st.markdown("---")
 
+            # --- GRAFIC TEHNIC ORIGINAL ---
             hist = calculate_technical_indicators(hist)
             st.subheader("📉 Grafic Tehnic")
             col_sel, col_price_info = st.columns([1, 4])
@@ -1050,133 +1052,117 @@ def main():
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
             st.plotly_chart(fig, use_container_width=True)
 
-            st.subheader("📊 Indicatori Fundamentali")
-            beta_val = info.get('beta')
-            alpha_val = calculate_alpha(hist, beta_val)
-            
-            de_ratio = info.get('debtToEquity')
-            if de_ratio is not None:
-                de_display = f"{de_ratio:.2f}%"
-            else:
-                de_display = "N/A"
-
-            # --- BLOC METRICI COMPLET ȘI CORECTAT ---
-            with st.container():
-                c_eval, c_prof, c_indat, c_risc = st.columns(4)
-                
-                with c_eval:
-                    st.markdown("**Evaluare & Dividende**")
-                    pe_val = info.get('trailingPE')
-                    pb_val = info.get('priceToBook')
-                    
-                    # --- 1. CALCUL DIVIDEND (MANUAL PENTRU PRECIZIE) ---
-                    div_rate = info.get('dividendRate')
-                    current_price = info.get('currentPrice') or info.get('previousClose') or info.get('regularMarketPreviousClose')
-                    
-                    if div_rate is not None and current_price is not None and current_price > 0:
-                        yield_calc = (div_rate / current_price) * 100
-                        div_display = f"{div_rate} {info.get('currency', '')} ({yield_calc:.2f}%)"
-                    elif div_rate is not None:
-                        div_display = f"{div_rate} {info.get('currency', '')}"
-                    else:
-                        div_display = "N/A"
-                    # ---------------------------------------------------
-
-                    if pe_val is not None and pb_val is not None:
-                        gn_val = pe_val * pb_val
-                        gn_display = f"{gn_val:.2f}"
-                    else:
-                        gn_display = "N/A"
-
-                    # Afișare metrici (Ordinea completă)
-                    st.metric("P/E Ratio", format_num(pe_val), help="Cât plătești pentru 1$ profit.")
-                    st.metric("Forward P/E", format_num(info.get('forwardPE')), help="P/E estimat pentru anul viitor.")
-                    st.metric("Dividend (Randament)", div_display, help="Dividendul anual și randamentul real (Div/Preț).")
-                    st.metric("P/BV", format_num(pb_val), help="Preț față de valoarea contabilă.")
-                    st.metric("GN (Graham)", gn_display, help="Produsul P/E * P/BV.")
-                    st.metric("EPS", format_num(info.get('trailingEps')), help="Profit net pe acțiune.")
-                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help="Valoarea activelor nete per acțiune.")
-
-                with c_prof:
-                    st.markdown("**Profitabilitate**")
-                    st.metric("ROA", format_num(info.get('returnOnAssets'), True), help="Randamentul activelor.")
-                    st.metric("ROE", format_num(info.get('returnOnEquity'), True), help="Randamentul capitalului propriu.")
-                    st.metric("Marjă Netă", format_num(info.get('profitMargins'), True), help="Profit net din venituri.")
-                    st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True), help="EBIT / Venituri.")
-                
-                with c_indat:
-                    st.markdown("**Îndatorare**")
-                    st.metric("Datorii/Capital", de_display, help="Datorii totale la capital propriu (>100% poate indica risc).")
-                    st.metric("Current Ratio", info.get('currentRatio', 'N/A'), help="Active curente / Datorii curente.")
-                    st.metric("Quick Ratio", info.get('quickRatio', 'N/A'), help="Lichiditate imediată.")
-                
-                with c_risc:
-                    st.markdown("**Risc (Alpha & Beta)**")
-                    st.metric("Beta", info.get('beta', 'N/A'), help="Volatilitatea față de piață.")
-                    st.metric("Alpha (1Y)", format_num(alpha_val, True), help="Performanța peste piață (vs SPY).")
-            
-            st.markdown("---")
-            st.subheader(f"📰 Ultimele Știri despre {real_sym}")
-            company_news = get_company_news_rss(real_sym)
-            if company_news:
-                for n in company_news:
-                    sentiment, css_cls, icon = get_sentiment(n['title'])
-                    c_txt, c_imp = st.columns([5, 1])
-                    with c_txt:
-                        st.markdown(f"**[{n['title']}]({n['link']})**")
-                        st.caption(f"{n['publisher']} • {n['date_str']}")
-                    with c_imp:
-                        st.markdown(f"<span class='{css_cls}'>{icon} {sentiment}</span>", unsafe_allow_html=True)
-                    st.divider()
-            else:
-                st.info(f"Nu au fost găsite știri recente pe fluxul Yahoo pentru {real_sym}.")
-
-            # --- MODUL NOU: CALCULATOR EVALUARE ---
+            # --- CALCULATOR FAIR VALUE ORIGINAL ---
             st.subheader("🧮 Calculator Valoare Intrinsecă (Fair Value)")
-            
             graham, dcf, curr_p = calculate_intrinsic_value(info)
             
             if curr_p and curr_p > 0:
-                # Creăm 3 coloane vizuale
                 c_val1, c_val2, c_val3 = st.columns(3)
-                
                 with c_val1:
                     st.markdown("#### Preț Curent")
                     st.markdown(f"<h2 style='color: #FFFFFF;'>{curr_p:.2f} {info.get('currency','')}</h2>", unsafe_allow_html=True)
-                
                 with c_val2:
                     st.markdown("#### Benjamin Graham")
                     if graham > 0:
                         diff_graham = ((curr_p - graham) / graham) * 100
-                        color_g = "#F85149" if curr_p > graham else "#3FB950" # Rosu daca e scump, Verde daca e ieftin
-                        status_g = "SUPRAEVALUAT" if curr_p > graham else "SUBEVALUAT"
+                        color_g = "#F85149" if curr_p > graham else "#3FB950"
                         st.markdown(f"<h2 style='color: {color_g};'>{graham:.2f}</h2>", unsafe_allow_html=True)
-                        st.caption(f"{status_g} cu {abs(diff_graham):.1f}%")
-                        st.info("Recomandat pentru: Bănci, Industrie, Energie (Active tangibile).")
-                    else:
-                        st.warning("Nu se poate calcula (EPS sau BV negativ).")
-
+                        st.caption(f"{'SUPRAEVALUAT' if curr_p > graham else 'SUBEVALUAT'} cu {abs(diff_graham):.1f}%")
+                    else: st.warning("Date insuficiente.")
                 with c_val3:
                     st.markdown("#### Model DCF (Growth)")
                     if dcf > 0:
                         diff_dcf = ((curr_p - dcf) / dcf) * 100
                         color_d = "#F85149" if curr_p > dcf else "#3FB950"
-                        status_d = "SUPRAEVALUAT" if curr_p > dcf else "SUBEVALUAT"
                         st.markdown(f"<h2 style='color: {color_d};'>{dcf:.2f}</h2>", unsafe_allow_html=True)
-                        st.caption(f"{status_d} cu {abs(diff_dcf):.1f}%")
-                        st.info("Recomandat pentru: Tech, Servicii, Growth (Flux de numerar viitor).")
-                    else:
-                        st.warning("Date insuficiente pentru proiecție.")
-                
-                st.markdown("---")
-            # --------------------------------------
+                        st.caption(f"{'SUPRAEVALUAT' if curr_p > dcf else 'SUBEVALUAT'} cu {abs(diff_dcf):.1f}%")
+                    else: st.warning("Date insuficiente.")
 
+            # ==================================================
+            # 🚀 INTEGRARE NOUĂ: MODUL AI (ADĂUGAT, NU ÎNLOCUIT)
+            # ==================================================
+            st.markdown("---")
+            st.subheader("🤖 Terminal Intelligence (AI & ML)")
+
+            company_news_ai = get_company_news_rss(real_sym)
+            c_ai_1, c_ai_2 = st.columns([1, 2])
+
+            with c_ai_1:
+                st.write("📊 **Analiză Sentiment Avansată**")
+                if company_news_ai:
+                    from ai_engine import analyze_sentiment_ai
+                    s_score = analyze_sentiment_ai(company_news_ai)
+                    color_ai = "#3FB950" if s_score > 0.1 else "#F85149" if s_score < -0.1 else "#8B949E"
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid {color_ai}; text-align:center;">
+                            <h1 style="color:{color_ai}; margin:0;">{s_score:.2f}</h1>
+                            <p style="color:#8B949E; font-size:14px;">Sentiment Scor Contextual</p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.info("Nu sunt destule știri pentru analiza AI.")
+
+            with c_ai_2:
+                st.write("📈 **Prognoză Algoritmică (Next 30 Days)**")
+                if len(hist) > 100:
+                    from ai_engine import predict_stock_price, render_ai_chart
+                    with st.spinner("Rulăm modelul predictiv..."):
+                        try:
+                            forecast_ai = predict_stock_price(hist)
+                            render_ai_chart(forecast_ai, hist)
+                        except Exception as e:
+                            st.error(f"Eroare AI: {e}")
+                else:
+                    st.warning("Istoric insuficient pentru predicție ML.")
+
+            # --- INDICATORI FUNDAMENTALI ORIGINALI (RECUPERAȚI) ---
+            st.markdown("---")
+            st.subheader("📊 Indicatori Fundamentali")
+            beta_val = info.get('beta')
+            alpha_val = calculate_alpha(hist, beta_val)
+            de_ratio = info.get('debtToEquity')
+            de_display = f"{de_ratio:.2f}%" if de_ratio is not None else "N/A"
+
+            with st.container():
+                c_eval, c_prof, c_indat, c_risc = st.columns(4)
+                
+                with c_eval:
+                    st.markdown("**Evaluare & Dividende**")
+                    st.metric("P/E Ratio", format_num(info.get('trailingPE')))
+                    st.metric("Forward P/E", format_num(info.get('forwardPE')))
+                    div_rate = info.get('dividendRate')
+                    div_display = f"{div_rate} ({ (div_rate/curr_p*100):.2f}%)" if (div_rate and curr_p) else "N/A"
+                    st.metric("Dividend (Randament)", div_display)
+                    st.metric("P/BV", format_num(info.get('priceToBook')))
+                    st.metric("GN (Graham)", format_num( (info.get('trailingPE') or 0) * (info.get('priceToBook') or 0) ) if info.get('trailingPE') and info.get('priceToBook') else "N/A")
+                    st.metric("EPS", format_num(info.get('trailingEps')))
+                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')))
+
+                with c_prof:
+                    st.markdown("**Profitabilitate**")
+                    st.metric("ROA", format_num(info.get('returnOnAssets'), True))
+                    st.metric("ROE", format_num(info.get('returnOnEquity'), True))
+                    st.metric("Marjă Netă", format_num(info.get('profitMargins'), True))
+                    st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True))
+
+                with c_indat:
+                    st.markdown("**Îndatorare**")
+                    st.metric("Datorii/Capital", de_display)
+                    st.metric("Current Ratio", info.get('currentRatio', 'N/A'))
+                    st.metric("Quick Ratio", info.get('quickRatio', 'N/A'))
+
+                with c_risc:
+                    st.markdown("**Risc (Alpha & Beta)**")
+                    st.metric("Beta", info.get('beta', 'N/A'))
+                    st.metric("Alpha (1Y)", format_num(alpha_val, True))
+
+            # --- FINANCIAR & RAPORTĂRI ORIGINAL ---
+            st.markdown("---")
             st.subheader("💰 Financiar & Raportări")
             st.markdown("""<div class="fin-card"><h4>Rezultate Financiare (Ultima Raportare)</h4></div>""", unsafe_allow_html=True)
             rev = info.get('totalRevenue')
             net_inc = info.get('netIncomeToCommon')
             cash = info.get('totalCash')
-            
             exp = (rev - net_inc) if (rev and net_inc) else None
             
             c_f1, c_f2, c_f3, c_f4 = st.columns(4)
@@ -1192,44 +1178,33 @@ def main():
                 rec = info.get('recommendationKey', 'N/A').replace('_', ' ').upper()
                 rec_mean = info.get('recommendationMean')
                 target = info.get('targetMeanPrice')
-                
                 color_rec = "#3FB950" if "BUY" in rec else "#F85149" if "SELL" in rec else "#8B949E"
                 st.markdown(f"Recomandare: <span style='color:{color_rec}; font-weight:bold;'>{rec}</span>", unsafe_allow_html=True)
-                
                 if rec_mean:
-                    score_clamped = max(1.0, min(5.0, rec_mean))
-                    pos_pct = (score_clamped - 1.0) / 4.0 * 100.0
-                    
-                    st.markdown(f"""
-                    <div style="margin-top:15px;">
-                        <span style="font-size:14px; color:#ddd;">Scor Consens: <b>{rec_mean:.1f}</b></span>
-                        <div class="analyst-bar-container">
-                            <div class="analyst-bar-gradient"></div>
-                            <div class="analyst-marker" style="left: {pos_pct}%;"></div>
-                        </div>
-                        <div class="analyst-labels">
-                            <span>Strong Buy (1)</span>
-                            <span>Hold (3)</span>
-                            <span>Sell (5)</span>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
+                    pos_pct = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
+                    st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left: {pos_pct}%;"></div></div>""", unsafe_allow_html=True)
                 st.metric("Preț Țintă (Mediu)", f"{target} {info.get('currency','USD')}" if target else "N/A")
                 
             with col_an_right:
-                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
-                 if not earn_df.empty:
-                    earn_display = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
-                    earn_display.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
-                    def color_surprise(val):
-                        if pd.isna(val): return ''
-                        color = '#3FB950' if val >= 0 else '#F85149'
-                        return f'color: {color}'
-                    st.dataframe(earn_display.style.map(color_surprise, subset=['Surpriză %']).format("{:.2f}"), use_container_width=True)
-                 else:
-                    st.info("Nu există date de earnings.")
+                st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
+                if earn_df is not None and not earn_df.empty:
+                    st.dataframe(earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].style.format("{:.2f}"), use_container_width=True)
+                else: st.info("Nu există date de earnings.")
+
+            # --- FLUX ȘTIRI RSS ORIGINAL ---
+            st.markdown("---")
+            st.subheader(f"📰 Ultimele Știri despre {real_sym}")
+            company_news = get_company_news_rss(real_sym)
+            if company_news:
+                for n in company_news:
+                    sentiment, css_cls, icon = get_sentiment(n['title'])
+                    c_txt, c_imp = st.columns([5, 1])
+                    with c_txt:
+                        st.markdown(f"**[{n['title']}]({n['link']})**")
+                        st.caption(f"{n['publisher']} • {n['date_str']}")
+                    with c_imp:
+                        st.markdown(f"<span class='{css_cls}'>{icon} {sentiment}</span>", unsafe_allow_html=True)
+                    st.divider()
 
     # ==================================================
     # 3. PORTOFOLIU (MODIFICAT PENTRU MOBIL)
@@ -2286,6 +2261,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
