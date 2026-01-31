@@ -11,3 +11,7 @@ matplotlib
 gspread
 google-auth
 curl_cffi
+prophet
+transformers
+torch
+scipy
