@@ -277,6 +277,7 @@ def get_macro_data_visuals():
         'Dolar Index 💲': 'DX-Y.NYB', 
         'Petrol WTI 🛢️': 'CL=F', 
         'Aur 🥇': 'GC=F',
+        'Argint 🥇': 'SI=F',
         'Copper': 'HG=F',
         'EUR/USD 🇪🇺': 'EURUSD=X',
         'EUR/RON 🇪🇺': 'EURRON=X',
@@ -2285,5 +2286,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
