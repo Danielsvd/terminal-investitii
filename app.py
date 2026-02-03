@@ -14,6 +14,26 @@ import re
 # --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
 import gspread
 from google.oauth2.service_account import Credentials
+import concurrent.futures # Pune acest import la începutul fișierului, sus de tot
+from scipy.stats import norm
+
+def fetch_portfolio_prices_parallel(tickers):
+    """Descarcă prețurile pentru tot portofoliul simultan."""
+    def get_price(ticker):
+        try:
+            t = yf.Ticker(ticker)
+            # Folosim fast_info pentru că este mult mai rapidă decât .info
+            return ticker, t.fast_info.last_price
+        except:
+            return ticker, 0.0
+
+    prices = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ticker = {executor.submit(get_price, t): t for t in tickers}
+        for future in concurrent.futures.as_completed(future_to_ticker):
+            ticker, price = future.result()
+            prices[ticker] = price
+    return prices
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
@@ -218,7 +238,29 @@ def get_sentiment(text):
     if pol > 0.05: return "Pozitiv", "impact-poz", "↗"
     elif pol < -0.05: return "Negativ", "impact-neg", "↘"
     else: return "Neutru", "impact-neu", "→"
-
+def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
+    """Calculează Beta și Corelația globală a întregului portofoliu."""
+    if portfolio_curve is None or portfolio_curve.empty:
+        return 0.0, 0.0
+    try:
+        start_date = portfolio_curve.index[0]
+        bench_data = yf.download(benchmark_ticker, start=start_date, progress=False)['Close']
+        if isinstance(bench_data, pd.DataFrame): bench_data = bench_data.iloc[:, 0]
+        
+        combined = pd.DataFrame({'Port': portfolio_curve, 'Bench': bench_data}).ffill().dropna()
+        returns = combined.pct_change().dropna()
+        
+        # Corelația globală (0 la 1)
+        correlation = returns['Port'].corr(returns['Bench'])
+        
+        # Beta (Sensibilitatea la piață)
+        variance = returns['Bench'].var()
+        beta = returns['Port'].cov(returns['Bench']) / variance if variance != 0 else 1.0
+        
+        return correlation, beta
+    except:
+        return 0.0, 1.0
+    
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news_data():
@@ -336,57 +378,31 @@ def calculate_alpha(stock_hist, beta):
         return alpha
     except: return None
 
-def calculate_intrinsic_value(info):
-    """
-    Calculează valoarea intrinsecă cu limite de siguranță (Capping).
-    """
+def calculate_dcf_dynamic(info, growth_rate_input, discount_rate_input):
+    """Calculează DCF folosind estimările tale manuale."""
     try:
-        current_price = info.get('currentPrice') or info.get('previousClose')
         eps = info.get('trailingEps')
-        book_value = info.get('bookValue')
+        if not eps or eps <= 0: return 0
         
-        # --- 1. FORMULA BENJAMIN GRAHAM ---
-        graham_val = 0
-        if eps is not None and book_value is not None:
-            if eps > 0 and book_value > 0:
-                graham_val = np.sqrt(22.5 * eps * book_value)
-            
-        # --- 2. DCF SIMPLIFICAT (Cu SANITY CHECK) ---
-        # Pas critic: Limităm creșterea. Nicio companie matură nu crește cu 50% pe an 5 ani la rând.
-        # Yahoo poate returna valori mari, noi le plafonăm la 15% (0.15) pentru siguranță.
-        raw_growth = info.get('earningsGrowth')
+        # Parametrii tăi din interfață
+        growth_rate = growth_rate_input / 100
+        discount_rate = discount_rate_input / 100
+        terminal_multiple = min(info.get('trailingPE', 15), 25) 
         
-        # Logică de siguranță pentru Growth Rate
-        if raw_growth is None:
-            growth_rate = 0.05  # 5% conservator dacă nu avem date
-        else:
-            # Plafonăm la maxim 15% (0.15) sau folosim valoarea reală dacă e mai mică
-            growth_rate = min(raw_growth, 0.15) 
+        # Proiecție pe 5 ani
+        cash_flows = []
+        for i in range(1, 6):
+            fcf = eps * ((1 + growth_rate) ** i)
+            discounted_fcf = fcf / ((1 + discount_rate) ** i)
+            cash_flows.append(discounted_fcf)
             
-            # Dacă Yahoo dă creștere negativă, folosim un minim de 2% pentru inflație
-            if growth_rate < 0.02: growth_rate = 0.02
-
-        discount_rate = 0.09 # 9% costul capitalului (standard industrie)
-        terminal_multiple = info.get('trailingPE', 15) # Folosim P/E actual, dar nu mai mult de 25
-        terminal_multiple = min(terminal_multiple, 25) 
+        # Valoare Terminală la finalul anului 5
+        terminal_val = (eps * ((1 + growth_rate) ** 5)) * terminal_multiple
+        discounted_terminal = terminal_val / ((1 + discount_rate) ** 5)
         
-        dcf_val = 0
-        if eps is not None and eps > 0:
-            future_cash_flows = []
-            for i in range(1, 6): # 5 ani
-                fcf = eps * ((1 + growth_rate) ** i)
-                discounted_fcf = fcf / ((1 + discount_rate) ** i)
-                future_cash_flows.append(discounted_fcf)
-            
-            # Valoare terminală
-            terminal_val = (eps * ((1 + growth_rate) ** 5)) * terminal_multiple
-            discounted_terminal = terminal_val / ((1 + discount_rate) ** 5)
-            
-            dcf_val = sum(future_cash_flows) + discounted_terminal
-            
-        return graham_val, dcf_val, current_price
-    except Exception as e:
-        return 0, 0, 0
+        return sum(cash_flows) + discounted_terminal
+    except:
+        return 0
     
 # --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
 @st.cache_data(ttl=900)
@@ -432,81 +448,166 @@ def calculate_technical_indicators(df):
     return df
 
 def plot_correlation_matrix(tickers):
-    """
-    Generează o matrice de corelare optimizată cu INTERPRETARE TEXTUALĂ.
-    Schimbă culorile: 
-    - Albastru = RISC (Corelare Mare)
-    - Verde = SIGURANȚĂ (Diversificare/Hedge)
-    """
+    """Generează matricea de corelație și un raport vizual premium."""
     if len(tickers) < 2: return None
     try:
-        # Descărcare date
+        # 1. Descărcare și calcul
         data = yf.download(tickers, period="1y", progress=False)['Close']
         returns = data.pct_change().dropna()
         corr_matrix = returns.corr()
         
-        # Pregătire matrice TEXT pentru afișare (Valoare + Interpretare)
+        # 2. Text Heatmap
         text_matrix = []
-        for row_idx in range(len(corr_matrix)):
+        for i in range(len(corr_matrix)):
             row_text = []
-            for col_idx in range(len(corr_matrix)):
-                val = corr_matrix.iloc[row_idx, col_idx]
-                
-                # Logică interpretare (Threshold-uri profesionale)
-                if row_idx == col_idx:
-                    label = "Identic"
-                    display_text = "" # Lăsăm gol pe diagonală
-                elif val > 0.8:
-                    label = "RISC (Duplicat)"
-                    display_text = f"{val:.2f}<br>⚠️ {label}"
-                elif val > 0.5:
-                    label = "Corelat (Risc Mediu)"
-                    display_text = f"{val:.2f}<br>{label}"
-                elif val > 0.2:
-                    label = "Moderat"
-                    display_text = f"{val:.2f}<br>{label}"
-                elif val > -0.2:
-                    label = "Diversificat (BUN)"
-                    display_text = f"{val:.2f}<br>✅ {label}"
-                else:
-                    label = "Hedge (Protecție)"
-                    display_text = f"{val:.2f}<br>🛡️ {label}"
-                
-                row_text.append(display_text)
+            for j in range(len(corr_matrix)):
+                val = corr_matrix.iloc[i, j]
+                if i == j: label = "1.00"
+                elif val > 0.8: label = f"{val:.2f}<br>⚠️ Risc"
+                elif val > 0.5: label = f"{val:.2f}<br>Moderat"
+                else: label = f"{val:.2f}<br>✅ OK"
+                row_text.append(label)
             text_matrix.append(row_text)
 
-        # --- CONFIGURARE CULORI ---
-        # 0.0 (Minim, -1) -> Verde lime (Siguranță)
-        # 0.5 (Mijloc, 0) -> Alb (Neutru)
-        # 1.0 (Maxim, 1)  -> Albastru (Risc)
-        custom_colorscale = [
-            [0.0, 'rgb(0, 255, 0)'],   # -1: Verde lime
-            [0.5, 'rgb(255, 255, 255)'], #  0: Alb
-            [1.0, 'rgb(1, 70, 77)']      # +1: Albastru
-        ]
-
+        # 3. Grafic Plotly optimizat
         fig = go.Figure(data=go.Heatmap(
             z=corr_matrix.values,
             x=corr_matrix.columns,
             y=corr_matrix.columns,
-            colorscale=custom_colorscale, 
+            colorscale=[[0.0, '#00FF00'], [0.5, '#ffffff'], [1.0, '#01464D']],
             zmin=-1, zmax=1,
             text=text_matrix,
             texttemplate="%{text}",
-            hovertemplate="<b>%{x} vs %{y}</b><br>Coeficient: %{z:.2f}<br><extra></extra>",
-            showscale=True,
-            colorbar=dict(title="Nivel Risc")
+            hovertemplate="Corelație: %{z:.2f}<extra></extra>"
         ))
         
         fig.update_layout(
-            title='Matrice Diversificare (Albastru = Risc Mare | Verde = Siguranță)',
-            height=550,
-            template="plotly_dark",
-            paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(size=12)
+            height=400, template="plotly_dark",
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(side="bottom")
         )
-        return fig
-    except Exception as e: return None
+
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 4. RAPORT VIZUAL STILIZAT (Cards)
+        st.markdown("### 📋 Analiză Strategica a Diversificării")
+        
+        cols = st.columns(len(corr_matrix.columns) - 1 if len(corr_matrix.columns) <= 3 else 2)
+        col_idx = 0
+
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i + 1, len(corr_matrix.columns)):
+                score = corr_matrix.iloc[i, j]
+                t1, t2 = corr_matrix.columns[i], corr_matrix.columns[j]
+                
+                # Logică Culori și Iconițe
+                if score > 0.75:
+                    color, icon, label = "#F85149", "🚫", "Diversificare Slabă"
+                    bg_light = "rgba(248, 81, 73, 0.1)"
+                elif score > 0.40:
+                    color, icon, label = "#DBAB09", "⚠️", "Diversificare Moderată"
+                    bg_light = "rgba(219, 171, 9, 0.1)"
+                else:
+                    color, icon, label = "#3FB950", "🛡️", "Diversificare Optimă"
+                    bg_light = "rgba(63, 185, 80, 0.1)"
+
+                # Randare Card HTML/CSS
+                with cols[col_idx % len(cols)]:
+                    st.markdown(f"""
+                        <div style="
+                            background-color: #161B22; 
+                            border-left: 5px solid {color}; 
+                            padding: 15px; 
+                            border-radius: 10px; 
+                            margin-bottom: 10px;
+                            box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="color: #8B949E; font-size: 12px; font-weight: bold; text-transform: uppercase;">{label}</span>
+                                <span style="font-size: 20px;">{icon}</span>
+                            </div>
+                            <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
+                            <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
+                                <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{score:.2f}</span>
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                col_idx += 1
+
+        return True
+    except Exception as e:
+        st.error(f"Eroare Matrice: {e}")
+        return None
+    
+def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name="S&P 500"):
+    """Compară performanța portofoliului cu benchmark-ul folosind procente în tooltip."""
+    if portfolio_curve is None or portfolio_curve.empty:
+        return
+    
+    try:
+        start_date = portfolio_curve.index[0]
+        spy_data = yf.download(bench_ticker, start=start_date, progress=False)['Close']
+        
+        if isinstance(spy_data, pd.DataFrame):
+            spy_data = spy_data.iloc[:, 0]
+        
+        combined = pd.DataFrame({'Portfolio': portfolio_curve, 'Benchmark': spy_data}).ffill().dropna()
+        
+        if combined.empty:
+            st.warning("Nu s-au putut sincroniza datele pentru benchmark.")
+            return
+
+        # Calculăm evoluția procentuală față de punctul zero (start)
+        # Formula: ((Valoare Curentă / Valoare Start) - 1) * 100
+        port_perf = ((combined['Portfolio'] / combined['Portfolio'].iloc[0]) - 1) * 100
+        bench_perf = ((combined['Benchmark'] / combined['Benchmark'].iloc[0]) - 1) * 100
+        
+        port_ret = port_perf.iloc[-1]
+        bench_ret = bench_perf.iloc[-1]
+        alpha = port_ret - bench_ret 
+
+        fig = go.Figure()
+        
+        # Adăugăm linia Portofoliului
+        fig.add_trace(go.Scatter(
+            x=port_perf.index, 
+            y=port_perf, 
+            name='Portofoliul Tău', 
+            line=dict(color='#3FB950', width=3),
+            hovertemplate="<b>Data:</b> %{x}<br><b>Evoluție:</b> %{y:.2f}%<extra></extra>"
+        ))
+        
+        # Adăugăm linia Benchmark-ului
+        fig.add_trace(go.Scatter(
+            x=bench_perf.index, 
+            y=bench_perf, 
+            name=bench_name, 
+            line=dict(color="#0678FA", dash='dash'),
+            hovertemplate="<b>Benchmark:</b> %{x}<br><b>Evoluție:</b> %{y:.2f}%<extra></extra>"
+        ))
+        
+        fig.update_layout(
+            title=f"Performanță Relativă vs {bench_name} (%)",
+            height=400, template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            yaxis=dict(ticksuffix="%", gridcolor="#446E9E"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Afișare Alpha Card (Rămâne neschimbat, dar folosim variabilele noi)
+        alpha_color = "#3FB950" if alpha > 0 else "#F85149"
+        st.markdown(f"""
+            <div style="background-color: #161B22; padding: 20px; border-radius: 12px; border-top: 4px solid {alpha_color}; text-align: center;">
+                <h4 style="color: #8B949E; margin-bottom: 5px;">Alpha (Diferență față de {bench_name})</h4>
+                <h1 style="color: {alpha_color}; margin: 0;">{alpha:+.2f}%</h1>
+                <p style="color: #8B949E; font-size: 14px;">Portofoliu: {port_ret:+.2f}% | {bench_name}: {bench_ret:+.2f}%</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+    except Exception as e:
+        st.error(f"Benchmark Eroare: {str(e)}")
 
 # --- FUNCȚII NOI PENTRU REZUMAT ZILNIC (DAILY BRIEFING) ---
 
@@ -645,7 +746,39 @@ def calculate_fear_greed_proxy(data):
         return final_score, label, current_vix
     except Exception as e:
         return 50, "Neutral 😐", 0
+    
+def calculate_bvb_sentiment(bvb_data):
+    """Calculează sentimentul pieței locale bazat pe deviația Indicelui BET."""
+    try:
+        # Preluăm datele pentru TVBETETF.RO (Proxy pentru BET)
+        if isinstance(bvb_data.columns, pd.MultiIndex):
+             bet_series = bvb_data['TVBETETF.RO']['Close'].dropna()
+        else:
+             return 50, "Neutral ⚖️"
 
+        if bet_series.empty: return 50, "Neutral ⚖️"
+
+        curr_bet = bet_series.iloc[-1]
+        mean_bet = bet_series.mean() # Media ultimelor 5 zile
+        
+        # Calculăm deviația procentuală
+        dev = ((curr_bet / mean_bet) - 1) * 100
+        
+        # Mapare pe un scor 0-100 (Proxy Fear & Greed BVB)
+        # O deviație de +/- 2% în 5 zile este considerată extremă pentru BVB
+        score = 50 + (dev * 25) 
+        score = max(0, min(100, score))
+
+        if score >= 75: label = "Optimism Excesiv 🚀"
+        elif score >= 55: label = "Sentiment Pozitiv 📈"
+        elif score >= 45: label = "Echilibru ⚖️"
+        elif score >= 25: label = "Precauție ⚠️"
+        else: label = "Panică / Sărituri 🚨"
+        
+        return score, label
+    except:
+        return 50, "Neutral ⚖️"
+    
 # --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
 def load_portfolio():
     """Citește datele din Google Sheets folosind Secrets."""
@@ -725,52 +858,42 @@ def get_portfolio_history_data(tickers):
 def calculate_portfolio_performance(df, history_range="1A"):
     if df.empty: return pd.DataFrame(), pd.DataFrame(), 0, 0
     
-    # Asigurăm conversia tipurilor (Google Sheets poate returna string-uri uneori)
     df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
     df['AvgPrice'] = pd.to_numeric(df['AvgPrice'], errors='coerce').fillna(0)
     
     tickers = df['Symbol'].unique().tolist()
-    if not tickers:
-        return pd.DataFrame(), pd.DataFrame(), 0, 0
-        
-    hist_data = yf.download(tickers, period="5y", group_by='ticker', auto_adjust=True, threads=True)
     
+    # --- SCHIMBARE MAJORĂ: Descărcăm totul dintr-o singură lovitură ---
+    with st.spinner("Actualizăm prețurile în timp real..."):
+        current_prices = fetch_portfolio_prices_parallel(tickers)
+        # Descărcăm istoricul bulk pentru grafic
+        hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False)
+
     current_vals = []
     total_daily_pl_abs = 0 
     
-    for index, row in df.iterrows():
+    for _, row in df.iterrows():
         sym = row['Symbol']
         qty = row['Quantity']
         avg_p = row['AvgPrice']
         
+        curr_p = current_prices.get(sym, 0)
+        
+        # Calculăm prețul de ieri din hist_data pentru evoluția zilnică
         try:
             if len(tickers) > 1:
-                series = hist_data[sym]['Close']
+                prev_p = hist_data[sym]['Close'].dropna().iloc[-2]
             else:
-                if isinstance(hist_data.columns, pd.MultiIndex):
-                      series = hist_data[sym]['Close']
-                else:
-                      series = hist_data['Close']
-            
-            series = series.dropna()
-            
-            if not series.empty:
-                curr_p = series.iloc[-1]
-                prev_p = series.iloc[-2] if len(series) >= 2 else curr_p
-            else:
-                curr_p = 0
-                prev_p = 0
-        except Exception as e:
-            curr_p = 0
-            prev_p = 0
-            
+                prev_p = hist_data['Close'].dropna().iloc[-2]
+        except:
+            prev_p = curr_p
+
         mkt_val = qty * curr_p
         inv_val = qty * avg_p
         profit = mkt_val - inv_val
         profit_pct = (profit / inv_val * 100) if inv_val != 0 else 0
         
-        daily_change = (curr_p - prev_p) * qty
-        total_daily_pl_abs += daily_change
+        total_daily_pl_abs += (curr_p - prev_p) * qty
         
         current_vals.append({
             'Symbol': sym, 'Quantity': qty, 'AvgPrice': avg_p, 'CurrentPrice': curr_p,
@@ -779,88 +902,85 @@ def calculate_portfolio_performance(df, history_range="1A"):
     
     df_result = pd.DataFrame(current_vals)
     
-    portfolio_curve = None
-    for index, row in df.iterrows():
+    # Generăm curba portofoliului (Corecție aliniere fus orar)
+    portfolio_curve = pd.Series(dtype=float)
+    for _, row in df.iterrows():
         sym = row['Symbol']
         qty = row['Quantity']
         try:
-            if len(tickers) > 1:
-                price_series = hist_data[sym]['Close']
-            else:
-                if isinstance(hist_data.columns, pd.MultiIndex):
-                      price_series = hist_data[sym]['Close']
-                else:
-                      price_series = hist_data['Close']
-                      
-            # FIX: Updated Pandas methods
-            price_series = price_series.ffill().bfill()
-            
-            if portfolio_curve is None:
-                portfolio_curve = price_series * qty
-            else:
-                portfolio_curve = portfolio_curve.add(price_series * qty, fill_value=0)
+            # Preluăm prețurile din bulk-ul descărcat anterior
+            prices = hist_data[sym]['Close'] if len(tickers) > 1 else hist_data['Close']
+            # .ffill() umple zilele libere (sărbători locale) cu ultimul preț
+            term = prices.ffill().bfill() * qty
+            if portfolio_curve.empty: 
+                portfolio_curve = term
+            else: 
+                # .add aliniază automat indicii de tip Datetime
+                portfolio_curve = portfolio_curve.add(term, fill_value=0)
         except: pass
-    
-    if portfolio_curve is None:
-        portfolio_curve = pd.Series()
 
     days_map = {"1Z": 2, "1S": 7, "1L": 30, "3L": 90, "6L": 180, "1A": 365, "3A": 1095, "5A": 1825}
-    days = days_map.get(history_range, 365)
-    portfolio_curve = portfolio_curve.iloc[-days:]
-    
+    portfolio_curve = portfolio_curve.iloc[-days_map.get(history_range, 365):]
     total_val_now = portfolio_curve.iloc[-1] if not portfolio_curve.empty else 0
     total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if (total_val_now - total_daily_pl_abs) != 0 else 0
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct
 
-def calculate_risk_metrics(portfolio_curve):
-    """Calculează Max Drawdown și Sharpe Ratio."""
-    if portfolio_curve.empty: return 0, 0
+from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
+
+def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
+    """Calculează Max Drawdown, Sharpe Ratio, VaR și Volatilitate Anualizată."""
+    if portfolio_curve is None or portfolio_curve.empty or len(portfolio_curve) < 5:
+        return 0.0, 0.0, 0.0, 0.0
     
-    # 1. Max Drawdown (Cea mai mare durere istorică)
-    # Calculăm maximul atins până în fiecare punct (Running Max)
-    rolling_max = portfolio_curve.cummax()
-    # Calculăm cât suntem sub maxim în fiecare zi
-    drawdown = (portfolio_curve - rolling_max) / rolling_max
-    # Luăm cea mai negativă valoare (ex: -0.20 înseamnă -20%)
-    max_dd = drawdown.min()
-    
-    # 2. Sharpe Ratio (Rentabilitate vs Risc)
-    # Calculăm randamentele zilnice
-    daily_rets = portfolio_curve.pct_change().dropna()
-    if daily_rets.std() == 0: return max_dd, 0
-    
-    # Formula anualizată (presupunem Risk Free Rate ~ 4%)
-    rf_daily = 0.04 / 252
-    excess_ret = daily_rets - rf_daily
-    sharpe = np.sqrt(252) * (excess_ret.mean() / daily_rets.std())
-    
-    return max_dd, sharpe
+    try:
+        # 1. Max Drawdown
+        rolling_max = portfolio_curve.cummax()
+        drawdown = (portfolio_curve - rolling_max) / rolling_max
+        max_dd = drawdown.min()
+        
+        # 2. Sharpe Ratio & Volatilitate
+        returns = portfolio_curve.pct_change().dropna()
+        if returns.std() == 0: return max_dd, 0.0, 0.0, 0.0
+        
+        # Volatilitate Anualizată (Standard Deviation * sqrt(252 zile de tranzacționare))
+        volatility_ann = returns.std() * np.sqrt(252)
+        
+        rf_daily = 0.04 / 252 
+        sharpe = np.sqrt(252) * ((returns.mean() - rf_daily) / returns.std())
+        
+        # 3. Value at Risk (VaR)
+        mu, sigma = returns.mean(), returns.std()
+        var_pct = norm.ppf(1 - confidence_level, mu, sigma)
+        var_abs = var_pct * portfolio_curve.iloc[-1]
+        
+        return max_dd, sharpe, var_abs, volatility_ann
+    except:
+        return 0.0, 0.0, 0.0, 0.0
 
 @st.cache_data(ttl=3600)
 def get_portfolio_sectors(df_current):
-    """Grupează valoarea portofoliului pe sectoare economice."""
+    """Calculează distribuția sectorială în procente și valoare."""
     if df_current.empty: return pd.DataFrame()
     
+    tickers_list = df_current['Symbol'].unique().tolist()
+    bulk_data = yf.Tickers(" ".join(tickers_list))
     sector_map = {}
+    total_mkt_val = df_current['MarketValue'].sum()
     
-    for _, row in df_current.iterrows():
-        sym = row['Symbol']
-        val = row['MarketValue']
-        
-        # Încercăm să aflăm sectorul
+    for sym in tickers_list:
         try:
-            # Folosim fast_info sau info (optimizat)
-            t = yf.Ticker(sym)
-            sec = t.info.get('sector', 'Nedefinit')
+            sec = bulk_data.tickers[sym].info.get('sector', 'Nedefinit')
+            val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
+            sector_map[sec] = sector_map.get(sec, 0) + val
         except:
-            sec = 'Nedefinit'
+            val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
+            sector_map['Nedefinit'] = sector_map.get('Nedefinit', 0) + val
             
-        sector_map[sec] = sector_map.get(sec, 0) + val
-        
-    # Convertim în DataFrame pentru grafic
     df_sec = pd.DataFrame(list(sector_map.items()), columns=['Sector', 'MarketValue'])
-    return df_sec
+    # Adăugăm coloana de procentaj
+    df_sec['Pondere %'] = (df_sec['MarketValue'] / total_mkt_val) * 100
+    return df_sec.sort_values(by='Pondere %', ascending=False)
 
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
@@ -968,7 +1088,7 @@ def main():
                     st.info(f"Nu există știri recente pentru: {cat}.")
 
     # ==================================================
-    # 2. ANALIZĂ COMPANIE (INTEGRARE COMPLETĂ: ORIGINAL + AI)
+    # 2. ANALIZĂ COMPANIE (VERSIUNE INTEGRALĂ REPARATĂ)
     # ==================================================
     elif sectiune == "2. Analiză Companie":
         st.sidebar.header("Căutare")
@@ -987,7 +1107,7 @@ def main():
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
         else:
-            # --- HEADER ORIGINAL ---
+            # 1. Informații Generale
             st.markdown(f"## {info.get('longName', real_sym)}")
             c1, c2, c3 = st.columns(3)
             c1.metric("Sector", info.get('sector', 'N/A'))
@@ -995,7 +1115,7 @@ def main():
             c3.metric("Capitalizare", format_num(info.get('marketCap')))
             st.markdown("---")
 
-            # --- GRAFIC TEHNIC ORIGINAL ---
+            # 2. Grafic Tehnic (Păstrat exact cum era în original)
             hist = calculate_technical_indicators(hist)
             st.subheader("📉 Grafic Tehnic")
             col_sel, col_price_info = st.columns([1, 4])
@@ -1021,12 +1141,8 @@ def main():
                  m1.metric(f"Interval ({time_opt})", f"{curr_price:.2f} {info.get('currency', '')}", f"{diff_val:.2f} ({diff_pct:.2f}%)")
                  m2.metric("Evoluție Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
 
-            rows_needed = 1
-            if show_rsi: rows_needed += 1
-            if show_macd: rows_needed += 1
-            row_heights = [0.6]
-            if show_rsi: row_heights.append(0.2)
-            if show_macd: row_heights.append(0.2)
+            rows_needed = 1 + (1 if show_rsi else 0) + (1 if show_macd else 0)
+            row_heights = [0.6] + ([0.2] if show_rsi else []) + ([0.2] if show_macd else [])
             total = sum(row_heights)
             row_heights = [r/total for r in row_heights]
 
@@ -1052,71 +1168,7 @@ def main():
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- CALCULATOR FAIR VALUE ORIGINAL ---
-            st.subheader("🧮 Calculator Valoare Intrinsecă (Fair Value)")
-            graham, dcf, curr_p = calculate_intrinsic_value(info)
-            
-            if curr_p and curr_p > 0:
-                c_val1, c_val2, c_val3 = st.columns(3)
-                with c_val1:
-                    st.markdown("#### Preț Curent")
-                    st.markdown(f"<h2 style='color: #FFFFFF;'>{curr_p:.2f} {info.get('currency','')}</h2>", unsafe_allow_html=True)
-                with c_val2:
-                    st.markdown("#### Benjamin Graham")
-                    if graham > 0:
-                        diff_graham = ((curr_p - graham) / graham) * 100
-                        color_g = "#F85149" if curr_p > graham else "#3FB950"
-                        st.markdown(f"<h2 style='color: {color_g};'>{graham:.2f}</h2>", unsafe_allow_html=True)
-                        st.caption(f"{'SUPRAEVALUAT' if curr_p > graham else 'SUBEVALUAT'} cu {abs(diff_graham):.1f}%")
-                    else: st.warning("Date insuficiente.")
-                with c_val3:
-                    st.markdown("#### Model DCF (Growth)")
-                    if dcf > 0:
-                        diff_dcf = ((curr_p - dcf) / dcf) * 100
-                        color_d = "#F85149" if curr_p > dcf else "#3FB950"
-                        st.markdown(f"<h2 style='color: {color_d};'>{dcf:.2f}</h2>", unsafe_allow_html=True)
-                        st.caption(f"{'SUPRAEVALUAT' if curr_p > dcf else 'SUBEVALUAT'} cu {abs(diff_dcf):.1f}%")
-                    else: st.warning("Date insuficiente.")
-
-            # ==================================================
-            # 🚀 INTEGRARE NOUĂ: MODUL AI (ADĂUGAT, NU ÎNLOCUIT)
-            # ==================================================
-            st.markdown("---")
-            st.subheader("🤖 Terminal Intelligence (AI & ML)")
-
-            company_news_ai = get_company_news_rss(real_sym)
-            c_ai_1, c_ai_2 = st.columns([1, 2])
-
-            with c_ai_1:
-                st.write("📊 **Analiză Sentiment Avansată**")
-                if company_news_ai:
-                    from ai_engine import analyze_sentiment_ai
-                    s_score = analyze_sentiment_ai(company_news_ai)
-                    color_ai = "#3FB950" if s_score > 0.1 else "#F85149" if s_score < -0.1 else "#8B949E"
-                    st.markdown(f"""
-                        <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid {color_ai}; text-align:center;">
-                            <h1 style="color:{color_ai}; margin:0;">{s_score:.2f}</h1>
-                            <p style="color:#8B949E; font-size:14px;">Sentiment Scor Contextual</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.info("Nu sunt destule știri pentru analiza AI.")
-
-            with c_ai_2:
-                st.write("📈 **Prognoză Algoritmică (Next 30 Days)**")
-                if len(hist) > 100:
-                    from ai_engine import predict_stock_price, render_ai_chart
-                    with st.spinner("Rulăm modelul predictiv..."):
-                        try:
-                            forecast_ai = predict_stock_price(hist)
-                            render_ai_chart(forecast_ai, hist)
-                        except Exception as e:
-                            st.error(f"Eroare AI: {e}")
-                else:
-                    st.warning("Istoric insuficient pentru predicție ML.")
-
-            # --- INDICATORI FUNDAMENTALI ORIGINALI (RECUPERAȚI) ---
-            st.markdown("---")
+            # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
             beta_val = info.get('beta')
             alpha_val = calculate_alpha(hist, beta_val)
@@ -1125,51 +1177,45 @@ def main():
 
             with st.container():
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
-                
                 with c_eval:
                     st.markdown("**Evaluare & Dividende**")
                     st.metric("P/E Ratio", format_num(info.get('trailingPE')))
                     st.metric("Forward P/E", format_num(info.get('forwardPE')))
                     div_rate = info.get('dividendRate')
-                    div_display = f"{div_rate} ({ (div_rate/curr_p*100):.2f}%)" if (div_rate and curr_p) else "N/A"
+                    div_display = f"{div_rate} ({ (div_rate/curr_price*100):.2f}%)" if (div_rate and curr_price) else "N/A"
                     st.metric("Dividend (Randament)", div_display)
                     st.metric("P/BV", format_num(info.get('priceToBook')))
-                    st.metric("GN (Graham)", format_num( (info.get('trailingPE') or 0) * (info.get('priceToBook') or 0) ) if info.get('trailingPE') and info.get('priceToBook') else "N/A")
+                    gn_calc = (info.get('trailingPE', 0) or 0) * (info.get('priceToBook', 0) or 0)
+                    st.metric("GN (Graham)", f"{gn_calc:.2f}" if gn_calc > 0 else "N/A")
                     st.metric("EPS", format_num(info.get('trailingEps')))
                     st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')))
-
                 with c_prof:
                     st.markdown("**Profitabilitate**")
                     st.metric("ROA", format_num(info.get('returnOnAssets'), True))
                     st.metric("ROE", format_num(info.get('returnOnEquity'), True))
                     st.metric("Marjă Netă", format_num(info.get('profitMargins'), True))
                     st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True))
-
                 with c_indat:
                     st.markdown("**Îndatorare**")
                     st.metric("Datorii/Capital", de_display)
                     st.metric("Current Ratio", info.get('currentRatio', 'N/A'))
                     st.metric("Quick Ratio", info.get('quickRatio', 'N/A'))
-
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", info.get('beta', 'N/A'))
                     st.metric("Alpha (1Y)", format_num(alpha_val, True))
-
-            # --- FINANCIAR & RAPORTĂRI ORIGINAL ---
             st.markdown("---")
+
+            # 4. Financiar & Raportări
             st.subheader("💰 Financiar & Raportări")
             st.markdown("""<div class="fin-card"><h4>Rezultate Financiare (Ultima Raportare)</h4></div>""", unsafe_allow_html=True)
-            rev = info.get('totalRevenue')
-            net_inc = info.get('netIncomeToCommon')
-            cash = info.get('totalCash')
+            rev = info.get('totalRevenue'); net_inc = info.get('netIncomeToCommon'); cash = info.get('totalCash')
             exp = (rev - net_inc) if (rev and net_inc) else None
-            
-            c_f1, c_f2, c_f3, c_f4 = st.columns(4)
-            c_f1.metric("Venituri Totale", format_num(rev))
-            c_f2.metric("Profit Net", format_num(net_inc))
-            c_f3.metric("Cheltuieli (Est.)", format_num(exp))
-            c_f4.metric("Numerar Disponibil", format_num(cash))
+            cf1, cf2, cf3, cf4 = st.columns(4)
+            cf1.metric("Venituri Totale", format_num(rev))
+            cf2.metric("Profit Net", format_num(net_inc))
+            cf3.metric("Cheltuieli (Est.)", format_num(exp))
+            cf4.metric("Numerar Disponibil", format_num(cash))
             
             st.markdown("<br>", unsafe_allow_html=True)
             col_an_left, col_an_right = st.columns([1, 2])
@@ -1181,31 +1227,91 @@ def main():
                 color_rec = "#3FB950" if "BUY" in rec else "#F85149" if "SELL" in rec else "#8B949E"
                 st.markdown(f"Recomandare: <span style='color:{color_rec}; font-weight:bold;'>{rec}</span>", unsafe_allow_html=True)
                 if rec_mean:
-                    pos_pct = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
-                    st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left: {pos_pct}%;"></div></div>""", unsafe_allow_html=True)
+                    pos_p = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
+                    st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left:{pos_p}%;"></div></div>""", unsafe_allow_html=True)
                 st.metric("Preț Țintă (Mediu)", f"{target} {info.get('currency','USD')}" if target else "N/A")
-                
+
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
                 if earn_df is not None and not earn_df.empty:
-                    st.dataframe(earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].style.format("{:.2f}"), use_container_width=True)
-                else: st.info("Nu există date de earnings.")
-
-            # --- FLUX ȘTIRI RSS ORIGINAL ---
+                    def style_surprise(val):
+                        color = '#3FB950' if val > 0 else '#F85149' if val < 0 else '#8B949E'
+                        return f'color: {color}; font-weight: bold'
+                    e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
+                    e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
+                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': '{:.2f}', 'Realizat': '{:.2f}', 'Diferență': '{:.2f}', 'Surpriză %': '{:.2%}'}), use_container_width=True)
+                else: st.info("Date earnings indisponibile.")
             st.markdown("---")
+
+            # 5. Calculator Fair Value (REPARAT - UNIC)
+            st.subheader("🧮 Calculator Valoare Intrinsecă (Valoare justă)")
+            
+            # Date fundamentale unice pentru acest bloc
+            eps_f = info.get('trailingEps', 0)
+            bv_f = info.get('bookValue', 0)
+            curr_f = info.get('currentPrice') or info.get('previousClose', 0)
+            t_curr = info.get('currency', 'USD')
+
+            st.write("⚙️ **Ajustează Ipotezele DCF**")
+            c_sl1, c_sl2 = st.columns(2)
+            u_growth = c_sl1.slider("Creștere Anuală EPS (%)", -10.0, 40.0, 10.0, key="slider_g_final")
+            u_discount = c_sl2.slider("Rata de Scont (Risc %)", 5.0, 15.0, 9.0, key="slider_d_final")
+            
+            # Calcul reactiv 100%
+            graham_calc = np.sqrt(22.5 * max(0, eps_f) * max(0, bv_f)) if (eps_f > 0 and bv_f > 0) else 0
+            dcf_calc = calculate_dcf_dynamic(info, u_growth, u_discount)
+
+            if curr_f > 0:
+                cv1, cv2, cv3 = st.columns(3)
+                box_css = "border: 2px solid {col}; padding: 15px; border-radius: 12px; text-align: center; background-color: #161B22; height: 160px; display: flex; flex-direction: column; justify-content: center;"
+                
+                with cv1:
+                    st.markdown(f'<div style="{box_css.format(col="#30363D")}"><p style="margin:0;color:#8B949E;font-size:14px;">Preț Curent</p><h2 style="margin:10px 0;color:white;">{curr_f:.2f} {t_curr}</h2></div>', unsafe_allow_html=True)
+                with cv2:
+                    diff_g = ((curr_f - graham_calc) / graham_calc) * 100 if graham_calc > 0 else 0
+                    g_col = "#3FB950" if curr_f < graham_calc else "#F85149"
+                    st.markdown(f'<div style="{box_css.format(col=g_col)}"><p style="margin:0;color:#8B949E;font-size:14px;">Benjamin Graham</p><h2 style="margin:10px 0;color:{g_col};">{graham_calc:.2f}</h2><p style="margin:0;color:{g_col};font-weight:bold;font-size:12px;">{"SUBEVALUAT" if curr_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)</p></div>', unsafe_allow_html=True)
+                with cv3:
+                    diff_d = ((curr_f - dcf_calc) / dcf_calc) * 100 if dcf_calc > 0 else 0
+                    d_col = "#3FB950" if curr_f < dcf_calc else "#F85149"
+                    st.markdown(f'<div style="{box_css.format(col=d_col)}"><p style="margin:0;color:#8B949E;font-size:14px;">Fair Value (DCF)</p><h2 style="margin:10px 0;color:{d_col};">{dcf_calc:.2f}</h2><p style="margin:0;color:{d_col};font-weight:bold;font-size:12px;">{"SUBEVALUAT" if curr_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
+            st.markdown("---")
+
+            # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
+            st.subheader("🤖 Terminal Intelligence (AI & ML)")
+            c_news_ai = get_company_news_rss(real_sym)
+            cai1, cai2 = st.columns([1, 2])
+            
+            with cai1:
+                st.write("📊 **Analiză Sentiment (FinBERT)**")
+                if c_news_ai:
+                    with st.spinner("AI-ul analizează contextul..."):
+                        from ai_engine import analyze_sentiment_ai
+                        s_score = analyze_sentiment_ai(c_news_ai)
+                        c_ai = "#3FB950" if s_score > 0.1 else "#F85149" if s_score < -0.1 else "#8B949E"
+                        st.markdown(f"<div style='background:#161B22; padding:20px; border-radius:15px; border:1px solid {c_ai}; text-align:center;'><h1 style='color:{c_ai}; margin:0;'>{s_score:.2f}</h1><p style='color:#8B949E;'>Sentiment Scor</p></div>", unsafe_allow_html=True)
+            
+            with cai2:
+                st.write("📈 **Prognoză Algoritmică (Next 30 Days)**")
+                if len(hist) > 100:
+                    from ai_engine import predict_stock_price, render_ai_chart
+                    forecast = predict_stock_price(hist)
+                    render_ai_chart(forecast, hist)
+            st.markdown("---")
+
+            # 7. Ultimele Știri (RESTABILITE)
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
-            company_news = get_company_news_rss(real_sym)
-            if company_news:
-                for n in company_news:
+            if c_news_ai:
+                for n in c_news_ai:
                     sentiment, css_cls, icon = get_sentiment(n['title'])
-                    c_txt, c_imp = st.columns([5, 1])
-                    with c_txt:
+                    c_t, c_i = st.columns([5, 1])
+                    with c_t:
                         st.markdown(f"**[{n['title']}]({n['link']})**")
                         st.caption(f"{n['publisher']} • {n['date_str']}")
-                    with c_imp:
+                    with c_i:
                         st.markdown(f"<span class='{css_cls}'>{icon} {sentiment}</span>", unsafe_allow_html=True)
                     st.divider()
-
+                    
     # ==================================================
     # 3. PORTOFOLIU (MODIFICAT PENTRU MOBIL)
     # ==================================================
@@ -1227,7 +1333,7 @@ def main():
                     st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
 
-        # Încărcăm datele din Google Sheets în loc de CSV local
+        # Încărcăm datele din Google Sheets
         df_pf = load_portfolio()
 
         if df_pf.empty:
@@ -1267,40 +1373,67 @@ def main():
                     ))
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig_hist, use_container_width=True)
-                # --- MODUL NOU: ANALIZĂ DE RISC & SECTOARE ---
-                # 1. Calculăm Metricile de Risc
-                max_dd, sharpe = calculate_risk_metrics(hist_curve)
+                    # --- NOU: COMPARAȚIE BENCHMARK ---
+                st.markdown("---")
+                st.subheader("🏁 Performanță Relativă (Benchmark)")
                 
-                st.markdown("#### 🛡️ Analiză Risc Portofoliu")
-                c_risk1, c_risk2, c_risk3 = st.columns(3)
+                # Definirea benchmark-ului înainte de apel (Fix Alpha EUR)
+                if currency_symbol == "$":
+                    current_bench_ticker = "SPY"
+                    current_bench_name = "S&P 500 (SPY)"
+                else:
+                    current_bench_ticker = "EXW1.DE"
+                    current_bench_name = "STOXX 600 (EUR)"
+
+                with st.spinner(f"Se compară cu {current_bench_name}..."):
+                    # Trimitem ticker-ul și numele corect către funcție
+                    render_benchmark_comparison(hist_curve, current_bench_ticker, current_bench_name)
                 
-                # Max Drawdown
-                c_risk1.metric(
-                    "Max Drawdown (Scădere Max.)", 
-                    f"{max_dd*100:.2f}%", 
-                    help="Cea mai mare scădere procentuală înregistrată de portofoliu de la un maxim istoric până la minim. Un DD de -20% înseamnă că la un moment dat portofoliul a pierdut 20% din vârf."
-                )
+                # --- CALCUL METRICI (Rândul 1 & 2) ---
+                # 1. Calculăm metricile de risc intern
+                max_dd, sharpe, var_abs, vol_ann = calculate_risk_metrics(hist_curve)
                 
-                # Sharpe Ratio
-                c_risk2.metric(
-                    "Sharpe Ratio", 
-                    f"{sharpe:.2f}", 
-                    help="Eficiența portofoliului. > 1 e Bun, > 2 e Excelent, < 0 e Rău. Indică cât profit faci pentru fiecare unitate de risc asumată."
-                )
+                # 2. Alegem benchmark-ul automat bazat pe monedă
+                if currency_symbol == "$":
+                    bench_ticker = "SPY"
+                    bench_name = "S&P 500 (SPY)"
+                else:
+                    bench_ticker = "EXW1.DE"
+                    bench_name = "STOXX 600 (EUR)"
                 
-                # Volatilitate (Bonus)
-                volatility = hist_curve.pct_change().std() * np.sqrt(252) * 100 if not hist_curve.empty else 0
-                c_risk3.metric(
-                    "Volatilitate Anualizată", 
-                    f"{volatility:.2f}%",
-                    help="Cât de mult fluctuează portofoliul într-un an."
-                )
+                # 3. Calculăm Corelația Globală și Beta
+                global_corr, portfolio_beta = calculate_portfolio_beta(hist_curve, bench_ticker)
+
+                st.markdown(f"#### 🛡️ Diagnostic Portofoliu ({currency_symbol})")
                 
+                # Rândul 1: Riscul Intern al activelor tale
+                c_r1, c_r2, c_r3, c_r4 = st.columns(4)
+                c_r1.metric("Max Drawdown", f"{max_dd*100:.2f}%", help="Cea mai mare scădere istorică.")
+                c_r2.metric("Sharpe Ratio", f"{sharpe:.2f}", help="Eficiența profitului vs risc (Ideal > 1).")
+                c_r3.metric("VaR (95%)", f"{currency_symbol} {abs(var_abs):,.2f}", help="Pierderea maximă probabilă într-o singură zi.")
+                c_r4.metric("Volatilitate Anualizată", f"{vol_ann*100:.2f}%", help="Agitația generală a prețurilor portofoliului.")
+
+                # Rândul 2: Relația Strategică cu Piața (Benchmark-ul)
+                st.write("") # Mic spațiu vizual între rânduri
+                c_b1, c_b2, c_b3, c_b4 = st.columns(4)
+                
+                c_b1.metric("Benchmark", bench_name)
+                
+                c_b2.metric("Corelație cu Piața", f"{global_corr:.2f}", 
+                           help=f"Scorul de {global_corr:.2f} arată cât de mult imiți indexul {bench_name}. 1.00 = Copie fidelă.")
+                
+                c_b3.metric("Beta Portofoliu", f"{portfolio_beta:.2f}", 
+                           help=f"Sensibilitatea la piață. Un Beta de {portfolio_beta:.2f} înseamnă că ești {'mai agresiv' if portfolio_beta > 1 else 'mai stabil'} decât media.")
+
+                # Scorul de Diversificare Strategică
+                div_score = (1 - abs(global_corr)) * 100
+                c_b4.metric("Scor Diversificare", f"{div_score:.1f}%", 
+                           help="Indică cât de independentă este strategia ta față de restul pieței.")
+
                 st.markdown("---")
 
                 # 2. Grafice Plăcintă: Simboluri vs Sectoare
                 st.subheader("🍰 Distribuția Activelor")
-                
                 col_pie1, col_pie2 = st.columns(2)
                 
                 with col_pie1:
@@ -1310,43 +1443,52 @@ def main():
                             labels=df_calc['Symbol'], 
                             values=df_calc['MarketValue'], 
                             hole=.4,
-                            textinfo='label+percent'
+                            textinfo='percent',
+                            hovertemplate="<b>%{label}</b><br>Valoare: %{value:,.2f} " + currency_symbol + "<br>Pondere: %{percent}<extra></extra>"
                         )])
-                        fig_sym.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+                        fig_sym.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
+                                              template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
                         st.plotly_chart(fig_sym, use_container_width=True)
 
                 with col_pie2:
-                    st.caption("**După Sector Economic**")
-                    # Calculăm alocarea pe sectoare
-                    with st.spinner("Analizăm sectoarele..."):
+                    st.caption("**După Sector Economic (%)**")
+                    with st.spinner("Analizăm expunerea..."):
                         df_sectors = get_portfolio_sectors(df_calc)
                     
                     if not df_sectors.empty:
+                        # Grafic Plăcintă cu Procente
                         fig_sec = go.Figure(data=[go.Pie(
                             labels=df_sectors['Sector'], 
-                            values=df_sectors['MarketValue'], 
+                            values=df_sectors['Pondere %'], 
                             hole=.4,
-                            textinfo='label+percent'
+                            textinfo='label+percent',
+                            marker=dict(colors=['#1f6feb', '#238636', '#da3633', '#d29922'])
                         )])
-                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
+                                              template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
                         st.plotly_chart(fig_sec, use_container_width=True)
-                    else:
-                        st.info("Nu există date suficiente pentru sectoare.")
 
-                # --- NEW: CORRELATION MATRIX ---
+                        # VERDICT DIVERSIFICARE
+                        max_sector = df_sectors.iloc[0]
+                        if max_sector['Pondere %'] > 40:
+                            st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {max_sector['Pondere %']:.1f}% din portofoliu. Riști mult dacă acest sector scade.")
+                        else:
+                            st.success(f"✅ **Diversificare bună:** Niciun sector nu depășește 40%.")
+                    else:
+                        st.info("Nu există date sectoriale.")
+
+                # 3. Matrice Corelare
                 st.markdown("---")
                 st.subheader("🧩 Analiză Diversificare (Corelare)")
                 current_tickers = df_subset['Symbol'].unique().tolist()
                 if len(current_tickers) > 1:
-                    with st.spinner("Generăm matricea de corelare..."):
-                        fig_corr = plot_correlation_matrix(current_tickers)
-                        if fig_corr:
-                            st.plotly_chart(fig_corr, use_container_width=True)
-                            st.caption("ℹ️ Notă: O corelare de **1.00** înseamnă că activele se mișcă identic. O valoare sub **0.5** sau negativă indică o diversificare bună.")
+                    with st.spinner("Analizăm suprapunerea riscului..."):
+                        # Acum doar apelăm funcția, ea face totul
+                        plot_correlation_matrix(current_tickers)
                 else:
-                    st.info("Adaugă cel puțin 2 active diferite în portofoliu pentru a vedea matricea de corelare.")
+                    st.info("Adaugă cel puțin 2 active pentru analiză.")
 
-                # --- ELEMENTE SUPRAPUSE PENTRU MOBIL ---
+                # 4. Detaliu Poziții
                 st.subheader("Detaliu Poziții")
                 if not df_calc.empty:
                     display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
@@ -1767,6 +1909,30 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
+            # --- NOU: SENTIMENTUL PIEȚEI BVB (RADAR) ---
+            # Calculăm scorul folosind funcția de proxy pentru BVB
+            bvb_score, bvb_sentiment_label = calculate_bvb_sentiment(bvb_data)
+            
+            # Stabilim culoarea vizuală în funcție de scor
+            b_color = "#3FB950" if bvb_score > 55 else ("#F85149" if bvb_score < 45 else "#8B949E")
+            
+            st.markdown(f"""
+            <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border: 1px solid {b_color}44; margin-bottom: 20px;">
+                <div style="font-size: 12px; color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Pulsul Pieței Locale (BVB)</div>
+                <div style="font-size: 20px; font-weight: bold; color: {b_color};">{bvb_sentiment_label}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Analiza Contextuală BVB (Explicație pentru investitor)
+            if bvb_score < 35:
+                bvb_conclusion = "🚨 **Vânzări emoționale pe BVB:** Piața locală este sub presiune. Investitorii tind să iasă din poziții, ceea ce poate crea oportunități pe companiile cu dividende mari."
+            elif bvb_score > 65:
+                bvb_conclusion = "🚀 **Apetit crescut pentru risc:** Există un val de optimism pe companiile din indexul BET. Atenție la raliurile care nu sunt susținute de volume mari."
+            else:
+                bvb_conclusion = "⚖️ **Stabilitate locală:** Bursa de la București tranzacționează calm, fără mișcări speculative majore."
+            
+            st.info(f"🇷🇴 {bvb_conclusion}")
+
             # Calculăm statisticile extinse
             if isinstance(bvb_data.columns, pd.MultiIndex):
                 bvb_analysis_tickers = bvb_data.columns.levels[0].tolist()
@@ -1898,19 +2064,32 @@ def main():
                 """, unsafe_allow_html=True)
 
             with c_fg:
+                # Preluăm datele calculate de funcția ta existentă
                 fg_score, fg_label, vix_val = calculate_fear_greed_proxy(us_data)
-                fg_color = "#F85149" if fg_score < 45 else "#3FB950" if fg_score > 55 else "#8B949E"
+                
+                # Stabilim culoarea în funcție de sentiment
+                fg_color = "#F85149" if fg_score < 40 else ("#3FB950" if fg_score > 60 else "#8B949E")
                 
                 st.markdown(f"""
-                <div style="text-align: center; background-color: #21262D; padding: 10px; border-radius: 10px;">
-                    <small style="color: #8B949E;">Fear & Greed (Est.)</small>
-                    <h2 style="color: {fg_color}; margin: 0;">{int(fg_score)}</h2>
-                    <div style="font-weight:bold; color: #FFFFFF;">{fg_label}</div>
-                    <small style="color: #8B949E;">VIX: {vix_val:.2f}</small>
+                <div style="text-align: center; background-color: #21262D; padding: 15px; border-radius: 12px; border: 1px solid {fg_color}44;">
+                    <small style="color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Sentimentul Wall Street</small>
+                    <h1 style="color: {fg_color}; margin: 10px 0; font-size: 42px;">{int(fg_score)}</h1>
+                    <div style="font-weight:bold; color: #FFFFFF; font-size: 18px; margin-bottom: 5px;">{fg_label}</div>
+                    <div style="font-size: 12px; color: #8B949E;">VIX (Volatilitate): {vix_val:.2f}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
-            st.markdown("---")
+            # --- NOU: CONCLUZIA ZILEI (CONTEXTUALĂ) ---
+            st.markdown("#### 🧠 Analiza Contextuală a Zilei")
+            
+            if fg_score < 30:
+                conclusion = "🚨 **PANICĂ ÎN PIAȚĂ:** Sentimentul este de teamă extremă. Din punct de vedere contrarian, acestea sunt momentele în care se caută oportunități de cumpărare 'la reducere'."
+            elif fg_score > 70:
+                conclusion = "⚠️ **EUFORIE EXCESIVĂ:** Piața este lăcomă. Istoric, acest nivel precede adesea o corecție minoră. Atenție la noi intrări acum."
+            else:
+                conclusion = "⚖️ **ECHILIBRU:** Piața tranzacționează fără o direcție emoțională clară. Prețurile sunt dictate de datele economice, nu de impulsuri."
+            
+            st.info(conclusion)
 
             # --- 2. Top Movers & Volume (Top 10 Companii) ---
             if isinstance(us_data.columns, pd.MultiIndex):
@@ -2074,17 +2253,22 @@ def main():
                         change_pct = ((curr_p - prev_p) / prev_p) * 100
                         
                         results.append({
-                            "Simbol": t.replace('.RO', ''),
-                            "Preț": curr_p,
-                            "Variație %": change_pct,
-                            "Volum Azi": curr_vol,
-                            "Volum Mediu (20z)": avg_vol_20,
-                            "RVOL": rvol
-                        })
+                "Simbol": t.replace('.RO', ''),
+                "Preț": curr_p,
+                "Variație %": change_pct,
+                "Volum Azi": curr_vol,
+                "Volum Mediu (20z)": avg_vol_20,
+                "RVOL": rvol,
+                # --- NOU: Clasificare profesională (Corectată) ---
+                "Status": "🚀 BREAKOUT" if (rvol > 2.0 and change_pct > 1.5) 
+                         else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
+                         else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
+            }) # Linia 2071 acum închide corect dicționarul și append-ul
                     except: continue
                     
                 return pd.DataFrame(results)
             except: return pd.DataFrame()
+                        
 
         # --- SELECTOR DE PIAȚĂ (DROPDOWN în loc de TABURI pentru eficiență) ---
         market_choice = st.selectbox("Alege Piața/Sectorul de scanat:", list(tickers_map.keys()))
@@ -2112,25 +2296,36 @@ def main():
                     df_filtered = df_filtered.sort_values(by="RVOL", ascending=False)
                     
                     if not df_filtered.empty:
-                        # Funcție de colorare
-                        def style_scanner(row):
-                            if row['Variație %'] > 0:
-                                return ['color: #3FB950'] * len(row)
-                            else:
-                                return ['color: #F85149'] * len(row)
+                        # --- FUNCȚIE DE COLORARE PROFESIONALĂ (MODIFICATĂ) ---
+                        def style_scanner_rows(row):
+                            if "BREAKOUT" in row['Status']:
+                                # Verde aprins pentru oportunități imediate
+                                return ['background-color: rgba(63, 185, 80, 0.4); font-weight: bold'] * len(row)
+                            elif "ACUMULARE" in row['Status']:
+                                # Verde pal pentru acumulare discretă
+                                return ['background-color: rgba(63, 185, 80, 0.15)'] * len(row)
+                            elif "PANIC" in row['Status']:
+                                # Roșu pentru vânzare masivă
+                                return ['background-color: rgba(248, 81, 73, 0.25)'] * len(row)
+                            return [''] * len(row)
 
-                        # Formatare
-                        df_display = df_filtered.style.apply(style_scanner, axis=1).format({
-                            "Preț": "{:.2f}",
-                            "Variație %": "{:+.2f}%",
-                            "Volum Azi": "{:,.0f}",
-                            "Volum Mediu (20z)": "{:,.0f}",
-                            "RVOL": "{:.2f}x"
-                        })
-                        
+                        # --- AFIȘARE TABEL FĂRĂ INDEX ȘI CU STIL ---
                         st.success(f"Găsit: {len(df_filtered)} companii cu volum neobișnuit în {market_choice}.")
-                        st.dataframe(df_display, use_container_width=True, height=600)
-                        st.caption("🟢 **Verde:** Breakout | 🔴 **Roșu:** Panic Sell")
+                        
+                        st.dataframe(
+                            df_filtered.style.apply(style_scanner_rows, axis=1).format({
+                                "Preț": "{:.2f}",
+                                "Variație %": "{:+.2f}%",
+                                "Volum Azi": "{:,.0f}",
+                                "Volum Mediu (20z)": "{:,.0f}",
+                                "RVOL": "{:.2f}x"
+                            }),
+                            use_container_width=True, 
+                            height=600,
+                            hide_index=True  # <--- ACEASTA ESTE LINIA CARE ELIMINĂ NUMERELE DIN STÂNGA
+                        )
+                        
+                        st.caption("🟢 **Verde Aprins:** Breakout Confirmat | 🟢 **Verde Pal:** Acumulare Discretă | 🔴 **Roșu:** Panic Sell")
                     else:
                         st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
                 else:
