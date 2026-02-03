@@ -1292,7 +1292,7 @@ def main():
                         st.markdown(f"<div style='background:#161B22; padding:20px; border-radius:15px; border:1px solid {c_ai}; text-align:center;'><h1 style='color:{c_ai}; margin:0;'>{s_score:.2f}</h1><p style='color:#8B949E;'>Sentiment Scor</p></div>", unsafe_allow_html=True)
             
             with cai2:
-                st.write("📈 **Prognoză Algoritmică (Next 30 Days)**")
+                st.write("📈 **Prognoză Algoritmică (Next 90 Days)**")
                 if len(hist) > 100:
                     from ai_engine import predict_stock_price, render_ai_chart
                     forecast = predict_stock_price(hist)
@@ -2456,6 +2456,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
