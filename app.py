@@ -1243,38 +1243,80 @@ def main():
                 else: st.info("Date earnings indisponibile.")
             st.markdown("---")
 
-            # 5. Calculator Fair Value (REPARAT - UNIC)
+            # 5. Calculator Fair Value (REPARAT - REACTIVITATE TOTALĂ)
             st.subheader("🧮 Calculator Valoare Intrinsecă (Valoare justă)")
             
-            # Date fundamentale unice pentru acest bloc
+            # Preluare Date
             eps_f = info.get('trailingEps', 0)
             bv_f = info.get('bookValue', 0)
-            curr_f = info.get('currentPrice') or info.get('previousClose', 0)
+            price_f = info.get('currentPrice') or info.get('previousClose', 0)
             t_curr = info.get('currency', 'USD')
 
-            st.write("⚙️ **Ajustează Ipotezele DCF**")
-            c_sl1, c_sl2 = st.columns(2)
-            u_growth = c_sl1.slider("Creștere Anuală EPS (%)", -10.0, 40.0, 10.0, key="slider_g_final")
-            u_discount = c_sl2.slider("Rata de Scont (Risc %)", 5.0, 15.0, 9.0, key="slider_d_final")
+            st.write("⚙️ **Configurați Ipotezele: Sliderele influențează acum ambele modele!**")
+            ctrl1, ctrl2 = st.columns(2)
             
-            # Calcul reactiv 100%
-            graham_calc = np.sqrt(22.5 * max(0, eps_f) * max(0, bv_f)) if (eps_f > 0 and bv_f > 0) else 0
-            dcf_calc = calculate_dcf_dynamic(info, u_growth, u_discount)
+            # Explicații profesionale pentru Tooltips
+            eps_help = """
+            **Creșterea EPS (Earnings Per Share):**
+            Reprezintă rata anuală compusă cu care estimezi că vor crește profiturile companiei în următorii 5-10 ani.
+            - 0-5%: Companii mature (Utility, Consumer Staples)
+            - 10-20%: Companii de creștere (Tech, Healthcare)
+            - 25%: Estimare foarte optimistă, greu de susținut pe termen lung.
+            """
 
-            if curr_f > 0:
+            discount_help = """
+            **Rata de Scont (Discount Rate):**
+            Reprezintă randamentul minim pe care îl ceri de la această investiție pentru a justifica riscul.
+            - 7-9%: Companii sigure, cu cash-flow stabil (Blue Chips).
+            - 10-12%: Media pieței (S&P 500).
+            - 13-15%+: Companii riscante sau cu datorii mari.
+            Cu cât rata de scont e mai mare, cu atât valoarea justă calculată va fi mai mică.
+            """
+
+            # Sliderele cu pas de 1% și explicații incluse
+            growth_val = ctrl1.slider(
+                "Creștere anuală EPS (%)", 
+                -5, 40, 15, step=1, 
+                help=eps_help,
+                key="v_final_g"
+            )
+            
+            discount_val = ctrl2.slider(
+                "Rata de scont (%)", 
+                5, 20, 9, step=1, 
+                help=discount_help,
+                key="v_final_d"
+            )
+            
+            # --- LOGICĂ REACTIVĂ ---
+            # 1. Graham Revizuit: V = EPS * (8.5 + 2 * Growth)
+            # Folosim formula adaptată a lui Graham pentru a fi influențată de slider-ul de creștere
+            graham_calc = eps_f * (8.5 + 2 * growth_val) if eps_f > 0 else 0
+            
+            # 2. DCF Reactiv
+            dcf_calc = calculate_dcf_dynamic(info, growth_val, discount_val)
+
+            # --- AFISARE REZULTATE ---
+            if price_f > 0:
                 cv1, cv2, cv3 = st.columns(3)
-                box_css = "border: 2px solid {col}; padding: 15px; border-radius: 12px; text-align: center; background-color: #161B22; height: 160px; display: flex; flex-direction: column; justify-content: center;"
+                css = "border: 2px solid {c}; padding: 20px; border-radius: 12px; text-align: center; background-color: #161B22; height: 180px; display: flex; flex-direction: column; justify-content: center;"
                 
                 with cv1:
-                    st.markdown(f'<div style="{box_css.format(col="#30363D")}"><p style="margin:0;color:#8B949E;font-size:14px;">Preț Curent</p><h2 style="margin:10px 0;color:white;">{curr_f:.2f} {t_curr}</h2></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Preț Curent</p><h1 style="color:white; margin:10px 0;">{price_f:.2f} <span style="font-size:14px;">{t_curr}</span></h1></div>', unsafe_allow_html=True)
+                
                 with cv2:
-                    diff_g = ((curr_f - graham_calc) / graham_calc) * 100 if graham_calc > 0 else 0
-                    g_col = "#3FB950" if curr_f < graham_calc else "#F85149"
-                    st.markdown(f'<div style="{box_css.format(col=g_col)}"><p style="margin:0;color:#8B949E;font-size:14px;">Benjamin Graham</p><h2 style="margin:10px 0;color:{g_col};">{graham_calc:.2f}</h2><p style="margin:0;color:{g_col};font-weight:bold;font-size:12px;">{"SUBEVALUAT" if curr_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)</p></div>', unsafe_allow_html=True)
+                    if graham_calc > 0:
+                        diff_g = ((price_f - graham_calc) / graham_calc) * 100
+                        g_col = "#3FB950" if price_f < graham_calc else "#F85149"
+                        st.markdown(f'<div style="{css.format(c=g_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Graham (Adaptat)</p><h1 style="color:{g_col}; margin:10px 0;">{graham_calc:.2f}</h1><p style="color:{g_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)</p></div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E;">Graham N/A</p></div>', unsafe_allow_html=True)
+
                 with cv3:
-                    diff_d = ((curr_f - dcf_calc) / dcf_calc) * 100 if dcf_calc > 0 else 0
-                    d_col = "#3FB950" if curr_f < dcf_calc else "#F85149"
-                    st.markdown(f'<div style="{box_css.format(col=d_col)}"><p style="margin:0;color:#8B949E;font-size:14px;">Fair Value (DCF)</p><h2 style="margin:10px 0;color:{d_col};">{dcf_calc:.2f}</h2><p style="margin:0;color:{d_col};font-weight:bold;font-size:12px;">{"SUBEVALUAT" if curr_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
+                    if dcf_calc > 0:
+                        diff_d = ((price_f - dcf_calc) / dcf_calc) * 100
+                        d_col = "#3FB950" if price_f < dcf_calc else "#F85149"
+                        st.markdown(f'<div style="{css.format(c=d_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Valoare Justă (DCF)</p><h1 style="color:{d_col}; margin:10px 0;">{dcf_calc:.2f}</h1><p style="color:{d_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
             st.markdown("---")
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
@@ -2456,7 +2498,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
