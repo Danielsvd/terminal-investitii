@@ -403,6 +403,124 @@ def calculate_dcf_dynamic(info, growth_rate_input, discount_rate_input):
         return sum(cash_flows) + discounted_terminal
     except:
         return 0
+# --- Pune acest bloc sus, lângă celelalte funcții (calculate_alpha, etc.) ---
+
+def calculate_health_score_ext(info):
+    score = 5
+    pros = []
+    cons = []
+    
+    try:
+        # 1. Analiză Datorii
+        de = info.get('debtToEquity', 0)
+        if de:
+            if de < 50: 
+                score += 2
+                pros.append("Datorii foarte mici")
+            elif de > 150: 
+                score -= 2
+                cons.append("Îndatorare ridicată")
+            elif de > 300: 
+                score -= 3
+                cons.append("Risc mare de insolvență")
+
+        # 2. Analiză Rentabilitate (ROE)
+        roe = info.get('returnOnEquity', 0)
+        if roe > 0.15: 
+            score += 2
+            pros.append("Profitabilitate excelentă (ROE)")
+        elif roe < 0.05: 
+            score -= 1
+            cons.append("Eficiență scăzută a capitalului")
+
+        # 3. Analiză Lichiditate
+        cr = info.get('currentRatio', 1)
+        if cr > 1.5: 
+            score += 1
+            pros.append("Lichiditate solidă")
+        elif cr < 1:
+            score -= 1
+            cons.append("Lichiditate precară")
+            
+    except: pass
+    
+    return max(1, min(10, score)), pros, cons
+
+def get_sector_benchmarks(sector):
+    """Definește pragurile 'normale' în funcție de industrie."""
+    # Benchmarks implicite (Standard)
+    benchmarks = {"pe_threshold": 20, "roe_target": 0.12, "de_max": 150}
+    
+    # Ajustări pe sectoare specifice
+    sector_maps = {
+        "Technology": {"pe_threshold": 35, "roe_target": 0.20, "de_max": 100},
+        "Energy": {"pe_threshold": 12, "roe_target": 0.10, "de_max": 200},
+        "Financial Services": {"pe_threshold": 15, "roe_target": 0.10, "de_max": 400},
+        "Utilities": {"pe_threshold": 18, "roe_target": 0.08, "de_max": 300}
+    }
+    
+    return sector_maps.get(sector, benchmarks)
+
+# Actualizăm funcția de audit să folosească aceste praguri
+def generate_advanced_audit_v2(info, alpha, beta, h_score):
+    """
+    Audit Profesional Complet: Analiză pe 6 categorii independente.
+    Include Beta, Alpha, Lichiditate, Datorii, Profitabilitate și Sector.
+    """
+    sector = info.get('sector', 'Unknown')
+    limits = get_sector_benchmarks(sector)
+    
+    # Date fundamentale
+    pe = info.get('trailingPE', 0) or 0
+    roe = info.get('returnOnEquity', 0) or 0
+    de = info.get('debtToEquity', 0) or 0
+    cr = info.get('currentRatio', 0) or 0
+    alpha_p = alpha * 100
+    
+    audit = []
+
+    # --- 1. EVALUARE VS SECTOR ---
+    if pe > 0:
+        if pe < limits['pe_threshold'] and roe > limits['roe_target']:
+            audit.append(f"💎 **EVALUARE:** Subevaluată în {sector}. P/E {pe:.1f} sub media de {limits['pe_threshold']}.")
+        elif pe > limits['pe_threshold'] * 1.3:
+            audit.append(f"⚖️ **EVALUARE:** Supraevaluată ({pe:.1f} vs {limits['pe_threshold']}). Plătești un premium.")
+        else:
+            audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector}.")
+
+    # --- 2. PROFITABILITATE (ROE) ---
+    if roe > 0.20:
+        audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {roe*100:.1f}%).")
+    elif roe < 0.08:
+        audit.append(f"📉 **PROFITABILITATE:** Randament slab ({roe*100:.1f}%) raportat la capital.")
+
+    # --- 3. SOLVABILITATE (DATORII) ---
+    if de > limits['de_max']:
+        audit.append(f"🚩 **SOLVABILITATE:** Datorii peste limita sectorului ({de:.1f}%). Risc structural.")
+    else:
+        audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({de:.1f}%).")
+
+    # --- 4. LICHIDITATE (CASH) ---
+    if cr < 1.0:
+        audit.append(f"❌ **LICHIDITATE:** Critică ({cr:.2f}). Risc de cash-flow pe termen scurt.")
+    elif cr > 1.5:
+        audit.append(f"💧 **LICHIDITATE:** Solidă ({cr:.2f}). Rezervă de siguranță optimă.")
+
+    # --- 5. PERFORMANȚĂ (ALPHA) ---
+    if alpha > 0.02:
+        audit.append(f"📈 **PERFORMANȚĂ:** Alpha Pozitiv ({alpha_p:.1f}%). Managementul a generat valoare extra.")
+    elif alpha < -0.02:
+        audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({alpha_p:.1f}%). Acțiunea pierde în fața pieței.")
+
+    # --- 6. RISC DE PIAȚĂ (BETA) - NOU ---
+    if beta > 1.3:
+        audit.append(f"🎢 **VOLATILITATE (Beta {beta:.2f}):** Risc ridicat. Acțiunea este mult mai agresivă decât piața.")
+    elif beta < 0.8:
+        audit.append(f"🛡️ **VOLATILITATE (Beta {beta:.2f}):** Profil defensiv. Stabilă în timpul scăderilor de piață.")
+    else:
+        audit.append(f"⚖️ **VOLATILITATE (Beta {beta:.2f}):** Mișcare sincronizată cu piața.")
+
+    return audit
     
 # --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
 @st.cache_data(ttl=900)
@@ -1318,6 +1436,33 @@ def main():
                         d_col = "#3FB950" if price_f < dcf_calc else "#F85149"
                         st.markdown(f'<div style="{css.format(c=d_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Valoare Justă (DCF)</p><h1 style="color:{d_col}; margin:10px 0;">{dcf_calc:.2f}</h1><p style="color:{d_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
             st.markdown("---")
+            # --- RAPORT FINAL PE CATEGORII ---
+            st.markdown("---")
+            st.subheader("🕵️‍♂️ Audit Instituțional (6 Piloni)")
+            
+            # Executăm calculele
+            h_score, pros, cons = calculate_health_score_ext(info)
+            audit_report = generate_advanced_audit_v2(info, alpha_val, beta_val, h_score)
+            
+            # Culoare Scor
+            h_color = "#3FB950" if h_score >= 8 else ("#D29922" if h_score >= 5 else "#F85149")
+            
+            c_left, c_right = st.columns([1, 2])
+            
+            with c_left:
+                st.markdown(f"""
+                <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {h_color}; text-align:center;">
+                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sănătate Financiară</p>
+                    <h1 style="color:{h_color}; margin:15px 0; font-size:54px;">{h_score}<span style="font-size:18px;">/10</span></h1>
+                    <hr style="border-color:#30363D;">
+                    <p style="font-size:13px; color:#8B949E;">Beta: {beta_val:.2f} | Alpha: {alpha_val*100:.1f}%</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with c_right:
+                st.markdown(f"**Analiză de Specialist în Sectorul:** `{info.get('sector', 'N/A')}`")
+                for line in audit_report:
+                    st.info(line)
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
             st.subheader("🤖 Terminal Intelligence (AI & ML)")
