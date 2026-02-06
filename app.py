@@ -460,7 +460,7 @@ def get_sector_benchmarks(sector):
     }
     
     return sector_maps.get(sector, benchmarks)
-
+    
 # Actualizăm funcția de audit să folosească aceste praguri
 def generate_advanced_audit_v2(info, alpha, beta, h_score):
     """
@@ -521,7 +521,51 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
         audit.append(f"⚖️ **VOLATILITATE (Beta {beta:.2f}):** Mișcare sincronizată cu piața.")
 
     return audit
+
+def calculate_margin_of_safety(current_price, fair_value):
+    """Calculează marja de siguranță între prețul actual și valoarea intrinsecă."""
+    if fair_value <= 0: return 0, "N/A"
     
+    # Diferența procentuală
+    mos = (fair_value - current_price) / fair_value
+    
+    if mos > 0.30:
+        verdict = "🚀 Deep Value: Acțiunea este sever subevaluată. Marjă de siguranță excelentă."
+    elif mos > 0.10:
+        verdict = "✅ Fair Value: Preț rezonabil. Există o marjă de siguranță acceptabilă."
+    elif mos > -0.10:
+        verdict = "⚖️ Evaluare Corectă: Prețul pieței reflectă valoarea reală. Fără marjă de siguranță."
+    else:
+        verdict = "⚠️ Supraevaluare: Prețul este mult peste valoarea intrinsecă. Risc mare de corecție."
+        
+    return mos * 100, verdict
+
+def analyze_dividend_quality(info):
+    """Analizează dacă dividendele și profitul sunt sustenabile."""
+    payout = info.get('payoutRatio', 0)
+    net_income = info.get('netIncomeToCommon', 1)
+    cash_flow = info.get('operatingCashflow', 0)
+    
+    # Calculăm Calitatea Profitului (Cash Flow / Net Income)
+    # Un raport sub 0.8 indică profituri 'pe hârtie', nu în cash.
+    quality_ratio = cash_flow / net_income if net_income != 0 else 0
+    
+    verdicts = []
+    
+    # Analiză Payout
+    if payout > 0.80:
+        verdicts.append("🚨 **Dividend Periculos:** Firma distribuie peste 80% din profit. Riscul de tăiere a dividendului este imens.")
+    elif 0.30 < payout <= 0.60:
+        verdicts.append("✅ **Dividend Sustenabil:** Distribuție echilibrată, lăsând loc și pentru reinvestiții.")
+        
+    # Analiză Calitate Profit
+    if quality_ratio < 0.7:
+        verdicts.append("⚠️ **Calitate Slabă a Profitului:** Firma raportează profit, dar nu încasează suficient cash. Atenție la contabilitate!")
+    elif quality_ratio > 1.2:
+        verdicts.append("💎 **Profit de Înaltă Calitate:** Cash-flow-ul depășește profitul net. Semn de business ultra-sănătos.")
+        
+    return verdicts, quality_ratio, payout * 100
+        
 # --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
@@ -1286,6 +1330,9 @@ def main():
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
             st.plotly_chart(fig, use_container_width=True)
 
+            # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
+            st.markdown("---")
+
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
             beta_val = info.get('beta')
@@ -1435,7 +1482,7 @@ def main():
                         diff_d = ((price_f - dcf_calc) / dcf_calc) * 100
                         d_col = "#3FB950" if price_f < dcf_calc else "#F85149"
                         st.markdown(f'<div style="{css.format(c=d_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Valoare Justă (DCF)</p><h1 style="color:{d_col}; margin:10px 0;">{dcf_calc:.2f}</h1><p style="color:{d_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
-            st.markdown("---")
+         
             # --- RAPORT FINAL PE CATEGORII ---
             st.markdown("---")
             st.subheader("🕵️‍♂️ Audit Instituțional (6 Piloni)")
@@ -1463,6 +1510,105 @@ def main():
                 st.markdown(f"**Analiză de Specialist în Sectorul:** `{info.get('sector', 'N/A')}`")
                 for line in audit_report:
                     st.info(line)
+
+            # --- MODUL MARJA DE SIGURANȚĂ CU AVERTIZĂRI (Linia 1483) ---
+            st.markdown("---")
+            st.subheader("🛡️ Analiza Marjei de Siguranță")
+            
+            current_p = info.get('currentPrice', 0)
+            target_val = dcf_calc 
+            
+            if target_val > 0:
+                mos_val = ((target_val - current_p) / target_val) * 100
+                
+                # Logica de culori și mesaje detaliate
+                if mos_val > 30:
+                    mos_verdict = "🚀 **Oportunitate Majoră (Deep Value):** Acțiunea se vinde cu un discount masiv. Aceasta este zona ideală pentru un investitor de valoare."
+                    mos_color = "#3FB950" 
+                elif mos_val > 10:
+                    mos_verdict = "✅ **Preț Atractiv:** Există o marjă de siguranță care te protejează împotriva erorilor de estimare în modelul DCF."
+                    mos_color = "#3FB950"
+                elif mos_val > -10:
+                    mos_verdict = "⚖️ **Evaluare neutră:** Prețul este corect. Nu ai marjă de siguranță, deci orice veste proastă poate duce la scăderi imediate."
+                    mos_color = "#D29922" 
+                else:
+                    mos_verdict = "🚨 **SUPRAEVALUARE CRITICĂ:** Plătești un premium periculos. Riscul de 'reversie la medie' este extrem de ridicat."
+                    mos_color = "#F85149"
+
+                m_col1, m_col2 = st.columns([1, 2])
+                
+                with m_col1:
+                    st.markdown(f"""
+                    <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {mos_color}; text-align:center;">
+                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Margin of Safety</p>
+                        <h1 style="color:{mos_color}; margin:10px 0; font-size:40px;">{mos_val:.1f}%</h1>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                with m_col2:
+                    # Afișarea verdictului explicativ
+                    if mos_val < -20:
+                        # Avertizarea vizuală agresivă pentru supraevaluare
+                        st.error(f"⚠️ **ALERTĂ DE RISC:** {mos_verdict}")
+                        st.write("👉 *Sfat Analist:* Istoric, cumpărarea în această zonă a dus la randamente negative pe termen lung.")
+                    elif mos_val > 30:
+                        st.success(f"🌟 **SURPRIZĂ DE VALOARE:** {mos_verdict}")
+                    else:
+                        st.info(mos_verdict)
+                    
+                    st.write(f"💵 **Preț Actual:** {current_p:.2f} | 🎯 **Fair Value:** {target_val:.2f}")
+                    st.progress(max(0, min(mos_val / 100, 1.0)) if mos_val > 0 else 0)
+            else:
+                st.warning("⚠️ Calculul marjei de siguranță necesită un Fair Value DCF valid.")
+
+            # --- MODUL: SUSTENABILITATE ȘI CALITATE (VERSIUNE EXTINSĂ) ---
+            st.markdown("---")
+            st.subheader("🧬 Sustenabilitate și Calitatea Profitului")
+            
+            div_verdicts, q_ratio, p_ratio = analyze_dividend_quality(info)
+            q_color = "#3FB950" if q_ratio > 1 else ("#D29922" if q_ratio > 0.7 else "#F85149")
+            
+            c_q1, c_q2 = st.columns([1, 2])
+            
+            with c_q1:
+                # Vizualizare principală scor cash
+                st.markdown(f"""
+                <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {q_color}; text-align:center;">
+                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Cash-to-Income Ratio</p>
+                    <h1 style="color:{q_color}; margin:10px 0; font-size:35px;">{q_ratio:.2f}x</h1>
+                    <p style="font-size:12px; color:#8B949E;">Plată Dividend (Payout): {p_ratio:.1f}%</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with c_q2:
+                # Verdictul textual
+                if div_verdicts:
+                    for v in div_verdicts:
+                        st.write(v)
+                else:
+                    st.write("⚖️ Parametrii de sustenabilitate sunt în limitele de siguranță.")
+
+            # --- EXPLICATII PERMANENTE (FĂRĂ CLICK) ---
+            st.markdown("#### 💡 Ghid de Interpretare Rapidă")
+            col_info1, col_info2 = st.columns(2)
+            
+            with col_info1:
+                st.markdown(f"""
+                **Ce înseamnă {q_ratio:.2f}x (Cash-to-Income)?**
+                * **Peste 1.0x:** Afacere de tip 'Cash Machine'. Firma încasează mai mulți bani reali decât profitul declarat contabil.
+                * **0.7x - 1.0x:** Nivel normal pentru companii în creștere.
+                * **Sub 0.7x:** Profitul este doar pe hârtie. Există riscul ca facturile să nu fie încasate.
+                """)
+                
+            with col_info2:
+                st.markdown(f"""
+                **Ce înseamnă {p_ratio:.1f}% (Payout Ratio)?**
+                * **30% - 60%:** Zona ideală (Sweet Spot). Dividend sigur și loc de creștere.
+                * **Peste 80%:** Zona de pericol. Firma dă aproape tot profitul afară; orice scădere a vânzărilor va duce la tăierea dividendului.
+                """)
+
+              # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
+            st.markdown("---")    
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
             st.subheader("🤖 Terminal Intelligence (AI & ML)")
@@ -2643,7 +2789,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
