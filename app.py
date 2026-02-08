@@ -464,61 +464,67 @@ def get_sector_benchmarks(sector):
 # Actualizăm funcția de audit să folosească aceste praguri
 def generate_advanced_audit_v2(info, alpha, beta, h_score):
     """
-    Audit Profesional Complet: Analiză pe 6 categorii independente.
-    Include Beta, Alpha, Lichiditate, Datorii, Profitabilitate și Sector.
+    Audit Instituțional Complet (6 Piloni).
+    Include protecție pentru date lipsă (NVS, BVB) și toate interpretările.
     """
     sector = info.get('sector', 'Unknown')
     limits = get_sector_benchmarks(sector)
     
-    # Date fundamentale
-    pe = info.get('trailingPE', 0) or 0
-    roe = info.get('returnOnEquity', 0) or 0
-    de = info.get('debtToEquity', 0) or 0
-    cr = info.get('currentRatio', 0) or 0
-    alpha_p = alpha * 100
+    # Extragere sigură date (evităm erorile dacă lipsesc indicatori)
+    pe = info.get('trailingPE') or 0
+    roe = info.get('returnOnEquity') or 0
+    de = info.get('debtToEquity') or 0
+    cr = info.get('currentRatio') or 0
+    
+    # Protecție anti-crash pentru NVS (Transformăm None în 0 sau 1)
+    safe_alpha = alpha if alpha is not None else 0
+    safe_beta = beta if beta is not None else 1.0 # Beta 1.0 înseamnă risc neutru
     
     audit = []
 
     # --- 1. EVALUARE VS SECTOR ---
     if pe > 0:
-        if pe < limits['pe_threshold'] and roe > limits['roe_target']:
-            audit.append(f"💎 **EVALUARE:** Subevaluată în {sector}. P/E {pe:.1f} sub media de {limits['pe_threshold']}.")
-        elif pe > limits['pe_threshold'] * 1.3:
-            audit.append(f"⚖️ **EVALUARE:** Supraevaluată ({pe:.1f} vs {limits['pe_threshold']}). Plătești un premium.")
+        rel_price = pe / limits['pe_threshold']
+        if rel_price < 0.8 and roe > limits['roe_target']:
+            audit.append(f"💰 **EVALUARE:** Subevaluată în {sector}. P/E {pe:.1f} este atractiv față de media de {limits['pe_threshold']}.")
+        elif rel_price > 1.3:
+            audit.append(f"⚖️ **EVALUARE:** Scumpă raportat la sector ({pe:.1f} vs {limits['pe_threshold']}).")
         else:
-            audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector}.")
+            audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector} (P/E {pe:.1f}).")
 
-    # --- 2. PROFITABILITATE (ROE) ---
-    if roe > 0.20:
-        audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {roe*100:.1f}%).")
-    elif roe < 0.08:
-        audit.append(f"📉 **PROFITABILITATE:** Randament slab ({roe*100:.1f}%) raportat la capital.")
+    # --- 2. PROFITABILITATE & EFICIENȚĂ ---
+    if roe > 0.25:
+        audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {roe*100:.1f}%). Management performant.")
+    elif roe < 0.10:
+        audit.append(f"📉 **PROFITABILITATE:** Eficiență sub-optimă ({roe*100:.1f}%). Capitalul nu produce suficient.")
 
     # --- 3. SOLVABILITATE (DATORII) ---
     if de > limits['de_max']:
-        audit.append(f"🚩 **SOLVABILITATE:** Datorii peste limita sectorului ({de:.1f}%). Risc structural.")
+        audit.append(f"🚩 **SOLVABILITATE:** Îndatorare peste limita sectorului ({de:.1f}%). Risc structural ridicat.")
     else:
-        audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({de:.1f}%).")
+        audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({de:.1f}% debt/equity).")
 
-    # --- 4. LICHIDITATE (CASH) ---
-    if cr < 1.0:
-        audit.append(f"❌ **LICHIDITATE:** Critică ({cr:.2f}). Risc de cash-flow pe termen scurt.")
-    elif cr > 1.5:
-        audit.append(f"💧 **LICHIDITATE:** Solidă ({cr:.2f}). Rezervă de siguranță optimă.")
+    # --- 4. LICHIDITATE (CASH-FLOW) ---
+    if cr > 0:
+        if cr < 1.0:
+            audit.append(f"❌ **LICHIDITATE:** Critică ({cr:.2f}). Firma depinde de finanțări externe pe termen scurt.")
+        elif cr > 1.5:
+            audit.append(f"💧 **LICHIDITATE:** Solidă ({cr:.2f}). Există suficient 'cash' pentru siguranță.")
 
-    # --- 5. PERFORMANȚĂ (ALPHA) ---
-    if alpha > 0.02:
-        audit.append(f"📈 **PERFORMANȚĂ:** Alpha Pozitiv ({alpha_p:.1f}%). Managementul a generat valoare extra.")
-    elif alpha < -0.02:
-        audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({alpha_p:.1f}%). Acțiunea pierde în fața pieței.")
+    # --- 5. PERFORMANȚĂ PIAȚĂ (ALPHA) ---
+    alpha_p = safe_alpha * 100
+    if safe_alpha > 0.02:
+        audit.append(f"📈 **PERFORMANȚĂ:** Alpha Pozitiv ({alpha_p:.1f}%). Randament peste indexul de referință.")
+    elif safe_alpha < -0.02:
+        audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({alpha_p:.1f}%). Activul pierde în fața pieței.")
 
-    # --- 6. RISC DE PIAȚĂ (BETA) - NOU ---
-    if beta > 1.3:
-        audit.append(f"🎢 **VOLATILITATE (Beta {beta:.2f}):** Risc ridicat. Acțiunea este mult mai agresivă decât piața.")
-    elif beta < 0.8:
-        audit.append(f"🛡️ **VOLATILITATE (Beta {beta:.2f}):** Profil defensiv. Stabilă în timpul scăderilor de piață.")
+    # --- 6. RISC DE PIAȚĂ (BETA - Reparat pentru NVS) ---
+    if safe_beta > 1.3:
+        audit.append(f"🎢 **VOLATILITATE (Beta {safe_beta:.2f}):** Risc ridicat. Mișcări mult mai ample decât piața.")
+    elif safe_beta < 0.8:
+        audit.append(f"🛡️ **VOLATILITATE (Beta {safe_beta:.2f}):** Profil defensiv. Stabilă în perioade de criză.")
     else:
-        audit.append(f"⚖️ **VOLATILITATE (Beta {beta:.2f}):** Mișcare sincronizată cu piața.")
+        audit.append(f"⚖️ **VOLATILITATE (Beta {safe_beta:.2f}):** Mișcare sincronizată cu piața generală.")
 
     return audit
 
@@ -1511,12 +1517,18 @@ def main():
                 for line in audit_report:
                     st.info(line)
 
-            # --- MODUL MARJA DE SIGURANȚĂ CU AVERTIZĂRI (Linia 1483) ---
+            # --- MODUL MARJA DE SIGURANȚĂ REPARAT ---
             st.markdown("---")
             st.subheader("🛡️ Analiza Marjei de Siguranță")
             
             current_p = info.get('currentPrice', 0)
-            target_val = dcf_calc 
+            target_val = dcf_calc if dcf_calc and dcf_calc > 0 else 0
+            
+            if target_val > 0 and current_p > 0:
+                mos_val = ((target_val - current_p) / target_val) * 100
+                # ... restul codului de afișare rămâne la fel ...
+            else:
+                st.warning("⚠️ Date insuficiente pentru calculul Marjei de Siguranță.") 
             
             if target_val > 0:
                 mos_val = ((target_val - current_p) / target_val) * 100
