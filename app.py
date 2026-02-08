@@ -528,6 +528,31 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
 
     return audit
 
+def calculate_altman_z(info):
+    """Calcul Altman Z-Score recalibrat pentru a preveni erorile de miliarde."""
+    try:
+        total_assets = info.get('totalAssets') or info.get('totalAssetsNetModularEquity') or 1
+        working_cap = (info.get('totalCurrentAssets', 0) or 0) - (info.get('totalCurrentLiabilities', 0) or 0)
+        A = (working_cap / total_assets) * 1.2
+        B = ((info.get('retainedEarnings', 0) or 0) / total_assets) * 1.4
+        ebit = info.get('ebit', 0) or info.get('operatingIncome', 0) or 0
+        C = (ebit / total_assets) * 3.3
+        m_cap = info.get('marketCap', 0) or 0
+        t_liab = info.get('totalLiabilitiesNetModularEquity') or info.get('totalLiabilities') or 1
+        
+        raw_ratio = m_cap / t_liab
+        D = (raw_ratio / 1000 if raw_ratio > 100 else raw_ratio) * 0.6
+        E = ((info.get('totalRevenue', 0) or 0) / total_assets) * 1.0
+        
+        z_score = A + B + C + D + E
+        final_score = min(z_score, 15.0)
+
+        status, color = ("Safe Zone", "#3FB950") if final_score > 2.99 else \
+                        (("Grey Zone", "#D29922") if final_score >= 1.81 else ("Distress", "#F85149"))
+        return final_score, status, color, "Probabilitate de faliment neglijabilă."
+    except:
+        return 0.0, "Eroare", "#8B949E", "Date incomplete."
+
 def calculate_margin_of_safety(current_price, fair_value):
     """Calculează marja de siguranță între prețul actual și valoarea intrinsecă."""
     if fair_value <= 0: return 0, "N/A"
@@ -1619,8 +1644,42 @@ def main():
                 * **Peste 80%:** Zona de pericol. Firma dă aproape tot profitul afară; orice scădere a vânzărilor va duce la tăierea dividendului.
                 """)
 
-              # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
-            st.markdown("---")    
+            # --- MODUL: ANALIZĂ STRATEGICĂ IA (SWOT) ---
+            st.markdown("---")
+            st.subheader("🎯 Analiză Strategică IA (SWOT)")
+            try:
+                # Importuri din modulul extern
+                from ai_engine import analyze_sentiment_ai, generate_ai_swot_analysis
+                
+                # Colectare date necesare pentru SWOT
+                c_news_ai = get_company_news_rss(real_sym)
+                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
+                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if dcf_calc > 0 else 0
+                z_val_swot, _, _, _ = calculate_altman_z(info)
+                
+                # Generare date SWOT
+                swot_res = generate_ai_swot_analysis(info, h_score, z_val_swot, mos_swot, alpha_val, s_score_val)
+                
+                # Randare vizuală pe coloane
+                s_col1, s_col2 = st.columns(2)
+                with s_col1:
+                    st.success("**💪 PUNCTE TARI**")
+                    for item in swot_res["Strengths"]:
+                        st.write(f"• {item}")
+                    st.warning("**🌟 OPORTUNITĂȚI**")
+                    for item in swot_res["Opportunities"]:
+                        st.write(f"• {item}")
+                with s_col2:
+                    st.error("**⚠️ PUNCTE SLABE**")
+                    for item in swot_res["Weaknesses"]:
+                        st.write(f"• {item}")
+                    st.info("**🚩 AMENINȚĂRI**")
+                    for item in swot_res["Threats"]:
+                        st.write(f"• {item}")
+            except Exception as e:
+                st.warning(f"Modulul SWOT IA este momentan indisponibil.")
+
+            st.markdown("---")
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
             st.subheader("🤖 Terminal Intelligence (AI & ML)")
