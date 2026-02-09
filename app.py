@@ -260,7 +260,48 @@ def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
         return correlation, beta
     except:
         return 0.0, 1.0
-    
+
+def get_macro_interpretation(ticker_data):
+    """
+    Motor IA Macro Profesional: Analiză corelații, inflație și impact sectorial.
+    """
+    try:
+        def get_chg(t): return ticker_data[t]['Close'].pct_change().iloc[-1] if t in ticker_data else 0
+
+        usd = get_chg('DX-Y.NYB')
+        gold = get_chg('GC=F')
+        oil = get_chg('CL=F')
+        copper = get_chg('HG=F')
+        tnx_chg = get_chg('^TNX') # Yield 10Y
+        
+        v = []
+
+        # --- 1. CORELAȚII ACTIVE (DINAMICE) ---
+        if usd < -0.003 and gold > 0.003:
+            v.append("🟡 **AUR:** Refugiu activ. Dolarul slăbește, confirmând rolul aurului de protecție a puterii de cumpărare.")
+        
+        if usd > 0.003 and oil < -0.005:
+            v.append("🛢️ **PETROL:** Presiune valutară. Dolarul puternic scumpește barilul pentru importatori, reducând cererea.")
+
+        if copper > 0.01:
+            v.append("🏗️ **CUPRU:** Semnal expansiune. Creșterea metalelor industriale indică activitate industrială robustă.")
+
+        # --- 2. IMPACT SECTORIAL & INFLAȚIE (PROFESIONAL) ---
+        if tnx_chg > 0.01: # Dacă dobânzile cresc
+            v.append("🚀 **SECTOR BANCAR:** Impact Pozitiv. Creșterea yield-urilor îmbunătățește marjele nete de dobândă (spread).")
+            v.append("📉 **TECH & GROWTH:** Risc ridicat. Dobânzile mari scad valoarea prezentă a profiturilor viitoare (model DCF).")
+            v.append("🚩 **SMALL CAPS:** Vulnerabilitate crescută la refinanțarea datoriilor cu dobândă variabilă.")
+        elif tnx_chg < -0.01: # Dacă dobânzile scad
+            v.append("🟢 **TECH & REAL ESTATE:** Mediu favorabil. Costul capitalului scade, stimulând evaluările activelor imobiliare și tehnologice.")
+        
+        # --- 3. ALERTA "BLACK SWAN" (CRERATĂ DE TINE) ---
+        if gold > 0.01 and usd > 0.005 and get_chg('^VIX') > 0.10:
+            v.append("🚨 **ALERTA BLACK SWAN:** Fuga masivă către siguranță detectată (Aur+Dolar+VIX în creștere). Risc sistemic ridicat!")
+
+        return v if v else ["⚖️ **ECHILIBRU:** Corelațiile macro sunt stabile azi. Mișcările reflectă fundamentele individuale ale activelor."]
+    except:
+        return ["⚠️ Date insuficiente pentru procesarea corelațiilor macro."]
+
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news_data():
@@ -1938,19 +1979,36 @@ def main():
         st.title("🌐 Pulsul Pieței Globale")
         st.caption("Date în timp real (cu întârziere minimă) furnizate via Yahoo Finance.")
         
-        # Buton refresh global (pentru macro + actiuni)
         if st.button("🔄 Reîmprospătează Piața"):
             get_global_market_data.clear()
             get_macro_data_visuals.clear()
             st.rerun()
 
-        # --- DASHBOARD MACROECONOMIC (PARTEA NOUĂ) ---
-        st.markdown("### 🧭 Indicatori Macroeconomici")
-        st.info("💡 **Interpretare:** Dacă **US 10Y Yield** crește brusc, acțiunile de tehnologie (Growth) tind să scadă. Dacă **Aurul** crește, indică frică în piață.")
-        
-        # Apelăm funcția (acum descarcă 5 ani)
+        # --- PASUL 1: DESCĂRCARE DATE (Trebuie să fie PRIMUL rând!) ---
+        # Acum variabila macro_data este creată și poate fi folosită mai jos
         macro_tickers, macro_data = get_macro_data_visuals()
+
+        # --- PASUL 2: MODUL INTERPRETARE DINAMICĂ DOBÂNZI ---
+        st.markdown("### 🧭 Indicatori Macroeconomici")
         
+        # Verificăm dacă avem date pentru randamentele pe 10 ani
+        has_tnx = '^TNX' in macro_data.columns.levels[0] if isinstance(macro_data.columns, pd.MultiIndex) else '^TNX' in macro_data
+        
+        if has_tnx:
+            try:
+                tnx_series = macro_data['^TNX']['Close'].dropna() if isinstance(macro_data.columns, pd.MultiIndex) else macro_data['^TNX'].dropna()
+                tnx_chg = tnx_series.pct_change().iloc[-1]
+                
+                if tnx_chg > 0.015:
+                    macro_msg = "🚨 **RANDAMENTE ÎN CREȘTERE:** Yield-ul 10Y crește brusc. Acest lucru pune presiune pe acțiunile de Tehnologie (Growth) și crește costul creditării."
+                elif tnx_chg < -0.015:
+                    macro_msg = "🟢 **REDUCERE COST CAPITAL:** Yield-ul 10Y scade. Un mediu favorabil pentru acțiuni și pentru refinanțarea datoriilor companiilor."
+                else:
+                    macro_msg = "⚖️ **STABILITATE DOBÂNZI:** Yield-ul 10Y este stabil. Piața nu anticipează schimbări majore de politică monetară în acest moment."
+                st.info(macro_msg)
+            except:
+                st.info("💡 Interpretare: Dacă US 10Y Yield crește brusc, acțiunile de tehnologie tind să scadă. Dacă Aurul crește, indică frică în piață.")
+                
         # --- 1. CONFIGURARE UI (Selectori) ---
         c_sel1, c_sel2 = st.columns([1, 3])
         
@@ -2049,10 +2107,143 @@ def main():
                 )
                 
                 st.plotly_chart(fig_macro, use_container_width=True)
+                # --- NOU: MODUL INTERPRETARE DINAMICĂ MACRO ---
+                st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
+                
+                # Trimitem tot bulk-ul de date macro descărcat anterior
+                macro_verdicts = get_macro_interpretation(macro_data)
+                
+                for v in macro_verdicts:
+                    st.info(v)
+                
+                # --- TABEL IMPACT SECTORIAL DINAMIC (AMBELE SCENARII) ---
+                st.markdown("---")
+                st.subheader("📊 Matricea de Sensibilitate Economică (Scenarii)")
+                
+                impact_data = {
+                    "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
+                    "Dacă Dobânzile CRESC (↑)": [
+                        "🔴 NEGATIV (Evaluări scăzute)", 
+                        "🟢 POZITIV (Marje mai mari)", 
+                        "🔴 NEGATIV (Costuri datorie)", 
+                        "🟡 NEUTRU/POZITIV (Hedge)", 
+                        "🟡 NEUTRU (Cerere stabilă)"
+                    ],
+                    "Dacă Dobânzile SCAD (↓)": [
+                        "🟢 POZITIV (Expansiune multipli)", 
+                        "🔴 NEGATIV (Venituri scăzute)", 
+                        "🟢 POZITIV (Refinanțare ieftină)", 
+                        "🔴 NEGATIV (Semnal încetinire)", 
+                        "🟢 POZITIV (Randament dividend)"
+                    ]
+                }
+                
+                # Afișare tabel profesional
+                st.table(pd.DataFrame(impact_data))
+
+                # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    st.success("**🏢 Companii Large-Cap (Gigant)**")
+                    st.markdown("""
+                    * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
+                    * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
+                    """)
+                with col_c2:
+                    st.warning("**🚜 Companii Small-Cap (Mici)**")
+                    st.markdown("""
+                    * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
+                    * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
+                    """)
+                # --- MODUL: INDICATOR DE ROTAȚIE (GROWTH VS VALUE) ---
+                st.markdown("---")
+                st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
+                
+                try:
+                    # Pasul 1: Descărcare date cu un interval mai mare pentru siguranță
+                    rot_data = yf.download(['^IXIC', '^DJI'], period="1y", progress=False)['Close']
+                    
+                    if not rot_data.empty and '^IXIC' in rot_data and '^DJI' in rot_data:
+                        # Pasul 2: Calcul raport (Ratio)
+                        ratio = rot_data['^IXIC'] / rot_data['^DJI']
+                        ratio = ratio.dropna()
+                        
+                        # Pasul 3: Calcul trend 30z
+                        current_ratio = ratio.iloc[-1]
+                        prev_ratio = ratio.iloc[-22] if len(ratio) >= 22 else ratio.iloc[0]
+                        rot_change = ((current_ratio - prev_ratio) / prev_ratio) * 100
+                        
+                        # Pasul 4: Randare vizuală pe coloane
+                        rc1, rc2 = st.columns([1, 2])
+                        
+                        with rc1:
+                            rot_status = "🚀 GROWTH (Tech)" if rot_change > 0 else "🏭 VALOARE (Industrială)"
+                            
+                            # Tooltip pentru Rotație
+                            st.metric(
+                                label="Trend Rotație (30z)", 
+                                value=rot_status, 
+                                delta=f"{rot_change:+.2f}%",
+                                help="Măsoară forța relativă a Tehnologiei față de Industrie. Negativ = Investitorii vând Tech și cumpără Industriale (Risk-Off)."
+                            )
+                            
+                            # Tooltip pentru Scor Relativ
+                            st.write(f"Scor relativ real: **{current_ratio:.4f}**", 
+                                     help="Raportul matematic dintre Nasdaq și Dow Jones. Un scor în scădere indică migrarea banilor către economia reală/stabilă.")
+                            
+                            if rot_change < -1.5:
+                                st.warning("Rotație defensivă confirmată. Investitorii caută securitate în Value/Industriale.")
+                            elif rot_change > 1.5:
+                                st.success("Capitalul migrează spre Tehnologie. Apetit ridicat pentru risc.")
+                            else:
+                                st.info("Piața este în echilibru între Tech și Industrie.")
+                                
+                        with rc2:
+                            # Tooltip pentru Grafic (Help)
+                            st.caption("📈 Evoluția Raportului de Forță", 
+                                       help="Vizualizarea grafică a raportului Nasdaq/Dow Jones. Panta descendentă arată clar momentul în care banii părăsesc sectorul tech.")
+                            
+                            # Graficul Mov (Restaurat la formatul care funcționa)
+                            fig_rot = go.Figure()
+                            fig_rot.add_trace(go.Scatter(
+                                x=ratio.index, 
+                                y=ratio.values, 
+                                line=dict(color='#BF91FF', width=2), 
+                                fill='tozeroy',
+                                name="Ratio Growth/Value"
+                            ))
+                            fig_rot.update_layout(
+                                height=250, 
+                                margin=dict(l=0, r=0, t=0, b=0), 
+                                template="plotly_dark", 
+                                paper_bgcolor='rgba(0,0,0,0)', 
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                yaxis=dict(showgrid=True, gridcolor='#30363D')
+                            )
+                            st.plotly_chart(fig_rot, use_container_width=True)
+                    else:
+                        st.warning("⚠️ Sincronizare date index... Te rugăm să reîncarci pagina.")
+                        
+                except Exception as e:
+                    st.info("🔄 Indicatorul de rotație se actualizează (Server Busy).")
+
+                with st.expander("📖 Vezi Minighid de Macroeconomie"):
+                    st.markdown("""
+                    **1. Aurul: Refugiu Financiar**
+                    * Tinde să aibă o corelație negativă cu dolarul.
+                    * Indicator de stres: Creșterea rapidă indică temeri financiare.
+                    
+                    **2. Monedele de Refugiu**
+                    * USD, CHF, JPY: Investitorii migrează aici în crize.
+                    
+                    **3. Petrolul & Mărfurile**
+                    * Corelat invers cu USD: Dolarul puternic = Petrol mai ieftin.
+                    * Gazele naturale: Influențate masiv de contextul geopolitic și sezonier.
+                    """)
 
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
-
+        
         st.markdown("---")
         # ---------------------------------------------------------
         
