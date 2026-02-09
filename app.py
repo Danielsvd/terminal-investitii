@@ -1518,11 +1518,15 @@ def main():
             st.markdown("---")
             st.subheader("🕵️‍♂️ Audit Instituțional (6 Piloni)")
             
-            # Executăm calculele
+            # 1. EXECUTĂM CALCULELE (Aceste rânduri îți lipsesc acum!)
             h_score, pros, cons = calculate_health_score_ext(info)
             audit_report = generate_advanced_audit_v2(info, alpha_val, beta_val, h_score)
             
-            # Culoare Scor
+            # 2. PREGĂTIM DATELE PENTRU AFIȘARE (Plasa de siguranță anti-crash)
+            display_beta = f"{beta_val:.2f}" if beta_val is not None else "N/A"
+            display_alpha = f"{alpha_val*100:.1f}%" if alpha_val is not None else "N/A"
+
+            # 3. STABILIM CULOAREA SCORULUI
             h_color = "#3FB950" if h_score >= 8 else ("#D29922" if h_score >= 5 else "#F85149")
             
             c_left, c_right = st.columns([1, 2])
@@ -1533,7 +1537,7 @@ def main():
                     <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sănătate Financiară</p>
                     <h1 style="color:{h_color}; margin:15px 0; font-size:54px;">{h_score}<span style="font-size:18px;">/10</span></h1>
                     <hr style="border-color:#30363D;">
-                    <p style="font-size:13px; color:#8B949E;">Beta: {beta_val:.2f} | Alpha: {alpha_val*100:.1f}%</p>
+                    <p style="font-size:13px; color:#8B949E;">Beta: {display_beta} | Alpha: {display_alpha}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
