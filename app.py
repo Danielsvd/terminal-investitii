@@ -2155,78 +2155,6 @@ def main():
                     * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
                     * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
                     """)
-                # --- MODUL: INDICATOR DE ROTAȚIE (GROWTH VS VALUE) ---
-                st.markdown("---")
-                st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
-                
-                try:
-                    # Pasul 1: Descărcare date cu un interval mai mare pentru siguranță
-                    rot_data = yf.download(['^IXIC', '^DJI'], period="1y", progress=False)['Close']
-                    
-                    if not rot_data.empty and '^IXIC' in rot_data and '^DJI' in rot_data:
-                        # Pasul 2: Calcul raport (Ratio)
-                        ratio = rot_data['^IXIC'] / rot_data['^DJI']
-                        ratio = ratio.dropna()
-                        
-                        # Pasul 3: Calcul trend 30z
-                        current_ratio = ratio.iloc[-1]
-                        prev_ratio = ratio.iloc[-22] if len(ratio) >= 22 else ratio.iloc[0]
-                        rot_change = ((current_ratio - prev_ratio) / prev_ratio) * 100
-                        
-                        # Pasul 4: Randare vizuală pe coloane
-                        rc1, rc2 = st.columns([1, 2])
-                        
-                        with rc1:
-                            rot_status = "🚀 GROWTH (Tech)" if rot_change > 0 else "🏭 VALOARE (Industrială)"
-                            
-                            # Tooltip pentru Rotație
-                            st.metric(
-                                label="Trend Rotație (30z)", 
-                                value=rot_status, 
-                                delta=f"{rot_change:+.2f}%",
-                                help="Măsoară forța relativă a Tehnologiei față de Industrie. Negativ = Investitorii vând Tech și cumpără Industriale (Risk-Off)."
-                            )
-                            
-                            # Tooltip pentru Scor Relativ
-                            st.write(f"Scor relativ real: **{current_ratio:.4f}**", 
-                                     help="Raportul matematic dintre Nasdaq și Dow Jones. Un scor în scădere indică migrarea banilor către economia reală/stabilă.")
-                            
-                            if rot_change < -1.5:
-                                st.warning("Rotație defensivă confirmată. Investitorii caută securitate în Value/Industriale.")
-                            elif rot_change > 1.5:
-                                st.success("Capitalul migrează spre Tehnologie. Apetit ridicat pentru risc.")
-                            else:
-                                st.info("Piața este în echilibru între Tech și Industrie.")
-                                
-                        with rc2:
-                            # Tooltip pentru Grafic (Help)
-                            st.caption("📈 Evoluția Raportului de Forță", 
-                                       help="Vizualizarea grafică a raportului Nasdaq/Dow Jones. Panta descendentă arată clar momentul în care banii părăsesc sectorul tech.")
-                            
-                            # Graficul Mov (Restaurat la formatul care funcționa)
-                            fig_rot = go.Figure()
-                            fig_rot.add_trace(go.Scatter(
-                                x=ratio.index, 
-                                y=ratio.values, 
-                                line=dict(color='#BF91FF', width=2), 
-                                fill='tozeroy',
-                                name="Ratio Growth/Value"
-                            ))
-                            fig_rot.update_layout(
-                                height=250, 
-                                margin=dict(l=0, r=0, t=0, b=0), 
-                                template="plotly_dark", 
-                                paper_bgcolor='rgba(0,0,0,0)', 
-                                plot_bgcolor='rgba(0,0,0,0)',
-                                yaxis=dict(showgrid=True, gridcolor='#30363D')
-                            )
-                            st.plotly_chart(fig_rot, use_container_width=True)
-                    else:
-                        st.warning("⚠️ Sincronizare date index... Te rugăm să reîncarci pagina.")
-                        
-                except Exception as e:
-                    st.info("🔄 Indicatorul de rotație se actualizează (Server Busy).")
-
                 with st.expander("📖 Vezi Minighid de Macroeconomie"):
                     st.markdown("""
                     **1. Aurul: Refugiu Financiar**
@@ -2240,6 +2168,108 @@ def main():
                     * Corelat invers cu USD: Dolarul puternic = Petrol mai ieftin.
                     * Gazele naturale: Influențate masiv de contextul geopolitic și sezonier.
                     """)
+
+                # --- MODUL NOU: INDICATOR DE ROTAȚIE (GROWTH VS VALUE) ---
+                st.markdown("---")
+                st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
+                
+                try:
+                    # Descărcăm date pe 1 an pentru indicii relevanți
+                    # Folosim cache separat pentru a nu încetini restul aplicației
+                    rot_data = yf.download(['^IXIC', '^DJI'], period="1y", progress=False)['Close']
+                    
+                    # Calculăm raportul (Ratio) între Nasdaq (Growth) și Dow Jones (Value)
+                    ratio = rot_data['^IXIC'] / rot_data['^DJI']
+                    
+                    # Trendul ultimelor 22 de zile (o lună de tranzacționare)
+                    current_ratio = ratio.iloc[-1]
+                    prev_ratio = ratio.iloc[-22]
+                    rot_change = ((current_ratio - prev_ratio) / prev_ratio) * 100
+                    
+                    # Structură pe coloane pentru afișare profesională
+                    rc1, rc2 = st.columns([1, 2])
+                    
+                    with rc1:
+                        rot_color = "#3FB950" if rot_change > 0 else "#F85149"
+                        rot_status = "🚀 GROWTH (Tech)" if rot_change > 0 else "🏭 VALUE (Industrial)"
+                        
+                        st.metric("Trend Rotație (30z)", rot_status, f"{rot_change:+.2f}%")
+                        st.write(f"Scor Relativ Actual: **{current_ratio:.4f}**")
+                        
+                        if rot_change > 1.5:
+                            st.success("Capitalul migrează agresiv spre Tehnologie. Apetit ridicat pentru risc.")
+                        elif rot_change < -1.5:
+                            st.warning("Rotație defensivă confirmată. Investitorii caută siguranță în Value/Industriale.")
+                        else:
+                            st.info("Piața tranzacționează în echilibru între sectoarele Growth și Value.")
+                            
+                    with rc2:
+                        # Grafic evoluție ratio pentru context istoric
+                        fig_rot = go.Figure()
+                        fig_rot.add_trace(go.Scatter(
+                            x=ratio.index, 
+                            y=ratio.values, 
+                            line=dict(color='#BF91FF', width=2), 
+                            fill='tozeroy',
+                            name="Ratio Growth/Value"
+                        ))
+                        fig_rot.update_layout(
+                            height=250, 
+                            margin=dict(l=0, r=0, t=0, b=0), 
+                            template="plotly_dark", 
+                            paper_bgcolor='rgba(0,0,0,0)', 
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            yaxis=dict(showgrid=True, gridcolor='#30363D')
+                        )
+                        st.plotly_chart(fig_rot, use_container_width=True)
+                        
+                except Exception as e:
+                    st.info("Indicatorul de rotație este momentan indisponibil (Eroare date index).")
+                    # --- MODUL: BAROMETRU DE SENTIMENT GLOBAL (ȘTIRI) ---
+                st.markdown("---")
+                st.subheader("🎭 Barometru Sentiment Global")
+                
+                try:
+                    # Colectăm știrile de la indicii majori pentru un eșantion relevant
+                    news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
+                    
+                    if news_samples:
+                        # Calculăm scorul mediu folosind motorul tău de IA
+                        from ai_engine import analyze_sentiment_ai
+                        global_sentiment_score = analyze_sentiment_ai(news_samples)
+                        
+                        # Definire culori și mesaje profesionale
+                        if global_sentiment_score > 0.15:
+                            s_col, s_msg = "#3FB950", "🚀 BULLISH: Narațiunea globală este optimistă."
+                        elif global_sentiment_score < -0.15:
+                            s_col, s_msg = "#F85149", "📉 BEARISH: Predomină frica și incertitudinea."
+                        else:
+                            s_col, s_msg = "#8B949E", "⚖️ NEUTRU: Media reflectă o perioadă de consolidare."
+                            
+                        # Afișare vizuală
+                        sb1, sb2 = st.columns([1, 2])
+                        with sb1:
+                            st.markdown(f"""
+                            <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {s_col}; text-align:center;">
+                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sentiment Media</p>
+                                <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{global_sentiment_score:.2f}</h1>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        with sb2:
+                            st.info(s_msg)
+                            st.write("**Corelație cu Rotația:**")
+                            # Logică de corelare automată
+                            if global_sentiment_score < 0 and rot_change < 0:
+                                st.write("⚠️ **CONFIRMARE DEFENSIVĂ:** Atât știrile, cât și mișcările de capital (rotația) indică o fugă către siguranță.")
+                            elif global_sentiment_score > 0 and rot_change > 0:
+                                st.write("🌟 **CONFIRMARE GROWTH:** Sentimentul pozitiv din media susține migrarea banilor către Tehnologie.")
+                            else:
+                                st.write("🔄 **DIVERGENȚĂ:** Piața se mișcă într-o direcție, dar media raportează altceva. Atenție la potențiale capcane!")
+                    else:
+                        st.info("Sincronizare fluxuri știri pentru barometru...")
+                except:
+                    st.info("Barometrul de sentiment se actualizează...")
 
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
