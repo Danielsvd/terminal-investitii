@@ -302,6 +302,67 @@ def get_macro_interpretation(ticker_data):
     except:
         return ["⚠️ Date insuficiente pentru procesarea corelațiilor macro."]
 
+def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
+    score = 50
+    details = []
+    
+    # 1. ANALIZA SMART MONEY
+    if inst_pct > 70:
+        score += 15
+        details.append("✅ **Smart Money:** Deținere de elită (>70%). Suport instituțional masiv.")
+    elif inst_pct > 50:
+        score += 10
+        details.append("✅ **Smart Money:** Majoritate instituțională. Stabilitate ridicată.")
+    elif inst_pct < 20:
+        score -= 15
+        details.append("⚠️ **Smart Money:** Deținere instituțională slabă. Risc de volatilitate retail.")
+
+    # 2. ANALIZA EVALUARE
+    if mos_val > 25:
+        score += 15
+        details.append(f"✅ **Evaluare:** Marjă de siguranță excelentă ({mos_val:.1f}%). Preț subevaluat.")
+    elif mos_val < -10:
+        score -= 15
+        details.append(f"🚨 **Evaluare:** Supraevaluare semnificativă. Risc ridicat de corecție.")
+
+    # 3. ANALIZA MACRO
+    if spread_val < 0:
+        score -= 20
+        details.append("🚨 **Macro:** Curbă 10Y-2Y inversată. Risc sistemic de recesiune detectat.")
+    else:
+        score += 5
+        details.append("✅ **Macro:** Mediul economic este favorabil expansiunii.")
+
+    # 4. SĂNĂTATE FINANCIARĂ
+    roe = info.get('returnOnEquity', 0)
+    if roe > 0.20:
+        score += 10
+        details.append(f"🚀 **Eficiență:** ROE excepțional ({roe*100:.1f}%).")
+    
+    debt = info.get('debtToEquity', 0)
+    if debt > 150:
+        score -= 10
+        details.append("🚩 **Datorii:** Grad de îndatorare ridicat.")
+    
+    return max(0, min(100, score)), details
+
+def get_score_highlights(data):
+    highlights = []
+    
+    # Verificare Profitabilitate
+    if data['roe'] > 0.15:
+        highlights.append("✅ Profitabilitate: ROE excelent susține creșterea organică.")
+    
+    # Verificare Marjă de Siguranță
+    if data['margin_of_safety'] < 0.10:
+        highlights.append("⚠️ Evaluare: Marjă de siguranță redusă sub nivelul ideal de 20%.")
+        
+    # Verificare Balene (Instituționali)
+    if data['inst_ownership'] > 0.50:
+        highlights.append("✅ Smart Money: Suport instituțional solid detectat.")
+        
+    return highlights
+
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news_data():
@@ -1337,6 +1398,14 @@ def main():
 
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
+            # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
+            try:
+                # Preluăm spread-ul 10Y-2Y pentru rating
+                t_10y = yf.Ticker("^TNX").fast_info.last_price
+                t_2y = yf.Ticker("2Y=F").fast_info.last_price
+                spread = t_10y - t_2y
+            except:
+                spread = 0.5 # Fallback neutru dacă API-ul eșuează
             
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
@@ -1874,8 +1943,55 @@ def main():
                     from ai_engine import predict_stock_price, render_ai_chart
                     forecast = predict_stock_price(hist)
                     render_ai_chart(forecast, hist)
+            
+            # ==================================================
+            # CALCUL RATING FINAL (CONCLUZIA)
+            # ==================================================
             st.markdown("---")
+            st.subheader("🎯 Verdict Final: Rating de Investiție")
 
+            # Pregătim variabilele (Safe check)
+            # Luăm spread-ul din piață direct pentru rating
+            try:
+                t_10y = yf.Ticker("^TNX").fast_info.last_price
+                t_2y = yf.Ticker("2Y=F").fast_info.last_price
+                curr_spread = t_10y - t_2y
+            except:
+                curr_spread = 0.5
+
+            s_inst = inst_percent if 'inst_percent' in locals() else 0
+            s_mos = mos_val if 'mos_val' in locals() else 0
+            s_rvol = rvol if 'rvol' in locals() else 1.0
+            
+            # Apelăm funcția PRO care returnează SCOR + DETALII
+            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, curr_spread, s_mos)
+            
+            r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
+            r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
+
+            # Afișare UI
+            c_res1, c_res2 = st.columns([1, 2])
+            with c_res1:
+                st.markdown(f"""
+                    <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {r_color}; text-align:center;">
+                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Investiție</p>
+                        <h1 style="color:{r_color}; margin:15px 0; font-size:54px;">{final_score}</h1>
+                        <div style="background:{r_color}22; color:{r_color}; padding:5px; border-radius:5px; font-weight:bold;">{r_label}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with c_res2:
+                st.markdown("#### 🔍 Argumente pentru acest Scor:")
+                for item in highlights:
+                    st.write(item)
+
+                # --- AFISARE SCOR SĂNĂTATE FINANCIARĂ UNIFORMIZAT ---
+                # Stabilim pictograma în funcție de nota de sănătate (h_score)
+                h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
+                
+                st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
+
+            st.markdown("---")
             # 7. Ultimele Știri (RESTABILITE)
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
             if c_news_ai:
