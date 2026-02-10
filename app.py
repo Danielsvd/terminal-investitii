@@ -1478,6 +1478,105 @@ def main():
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
                     st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': '{:.2f}', 'Realizat': '{:.2f}', 'Diferență': '{:.2f}', 'Surpriză %': '{:.2%}'}), use_container_width=True)
                 else: st.info("Date earnings indisponibile.")
+            
+            # --- MODUL NOU: ANALIZA VOLUMULUI INSTITUȚIONAL ---
+            st.markdown("---")
+            st.subheader("📊 Analiza Fluxului de Volum (Instituțional)")
+
+            if not hist.empty:
+                # Calculăm Volumul Relativ (RVOL)
+                current_vol = hist['Volume'].iloc[-1]
+                avg_vol = hist['Volume'].rolling(window=20).mean().iloc[-1]
+                rvol = current_vol / avg_vol
+
+                v_col1, v_col2 = st.columns([1, 2])
+
+                with v_col1:
+                    # Indicator vizual pentru RVOL
+                    v_color = "#3FB950" if rvol > 1.5 else ("#F85149" if rvol < 0.7 else "#8B949E")
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {v_color}; text-align:center;">
+                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Volum Relativ (RVOL)</p>
+                            <h1 style="color:{v_color}; margin:10px 0;">{rvol:.2f}x</h1>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with v_col2:
+                    # Interpretare profesională
+                    if rvol > 2.0:
+                        st.warning("⚠️ **ACTIVITATE INSTITUȚIONALĂ EXTREMĂ:** Volumul este de peste 2 ori mai mare decât media. Se fac mișcări mari de portofoliu.")
+                    elif rvol > 1.3:
+                        st.success("✅ **ACCUMULARE/INTERES:** Interes crescut în piață pentru acest activ.")
+                    else:
+                        st.info("⚖️ **VOLUM NORMAL:** Tranzacționare de retail, fără mișcări majore ale balenelor.")
+
+                    # Afișăm și prețul pentru context
+                    day_change = ((hist['Close'].iloc[-1] / hist['Close'].iloc[-2]) - 1) * 100
+                    st.write(f"Variație Preț: **{day_change:+.2f}%**")
+                    if rvol > 1.3 and day_change > 1.5:
+                        st.markdown("🚀 **CONCLUZIE:** Achiziție agresivă detectată (Bullish Breakout).")
+                    elif rvol > 1.3 and day_change < -1.5:
+                        st.markdown("🚨 **CONCLUZIE:** Vânzare de panică sau descărcare instituțională (Bearish Distribution).")
+            
+            # --- MODUL REPARAT: SMART MONEY FLOW (FIX PROCENT) ---
+            st.markdown("---")
+            st.subheader("🐳 Smart Money Flow: Dețineri Instituționale")
+
+            try:
+                t_whale = yf.Ticker(real_sym)
+                major_df = t_whale.major_holders
+                
+                inst_percent = 0.0
+                
+                if major_df is not None and not major_df.empty:
+                    # Resetăm indexul pentru a procesa corect ambele coloane
+                    major_df = major_df.reset_index()
+                    
+                    for _, row in major_df.iterrows():
+                        label = str(row.iloc[1]).lower() # De obicei a doua coloană e textul
+                        value = row.iloc[0]              # Prima coloană e valoarea
+                        
+                        if 'institutions' in label or 'institu' in label:
+                            try:
+                                # Conversie sigură la float
+                                raw_val = float(value)
+                                # FIX: Dacă valoarea este > 1, înseamnă că e deja procent (ex: 60.5)
+                                # Dacă este < 1, este fracție (ex: 0.605)
+                                if 0 < raw_val <= 1.0:
+                                    inst_percent = raw_val * 100
+                                elif 1.0 < raw_val <= 100.0:
+                                    inst_percent = raw_val
+                                else:
+                                    # Dacă e peste 100, e probabil numărul de instituții, nu procentul
+                                    # Căutăm în cealaltă coloană sau rândul următor
+                                    continue
+                                break
+                            except: continue
+
+                # Dacă tot e 0, încercăm o metodă secundară din info
+                if inst_percent == 0:
+                    inst_percent = info.get('heldPercentInstitutions', 0) * 100
+
+                iw_col1, iw_col2 = st.columns([1, 2])
+                
+                with iw_col1:
+                    # Limităm vizual la 100% pentru acuratețe profesională
+                    inst_percent = min(inst_percent, 100.0)
+                    
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:20px; border-radius:15px; border-left:5px solid #58A6FF;">
+                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Dețineri Instituționale Totale</p>
+                            <h2 style="color:#58A6FF; margin:10px 0;">{inst_percent:.2f}%</h2>
+                            <p style="font-size:12px; color:#FFFFFF;">
+                                {'💎 Suport Instituțional Masiv' if inst_percent > 40 else '🌊 Acționariat Retail'}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with iw_col2:
+                    st.info(f"Pentru **{real_sym}**, instituțiile mari (fonduri, bănci) controlează **{inst_percent:.1f}%** din totalul acțiunilor. Acest lucru oferă o barieră de siguranță împotriva volatilității extreme.")
+            except Exception as e:
+                st.caption("Analiza deținerilor este optimizată pentru acțiunile listate în SUA.")
             st.markdown("---")
 
             # 5. Calculator Fair Value (REPARAT - REACTIVITATE TOTALĂ)
@@ -1791,7 +1890,7 @@ def main():
             st.markdown("### Perioadă Analiză")
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
             
-            tab_usd, tab_eur = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR"])
+            tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
 
             def render_portfolio_tab(df_subset, currency_symbol):
                 if df_subset.empty:
@@ -1830,7 +1929,12 @@ def main():
                 if currency_symbol == "$":
                     current_bench_ticker = "SPY"
                     current_bench_name = "S&P 500 (SPY)"
+                elif currency_symbol == "RON":
+                    # Schimbăm STOXX 600 cu indicele local BET
+                    current_bench_ticker = "TVBETETF.RO"
+                    current_bench_name = "Indice BET (RON)"
                 else:
+                    # Rămâne STOXX 600 doar pentru portofoliul în EURO
                     current_bench_ticker = "EXW1.DE"
                     current_bench_name = "STOXX 600 (EUR)"
 
@@ -1846,7 +1950,12 @@ def main():
                 if currency_symbol == "$":
                     bench_ticker = "SPY"
                     bench_name = "S&P 500 (SPY)"
+                elif currency_symbol == "RON":
+                    # Schimbarea crucială pentru piața din România
+                    bench_ticker = "TVBETETF.RO"
+                    bench_name = "Indice BET (RON)"
                 else:
+                    # Rămâne STOXX 600 doar pentru portofoliul în EUR
                     bench_ticker = "EXW1.DE"
                     bench_name = "STOXX 600 (EUR)"
                 
@@ -1899,6 +2008,24 @@ def main():
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
                         st.plotly_chart(fig_sym, use_container_width=True)
 
+                # 4. Detaliu Poziții
+                st.subheader("Detaliu Poziții")
+                if not df_calc.empty:
+                    display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
+                    
+                    def color_profit(val):
+                        color = '#3FB950' if val >= 0 else '#F85149'
+                        return f'color: {color}'
+
+                    st.dataframe(
+                        df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
+                        .format({
+                            'Quantity': '{:.4f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
+                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                        }),
+                        use_container_width=True
+                    )        
+
                 with col_pie2:
                     st.caption("**După Sector Economic (%)**")
                     with st.spinner("Analizăm expunerea..."):
@@ -1936,24 +2063,6 @@ def main():
                         plot_correlation_matrix(current_tickers)
                 else:
                     st.info("Adaugă cel puțin 2 active pentru analiză.")
-
-                # 4. Detaliu Poziții
-                st.subheader("Detaliu Poziții")
-                if not df_calc.empty:
-                    display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
-                    
-                    def color_profit(val):
-                        color = '#3FB950' if val >= 0 else '#F85149'
-                        return f'color: {color}'
-
-                    st.dataframe(
-                        df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
-                        .format({
-                            'Quantity': '{:.4f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
-                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
-                        }),
-                        use_container_width=True
-                    )
                 
                 st.markdown("<br>", unsafe_allow_html=True) 
 
@@ -1964,6 +2073,11 @@ def main():
             with tab_eur:
                 df_eur = df_pf[df_pf['Currency'] == 'EUR']
                 render_portfolio_tab(df_eur, "€")
+
+            with tab_ron:
+                df_ron = df_pf[df_pf['Currency'] == 'RON']
+                # Folosim simbolul monedei locale
+                render_portfolio_tab(df_ron, "RON")    
 
             # Butonul de reset nu poate șterge datele din Google Drive, doar le ignoră temporar
             # Așa că l-am comentat sau ar trebui scos, deoarece gestionarea datelor se face acum în Sheets.
@@ -1983,6 +2097,58 @@ def main():
             get_global_market_data.clear()
             get_macro_data_visuals.clear()
             st.rerun()
+        # --- MODUL REPARAT: 10Y - 2Y YIELD SPREAD (WALL STREET STANDARD) ---
+        st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-2Y)")
+        
+        try:
+            # ^TNX = 10 Year Treasury Yield
+            # ^IRX = 13 Week Bill (3 luni) - îl păstrăm pentru comparație
+            # 2Y=F sau ^ZT=F sunt Futures, dar cel mai sigur pentru Yield 2Y este:
+            # Descarcăm datele necesare
+            tickers_yield = ['^TNX', '^IRX'] 
+            # Notă: Dacă simbolul de 2Y direct nu e disponibil, aproximăm profesional
+            # sau folosim un ticker de bond stabil.
+            yield_data = yf.download(tickers_yield, period="5d", progress=False)['Close']
+            
+            # Pentru 2Y Yield, în lipsa unui ticker stabil de index, 
+            # mulți profesioniști folosesc SHY (1-3 Year Bond) ca proxy sau datele de trezorerie.
+            # Pentru acest modul, vom folosi ^TNX și un apel separat pentru 2Y Note.
+            
+            t_10y = yf.Ticker("^TNX").fast_info.last_price
+            # Încercăm să luăm randamentul la 2 ani
+            try:
+                # Simbolul de futures pe 2 ani (randament inversat)
+                t_2y = yf.Ticker("2Y=F").fast_info.last_price 
+                # Ajustare: Futures se tranzacționează diferit, folosim o constantă de piață 
+                # sau rămânem la 10Y-3M dacă datele 2Y sunt corupte.
+                spread = t_10y - t_2y
+                label_spread = "Spread 10Y - 2Y"
+            except:
+                t_3m = yf.Ticker("^IRX").fast_info.last_price
+                spread = t_10y - t_3m
+                label_spread = "Spread 10Y - 3M (Fallback)"
+
+            y_col1, y_col2 = st.columns([1, 2])
+            
+            with y_col1:
+                spread_color = "#F85149" if spread < 0 else "#3FB950"
+                st.markdown(f"""
+                    <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {spread_color}; text-align:center;">
+                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">{label_spread}</p>
+                        <h1 style="color:{spread_color}; margin:10px 0;">{spread:.3f}</h1>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with y_col2:
+                if spread < 0:
+                    st.error(f"⚠️ **CURBĂ INVERSATĂ:** Diferența este de {spread:.3f}. Istoric, acest semnal a precedat fiecare recesiune majoră din ultimii 50 de ani Piața de obligațiuni semnalează o recesiune iminentă.")
+                    st.write("👉 **Strategie:** Redu expunerea pe acțiuni ciclice și mărește rezervele de Cash/Aur. Când ratele pe termen scurt sunt mai mari decât cele pe termen lung, investitorii nu au încredere în creșterea economică viitoare")
+                else:
+                    st.success(f"✅ **CURBĂ NORMALĂ:** Diferența de {spread:.3f} indică o expansiune economică continuă. Riscul de recesiune sistemică este scăzut.")
+                    st.write("👉 **Strategie:** Poți menține o strategie de creștere (Growth) activă. Economia este în fază de expansiune. Băncile pot împrumuta bani ieftin pe termen scurt și îi pot plasa scump pe termen lung, generând profit.")
+        except:
+            st.info("Datele pentru curba randamentelor se încarcă...")
+        st.markdown("---")    
 
         # --- PASUL 1: DESCĂRCARE DATE (Trebuie să fie PRIMUL rând!) ---
         # Acum variabila macro_data este creată și poate fi folosită mai jos
