@@ -1560,21 +1560,50 @@ def main():
                 iw_col1, iw_col2 = st.columns([1, 2])
                 
                 with iw_col1:
-                    # Limităm vizual la 100% pentru acuratețe profesională
-                    inst_percent = min(inst_percent, 100.0)
-                    
+                    # Determinarea culorii și mesajului pe baza pragurilor profesionale
+                    if inst_percent > 70:
+                        status_msg = "💎 SUPORT ELITĂ"
+                        status_desc = "Instituțiile domină total. Volatilitate scăzută."
+                        status_color = "#3FB950" # Verde aprins
+                    elif inst_percent > 50:
+                        status_msg = "✅ SUPORT SOLID"
+                        status_desc = "Majoritate instituțională. Bază de investitori stabilă."
+                        status_color = "#238636" # Verde închis
+                    elif inst_percent > 30:
+                        status_msg = "⚖️ POZIȚIONARE MIXTĂ"
+                        status_desc = "Echilibru între fonduri și retail. Atenție la știri."
+                        status_color = "#D29922" # Galben/Portocaliu
+                    else:
+                        status_msg = "🚨 EXTREM DE SLAB"
+                        status_desc = "Retail dominant. Risc ridicat de mișcări speculative."
+                        status_color = "#F85149" # Roșu
+
                     st.markdown(f"""
-                        <div style="background:#161B22; padding:20px; border-radius:15px; border-left:5px solid #58A6FF;">
+                        <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {status_color}; text-align:center;">
                             <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Dețineri Instituționale Totale</p>
-                            <h2 style="color:#58A6FF; margin:10px 0;">{inst_percent:.2f}%</h2>
-                            <p style="font-size:12px; color:#FFFFFF;">
-                                {'💎 Suport Instituțional Masiv' if inst_percent > 40 else '🌊 Acționariat Retail'}
-                            </p>
+                            <h1 style="color:{status_color}; margin:10px 0;">{inst_percent:.2f}%</h1>
+                            <div style="background:{status_color}22; color:{status_color}; padding:5px; border-radius:5px; font-weight:bold; font-size:14px;">
+                                {status_msg}
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
 
                 with iw_col2:
-                    st.info(f"Pentru **{real_sym}**, instituțiile mari (fonduri, bănci) controlează **{inst_percent:.1f}%** din totalul acțiunilor. Acest lucru oferă o barieră de siguranță împotriva volatilității extreme.")
+                    st.markdown(f"### 🚩 Analiză Acționariat: {real_sym}")
+                    st.write(f"**Verdict:** {status_desc}")
+                    
+                    # Bara de progres vizuală pentru context rapid
+                    st.progress(inst_percent / 100)
+                    
+                    st.markdown(f"""
+                    <div style="background:#21262D; padding:15px; border-radius:10px; margin-top:10px;">
+                        <p style="font-size:14px; margin-bottom:5px;">💡 <b>De ce contează?</b></p>
+                        <p style="font-size:13px; color:#8B949E; line-height:1.4;">
+                            {'Fondurile mari (Vanguard, BlackRock) au "mâini puternice" și nu vând în panică, oferind un prag de suport prețului.' if inst_percent > 50 
+                            else 'Lipsa instituțiilor înseamnă că prețul este dictat de investitori mici, care pot vinde agresiv la prima veste negativă.'}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
             except Exception as e:
                 st.caption("Analiza deținerilor este optimizată pentru acțiunile listate în SUA.")
             st.markdown("---")
