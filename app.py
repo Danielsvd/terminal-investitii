@@ -379,18 +379,17 @@ def get_watchlist_target(symbol):
 def get_peers_analysis(sector, industry, current_ticker):
     """Extrage competitori și include datoria pentru o analiză de risc."""
     peers_map = {
-        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META"],
+        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META", "TSM", "QCOM"],
         "Financial Services": ["JPM", "BAC", "GS", "WFC", "C"],
-        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP"],
-        "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE"],
-        "Military & Defense": ["LMT", "RTX", "NOC", "BA", "GD"],
-        "Mining": ["RIO", "VALE", "BHP", "FCX", "NEM"], 
-        "Consumer Cyclical": ["WMT", "MCD", "KO", "PG"],
-        "Agriculture": ["DE", "ADM", "CTVA"]
+        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "FSLR", "VST", "UUUU", "LEU", "CEG"],
+        "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
+        "Aerospace & Defense": ["LMT", "RTX", "NOC", "BA", "GD"],
+        "Other Industrial Metals & Mining": ["RIO", "VALE", "BHP", "FCX", "NEM"], 
+        "Restaurants": ["MCD", "CMG", "SBUX"]
     }
     
     potential_peers = peers_map.get(sector, ["SPY", "QQQ", "DIA"])
-    peers = [p for p in potential_peers if p != current_ticker][:3]
+    peers = [p for p in potential_peers if p != current_ticker][:15]
     
     peer_results = []
     for p_sym in peers:
