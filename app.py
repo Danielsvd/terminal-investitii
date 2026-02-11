@@ -363,6 +363,18 @@ def get_score_highlights(data):
         
     return highlights
 
+def get_watchlist_target(symbol):
+    """Extrage prețul țintă din foaia 'watchlist' pentru simbolul analizat."""
+    try:
+        df_wl = load_watchlist() # Folosește funcția ta existentă de încărcare
+        if not df_wl.empty and 'Symbol' in df_wl.columns:
+            match = df_wl[df_wl['Symbol'] == symbol]
+            if not match.empty:
+                return smart_to_float(match.iloc[0]['TargetPrice'])
+    except:
+        pass
+    return None
+
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news_data():
@@ -1410,14 +1422,68 @@ def main():
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
         else:
-            # 1. Informații Generale
+            # 1. Informații Generaley
             st.markdown(f"## {info.get('longName', real_sym)}")
             c1, c2, c3 = st.columns(3)
             c1.metric("Sector", info.get('sector', 'N/A'))
             c2.metric("Industrie", info.get('industry', 'N/A'))
-            c3.metric("Capitalizare", format_num(info.get('marketCap')))
-            st.markdown("---")
+            c3.metric("Capitalizare", format_num(info.get('marketCap')))             
+         
+        # --- 1. DEFINIREA PREȚULUI (VITAL PENTRU CALCULE) ---
+            # Luăm ultimul preț disponibil din istoricul deja descărcat
+            curr_price = hist['Close'].iloc[-1] if not hist.empty else 0
 
+            # --- 2. EXTRAGEREA ȚINTEI DIN WATCHLIST ---
+            target_p = get_watchlist_target(real_sym)
+            
+            st.markdown("---") # Separator vizual între info generale și țintă
+
+            # --- 3. AFIȘARE CARD DINAMIC ȚINTĂ ---
+            if target_p and curr_price > 0:
+                # Calculăm distanța procentuală (Cât de mult trebuie să mai scadă)
+                # Dacă prețul e sub țintă, rezultatul va fi negativ
+                dist_pct = ((curr_price - target_p) / target_p) * 100
+                is_hit = curr_price <= target_p
+                
+                # Culoare dinamică: Verde dacă e sub țintă, Galben dacă e aproape (sub 5%)
+                if is_hit:
+                    t_color = "#3FB950"  # Verde (Zona de cumpărare)
+                    t_status = "🚀 ZONĂ ACHIZIȚIE (Țintă Atinsă!)"
+                elif dist_pct < 5:
+                    t_color = "#D29922"  # Galben (Aproape de țintă)
+                    t_status = f"⚠️ ATENȚIE: Doar {dist_pct:.1f}% peste țintă"
+                else:
+                    t_color = "#8B949E"  # Gri (Încă scump)
+                    t_status = f"⏳ +{dist_pct:.1f}% peste țintă"
+                
+                st.markdown(f"""
+                    <div style="background:#161B22; padding:25px; border-radius:15px; border-left: 10px solid {t_color}; margin-bottom:20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Ținta ta de intrare</p>
+                                <h2 style="color:white; margin:5px 0;">{target_p:.2f} <span style="font-size:16px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
+                            </div>
+                            <div style="text-align:right;">
+                                <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
+                                <h2 style="color:{t_color}; margin:5px 0;">{curr_price:.2f}</h2>
+                            </div>
+                        </div>
+                        <div style="background:{t_color}22; color:{t_color}; padding:8px; border-radius:8px; font-weight:bold; font-size:16px; text-align:center; margin-top:10px; border: 1px solid {t_color}44;">
+                            {t_status}
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                # Afișare în caz că nu ai setat o țintă pentru acest simbol
+                st.markdown(f"""
+                    <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid #30363D; text-align:center; margin-bottom:20px; opacity:0.7;">
+                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Strategie Watchlist</p>
+                        <h3 style="color:#8B949E; margin:10px 0;">Fără Țintă Stabilită</h3>
+                        <p style="font-size:13px; color:#58A6FF;">Adaugă o alertă în capitolul Watchlist pentru a monitoriza {real_sym}.</p>
+                    </div>
+                """, unsafe_allow_html=True)
+            st.markdown("---") # Separator vizual între info generale și țintă    
+                        
             # 2. Grafic Tehnic (Păstrat exact cum era în original)
             hist = calculate_technical_indicators(hist)
             st.subheader("📉 Grafic Tehnic")
