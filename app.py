@@ -421,34 +421,6 @@ def get_peers_analysis(sector, industry, current_ticker):
         except: continue
     return pd.DataFrame(peer_results)
 
-def get_macro_correlation(stock_hist):
-    """Calculează corelația robustă între acțiune și activele macro."""
-    try:
-        # Descărcăm activele macro pe aceeași perioadă cu acțiunea
-        start_date = stock_hist.index[0]
-        # Folosim CL=F pentru Petrol WTI, GC=F pentru Aur, DX-Y.NYB pentru Dolar
-        macro_data = yf.download(['CL=F', 'GC=F', 'DX-Y.NYB'], start=start_date, progress=False)['Close']
-        
-        # Creăm un DataFrame comun
-        combined = pd.DataFrame({
-            'Stock': stock_hist['Close'],
-            'Oil': macro_data['CL=F'],
-            'Gold': macro_data['GC=F'],
-            'USD': macro_data['DX-Y.NYB']
-        })
-
-        # --- REPARAȚIA CRUCIALĂ ---
-        # 1. Eliminăm rândurile unde lipsesc date (zile de sărbătoare diferite)
-        # 2. Calculăm variația procentuală (pct_change)
-        # 3. Calculăm corelația
-        returns = combined.ffill().pct_change().dropna()
-        corr_matrix = returns.corr()
-        
-        return corr_matrix['Stock']['Gold'], corr_matrix['Stock']['Oil'], corr_matrix['Stock']['USD']
-    except Exception as e:
-        print(f"Eroare corelație: {e}")
-        return 0, 0, 0
-
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news_data():
@@ -1697,48 +1669,8 @@ def main():
                     st.info("Informații despre competitori indisponibile pentru acest simbol.")
 
             st.caption(f"💡 Analiza compară eficiența {real_sym} cu giganții din sectorul {info.get('sector')}.")
-            
-            # ==================================================
-            # MODUL PRO: ANALIZĂ CORELAȚIE MACRO
-            # ==================================================
-            st.markdown("---")
-            st.subheader("🔗 Sinergia cu Piața Globală (Corelații 1Y)")
-            
-            c_gold, c_oil, c_usd = get_macro_correlation(hist)
-            
-            mc1, mc2, mc3 = st.columns(3)
-            
-            def render_corr_card(col, name, val, icon):
-                # Logică interpretare: peste 0.6 e corelație mare, sub -0.6 e inversă
-                if val > 0.6: 
-                    msg, color = "Corelație Pozitivă", "#3FB950" # Verde
-                elif val < -0.6: 
-                    msg, color = "Corelație Inversă", "#F85149" # Roșu
-                else: 
-                    msg, color = "Independentă", "#8B949E" # Gri
-                
-                with col:
-                    st.markdown(f"""
-                        <div style="background:#161B22; padding:15px; border-radius:12px; border-bottom: 4px solid {color}; text-align:center;">
-                            <p style="color:#8B949E; margin:0; font-size:12px;">{icon} {name}</p>
-                            <h2 style="margin:5px 0; color:white;">{val:.2f}</h2>
-                            <small style="color:{color}; font-weight:bold;">{msg}</small>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-            render_corr_card(mc1, "AUR", c_gold, "🥇")
-            render_corr_card(mc2, "PETROL", c_oil, "🛢️")
-            render_corr_card(mc3, "DOLAR (DXY)", c_usd, "💲")
             st.markdown("---")
             
-            # --- VERDICTUL ANALISTULUI ---
-            st.write("")
-            if abs(c_oil) > 0.7:
-                st.info(f"💡 **Observație:** {real_sym} este extrem de sensibilă la prețul **Petrolului**. O creștere a energiei îi va influența prețul direct.")
-            elif abs(c_gold) > 0.5 and c_gold < 0:
-                st.success(f"🛡️ **Hedge:** {real_sym} se mișcă opus Aurului, funcționând ca un activ de risc pur.")
-            elif abs(c_usd) > 0.7:
-                st.warning(f"⚠️ **Risc Valutar:** Expunere masivă la fluctuațiile **Dolarului**. Un DXY puternic îi poate afecta profiturile.")
             # 4. Financiar & Raportări
             st.subheader("💰 Financiar & Raportări")
             st.markdown("""<div class="fin-card"><h4>Rezultate Financiare (Ultima Raportare)</h4></div>""", unsafe_allow_html=True)
