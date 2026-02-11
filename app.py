@@ -376,31 +376,17 @@ def get_watchlist_target(symbol):
         pass
     return None
 
-def get_macro_correlation(stock_hist):
-    """Calculează corelația acțiunii cu Aurul și Petrolul pe ultimul an."""
-    try:
-        # Descărcăm Aur (GC=F) și Petrol (CL=F)
-        macro_data = yf.download(['GC=F', 'CL=F'], period="1y", progress=False)['Close']
-        combined = pd.DataFrame({
-            'Stock': stock_hist['Close'],
-            'Gold': macro_data['GC=F'],
-            'Oil': macro_data['CL=F']
-        }).ffill().dropna().pct_change().corr()
-        
-        return combined['Stock']['Gold'], combined['Stock']['Oil']
-    except:
-        return 0, 0
-
 def get_peers_analysis(sector, industry, current_ticker):
     """Extrage competitori și include datoria pentru o analiză de risc."""
     peers_map = {
-        "Technology": ["MSFT", "GOOGL", "NVDA"],
-        "Financial Services": ["JPM", "BAC", "GS"],
-        "Energy": ["XOM", "CVX", "LNG"],
-        "Healthcare": ["LLY", "JNJ", "NVO"],
-        "Military": ["LMT", "RTX", "BA"],
-        "Mining": ["BHP", "RIO", "GLNCY"],
-        "Consumer Cyclical": ["WMT", "MCD", "KO", "PG"]
+        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META"],
+        "Financial Services": ["JPM", "BAC", "GS", "WFC", "C"],
+        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP"],
+        "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE"],
+        "Military & Defense": ["LMT", "RTX", "NOC", "BA", "GD"],
+        "Mining": ["RIO", "VALE", "BHP", "FCX", "NEM"], 
+        "Consumer Cyclical": ["WMT", "MCD", "KO", "PG"],
+        "Agriculture": ["DE", "ADM", "CTVA"]
     }
     
     potential_peers = peers_map.get(sector, ["SPY", "QQQ", "DIA"])
