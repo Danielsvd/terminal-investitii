@@ -238,6 +238,7 @@ def get_sentiment(text):
     if pol > 0.05: return "Pozitiv", "impact-poz", "↗"
     elif pol < -0.05: return "Negativ", "impact-neg", "↘"
     else: return "Neutru", "impact-neu", "→"
+
 def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
     """Calculează Beta și Corelația globală a întregului portofoliu."""
     if portfolio_curve is None or portfolio_curve.empty:
@@ -374,6 +375,79 @@ def get_watchlist_target(symbol):
     except:
         pass
     return None
+
+def get_macro_correlation(stock_hist):
+    """Calculează corelația acțiunii cu Aurul și Petrolul pe ultimul an."""
+    try:
+        # Descărcăm Aur (GC=F) și Petrol (CL=F)
+        macro_data = yf.download(['GC=F', 'CL=F'], period="1y", progress=False)['Close']
+        combined = pd.DataFrame({
+            'Stock': stock_hist['Close'],
+            'Gold': macro_data['GC=F'],
+            'Oil': macro_data['CL=F']
+        }).ffill().dropna().pct_change().corr()
+        
+        return combined['Stock']['Gold'], combined['Stock']['Oil']
+    except:
+        return 0, 0
+
+def get_peers_analysis(sector, industry, current_ticker):
+    """Extrage competitori și include datoria pentru o analiză de risc."""
+    peers_map = {
+        "Technology": ["MSFT", "GOOGL", "NVDA"],
+        "Financial Services": ["JPM", "BAC", "GS"],
+        "Energy": ["XOM", "CVX", "LNG"],
+        "Healthcare": ["LLY", "JNJ", "NVO"],
+        "Military": ["LMT", "RTX", "BA"],
+        "Mining": ["BHP", "RIO", "GLNCY"],
+        "Consumer Cyclical": ["WMT", "MCD", "KO", "PG"]
+    }
+    
+    potential_peers = peers_map.get(sector, ["SPY", "QQQ", "DIA"])
+    peers = [p for p in potential_peers if p != current_ticker][:3]
+    
+    peer_results = []
+    for p_sym in peers:
+        try:
+            t = yf.Ticker(p_sym)
+            inf = t.info
+            peer_results.append({
+                "Simbol": p_sym,
+                "P/E": inf.get('trailingPE', 0),
+                "ROE (%)": inf.get('returnOnEquity', 0) * 100,
+                "Marjă Netă (%)": inf.get('profitMargins', 0) * 100,
+                "Datorii/Eq (%)": inf.get('debtToEquity', 0)
+            })
+        except: continue
+    return pd.DataFrame(peer_results)
+
+def get_macro_correlation(stock_hist):
+    """Calculează corelația robustă între acțiune și activele macro."""
+    try:
+        # Descărcăm activele macro pe aceeași perioadă cu acțiunea
+        start_date = stock_hist.index[0]
+        # Folosim CL=F pentru Petrol WTI, GC=F pentru Aur, DX-Y.NYB pentru Dolar
+        macro_data = yf.download(['CL=F', 'GC=F', 'DX-Y.NYB'], start=start_date, progress=False)['Close']
+        
+        # Creăm un DataFrame comun
+        combined = pd.DataFrame({
+            'Stock': stock_hist['Close'],
+            'Oil': macro_data['CL=F'],
+            'Gold': macro_data['GC=F'],
+            'USD': macro_data['DX-Y.NYB']
+        })
+
+        # --- REPARAȚIA CRUCIALĂ ---
+        # 1. Eliminăm rândurile unde lipsesc date (zile de sărbătoare diferite)
+        # 2. Calculăm variația procentuală (pct_change)
+        # 3. Calculăm corelația
+        returns = combined.ffill().pct_change().dropna()
+        corr_matrix = returns.corr()
+        
+        return corr_matrix['Stock']['Gold'], corr_matrix['Stock']['Oil'], corr_matrix['Stock']['USD']
+    except Exception as e:
+        print(f"Eroare corelație: {e}")
+        return 0, 0, 0
 
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1576,8 +1650,95 @@ def main():
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", info.get('beta', 'N/A'))
                     st.metric("Alpha (1Y)", format_num(alpha_val, True))
+            
+            # ==================================================
+            # MODUL PRO: PEER ANALYSIS (CARDURI SUS + TABEL JOS)
+            # ==================================================
             st.markdown("---")
+            st.subheader("🏁 Peer Review: Poziționarea față de Liderii de Sector")
+            
+            # Datele firmei curente
+            my_pe = info.get('trailingPE', 0) or 0
+            my_roe = (info.get('returnOnEquity', 0) or 0) * 100
+            my_margin = (info.get('profitMargins', 0) or 0) * 100
+            
+            # --- PASUL 1: CARDURILE DE STATUS (SUS) ---
+            c_p1, c_p2, c_p3 = st.columns(3)
+            
+            with c_p1:
+                st.metric("P/E vs Sector", f"{my_pe:.1f}", 
+                          f"{'🔴 Scump' if my_pe > 25 else '🟢 Atractiv'}")
+            
+            with c_p2:
+                st.metric("ROE vs Sector", f"{my_roe:.1f}%", 
+                          f"{'🟢 Lider' if my_roe > 15 else '🟡 Mediu'}")
+                
+            with c_p3:
+                # Cardul solicitat pentru Marja Netă
+                st.metric("Marjă Netă", f"{my_margin:.1f}%", 
+                          f"{'🚀 Eficient' if my_margin > 15 else '⚖️ Standard'}")
 
+            st.write("") # Mic spațiu între carduri și tabel
+
+            # --- PASUL 2: TABELUL COMPARATIV (JOS) ---
+            st.markdown("**🔍 Comparație Detaliată cu Benchmark-urile Industriei:**")
+            with st.spinner("Se analizează competitorii..."):
+                df_peers = get_peers_analysis(info.get('sector'), info.get('industry'), real_sym)
+                
+                if not df_peers.empty:
+                    # Aplicăm stilizare profesională tabelului
+                    st.dataframe(df_peers.style.format({
+                        "P/E": "{:.2f}",
+                        "ROE (%)": "{:.1f}%",
+                        "Marjă Netă (%)": "{:.1f}%",
+                        "Datorii/Eq (%)": "{:.1f}%"
+                    }), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Informații despre competitori indisponibile pentru acest simbol.")
+
+            st.caption(f"💡 Analiza compară eficiența {real_sym} cu giganții din sectorul {info.get('sector')}.")
+            
+            # ==================================================
+            # MODUL PRO: ANALIZĂ CORELAȚIE MACRO
+            # ==================================================
+            st.markdown("---")
+            st.subheader("🔗 Sinergia cu Piața Globală (Corelații 1Y)")
+            
+            c_gold, c_oil, c_usd = get_macro_correlation(hist)
+            
+            mc1, mc2, mc3 = st.columns(3)
+            
+            def render_corr_card(col, name, val, icon):
+                # Logică interpretare: peste 0.6 e corelație mare, sub -0.6 e inversă
+                if val > 0.6: 
+                    msg, color = "Corelație Pozitivă", "#3FB950" # Verde
+                elif val < -0.6: 
+                    msg, color = "Corelație Inversă", "#F85149" # Roșu
+                else: 
+                    msg, color = "Independentă", "#8B949E" # Gri
+                
+                with col:
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:15px; border-radius:12px; border-bottom: 4px solid {color}; text-align:center;">
+                            <p style="color:#8B949E; margin:0; font-size:12px;">{icon} {name}</p>
+                            <h2 style="margin:5px 0; color:white;">{val:.2f}</h2>
+                            <small style="color:{color}; font-weight:bold;">{msg}</small>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+            render_corr_card(mc1, "AUR", c_gold, "🥇")
+            render_corr_card(mc2, "PETROL", c_oil, "🛢️")
+            render_corr_card(mc3, "DOLAR (DXY)", c_usd, "💲")
+            st.markdown("---")
+            
+            # --- VERDICTUL ANALISTULUI ---
+            st.write("")
+            if abs(c_oil) > 0.7:
+                st.info(f"💡 **Observație:** {real_sym} este extrem de sensibilă la prețul **Petrolului**. O creștere a energiei îi va influența prețul direct.")
+            elif abs(c_gold) > 0.5 and c_gold < 0:
+                st.success(f"🛡️ **Hedge:** {real_sym} se mișcă opus Aurului, funcționând ca un activ de risc pur.")
+            elif abs(c_usd) > 0.7:
+                st.warning(f"⚠️ **Risc Valutar:** Expunere masivă la fluctuațiile **Dolarului**. Un DXY puternic îi poate afecta profiturile.")
             # 4. Financiar & Raportări
             st.subheader("💰 Financiar & Raportări")
             st.markdown("""<div class="fin-card"><h4>Rezultate Financiare (Ultima Raportare)</h4></div>""", unsafe_allow_html=True)
