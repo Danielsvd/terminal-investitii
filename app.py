@@ -401,6 +401,7 @@ def get_peers_analysis(sector, industry, current_ticker):
                 "Simbol": p_sym,
                 "P/E": inf.get('trailingPE', 0),
                 "ROE (%)": inf.get('returnOnEquity', 0) * 100,
+                "ROA (%)": inf.get('returnOnAssets', 0) * 100,
                 "Marjă Netă (%)": inf.get('profitMargins', 0) * 100,
                 "Datorii/Eq (%)": inf.get('debtToEquity', 0)
             })
@@ -3561,4 +3562,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
