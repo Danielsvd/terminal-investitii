@@ -1639,10 +1639,11 @@ def main():
             # Datele firmei curente
             my_pe = info.get('trailingPE', 0) or 0
             my_roe = (info.get('returnOnEquity', 0) or 0) * 100
+            my_roa = (info.get('returnOnAssets', 0) or 0) * 100
             my_margin = (info.get('profitMargins', 0) or 0) * 100
             
             # --- PASUL 1: CARDURILE DE STATUS (SUS) ---
-            c_p1, c_p2, c_p3 = st.columns(3)
+            c_p1, c_p2, c_p3, c_p4 = st.columns(4)
             
             with c_p1:
                 st.metric("P/E vs Sector", f"{my_pe:.1f}", 
@@ -1651,11 +1652,15 @@ def main():
             with c_p2:
                 st.metric("ROE vs Sector", f"{my_roe:.1f}%", 
                           f"{'🟢 Lider' if my_roe > 15 else '🟡 Mediu'}")
-                
+
             with c_p3:
-                # Cardul solicitat pentru Marja Netă
+                # Interpretare profesională pentru ROA (peste 5% e considerat bun)
+                roa_status = "💎 Excelent" if my_roa > 5 else "⚠️ Scăzut"
+                st.metric("ROA vs Sector", f"{my_roa:.1f}%", roa_status)
+            
+            with c_p4:
                 st.metric("Marjă Netă", f"{my_margin:.1f}%", 
-                          f"{'🚀 Eficient' if my_margin > 15 else '⚖️ Standard'}")
+                          f"{'🚀 Eficient' if my_margin > 15 else '⚖️ Standard'}")    
 
             st.write("") # Mic spațiu între carduri și tabel
 
