@@ -380,12 +380,13 @@ def get_peers_analysis(sector, industry, current_ticker):
     """Extrage competitori și include datoria pentru o analiză de risc."""
     peers_map = {
         "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META", "TSM", "QCOM"],
-        "Financial Services": ["JPM", "BAC", "GS", "WFC", "C"],
+        "Financial Services": ["JPM", "BAC", "GS", "WFC", "C", "V", "MS", "MA", "AXP", "SCHW"],
         "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "FSLR", "VST", "UUUU", "LEU", "CEG"],
         "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
-        "Aerospace & Defense": ["LMT", "RTX", "NOC", "BA", "GD"],
-        "Other Industrial Metals & Mining": ["RIO", "VALE", "BHP", "FCX", "NEM"], 
-        "Restaurants": ["MCD", "CMG", "SBUX"]
+        "Industrials": ["LMT", "RTX", "NOC", "BA", "GD", "MMM", "CAT", "DAL", "UAL"],
+        "Basic Materials": ["RIO", "VALE", "BHP", "FCX", "NEM", "AEM", "GLNCY", "USAR", "AREC", "LAC"],
+        "Consumer Defensive": ["WMT", "KO", "CL", "KHC", "PG", "SFD", "PEP", "PM"], 
+        "Consumer Cyclical": ["MCD", "CMG", "SBUX", "DPZ", "NKE", "RCL", "GM", "F"]
     }
     
     potential_peers = peers_map.get(sector, ["SPY", "QQQ", "DIA"])
@@ -3560,3 +3561,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
