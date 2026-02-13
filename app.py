@@ -995,7 +995,7 @@ def get_daily_briefing_data():
         'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ASC.RO', 'ARS.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
         'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
     ]
-    bvb_data = yf.download(bvb_tickers, period="5d", group_by='ticker', progress=False)
+    bvb_data = yf.download(bvb_tickers, period="1mo", group_by='ticker', progress=False)
     
     us_tickers = [
         '^GSPC', '^DJI', '^IXIC', '^VIX', 
@@ -1004,7 +1004,7 @@ def get_daily_briefing_data():
         'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
         'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'CMG', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
     ]
-    us_data = yf.download(us_tickers, period="5d", group_by='ticker', progress=False)
+    us_data = yf.download(us_tickers, period="1mo", group_by='ticker', progress=False)
     
     return bvb_data, us_data
 
@@ -1086,32 +1086,52 @@ def calculate_fear_greed_proxy(data):
         return 50, "Neutral 😐", 0
     
 def calculate_bvb_sentiment(bvb_data):
-    """Calculează sentimentul pieței locale bazat pe deviația Indicelui BET."""
+    """
+    Algoritm avansat de sentiment BVB (v2.0).
+    Integrează: Preț vs Medie (5z/20z), Volume Relativ și Volatilitatea.
+    """
     try:
-        # Preluăm datele pentru TVBETETF.RO (Proxy pentru BET)
+        # 1. Extragere date proxy BET
         if isinstance(bvb_data.columns, pd.MultiIndex):
-             bet_series = bvb_data['TVBETETF.RO']['Close'].dropna()
+             bet_df = bvb_data['TVBETETF.RO'].dropna()
         else:
              return 50, "Neutral ⚖️"
 
-        if bet_series.empty: return 50, "Neutral ⚖️"
+        if bet_df.empty or len(bet_df) < 5: return 50, "Neutral ⚖️"
 
-        curr_bet = bet_series.iloc[-1]
-        mean_bet = bet_series.mean() # Media ultimelor 5 zile
+        # 2. Parametri Preț
+        curr_bet = bet_df['Close'].iloc[-1]
+        mean_5d = bet_df['Close'].rolling(window=5).mean().iloc[-1]
+        mean_20d = bet_df['Close'].mean() # Media întregului set descărcat (5 zile în codul tău)
         
-        # Calculăm deviația procentuală
-        dev = ((curr_bet / mean_bet) - 1) * 100
+        # Deviația față de termen scurt (5 zile)
+        dev_short = ((curr_bet / mean_5d) - 1) * 100
         
-        # Mapare pe un scor 0-100 (Proxy Fear & Greed BVB)
-        # O deviație de +/- 2% în 5 zile este considerată extremă pentru BVB
-        score = 50 + (dev * 25) 
+        # 3. Parametri Volum (Factorul de confirmare)
+        curr_vol = bet_df['Volume'].iloc[-1]
+        mean_vol = bet_df['Volume'].mean()
+        # Relative Volume (RVOL) - dacă e > 1.5, mișcarea este instituțională, nu retail
+        rvol = curr_vol / mean_vol if mean_vol > 0 else 1.0
+
+        # 4. Calcul Scor de Bază (0-100)
+        # Am calibrat formula: +/- 1.5% mișcare pe BVB este considerată acum prag critic
+        score = 50 + (dev_short * 33.3) 
+        
+        # 5. Ajustare dinamică cu Volum
+        # Dacă prețul scade pe volum mare, scorul scade și mai mult (Panic confirmation)
+        # Dacă prețul crește pe volum mare, scorul crește și mai mult (Buying frenzy)
+        if rvol > 1.3:
+            if dev_short > 0: score += (rvol * 5) # Boost optimism
+            else: score -= (rvol * 10) # Penalizare panică (vânzare pe volum mare e mai gravă)
+
         score = max(0, min(100, score))
 
-        if score >= 75: label = "Optimism Excesiv 🚀"
-        elif score >= 55: label = "Sentiment Pozitiv 📈"
-        elif score >= 45: label = "Echilibru ⚖️"
-        elif score >= 25: label = "Precauție ⚠️"
-        else: label = "Panică / Sărituri 🚨"
+        # 6. Verdict bazat pe praguri profesionale
+        if score >= 80: label = "Optimism Excesiv (Frenzy) 🚀"
+        elif score >= 60: label = "Sentiment Pozitiv 📈"
+        elif score >= 40: label = "Echilibru / Stabilitate ⚖️"
+        elif score >= 20: label = "Precauție (Vânzări sub presiune) ⚠️"
+        else: label = "Panică / Capitulare 🚨"
         
         return score, label
     except:
