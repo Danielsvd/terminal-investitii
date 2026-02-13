@@ -1669,6 +1669,7 @@ def main():
                     st.dataframe(df_peers.style.format({
                         "P/E": "{:.2f}",
                         "ROE (%)": "{:.1f}%",
+                        "ROA (%)": "{:.1f}%",
                         "Marjă Netă (%)": "{:.1f}%",
                         "Datorii/Eq (%)": "{:.1f}%"
                     }), use_container_width=True, hide_index=True)
@@ -3562,5 +3563,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
