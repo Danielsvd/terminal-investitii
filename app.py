@@ -379,7 +379,7 @@ def get_watchlist_target(symbol):
 def get_peers_analysis(sector, industry, current_ticker):
     """Extrage competitori și include datoria pentru o analiză de risc."""
     peers_map = {
-         "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META", "TSM", "QCOM"],
+        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META", "TSM", "QCOM"],
         "Financial Services": ["JPM", "BAC", "GS", "WFC", "C", "V", "MS", "MA", "AXP", "SCHW"],
         "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "FSLR", "VST", "UUUU", "LEU", "CEG"],
         "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
@@ -2337,8 +2337,8 @@ def main():
                     st.dataframe(
                         df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
                         .format({
-                            'Quantity': '{:.4f}', 'AvgPrice': '{:.2f}', 'CurrentPrice': '{:.2f}',
-                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                            'Quantity': '{:.1f}', 'AvgPrice': '{:.4f}', 'CurrentPrice': '{:.4f}',
+                            'MarketValue': '{:,.4f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
                         }),
                         use_container_width=True
                     )        
@@ -3568,4 +3568,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
