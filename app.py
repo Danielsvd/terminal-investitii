@@ -158,8 +158,9 @@ RSS_CONFIG = {
         "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "Critical Matals", "Glencore", "USA Rare Earth", "MP Materials", "otel"],
         "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "cacao", "soia", "prime materials", "gas", "cafea", "culturi"],
         "Dobânzi": ["dobanda", "robor", "ircc", "interest", "inflation", "inflatie", "banci centrale", "FED", "BCE", "BNR"],
-        "Asia": ["BOJ", "Japonia", "China", "Taiwan", "Nikkei", "Topix", "Hang Seng", "banca japoniei", "guvernul japoniei", "Bank of China", "Shanghai Composite", "Bank of Japan", "Nifty", "Beijing", "yuan", "India", "yen", "KOSPI", "Nipah"],
-        "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "PPI", "PCE", "CPI", "PMI", "NFP", "HR", "munca", "forta de munca"]
+        "Imobiliare": ["Imp", "One", "ircc", "cladiri noi", "constructii noi", "materiale de constuctii", "Evergrande", "autorizatii de constructii", "credite imobiliare", "cladiri de birouri", "apartamente noi", "credite prima casa"],
+        "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "PPI", "PCE", "CPI", "PMI", "NFP", "HR", "munca", "forta de munca"],
+        "Asia": ["BOJ", "Japonia", "China", "Taiwan", "Nikkei", "Topix", "Hang Seng", "banca japoniei", "guvernul japoniei", "Bank of China", "Shanghai Composite", "Bank of Japan", "Nifty", "Beijing", "yuan", "India", "yen", "KOSPI", "Nipah"]
     }
 }
 
