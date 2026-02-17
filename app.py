@@ -2324,7 +2324,7 @@ def main():
                         )])
                         fig_sym.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_sym, use_container_width=True)
+                        st.plotly_chart(fig_sym, use_container_width=True, key=f"pie_sym_{currency_symbol}")
 
                 # 4. Detaliu Poziții
                 st.subheader("Detaliu Poziții")
@@ -2360,7 +2360,7 @@ def main():
                         )])
                         fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_sec, use_container_width=True)
+                        st.plotly_chart(fig_sec, use_container_width=True, key=f"pie_sec_{currency_symbol}")
 
                         # VERDICT DIVERSIFICARE
                         max_sector = df_sectors.iloc[0]
