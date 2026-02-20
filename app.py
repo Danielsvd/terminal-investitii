@@ -2098,17 +2098,59 @@ def main():
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
             st.subheader("🤖 Terminal Intelligence (AI & ML)")
+            # --- NOU: RADAR REGIM DE PIAȚĂ AI (K-Means) ---
+            with st.spinner("AI-ul clasifică regimul de piață..."):
+                from ai_engine import detect_market_regime_ai
+                regime_msg, regime_color = detect_market_regime_ai(hist)
+                
+                st.markdown(f"""
+                <div style='background:#161B22; padding:15px; border-radius:10px; border-left: 5px solid {regime_color}; margin-bottom: 20px;'>
+                    <p style='margin:0; color:#8B949E; font-size: 11px; text-transform: uppercase; font-weight: bold;'>Radar AI: Regimul Curent al Pieței (K-Means)</p>
+                    <h3 style='margin:5px 0 0 0; color:{regime_color}; font-size: 18px;'>{regime_msg}</h3>
+                </div>
+                """, unsafe_allow_html=True)
+                       
             c_news_ai = get_company_news_rss(real_sym)
             cai1, cai2 = st.columns([1, 2])
             
+            # --- PARTEA ACTUALIZATĂ (Scorul FinBERT cu Legendă) ---
             with cai1:
                 st.write("📊 **Analiză Sentiment (FinBERT)**")
                 if c_news_ai:
                     with st.spinner("AI-ul analizează contextul..."):
                         from ai_engine import analyze_sentiment_ai
                         s_score = analyze_sentiment_ai(c_news_ai)
-                        c_ai = "#3FB950" if s_score > 0.1 else "#F85149" if s_score < -0.1 else "#8B949E"
-                        st.markdown(f"<div style='background:#161B22; padding:20px; border-radius:15px; border:1px solid {c_ai}; text-align:center;'><h1 style='color:{c_ai}; margin:0;'>{s_score:.2f}</h1><p style='color:#8B949E;'>Sentiment Scor</p></div>", unsafe_allow_html=True)
+                        
+                        # Definim intervalele profesionale și etichetele
+                        if s_score >= 0.25:
+                            c_ai, status_text = "#3FB950", "🚀 Puternic Pozitiv"
+                        elif s_score > 0.05:
+                            c_ai, status_text = "#3FB950", "📈 Pozitiv (Bullish)"
+                        elif s_score <= -0.25:
+                            c_ai, status_text = "#F85149", "🚨 Puternic Negativ"
+                        elif s_score < -0.05:
+                            c_ai, status_text = "#F85149", "📉 Negativ (Bearish)"
+                        else:
+                            c_ai, status_text = "#8B949E", "⚖️ Neutru"
+
+                        # Randăm Cardul și Legenda explicativă
+                        st.markdown(f"""
+                        <div style='background:#161B22; padding:20px; border-radius:15px; border:1px solid {c_ai}; text-align:center;'>
+                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{s_score:.2f}</h1>
+                            <div style='color:{c_ai}; font-weight:bold; font-size:16px; margin-top:5px;'>{status_text}</div>
+                        </div>
+                        
+                        <div style='margin-top: 15px; padding: 15px; background: #21262D; border-radius: 10px; border-left: 3px solid #58A6FF;'>
+                            <p style='color:#8B949E; font-size: 11px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Ghid Intervale (Scală -1 la +1)</p>
+                            <div style='color:#C9D1D9; font-size: 13px; line-height: 1.6;'>
+                                <div><span style='color:#3FB950;'>■</span> <b>+0.25 la +1.00:</b> Euforie media</div>
+                                <div><span style='color:#3FB950; opacity: 0.7;'>■</span> <b>+0.05 la +0.24:</b> Optimism moderat</div>
+                                <div><span style='color:#8B949E;'>■</span> <b>-0.05 la +0.05:</b> Zgomot neutru</div>
+                                <div><span style='color:#F85149; opacity: 0.7;'>■</span> <b>-0.24 la -0.06:</b> Îngrijorare / Pesimism</div>
+                                <div><span style='color:#F85149;'>■</span> <b>-1.00 la -0.25:</b> Panică extremă</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
             
             with cai2:
                 st.write("📈 **Prognoză Algoritmică (Next 90 Days)**")
@@ -2165,6 +2207,37 @@ def main():
                 st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
 
             st.markdown("---")
+            
+            # ==================================================
+            # MODUL NOU: HARTA SEZONALITĂȚII
+            # ==================================================
+           
+            st.subheader("📅 Harta Sezonalității (Avantajul Statistic)")
+            from ai_engine import calculate_and_plot_seasonality
+            with st.spinner("Se analizează tiparele istorice lunare..."):
+                fig_season, df_stats = calculate_and_plot_seasonality(hist)
+                
+                if fig_season is not None:
+                    s_col1, s_col2 = st.columns([2, 1])
+                    with s_col1:
+                        st.plotly_chart(fig_season, use_container_width=True)
+                    
+                    with s_col2:
+                        # Extragem extremele pentru a oferi un verdict clar utilizatorului
+                        best_m = df_stats.loc[df_stats['Win Rate (%)'].idxmax()]
+                        worst_m = df_stats.loc[df_stats['Win Rate (%)'].idxmin()]
+                        
+                        st.markdown("#### 💡 Analiză Quant")
+                        st.success(f"**🌟 Cea mai bună lună: {best_m['Luna']}**\n\nIstoric, prețul a crescut în **{best_m['Win Rate (%)']:.0f}%** din cazuri, aducând un randament mediu de **+{best_m['Randament Mediu (%)']:.2f}%**.")
+                        
+                        st.error(f"**🚨 Cea mai slabă lună: {worst_m['Luna']}**\n\nIstoric, a avut o rată de succes de doar **{worst_m['Win Rate (%)']:.0f}%**, cu o scădere medie de **{worst_m['Randament Mediu (%)']:.2f}%**.")
+                        
+                        st.info("📉 **Cum folosești acest modul:** Elimină ghicitul și emoția. Dacă dorești să cumperi această acțiune, dar te afli într-o lună cu Win Rate sub 40%, șansele matematice sunt împotriva ta. Așteaptă luna verde pentru a deschide o poziție la un preț statistic favorabil.")
+                else:
+                    # Dacă df_stats este string, înseamnă că a returnat mesajul de eroare
+                    st.info(df_stats)
+            st.markdown("---")
+            
             # 7. Ultimele Știri (RESTABILITE)
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
             if c_news_ai:
@@ -2177,7 +2250,7 @@ def main():
                     with c_i:
                         st.markdown(f"<span class='{css_cls}'>{icon} {sentiment}</span>", unsafe_allow_html=True)
                     st.divider()
-                    
+                                
     # ==================================================
     # 3. PORTOFOLIU (MODIFICAT PENTRU MOBIL)
     # ==================================================
@@ -2382,7 +2455,86 @@ def main():
                 else:
                     st.info("Adaugă cel puțin 2 active pentru analiză.")
                 
-                st.markdown("<br>", unsafe_allow_html=True) 
+                st.markdown("<br>", unsafe_allow_html=True)
+                # =======================================================
+                # MODUL NOU: OPTIMIZARE PORTOFOLIU AI (MARKOWITZ)
+                # =======================================================
+                st.markdown("---")
+                st.subheader("🧠 Optimizator Portofoliu AI (Markowitz)")
+                st.markdown("Inteligența artificială analizează corelațiile și volatilitatea istorică pentru a găsi alocarea matematic perfectă (risc minim, profit maxim).")
+
+                if len(current_tickers) >= 2:
+                    with st.spinner("Motorul Quant calculează Frontiera Eficientă..."):
+                        # 1. Descărcăm prețurile de închidere curate pentru acțiunile tale
+                        hist_opt = yf.download(current_tickers, period="1y", progress=False)['Close']
+                        
+                        # 2. Trimitem datele la creierul AI
+                        from ai_engine import optimize_portfolio_ai
+                        opt_res, opt_msg = optimize_portfolio_ai(hist_opt)
+
+                        if opt_res:
+                            # Calculăm ponderile actuale din portofoliul tău
+                            total_val = df_calc['MarketValue'].sum()
+                            current_w = (df_calc.groupby('Symbol')['MarketValue'].sum() / total_val * 100).to_dict()
+
+                            # Creăm un tabel pentru a compara Ce ai TU vs Ce zice AI-ul
+                            comp_data = []
+                            for sym in current_tickers:
+                                comp_data.append({
+                                    "Simbol": sym,
+                                    "Pondere Actuală (%)": current_w.get(sym, 0),
+                                    "Pondere Optimă AI (%)": opt_res['allocation'].get(sym, 0)
+                                })
+                            df_comp = pd.DataFrame(comp_data)
+
+                            # 3. Desenăm Graficul Comparativ Profesional
+                            fig_opt = go.Figure()
+                            
+                            # Bara pentru Alocarea Ta
+                            fig_opt.add_trace(go.Bar(
+                                x=df_comp['Simbol'], 
+                                y=df_comp['Pondere Actuală (%)'], 
+                                name='Alocarea Ta', 
+                                marker_color='#8B949E',
+                                texttemplate='%{y:.1f}%',      # Scrie procentul pe bară
+                                textposition='auto',           # Îl așează automat (sus sau în interior)
+                                hovertemplate="<b>%{x}</b> (Acum): %{y:.2f}%<extra></extra>" # Formatare hover
+                            ))
+                            
+                            # Bara pentru Sugestia AI
+                            fig_opt.add_trace(go.Bar(
+                                x=df_comp['Simbol'], 
+                                y=df_comp['Pondere Optimă AI (%)'], 
+                                name='Sugestia AI', 
+                                marker_color='#3FB950',
+                                texttemplate='%{y:.1f}%',      # Scrie procentul pe bară
+                                textposition='auto',
+                                hovertemplate="<b>%{x}</b> (Optim AI): %{y:.2f}%<extra></extra>" # Formatare hover
+                            ))
+                            
+                            fig_opt.update_layout(
+                                barmode='group', 
+                                template="plotly_dark", 
+                                height=400, 
+                                paper_bgcolor='rgba(0,0,0,0)', 
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                yaxis=dict(ticksuffix="%"),    # Adaugă % pe axa verticală (Y)
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                            )
+                            st.plotly_chart(fig_opt, use_container_width=True, key=f"opt_bar_{currency_symbol}")
+
+                            # 4. Afișăm Metricele Portofoliului Ideal
+                            st.markdown("##### 🏆 Cum ar arăta Portofoliul Ideal (Conform AI):")
+                            c_op1, c_opt2, c_opt3 = st.columns(3)
+                            c_op1.metric("Randament Anual Așteptat", f"{opt_res['expected_return']:.2f}%")
+                            c_opt2.metric("Volatilitate (Risc)", f"{opt_res['expected_volatility']:.2f}%")
+                            c_opt3.metric("Sharpe Ratio Optim", f"{opt_res['sharpe_ratio']:.2f}")
+
+                            st.info("💡 **Strategie Quant:** Barele verzi îți arată unde ar trebui să muți banii. Algoritmul îți sugerează să crești expunerea pe activele cu randament stabil și să o reduci pe cele care aduc doar 'zgomot' (volatilitate inutilă).")
+                        else:
+                            st.warning(opt_msg)
+                else:
+                    st.info("Adaugă cel puțin 2 acțiuni în portofoliu pentru ca AI-ul să poată calcula diversificarea optimă.") 
 
             with tab_usd:
                 df_usd = df_pf[df_pf['Currency'] == 'USD']
@@ -2395,7 +2547,7 @@ def main():
             with tab_ron:
                 df_ron = df_pf[df_pf['Currency'] == 'RON']
                 # Folosim simbolul monedei locale
-                render_portfolio_tab(df_ron, "RON")    
+                render_portfolio_tab(df_ron, "RON")      
 
             # Butonul de reset nu poate șterge datele din Google Drive, doar le ignoră temporar
             # Așa că l-am comentat sau ar trebui scos, deoarece gestionarea datelor se face acum în Sheets.
@@ -2403,7 +2555,7 @@ def main():
             # if st.button("⚠️ Șterge TOT Portofoliul (Reset)"):
             #     os.remove(FILE_PORTOFOLIU)
             #     st.rerun()
-
+        
     # ==================================================
     # 4. PIAȚĂ GLOBALĂ (CU DASHBOARD MACRO - DUAL METRICS)
     # ==================================================
@@ -3326,11 +3478,12 @@ def main():
             ]
         }
         
-        # Funcție internă de calcul RVOL
+        # Funcție internă de calcul RVOL + AI Isolation Forest
         def get_rvol_data(ticker_list):
+            from ai_engine import detect_volume_anomaly_ai # Importăm funcția nouă AI
             try:
-                # Descărcăm date pe 2 luni pentru a avea o medie solidă
-                data = yf.download(ticker_list, period="2mo", group_by='ticker', progress=False)
+                # Descărcăm date pe 3 luni pentru a avea destul istoric de "învățare" pt ML
+                data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False)
                 results = []
                 
                 for t in ticker_list:
@@ -3340,43 +3493,39 @@ def main():
                             if t not in data.columns.levels[0]: continue
                             df_t = data[t]
                         else:
-                            df_t = data # Cazul unui singur ticker (rar aici)
+                            df_t = data
                         
-                        # Avem nevoie de Volum și Close
                         vol = df_t['Volume'].dropna()
                         close = df_t['Close'].dropna()
                         
-                        if len(vol) < 25: continue # Nu avem destule date
+                        if len(vol) < 25: continue 
                         
-                        # 1. Volumul de AZI
+                        # Calcule clasice matematice
                         curr_vol = vol.iloc[-1]
-                        
-                        # 2. Media pe ultimele 20 zile (fără azi)
                         avg_vol_20 = vol.iloc[-21:-1].mean()
+                        if avg_vol_20 < 5000: continue # Ignorăm acțiunile nelichide
                         
-                        # FILTRU ZGOMOT: Ignorăm dacă media e sub 5000 unități
-                        if avg_vol_20 < 5000: continue
-                        
-                        # 3. Calcul RVOL
                         rvol = curr_vol / avg_vol_20
                         
-                        # 4. Calcul Variație Preț
                         curr_p = close.iloc[-1]
                         prev_p = close.iloc[-2]
                         change_pct = ((curr_p - prev_p) / prev_p) * 100
                         
+                        # --- MAGIA AI: Interogăm modelul Isolation Forest ---
+                        is_anomaly = detect_volume_anomaly_ai(df_t)
+                        
                         results.append({
-                "Simbol": t.replace('.RO', ''),
-                "Preț": curr_p,
-                "Variație %": change_pct,
-                "Volum Azi": curr_vol,
-                "Volum Mediu (20z)": avg_vol_20,
-                "RVOL": rvol,
-                # --- NOU: Clasificare profesională (Corectată) ---
-                "Status": "🚀 BREAKOUT" if (rvol > 2.0 and change_pct > 1.5) 
-                         else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
-                         else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
-            }) # Linia 2071 acum închide corect dicționarul și append-ul
+                            "Simbol": t.replace('.RO', ''),
+                            "Preț": curr_p,
+                            "Variație %": change_pct,
+                            "Volum Azi": curr_vol,
+                            "Volum Mediu (20z)": avg_vol_20,
+                            "RVOL": rvol,
+                            "Alertă AI": "🚨 ANOMALIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
+                            "Status": "🚀 BREAKOUT" if (rvol > 2.0 and change_pct > 1.5) 
+                                     else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
+                                     else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
+                        })
                     except: continue
                     
                 return pd.DataFrame(results)
@@ -3409,18 +3558,24 @@ def main():
                     df_filtered = df_filtered.sort_values(by="RVOL", ascending=False)
                     
                     if not df_filtered.empty:
-                        # --- FUNCȚIE DE COLORARE PROFESIONALĂ (MODIFICATĂ) ---
+                        # --- FUNCȚIE DE COLORARE PROFESIONALĂ (ACTUALIZATĂ CU AI) ---
                         def style_scanner_rows(row):
+                            # Setăm culoarea de bază a rândului
                             if "BREAKOUT" in row['Status']:
-                                # Verde aprins pentru oportunități imediate
-                                return ['background-color: rgba(63, 185, 80, 0.4); font-weight: bold'] * len(row)
+                                styles = ['background-color: rgba(63, 185, 80, 0.3); font-weight: bold'] * len(row)
                             elif "ACUMULARE" in row['Status']:
-                                # Verde pal pentru acumulare discretă
-                                return ['background-color: rgba(63, 185, 80, 0.15)'] * len(row)
+                                styles = ['background-color: rgba(63, 185, 80, 0.1)'] * len(row)
                             elif "PANIC" in row['Status']:
-                                # Roșu pentru vânzare masivă
-                                return ['background-color: rgba(248, 81, 73, 0.25)'] * len(row)
-                            return [''] * len(row)
+                                styles = ['background-color: rgba(248, 81, 73, 0.2)'] * len(row)
+                            else:
+                                styles = [''] * len(row)
+                                
+                            # Evidențiem DOAR coloana de AI dacă e anomalie (O colorăm diferit, gen Wall Street Alert)
+                            if "ANOMALIE" in str(row['Alertă AI']):
+                                idx = row.index.get_loc('Alertă AI')
+                                styles[idx] += '; color: #FFAB00; font-weight: bold; background-color: rgba(255, 171, 0, 0.2); border: 1px solid #FFAB00;'
+                                
+                            return styles
 
                         # --- AFIȘARE TABEL FĂRĂ INDEX ȘI CU STIL ---
                         st.success(f"Găsit: {len(df_filtered)} companii cu volum neobișnuit în {market_choice}.")
