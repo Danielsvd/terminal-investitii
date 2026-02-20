@@ -16,3 +16,5 @@ transformers
 torch
 scipy
 numpy
+scikit-learn
+
