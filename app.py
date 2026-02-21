@@ -155,7 +155,7 @@ RSS_CONFIG = {
         "Auto": ["auto", "masini", "ev", "electric", "dacia", "ford", "tesla", "volkswagen", "bmw", "mercedes", "byd", "xpeng", "nio", "toyota", "audi", "ferrari", "inmatriculari", "autostrada"],
         "Asia": ["asia", "china", "japonia", "tokyo", "beijing", "shanghai", "hong kong", "taiwan", "india", "seul", "coreea", "nikkei", "yen", "yuan", "rupee", "boj", "evergrande", "alibaba", "tencent", "tsmc", "nifty", "hang seng"],
         "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "otel", "minereu", "rio tinto", "bhp", "METC", "glencore", "mp materials"],
-        "Macro/Joburi": ["inflatie", "cpi", "pce", "fed", "bce", "robor", "ircc", "bnr", "somaj", "jobs", "angajari", "salarii", "pib", "gdp", "pmi", "recesiune", "dobanzi", "economie"]
+        "Macro/Joburi": ["inflatie", "cpi", "pce", "fed", "bce", "robor", "ircc", "bnr", "somaj", "jobs", "angajari", "salarii", "pib", "tarif", "gdp", "pmi", "recesiune", "dobanzi", "economie"]
     }
 }
 
@@ -1506,6 +1506,82 @@ def get_cross_asset_correlation():
     except Exception as e:
         print(f"Eroare Cross-Asset: {e}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_index_technical_levels(symbol):
+    """Calculează nivelurile critice (SMA 50, SMA 200) pentru un indice."""
+    try:
+        # Descărcăm 1 an de date pentru a avea destule zile pentru SMA 200
+        df = yf.download(symbol, period="1y", progress=False)['Close']
+        if isinstance(df, pd.DataFrame):
+            df = df.iloc[:, 0]
+            
+        df = df.dropna()
+        if len(df) < 200: return None # Nu avem destule date
+        
+        curr_price = df.iloc[-1]
+        sma_50 = df.rolling(window=50).mean().iloc[-1]
+        sma_200 = df.rolling(window=200).mean().iloc[-1]
+        
+        # Calculăm distanța procentuală
+        dist_50 = ((curr_price - sma_50) / sma_50) * 100
+        dist_200 = ((curr_price - sma_200) / sma_200) * 100
+        
+        return {
+            "price": curr_price,
+            "sma50": sma_50,
+            "sma200": sma_200,
+            "dist50": dist_50,
+            "dist200": dist_200
+        }
+    except:
+        return None
+
+def calculate_market_breadth(data, tickers):
+    """Calculează Lățimea Pieței (Avans vs Declin)"""
+    adv, dec, flat = 0, 0, 0
+    for t in tickers:
+        # Ignorăm indicii majori (ca să numărăm doar companiile)
+        if t.startswith('^') or t == 'TVBETETF.RO': continue 
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                if t not in data.columns.levels[0]: continue
+                series = data[t]['Close'].dropna()
+            else:
+                series = data['Close'].dropna()
+            
+            if len(series) >= 2:
+                change = series.iloc[-1] - series.iloc[-2]
+                if change > 0.001: adv += 1
+                elif change < -0.001: dec += 1
+                else: flat += 1
+        except: continue
+    
+    total = adv + dec + flat
+    if total == 0: return 0, 0, 0, 0, 0, 0
+    return adv, dec, flat, (adv/total*100), (dec/total*100), (flat/total*100)
+
+@st.cache_data(ttl=3600)
+def get_volume_analysis(symbol):
+    """Calculează intensitatea volumului față de media de 20 de zile."""
+    try:
+        t = yf.Ticker(symbol)
+        # Avem nevoie de 1 lună de date pentru o medie mobilă de 20 de zile
+        df = t.history(period="1mo")
+        if df.empty or len(df) < 20: return None
+        
+        curr_vol = df['Volume'].iloc[-1]
+        avg_vol = df['Volume'].rolling(window=20).mean().iloc[-1]
+        
+        # Intensitatea (Raportul)
+        intensity = curr_vol / avg_vol
+        return {
+            "current": curr_vol,
+            "average": avg_vol,
+            "intensity": intensity
+        }
+    except:
+        return None
 
 # --- MAIN APP ---
 def main():
@@ -3754,6 +3830,117 @@ def main():
                 bvb_analysis_tickers = []
 
             gainers, losers, vol_leaders = get_bvb_stats(bvb_data, bvb_analysis_tickers)
+            st.markdown("---")
+            # =========================================================
+            # NOU: MARKET BREADTH BVB
+            # =========================================================
+            st.markdown("#### ⚖️ Sănătatea Pieței (Market Breadth)")
+            adv_b, dec_b, flat_b, adv_pb, dec_pb, flat_pb = calculate_market_breadth(bvb_data, bvb_analysis_tickers)
+            
+            if (adv_b + dec_b + flat_b) > 0:
+                st.markdown(f"""
+                <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
+                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_b} ({adv_pb:.1f}%)</span>
+                    <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_b}</span>
+                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_b} ({dec_pb:.1f}%)</span>
+                </div>
+                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
+                    <div style="width: {adv_pb}%; background-color: #3FB950;"></div>
+                    <div style="width: {flat_pb}%; background-color: #8B949E;"></div>
+                    <div style="width: {dec_pb}%; background-color: #F85149;"></div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Verdict Pro Automat
+                if adv_b > dec_b * 1.5:
+                    st.caption("✅ **Raliu Sănătos:** Creșterea pieței este susținută de majoritatea companiilor (Participare largă).")
+                elif dec_b > adv_b * 1.5:
+                    st.caption("🚨 **Vânzare Generalizată:** Scăderile nu sunt izolate, presiunea acoperă tot spectrul.")
+                else:
+                    st.caption("🔄 **Piață Mixtă:** Echilibru. Banii se mută selectiv dintr-o acțiune în alta.")
+            st.write("") # Spațiu
+            st.markdown("---")
+            # =========================================================
+            # NOU: NIVELE TEHNICE CRITICE (BVB)
+            # =========================================================
+            st.markdown("#### 🎯 Nivele Tehnice Critice (Trend Macro)")
+            with st.spinner("Calculăm mediile mobile..."):
+                tech_bvb = get_index_technical_levels('TVBETETF.RO')
+                
+            if tech_bvb:
+                c50 = "#3FB950" if tech_bvb['dist50'] > 0 else "#F85149"
+                c200 = "#3FB950" if tech_bvb['dist200'] > 0 else "#F85149"
+                
+                # Diagnoza Trendului
+                if tech_bvb['dist50'] > 0 and tech_bvb['dist200'] > 0:
+                    regime_msg = "🟢 **BULL MARKET:** Prețul este deasupra mediilor majore. Trend ascendent confirmat."
+                elif tech_bvb['dist50'] < 0 and tech_bvb['dist200'] < 0:
+                    regime_msg = "🔴 **BEAR MARKET:** Prețul a spart suporturile majore. Presiune de vânzare activă."
+                else:
+                    regime_msg = "🟡 **ZONĂ DE TRANZIȚIE:** Prețul este prins între SMA 50 și SMA 200. Indecizie majoră."
+                
+                # Golden / Death Cross
+                cross_msg = "✨ *Golden Cross activ* (SMA 50 este deasupra SMA 200)" if tech_bvb['sma50'] > tech_bvb['sma200'] else "☠️ *Death Cross activ* (SMA 50 a picat sub SMA 200)"
+
+                st.markdown(f"""
+                <div style="display:flex; gap:15px; margin-bottom: 10px;">
+                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
+                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
+                        <div style="font-size:24px; font-weight:bold; color:{c50};">{tech_bvb['dist50']:+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_bvb['sma50']:.2f}</b></div>
+                    </div>
+                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
+                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
+                        <div style="font-size:24px; font-weight:bold; color:{c200};">{tech_bvb['dist200']:+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_bvb['sma200']:.2f}</b></div>
+                    </div>
+                </div>
+                <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_bvb['dist200'] > 0 else '#F85149'};">
+                    {regime_msg} <br> <span style="color:#8B949E; font-size:12px;">{cross_msg}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("Date tehnice indisponibile pentru acest indice.")
+            st.markdown("---")
+            
+            # =========================================================
+            # NOU: INTENSITATE VOLUM (BVB)
+            # =========================================================
+            st.markdown("#### 🔊 Intensitatea Tranzacționării (Volume)")
+            vol_bvb = get_volume_analysis('TVBETETF.RO')
+            
+            if vol_bvb:
+                v_int = vol_bvb['intensity']
+                # Culori în funcție de intensitate
+                v_color = "#3FB950" if v_int > 1.2 else ("#D29922" if v_int > 0.8 else "#8B949E")
+                v_label = "ACTIVITATE RIDICATĂ" if v_int > 1.2 else ("NORMAL" if v_int > 0.8 else "LICHIDITATE SCĂZUTĂ")
+                
+                # Formula intensității: $I = \frac{V_{current}}{V_{average}}$
+                st.markdown(f"""
+                <div style="background:#161B22; padding:20px; border-radius:12px; border-top: 4px solid {v_color};">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volum vs Media 20z</div>
+                            <div style="font-size:28px; font-weight:bold; color:white;">{v_int:.2f}x</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <span style="background:{v_color}22; color:{v_color}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
+                                {v_label}
+                            </span>
+                        </div>
+                    </div>
+                    <div style="margin-top:15px; background:#30363D; height:8px; border-radius:4px; overflow:hidden;">
+                        <div style="width:{min(v_int*50, 100)}%; background:{v_color}; height:100%;"></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if v_int > 1.5:
+                    st.caption("🔥 **Alertă:** Volum neobișnuit de mare. Instituțiile fac mutări importante în piața locală.")
+                elif v_int < 0.6:
+                    st.caption("💤 **Atenție:** Piață „adormită”. Mișcările de preț pot fi cauzate de ordine mici de retail.")
+            # =========================================================
+            st.markdown("---")
             
             # 2. Top Movers (5 companii)
             col_mov1, col_mov2 = st.columns(2)
@@ -3914,7 +4101,120 @@ def main():
             us_analysis_tickers = [t for t in all_us_tickers if not t.startswith('^')]
             
             us_gainers, us_losers, us_vol = get_bvb_stats(us_data, us_analysis_tickers)
+            st.markdown("---")
             
+            # =========================================================
+            # NOU: MARKET BREADTH SUA
+            # =========================================================
+            st.markdown("#### ⚖️ Sănătatea Pieței (Market Breadth)")
+            adv_u, dec_u, flat_u, adv_pu, dec_pu, flat_pu = calculate_market_breadth(us_data, us_analysis_tickers)
+            
+            if (adv_u + dec_u + flat_u) > 0:
+                st.markdown(f"""
+                <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
+                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_u} ({adv_pu:.1f}%)</span>
+                    <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_u}</span>
+                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_u} ({dec_pu:.1f}%)</span>
+                </div>
+                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
+                    <div style="width: {adv_pu}%; background-color: #3FB950;"></div>
+                    <div style="width: {flat_pu}%; background-color: #8B949E;"></div>
+                    <div style="width: {dec_pu}%; background-color: #F85149;"></div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Verdict Pro Automat (Corelare cu indicii)
+                if adv_u > dec_u * 1.5 and sp500_chg > 0:
+                    st.caption("✅ **Breakout Confirmat:** Indicele S&P urcă și o face tragând majoritatea acțiunilor cu el.")
+                elif dec_u > adv_u * 1.5 and sp500_chg > 0:
+                    st.caption("⚠️ **Divergență Periculoasă (Mega-Cap Illusion):** S&P crește doar datorită a 2-3 giganți (ex: Nvidia, Apple). Restul pieței de fapt scade!")
+                elif dec_u > adv_u * 1.5:
+                    st.caption("🚨 **Bearish Breadth:** Scădere severă, instituțiile vând la nivel generalizat.")
+                else:
+                    st.caption("🔄 **Rotație Sectorială:** Volumele sunt împărțite în mod egal între câștigători și perdanți.")
+            st.write("") # Spațiu
+            st.markdown("---")
+            
+            # =========================================================
+            # NOU: NIVELE TEHNICE CRITICE (SUA - S&P 500)
+            # =========================================================
+            st.markdown("#### 🎯 Nivele Tehnice Critice (Trend Macro S&P 500)")
+            with st.spinner("Calculăm mediile mobile S&P 500..."):
+                tech_us = get_index_technical_levels('^GSPC')
+                
+            if tech_us:
+                c50_u = "#3FB950" if tech_us['dist50'] > 0 else "#F85149"
+                c200_u = "#3FB950" if tech_us['dist200'] > 0 else "#F85149"
+                
+                if tech_us['dist50'] > 0 and tech_us['dist200'] > 0:
+                    regime_us = "🟢 **BULL MARKET:** Trend lung intact. Scăderile spre SMA 50 sunt văzute ca oportunități de cumpărare ('Buy the dip')."
+                elif tech_us['dist50'] < 0 and tech_us['dist200'] < 0:
+                    regime_us = "🔴 **BEAR MARKET:** Teritoriul urșilor. Orice creștere este considerată o capcană ('Dead cat bounce')."
+                else:
+                    regime_us = "🟡 **ZONĂ DE CONSOLIDARE:** Luptă critică la nivelul mediilor mobile. Așteaptă confirmarea spargerii."
+                
+                cross_us = "✨ *Golden Cross activ* (Piață în expansiune lungă)" if tech_us['sma50'] > tech_us['sma200'] else "☠️ *Death Cross activ* (Risc de recesiune a pieței)"
+
+                st.markdown(f"""
+                <div style="display:flex; gap:15px; margin-bottom: 10px;">
+                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
+                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
+                        <div style="font-size:24px; font-weight:bold; color:{c50_u};">{tech_us['dist50']:+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_us['sma50']:,.2f}</b></div>
+                    </div>
+                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
+                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
+                        <div style="font-size:24px; font-weight:bold; color:{c200_u};">{tech_us['dist200']:+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_us['sma200']:,.2f}</b></div>
+                    </div>
+                </div>
+                <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_us['dist200'] > 0 else '#F85149'};">
+                    {regime_us} <br> <span style="color:#8B949E; font-size:12px;">{cross_us}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("Date tehnice indisponibile pentru S&P 500.")
+            st.markdown("---")
+            
+            # =========================================================
+            # NOU: INTENSITATE VOLUM (SUA)
+            # =========================================================
+            st.markdown("#### 🔊 Intensitatea Tranzacționării (S&P 500)")
+            vol_us = get_volume_analysis('^GSPC')
+            
+            if vol_us:
+                v_int_u = vol_us['intensity']
+                v_color_u = "#3FB950" if v_int_u > 1.2 else ("#D29922" if v_int_u > 0.8 else "#8B949E")
+                v_label_u = "CONVINGERE TARE" if v_int_u > 1.2 else ("STABIL" if v_int_u > 0.8 else "FĂRĂ CONVINGERE")
+                
+                st.markdown(f"""
+                <div style="background:#161B22; padding:20px; border-radius:12px; border-top: 4px solid {v_color_u};">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volume Intensity Index</div>
+                            <div style="font-size:28px; font-weight:bold; color:white;">{v_int_u:.2f}x</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <span style="background:{v_color_u}22; color:{v_color_u}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
+                                {v_label_u}
+                            </span>
+                        </div>
+                    </div>
+                    <div style="margin-top:15px; background:#30363D; height:8px; border-radius:4px; overflow:hidden;">
+                        <div style="width:{min(v_int_u*50, 100)}%; background:{v_color_u}; height:100%;"></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if v_int_u > 1.2 and sp500_chg > 0:
+                    st.caption("🚀 **Bullish Confirmation:** Creșterea este susținută de volume mari. Trendul are „combustibil” instituțional.")
+                elif v_int_u > 1.2 and sp500_chg < 0:
+                    st.caption("🚨 **Heavy Distribution:** Se vinde masiv pe volume mari. Pericol de continuare a scăderii.")
+                elif v_int_u < 0.7:
+                    st.caption("⚠️ **Low Conviction:** Volum sub medie. Mișcarea zilei nu este confirmată de jucătorii mari.")
+            st.markdown("---")
+            # =========================================================
+
             c_us1, c_us2 = st.columns(2)
             with c_us1:
                 st.markdown("**🚀 Top Creșteri (Big Caps)**")
