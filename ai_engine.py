@@ -8,6 +8,7 @@ from sklearn.cluster import KMeans
 from plotly.subplots import make_subplots
 from scipy.optimize import minimize
 from sklearn.ensemble import IsolationForest
+import yfinance as yf
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
@@ -408,4 +409,283 @@ def calculate_and_plot_seasonality(hist_data):
         
         return fig, df_stats
     except Exception as e:
-        return None, f"Eroare procesare sezonalitate: {e}"            
+        return None, f"Eroare procesare sezonalitate: {e}"
+
+def get_options_analysis_ai(ticker_sym):
+    """
+    Analiză cantitativă PRO a pieței de opțiuni.
+    Extrage OI, Volume, IV și calculează Max Pain + Stare IV.
+    """
+    try:
+        t = yf.Ticker(ticker_sym)
+        expirations = t.options
+        if not expirations:
+            return None, "Nu există date despre opțiuni."
+            
+        target_exp = expirations[0] 
+        opts = t.option_chain(target_exp)
+        calls, puts = opts.calls, opts.puts
+        
+        # 1. Calcule Put/Call
+        total_call_oi = calls['openInterest'].sum()
+        total_put_oi = puts['openInterest'].sum()
+        oi_pc_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 0
+        
+        total_call_vol = calls['volume'].sum()
+        total_put_vol = puts['volume'].sum()
+        vol_pc_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else 0
+        
+        # 2. Volatilitate Implicită (IV) medie
+        avg_iv = (calls['impliedVolatility'].mean() + puts['impliedVolatility'].mean()) / 2
+        iv_val = avg_iv * 100
+        
+        # Determinăm "starea" IV pentru vitezometru
+        # Praguri standard: <20% Mic (Ieftin), 20-45% Mediu, >45% Mare (Scump)
+        if iv_val < 20:
+            iv_status = "IEFTIN"
+            iv_color = "#3FB950"
+        elif iv_val < 45:
+            iv_status = "MODERAT"
+            iv_color = "#D29922"
+        else:
+            iv_status = "SCUMP"
+            iv_color = "#F85149"
+        
+        # 3. Calcul MAX PAIN
+        all_strikes = sorted(list(set(calls['strike']).union(set(puts['strike']))))
+        def calculate_pain(strike):
+            c_loss = ((strike - calls[calls['strike'] < strike]['strike']) * calls[calls['strike'] < strike]['openInterest']).sum()
+            p_loss = ((puts[puts['strike'] > strike]['strike'] - strike) * puts[puts['strike'] > strike]['openInterest']).sum()
+            return c_loss + p_loss
+        
+        pain_values = [calculate_pain(s) for s in all_strikes]
+        max_pain_price = all_strikes[pain_values.index(min(pain_values))]
+        
+        return {
+            "expiration": target_exp,
+            "oi_pc_ratio": oi_pc_ratio,
+            "vol_pc_ratio": vol_pc_ratio,
+            "max_pain": max_pain_price,
+            "iv": iv_val,
+            "iv_status": iv_status,
+            "iv_color": iv_color,
+            "total_calls": total_call_oi,
+            "total_puts": total_put_oi
+        }, "Succes"
+    except Exception as e:
+        return None, f"Eroare: {str(e)}"
+
+def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_score, opt_data, spread, z_score, q_ratio, regime_msg):
+    """
+    Sistem de Decizie Multicriterial (10 Piloni).
+    Punctaj maxim 100. Include penalizări drastice (Red Flags) pentru a preveni 'capcanele valorii'.
+    """
+    score = 0
+    reasons = []
+
+    # 1. EVALUARE (DCF Margin of Safety) - MAX 20 puncte
+    if mos_val > 25:
+        score += 20
+        reasons.append("✅ **Subevaluare Masivă:** Discount excelent față de valoarea intrinsecă (Model DCF).")
+    elif mos_val > 5:
+        score += 10
+        reasons.append("✅ **Preț Corect:** Acțiunea se tranzacționează în limite rezonabile de evaluare.")
+    elif mos_val < -15:
+        score += 0
+        reasons.append("🚨 **Supraevaluare Critică:** Prețul este nejustificat de mare matematic. Premium periculos.")
+    else:
+        score += 5
+        reasons.append("⚖️ **Evaluare Neutră:** Fără marjă de siguranță clară împotriva erorilor.")
+
+    # 2. SĂNĂTATE FINANCIARĂ & FALIMENT (Max 15 puncte)
+    if h_score >= 8:
+        score += 15
+        reasons.append(f"✅ **Bilanț Fortăreață:** Scor de sănătate extrem de solid ({h_score}/10).")
+    elif h_score >= 5:
+        score += 7
+        reasons.append(f"⚖️ **Bilanț Mediu:** Datorii și lichiditate în limite acceptabile ({h_score}/10).")
+    else:
+        reasons.append(f"🚨 **Risc de Bilanț:** Sănătate financiară precară, grad de îndatorare mare ({h_score}/10).")
+        
+    if z_score < 1.8:
+        score -= 20 # Penalizare fatală
+        reasons.append("🚨 **ALERTĂ ALTMAN Z:** Risc statistic sever de faliment sau restructurare în următorii 2 ani!")
+
+    # 3. CALITATEA PROFITULUI (Cash-Flow) (Max 10 puncte)
+    if q_ratio > 1.0:
+        score += 10
+        reasons.append("✅ **Cash Machine:** Compania generează mai mult cash real (în bancă) decât profit contabil.")
+    elif q_ratio > 0.7:
+        score += 5
+        reasons.append("✅ **Profit Calitativ:** Fluxurile de numerar susțin bine câștigurile raportate.")
+    else:
+        score -= 10 # Penalizare
+        reasons.append("⚠️ **Profit pe Hârtie:** Firma raportează profit, dar nu încasează cash. Risc de contabilitate creativă.")
+
+    # 4. SMART MONEY & VOLUM (Max 15 puncte)
+    if inst_pct > 60:
+        score += 10
+        reasons.append(f"✅ **Dominare Instituțională:** Balenele dețin {inst_pct:.0f}%, oferind stabilitate prețului.")
+    elif inst_pct < 30:
+        reasons.append(f"⚠️ **Lipsă Instituții:** Doar {inst_pct:.0f}% la fonduri. Preț expus la speculă de retail.")
+    else:
+        score += 5
+        
+    if rvol > 1.3:
+        score += 5
+        reasons.append("✅ **Momentum de Volum:** Activitate anormal de mare recent. Banii inteligenți se mișcă.")
+
+    # 5. PIAȚA DE OPȚIUNI & IV (Max 15 puncte)
+    if opt_data:
+        oi_pc = opt_data.get('oi_pc_ratio', 1)
+        iv = opt_data.get('iv', 50)
+        
+        if oi_pc < 0.7:
+            score += 10
+            reasons.append("✅ **Opțiuni Bullish:** Market Makerii văd pariuri masive pe creștere.")
+        elif oi_pc > 1.1:
+            score -= 10
+            reasons.append("🚨 **Frică în Opțiuni:** Număr disproporționat de contracte Put. Se așteaptă o cădere.")
+        else:
+            score += 5
+            
+        if iv < 30:
+            score += 5
+            reasons.append(f"✅ **Volatilitate (IV) Scăzută:** Primele de asigurare sunt ieftine ({iv:.1f}%).")
+        elif iv > 50:
+            score -= 10 # Penalizare
+            reasons.append(f"⚠️ **IV Extem ({iv:.1f}%):** Opțiunile sunt foarte scumpe. Piața așteaptă șocuri de preț.")
+
+    # 6. SENTIMENT NLP (Max 10 puncte)
+    if s_score > 0.15:
+        score += 10
+        reasons.append("✅ **Sentiment Media AI:** Știrile procesate de FinBERT sunt clar optimiste.")
+    elif s_score < -0.15:
+        score -= 5
+        reasons.append("🚨 **Presă Negativă:** Titlurile recente generează frică și presiune de vânzare.")
+    else:
+        score += 5
+
+    # 7. TEHNIC & TREND (Max 10 puncte)
+    try:
+        current_price = hist['Close'].iloc[-1]
+        sma50 = hist['SMA50'].iloc[-1]
+        rsi = hist['RSI'].iloc[-1]
+        
+        if current_price > sma50:
+            score += 5
+            reasons.append("✅ **Trend Tehnic:** Acțiunea navighează curat peste media mobilă (SMA 50).")
+        else:
+            reasons.append("⚠️ **Trend Descendent:** Prețul a rupt suportul de 50 de zile. Momentum negativ.")
+            
+        if rsi < 35:
+            score += 5
+            reasons.append("✅ **Oversold (Supra-vândut):** Indicatorul RSI sugerează o panică exagerată. Bun de intrare.")
+        elif rsi > 75:
+            score -= 15 # Penalizare gravă
+            reasons.append(f"🚨 **Overbought (RSI {rsi:.0f}):** Acțiunea este extrem de supra-cumpărată. Corecție iminentă!")
+        else:
+            score += 5
+    except: pass
+
+    # 8. MACROECONOMIE & REGIM (Max 5 puncte)
+    if spread > 0:
+        score += 5
+    else:
+        score -= 10
+        reasons.append("🚨 **Avertisment Macro:** Curba randamentelor 10Y-2Y inversată. Risc sistemic!")
+        
+    if "PANICĂ" in str(regime_msg).upper():
+        score -= 15 # Penalizare drastică
+        reasons.append("🚨 **Regim de Piață K-Means:** AI-ul detectează vânzări emoționale generalizate în piață.")
+
+    # Asigurăm intervalul strict 1-100
+    final_score = max(1, min(100, score))
+
+    # Ponderare Verdict Final
+    if final_score >= 75:
+        action, color = "CUMPĂRĂ (STRONG BUY)", "#3FB950"
+        advice = "Toate filtrele cuantice și fundamentale sunt aliniate pozitiv. Risc minim, potențial maxim."
+    elif final_score >= 55:
+        action, color = "ACUMULEAZĂ / HOLD", "#238636"
+        advice = "Companie robustă, dar prezintă 1-2 puncte slabe (ex: preț tehnic ridicat sau volatilitate). Intrări treptate."
+    elif final_score >= 40:
+        action, color = "ATENȚIE (NEUTRU)", "#D29922"
+        advice = "Semnale contradictorii puternice. De exemplu: fundamente bune, dar regim de piață panicat."
+    else:
+        action, color = "EVITĂ SAU VINDE", "#F85149"
+        advice = "Steaguri roșii critice: Risc de faliment, supraevaluare masivă, lipsă cash sau fugă instituțională."
+
+    # Sortăm lista ca să punem Steagurile Roșii (🚨) sus de tot
+    reasons.sort(key=lambda x: "🚨" not in x)
+
+    return final_score, action, color, advice, reasons
+
+def calculate_master_macro_verdict(df_sectors, credit_ratio_series, corr_matrix, sentiment_score, yield_spread, vix_val):
+    """
+    Algoritm de Sinteză Macro V2 (Quant Grade).
+    Adaugă VIX și corelația Dolarului ca filtre de siguranță.
+    """
+    score = 50 
+    reasons = []
+
+    # 1. ANALIZA PIEȚEI DE CREDIT (HYG/IEF) - 30%
+    if not credit_ratio_series.empty:
+        curr_r = credit_ratio_series.iloc[-1]
+        sma_20 = credit_ratio_series.rolling(20).mean().iloc[-1]
+        if curr_r < sma_20:
+            score -= 20
+            reasons.append("🚨 **Risc de Credit:** Piața de obligațiuni (banii deștepți) se retrage spre siguranță.")
+        else:
+            score += 10
+            reasons.append("✅ **Credit Sănătos:** Băncile finanțează activ economia.")
+
+    # 2. PILONUL VIX (Frica / Complăcere) - 20%
+    if vix_val > 25:
+        score -= 20
+        reasons.append(f"🚨 **Panică (VIX {vix_val:.1f}):** Frica este ridicată. Piața este vulnerabilă la căderi bruște.")
+    elif vix_val < 15:
+        score += 10
+        reasons.append(f"✅ **Liniște (VIX {vix_val:.1f}):** Volatilitatea este scăzută, favorizând trendul ascendent.")
+    else:
+        reasons.append(f"⚖️ **VIX Stabil ({vix_val:.1f}):** Frica este în limite normale.")
+
+    # 3. PILONUL DOLAR (Corelația SPY/UUP) - 15%
+    try:
+        spy_uup = corr_matrix.loc['Acțiuni (SPY)', 'Dolar (UUP)']
+        if spy_uup < -0.7:
+            score -= 15
+            reasons.append(f"⚠️ **Dolar Dominant:** Corelație inversă severă ({spy_uup:.2f}). Orice creștere a Dolarului va lovi bursa.")
+        else:
+            score += 5
+    except: pass
+
+    # 4. MONEY FLOW SECTORIAL - 15%
+    if not df_sectors.empty:
+        top_sectors = df_sectors.tail(3)['Sector'].tolist()
+        agg_count = sum(1 for s in top_sectors if s in ['Tehnologie', 'Consum Discreționar', 'Financiar', 'Comunicații'])
+        if agg_count >= 2:
+            score += 15
+            reasons.append("🚀 **Apetit Risc:** Capitalul migrează spre sectoarele de creștere.")
+        elif any(s in top_sectors for s in ['Utilități', 'Consum de Bază']):
+            score -= 10
+            reasons.append("🛡️ **Rotație Defensivă:** Investitorii caută adăpost în sectoarele sigure.")
+
+    # 5. MACRO & SENTIMENT - 20%
+    if yield_spread < 0:
+        score -= 15
+        reasons.append("🚩 **Yield Curve:** Curba inversată semnalează risc de recesiune.")
+    if sentiment_score > 0.15: score += 10
+    elif sentiment_score < -0.15: score -= 10
+
+    # Normalizare și Verdict
+    final_score = max(1, min(100, score))
+    
+    if final_score >= 70:
+        label, color, desc = "INVESTEȘTE", "#3FB950", "Condiții ideale: Lichiditate mare, frica scăzută. Mediul macro este extrem de favorabil. Riscurile sistemice sunt scăzute."
+    elif final_score >= 45:
+        label, color, desc = "AȘTEAPTĂ", "#D29922", "Echilibru fragil. Nu forța intrări noi azi. Piața este în tranziție. Există semnale contradictorii."
+    else:
+        label, color, desc = "CASH / SELL", "#F85149", "🚨 PERICOL: Riscurile sistemice domină piața. Condițiile macro sunt periculoase. Capitalul se retrage rapid"
+
+    return final_score, label, color, desc, reasons                   
