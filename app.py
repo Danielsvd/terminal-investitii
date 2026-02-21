@@ -146,21 +146,16 @@ RSS_CONFIG = {
     ],
     "Categorii": {
         "General": [], 
-        "Tehnologie": ["tehnologie", "tech", "it", "ai", "software", "hardware", "digital", "cyber", "apple", "microsoft", "google", "nvidia", "oracle", "amazon", "adobe", "asml", "tsm", "palantir", "qualcomm", "Micron", "AMD", "Meta", "Broadcom", "intel", "innodata", "crypto", "blockchain"],
-        "Energie": ["energie", "petrol", "gaze", "oil", "WTI", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica", "electrica", "simtel", "transelectrica", "transgaz", "regenerabil", "eolian", "occidental petroleum", "exxon", "chevron", "devon", "centrus energy", "conocophillips", "LNG", "OKLO", "Shell", "vistra", "Totalenergies", "nuscale power", "fotovoltaic"],
-        "Financiar": ["banca", "bank", "credit", "bursa", "finante", "fonduri", "asigurari", "bvb", "fiscal", "profit", "taxe", "buget", "wall street", "brd", "banca transilvania", "aig", "bac", "wfc", "JPM", "BNP", "unicredit", "UBS", "Deutsche Bank", "MS", "GS", "BLK", "actiuni"],
-        "Farma": ["farma", "pharma", "sanatate", "medicament", "spital", "medical", "pfizer", "nvo", "sanofi", "eli lilly", "novartis", "antibiotice", "BIO", "Merk", "Biogen", "Biontech", "Medicover", "bayer", "sanofy", "Unitedhealth", "J&J", "medlife", "regina maria"],
-        "Militar": ["militar", "aparare", "defense", "armata", "razboi", "nato", "arme", "securitate", "geopolitic", "taiwan", "Lockheed Martin", "raytheon", "Bae Systems", "Leonardo", "rocket lab", "thales", "vinci", "red cat", "eutelsat", "rheinmetall", "ucraina", "rusia"],
-        "Alimentatie": ["alimentatie", "food", "retail", "agricultura", "horeca", "supermarket", "bauturi", "preturi alimente", "DPZ", "KO", "MCD", "PM", "P&G", "Colgate", "Pepsi", "Walmart", "carrefour", "lidl", "kaufland"],
-        "Calatorii": ["turism", "calatorii", "travel", "aviatie", "aeroport", "hotel", "transport", "tarom", "airbus", "boeing", "Delta", "Royal Caribbean", "Marriot", "United Airlines", "wizz", "vacanta", "zbor"],
-        "Constructii": ["constructii", "imobiliare", "impact developer", "ONE united properties", "real estate", "santier", "dezvoltator", "locuinte", "ciment", "infrastructura", "drumuri", "autostrada"],
-        "Auto": ["auto", "masini", "ev", "electric", "dacia", "ford", "tesla", "volkswagen", "bmw", "mercedes", "automotive", "BYD", "Xpeng", "Nio", "Toyota", "Audi", "Ferrari", "inmatriculari"],
-        "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "Ramaco Resources", "rio tinto", "BHP", "Critical Matals", "Glencore", "USA Rare Earth", "MP Materials", "otel"],
-        "Marfuri": ["marfuri", "commodities", "materii prime", "grau", "porumb", "cacao", "soia", "prime materials", "gas", "cafea", "culturi"],
-        "Dobânzi": ["dobanda", "robor", "ircc", "interest", "inflation", "inflatie", "banci centrale", "FED", "BCE", "BNR"],
-        "Imobiliare": ["Imp", "One", "ircc", "cladiri noi", "constructii noi", "materiale de constuctii", "Evergrande", "autorizatii de constructii", "credite imobiliare", "cladiri de birouri", "apartamente noi", "credite prima casa"],
-        "Șomaj": ["somaj", "locuri de munca", "salarii", "unemployment", "jobs", "angajari", "PPI", "PCE", "CPI", "PMI", "NFP", "HR", "munca", "forta de munca"],
-        "Asia": ["BOJ", "Japonia", "China", "Taiwan", "Nikkei", "Topix", "Hang Seng", "banca japoniei", "guvernul japoniei", "Bank of China", "Shanghai Composite", "Bank of Japan", "Nifty", "Beijing", "yuan", "India", "yen", "KOSPI", "Nipah"]
+        "Tehnologie": ["tehnologie", "tech", "it", "ai", "software", "hardware", "digital", "cyber", "apple", "microsoft", "google", "nvidia", "oracle", "amazon", "adobe", "asml", "tsm", "palantir", "qualcomm", "micron", "amd", "meta", "broadcom", "intel", "innodata", "crypto", "blockchain", "semiconductori", "startup"],
+        "Energie": ["energie", "petrol", "gaze", "oil", "wti", "energy", "curent", "hidroelectrica", "omv", "romgaz", "nuclearelectrica", "electrica", "simtel", "transelectrica", "transgaz", "regenerabil", "eolian", "solar", "fotovoltaic", "exxon", "chevron", "devon", "lng", "oklo", "shell", "vistra", "nuscale"],
+        "Financiar": ["banca", "bank", "credit", "bursa", "finante", "fonduri", "asigurari", "bvb", "fiscal", "profit", "taxe", "buget", "wall street", "jpm", "unicredit", "ubs", "goldman", "dobanda", "monetar", "Banca Transilvania", "BRD", "BAC", "WFC", "AXP", "JP", "Visa", "BNP", "GS", "Mastercard", "investitii"],
+        "Farma": ["farma", "pharma", "sanatate", "medicament", "spital", "medical", "pfizer", "nvo", "sanofi", "eli lilly", "novartis", "biogen", "medicover", "medlife", "regina maria", "BIO", "Antibiotice", "biotech"],
+        "Militar": ["militar", "aparare", "defense", "armata", "razboi", "nato", "arme", "securitate", "geopolitic", "taiwan", "ucraina", "rusia", "lmt", "raytheon", "bae", "Leonardo", "Boeing", "rheinmetall", "Thales", "Vinci", "Red Cat", "drone"],
+        "Imobiliare": ["imobiliare", "real estate", "apartament", "garsoniera", "casa", "vila", "locuinta", "teren", "birou", "birouri", "santier", "dezvoltator", "rezidential", "chirie", "chirii", "ipotecar", "reit", "mall", "spatii comerciale", "impact", "one united"],
+        "Auto": ["auto", "masini", "ev", "electric", "dacia", "ford", "tesla", "volkswagen", "bmw", "mercedes", "byd", "xpeng", "nio", "toyota", "audi", "ferrari", "inmatriculari", "autostrada"],
+        "Asia": ["asia", "china", "japonia", "tokyo", "beijing", "shanghai", "hong kong", "taiwan", "india", "seul", "coreea", "nikkei", "yen", "yuan", "rupee", "boj", "evergrande", "alibaba", "tencent", "tsmc", "nifty", "hang seng"],
+        "Aur/Metale": ["aur", "gold", "argint", "silver", "metal", "cupru", "precious", "aluminiu", "otel", "minereu", "rio tinto", "bhp", "METC", "glencore", "mp materials"],
+        "Macro/Joburi": ["inflatie", "cpi", "pce", "fed", "bce", "robor", "ircc", "bnr", "somaj", "jobs", "angajari", "salarii", "pib", "gdp", "pmi", "recesiune", "dobanzi", "economie"]
     }
 }
 
@@ -433,12 +428,36 @@ def fetch_news_data():
 
 def filter_news(all_news, category):
     keywords = RSS_CONFIG["Categorii"].get(category, [])
-    if not keywords: return all_news
+    
+    # --- LOGICA NOUĂ PENTRU GENERAL ---
+    # Tab-ul General va arăta acum TOATE știrile, ordonate cronologic.
+    # Este mai util ca punct de plecare (Landing Page).
+    if category == "General":
+        return all_news
+
     filtered = []
     for item in all_news:
         text_full = (item['title'] + " " + item['summary']).lower()
-        if any(k in text_full for k in keywords):
+        
+        match_found = False
+        for k in keywords:
+            k = k.lower()
+            # Dacă cuvântul cheie este scurt (sub 4 litere), căutăm doar cuvânt întreg
+            # pentru a evita potriviri greșite (ex: "it" în "venit")
+            if len(k) <= 3:
+                pattern = rf"\b{re.escape(k)}\b"
+                if re.search(pattern, text_full):
+                    match_found = True
+                    break
+            else:
+                # Pentru cuvinte lungi, căutăm doar rădăcina (ex: "imobilia" prinde și "imobiliar")
+                if k in text_full:
+                    match_found = True
+                    break
+        
+        if match_found:
             filtered.append(item)
+            
     return filtered
 
 def get_company_news_rss(symbol):
@@ -1403,6 +1422,91 @@ def get_global_market_data():
 
     return df_indices, df_commodities, us_gainers, us_losers, eu_gainers, eu_losers
 
+@st.cache_data(ttl=300)
+def get_sector_performance():
+    """Descarcă și calculează performanța zilnică a celor 11 sectoare majore."""
+    sectors_map = {
+        'XLK': 'Tehnologie', 'XLF': 'Financiar', 'XLE': 'Energie',
+        'XLV': 'Sănătate', 'XLY': 'Consum Discreționar',
+        'XLP': 'Consum de Bază', 'XLI': 'Industrial',
+        'XLU': 'Utilități', 'XLB': 'Materiale',
+        'XLRE': 'Imobiliare', 'XLC': 'Comunicații'
+    }
+    try:
+        # Descărcăm datele pe ultimele 5 zile pentru a fi siguri că prindem "ieri" și "azi"
+        data = yf.download(list(sectors_map.keys()), period="5d", group_by='ticker', progress=False)
+        
+        results = []
+        for ticker, name in sectors_map.items():
+            try:
+                # Verificăm dacă structura descărcată este MultiIndex sau simplă
+                if isinstance(data.columns, pd.MultiIndex):
+                    df_t = data[ticker]['Close'].dropna()
+                else:
+                    # Dacă din vreo eroare descarcă doar un ticker
+                    df_t = data['Close'].dropna()
+
+                if len(df_t) >= 2:
+                    curr_price = df_t.iloc[-1]
+                    prev_price = df_t.iloc[-2]
+                    pct_change = ((curr_price - prev_price) / prev_price) * 100
+                    results.append({'Simbol': ticker, 'Sector': name, 'Variație %': pct_change})
+            except:
+                continue
+                
+        df = pd.DataFrame(results)
+        if not df.empty:
+            # Sortăm crescător pentru ca pe graficul orizontal (Plotly) cele mai mari să fie sus
+            df = df.sort_values(by='Variație %', ascending=True)
+        return df
+    except Exception as e:
+        print(f"Eroare sectoare: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_credit_risk_data(period="1y"):
+    """
+    Descarcă datele pentru piața de credit pe o perioadă specificată.
+    """
+    try:
+        data = yf.download(['HYG', 'IEF'], period=period, progress=False)['Close']
+        if 'HYG' in data.columns and 'IEF' in data.columns:
+            ratio = data['HYG'] / data['IEF']
+            return ratio.dropna()
+        return pd.Series()
+    except Exception as e:
+        print(f"Eroare date bonduri: {e}")
+        return pd.Series()
+
+@st.cache_data(ttl=3600)
+def get_cross_asset_correlation():
+    """
+    Descarcă ETF-urile majore pentru a calcula corelația claselor de active.
+    SPY = Acțiuni, TLT = Obligațiuni (20Y+), GLD = Aur, USO = Petrol, UUP = Dolar
+    """
+    tickers = {
+        'Acțiuni (SPY)': 'SPY', 
+        'Bonduri (TLT)': 'TLT', 
+        'Aur (GLD)': 'GLD', 
+        'Petrol (USO)': 'USO', 
+        'Dolar (UUP)': 'UUP'
+    }
+    try:
+        # Descărcăm date pe 3 luni pentru a prinde regimul curent (nu prea vechi, nu prea scurt)
+        data = yf.download(list(tickers.values()), period="3mo", progress=False)['Close']
+        
+        # Redenumim coloanele cu numele noastre intuitive
+        rename_map = {v: k for k, v in tickers.items()}
+        data = data.rename(columns=rename_map)
+        
+        # Calculăm randamentele și matricea de corelație (Pearson)
+        returns = data.pct_change().dropna()
+        corr_matrix = returns.corr()
+        return corr_matrix
+    except Exception as e:
+        print(f"Eroare Cross-Asset: {e}")
+        return pd.DataFrame()
+
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
@@ -1414,7 +1518,7 @@ def main():
         "5. Import Date", 
         "6. Rezumatul Zilei",
         "7. Scanner Volum",
-        "8. Watchlist 🎯" 
+        "8. Watchlist" 
     ])
     st.sidebar.markdown("---")
 
@@ -2236,6 +2340,153 @@ def main():
                 else:
                     # Dacă df_stats este string, înseamnă că a returnat mesajul de eroare
                     st.info(df_stats)
+            
+            # =================================================================
+            # MODUL PRO: RAZE X - ANALIZĂ FLUX DERIVATE (FINAL & CURAT)
+            # =================================================================
+            st.markdown("---")
+            st.subheader("🕵️‍♂️ Raze X: Fluxul de Bani din Opțiuni (Pro)")
+            
+            from ai_engine import get_options_analysis_ai
+            with st.spinner("Se decodează contractele Market Makerilor..."):
+                opt_data, opt_msg = get_options_analysis_ai(real_sym)
+                
+                if opt_data:
+                    # --- RÂNDUL 1: VITEZOMETRU ȘI METRICE ---
+                    col_gau, col_met = st.columns([1.5, 2])
+                    
+                    with col_gau:
+                        fig_iv = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = opt_data['iv'],
+                            domain = {'x': [0, 1], 'y': [0, 1]},
+                            title = {'text': f"Termometru IV ({opt_data['iv_status']})", 'font': {'size': 18}},
+                            number = {'suffix': "%", 'font': {'color': opt_data['iv_color']}},
+                            gauge = {
+                                'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                                'bar': {'color': opt_data['iv_color']},
+                                'bgcolor': "rgba(0,0,0,0)",
+                                'borderwidth': 2,
+                                'bordercolor': "#30363D",
+                                'steps': [
+                                    {'range': [0, 20], 'color': 'rgba(63, 185, 80, 0.2)'},
+                                    {'range': [20, 45], 'color': 'rgba(210, 153, 34, 0.2)'},
+                                    {'range': [45, 100], 'color': 'rgba(248, 81, 73, 0.2)'}
+                                ],
+                                'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': opt_data['iv']}
+                            }
+                        ))
+                        fig_iv.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_iv, use_container_width=True)
+
+                    with col_met:
+                        m1, m2 = st.columns(2)
+                        m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}")
+                        m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}")
+                        
+                        m3, m4 = st.columns(2)
+                        mp = opt_data['max_pain']
+                        diff_mp = ((mp / curr_price) - 1) * 100 if curr_price > 0 else 0
+                        m3.metric("Preț Max Pain", f"${mp:.1f}", f"{diff_mp:.1f}%")
+                        m4.metric("Data Expirării", opt_data['expiration'])
+
+                    # --- RÂNDUL 2: VERDICTUL INTELIGENT ---
+                    oi_pc = opt_data['oi_pc_ratio']
+                    vol_pc = opt_data['vol_pc_ratio']
+                    iv_val = opt_data['iv']
+                    
+                    if oi_pc < 0.7 and vol_pc < 0.7:
+                        v_text, v_col = "🚀 **BULLISH CONVINCED:** Instituțiile cumpără masiv. Trend ascendent solid.", "#3FB950"
+                    elif oi_pc < 0.7 and vol_pc > 1.1:
+                        v_text, v_col = "🔄 **DIVERGENȚĂ:** Optimism pe termen lung, dar azi apare frică (Puts). Posibilă corecție!", "#D29922"
+                    elif oi_pc > 1.1:
+                        v_text, v_col = "🐻 **BEARISH DOMINANT:** Piața pariază pe scădere. Opțiunile Put domină peisajul.", "#F85149"
+                    else:
+                        v_text, v_col = "⚖️ **NEUTRU:** Echilibru între cumpărători și vânzători.", "#8B949E"
+
+                    st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_text}</div>", unsafe_allow_html=True)
+
+                    # --- RÂNDUL 3: STRATEGIA IV (AICI EXPLICI CONTRADICȚIA) ---
+                    if iv_val > 45:
+                        st.warning(f"⚠️ **ALERTA IV:** Deși direcția pare {v_text.split(':')[0][2:]}, opțiunile sunt **prea scumpe** ({iv_val:.1f}%). Riscul de scădere a valorii prin volatilitate este uriaș. Recomandare: Acțiuni direct, nu derivate.")
+                    elif iv_val < 20:
+                        st.success(f"💎 **OPORTUNITATE IV:** Opțiunile sunt foarte ieftine ({iv_val:.1f}%). Moment ideal pentru a paria pe direcția identificată.")
+
+                    # --- RÂNDUL 4: GHID DINAMIC (TABELUL FIXAT) ---
+                    st.markdown("#### 🔍 Detalierea Indicatorilor")
+                    interpretare_data = [
+                        {"Indicator": "📉 Put/Call (OI)", "Valoare": f"{oi_pc:.2f}", "Interpretare": "Bullish" if oi_pc < 0.7 else "Bearish" if oi_pc > 1.1 else "Neutru"},
+                        {"Indicator": "⚡ Put/Call (Volum)", "Valoare": f"{vol_pc:.2f}", "Interpretare": "Sentiment Bullish" if vol_pc < 0.7 else "Panică" if vol_pc > 1.1 else "Normal"},
+                        {"Indicator": "🧲 Max Pain Price", "Valoare": f"${mp:.1f}", "Interpretare": f"Prețul tinde spre ${mp:.1f}"},
+                        {"Indicator": "🌡️ Volatilitate (IV)", "Valoare": f"{iv_val:.1f}%", "Interpretare": "EVITĂ derivate (Scump)" if iv_val > 40 else "OK de cumpărat (Ieftin)"}
+                    ]
+                    st.table(interpretare_data)
+                else:
+                    st.info(opt_msg)
+                        
+            # =================================================================
+            # 👑 VERDICT FINAL MASTER AI: DECIZIA DE INVESTIȚIE (RADIOGRAFIE)
+            # =================================================================
+            st.markdown("---")
+            st.subheader("👑 Decizie Master AI")
+            
+            # --- PROTECȚIE VARIABILE (Safety Net pentru date lipsă din Yahoo) ---
+            s_inst = inst_percent if 'inst_percent' in locals() else 0
+            s_mos = mos_val if 'mos_val' in locals() else 0
+            s_rvol = rvol if 'rvol' in locals() else 1.0
+            s_score_final = s_score_val if 's_score_val' in locals() else 0 
+            opt_final = opt_data if 'opt_data' in locals() else None
+            
+            # Extragem datele specifice modulelor adiacente
+            z_score_val = z_val_swot if 'z_val_swot' in locals() else 3.0
+            cash_ratio = q_ratio if 'q_ratio' in locals() else 1.0
+            ai_regime = regime_msg if 'regime_msg' in locals() else "Neutru"
+
+            # Extragem Spread-ul Macro la cald
+            try:
+                t_10y = yf.Ticker("^TNX").fast_info.last_price
+                t_2y = yf.Ticker("2Y=F").fast_info.last_price
+                curr_spread = t_10y - t_2y
+            except: curr_spread = 0.5
+
+            # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
+            from ai_engine import calculate_master_ai_score
+            m_score, m_action, m_col, m_advice, m_reasons = calculate_master_ai_score(
+                info, hist, h_score, s_mos, s_inst, s_rvol, s_score_final, opt_final, 
+                curr_spread, z_score_val, cash_ratio, ai_regime
+            )
+
+            # --- AFIȘARE VIZUALĂ DE IMPACT (Dashboard Bloomberg-style) ---
+            col_m1, col_m2 = st.columns([1, 1.8])
+            
+            with col_m1:
+                st.markdown(f"""
+                    <div style="background:#161B22; padding:30px; border-radius:15px; border:3px solid {m_col}; text-align:center; height: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                        <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing: 1px;">Scor Algoritmic Integrat</p>
+                        <h1 style="color:{m_col}; margin:15px 0; font-size:80px; text-shadow: 0 0 10px {m_col}44;">{int(m_score)}<span style="font-size: 20px; color:#8B949E; text-shadow: none;">/100</span></h1>
+                        <div style="background:{m_col}; color:white; padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
+                            {m_action}
+                        </div>
+                        <p style="color:#8B949E; font-size:13px; margin-top:15px; line-height:1.4;">
+                            {m_advice}
+                        </p>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col_m2:
+                st.markdown("#### 🧠 Radiografia Deciziei (De ce să faci asta?)")
+                st.markdown("<p style='color:#8B949E; font-size:13px; margin-bottom:15px;'>Algoritmul a scanat toți cei 10 piloni (DCF, Tehnic, Opțiuni, Macro, Sentiment, Instituții, Bilanț, Cash-Flow, Faliment, Volum) și a identificat următoarele:</p>", unsafe_allow_html=True)
+                
+                # Afișăm lista curățată și sortată (Roșu sus, Verde jos)
+                for reason in m_reasons:
+                    if "🚨" in reason:
+                        st.markdown(f"<div style='background:rgba(248, 81, 73, 0.15); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #F85149; color:#FFD8D8;'>{reason}</div>", unsafe_allow_html=True)
+                    elif "⚠️" in reason:
+                        st.markdown(f"<div style='background:rgba(210, 153, 34, 0.1); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #D29922;'>{reason}</div>", unsafe_allow_html=True)
+                    elif "✅" in reason:
+                        st.markdown(f"<div style='background:rgba(63, 185, 80, 0.05); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3FB950;'>{reason}</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<div style='background:#21262D; padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #8B949E;'>{reason}</div>", unsafe_allow_html=True)
             st.markdown("---")
             
             # 7. Ultimele Știri (RESTABILITE)
@@ -2556,41 +2807,84 @@ def main():
             #     os.remove(FILE_PORTOFOLIU)
             #     st.rerun()
         
-    # ==================================================
-    # 4. PIAȚĂ GLOBALĂ (CU DASHBOARD MACRO - DUAL METRICS)
-    # ==================================================
+    # =================================================================
+    # 4. PIAȚĂ GLOBALĂ (CU MASTER VERDICT AI INTEGRAT)
+    # =================================================================
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
         st.caption("Date în timp real (cu întârziere minimă) furnizate via Yahoo Finance.")
-        
+
+        # --- MODUL ACTUALIZAT: MASTER MACRO VERDICT (V2 CU VIX INTEGRAT) ---
+        with st.spinner("Motorul Macro AI analizează corelațiile și frica în piață..."):
+            # A. Colectăm datele existente
+            macro_sectors = get_sector_performance()
+            macro_risk_ratio = get_credit_risk_data("1y")
+            macro_corr = get_cross_asset_correlation()
+            
+            # B. Obținem VIX-ul (Frica) în timp real
+            try:
+                vix_val = yf.Ticker("^VIX").fast_info.last_price
+            except:
+                vix_val = 20.0 # Valoare neutră în caz de eroare
+
+            # C. Preluăm sentimentul global din știri
+            news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
+            from ai_engine import analyze_sentiment_ai
+            macro_sentiment = analyze_sentiment_ai(news_samples) if news_samples else 0
+            
+            # D. Preluăm spread-ul 10Y-2Y
+            try:
+                t_10y = yf.Ticker("^TNX").fast_info.last_price
+                t_2y = yf.Ticker("2Y=F").fast_info.last_price
+                curr_yield_spread = t_10y - t_2y
+            except: curr_yield_spread = 0.5
+
+            # E. Apelăm noua funcție cu 6 parametri (am adăugat vix_val la final)
+            from ai_engine import calculate_master_macro_verdict
+            m_score, m_label, m_col, m_desc, m_reasons = calculate_master_macro_verdict(
+                macro_sectors, macro_risk_ratio, macro_corr, macro_sentiment, curr_yield_spread, vix_val
+            )
+
+            # AFIȘARE VIZUALĂ BANNER SUPREM
+            st.markdown(f"""
+                <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:30px; border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:30px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Verdict Sănătate Piață Globală</h4>
+                            <h1 style="color:{m_col}; margin:10px 0; font-size:38px;">{m_label}</h1>
+                            <p style="color:#C9D1D9; font-size:16px;">{m_desc}</p>
+                        </div>
+                        <div style="text-align:center; min-width: 120px;">
+                            <div style="font-size:12px; color:#8B949E;">SCOR MACRO AI</div>
+                            <div style="font-size:56px; font-weight:bold; color:{m_col};">{int(m_score)}</div>
+                            <div style="font-size:14px; color:#8B949E;">/ 100</div>
+                        </div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            # Afișăm motivele pe două coloane
+            st.markdown("#### 🔍 Argumentele Modelului (Analiză Cross-Asset):")
+            c_re1, c_re2 = st.columns(2)
+            for i, reason in enumerate(m_reasons):
+                if i % 2 == 0: c_re1.markdown(f"{reason}")
+                else: c_re2.markdown(f"{reason}")       
+        st.markdown("---")
+
+        # --- BUTON REFRESH ȘI MODULELE TALE VECHI CONTINUĂ AICI ---
         if st.button("🔄 Reîmprospătează Piața"):
             get_global_market_data.clear()
             get_macro_data_visuals.clear()
             st.rerun()
-        # --- MODUL REPARAT: 10Y - 2Y YIELD SPREAD (WALL STREET STANDARD) ---
+
         st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-2Y)")
         
         try:
-            # ^TNX = 10 Year Treasury Yield
-            # ^IRX = 13 Week Bill (3 luni) - îl păstrăm pentru comparație
-            # 2Y=F sau ^ZT=F sunt Futures, dar cel mai sigur pentru Yield 2Y este:
-            # Descarcăm datele necesare
             tickers_yield = ['^TNX', '^IRX'] 
-            # Notă: Dacă simbolul de 2Y direct nu e disponibil, aproximăm profesional
-            # sau folosim un ticker de bond stabil.
             yield_data = yf.download(tickers_yield, period="5d", progress=False)['Close']
-            
-            # Pentru 2Y Yield, în lipsa unui ticker stabil de index, 
-            # mulți profesioniști folosesc SHY (1-3 Year Bond) ca proxy sau datele de trezorerie.
-            # Pentru acest modul, vom folosi ^TNX și un apel separat pentru 2Y Note.
-            
             t_10y = yf.Ticker("^TNX").fast_info.last_price
-            # Încercăm să luăm randamentul la 2 ani
             try:
-                # Simbolul de futures pe 2 ani (randament inversat)
                 t_2y = yf.Ticker("2Y=F").fast_info.last_price 
-                # Ajustare: Futures se tranzacționează diferit, folosim o constantă de piață 
-                # sau rămânem la 10Y-3M dacă datele 2Y sunt corupte.
                 spread = t_10y - t_2y
                 label_spread = "Spread 10Y - 2Y"
             except:
@@ -2599,7 +2893,6 @@ def main():
                 label_spread = "Spread 10Y - 3M (Fallback)"
 
             y_col1, y_col2 = st.columns([1, 2])
-            
             with y_col1:
                 spread_color = "#F85149" if spread < 0 else "#3FB950"
                 st.markdown(f"""
@@ -2608,16 +2901,17 @@ def main():
                         <h1 style="color:{spread_color}; margin:10px 0;">{spread:.3f}</h1>
                     </div>
                 """, unsafe_allow_html=True)
-            
             with y_col2:
                 if spread < 0:
-                    st.error(f"⚠️ **CURBĂ INVERSATĂ:** Diferența este de {spread:.3f}. Istoric, acest semnal a precedat fiecare recesiune majoră din ultimii 50 de ani Piața de obligațiuni semnalează o recesiune iminentă.")
-                    st.write("👉 **Strategie:** Redu expunerea pe acțiuni ciclice și mărește rezervele de Cash/Aur. Când ratele pe termen scurt sunt mai mari decât cele pe termen lung, investitorii nu au încredere în creșterea economică viitoare")
+                    st.error(f"⚠️ **CURBĂ INVERSATĂ:** Diferența este de {spread:.3f}. Istoric, acest semnal a precedat fiecare recesiune majoră.")
+                    st.write("👉 **Strategie:** Redu expunerea pe acțiuni ciclice.")
                 else:
-                    st.success(f"✅ **CURBĂ NORMALĂ:** Diferența de {spread:.3f} indică o expansiune economică continuă. Riscul de recesiune sistemică este scăzut.")
-                    st.write("👉 **Strategie:** Poți menține o strategie de creștere (Growth) activă. Economia este în fază de expansiune. Băncile pot împrumuta bani ieftin pe termen scurt și îi pot plasa scump pe termen lung, generând profit.")
+                    st.success(f"✅ **CURBĂ NORMALĂ:** Diferența de {spread:.3f} indică expansiune economică.")
+                    st.write("👉 **Strategie:** Poți menține o strategie de creștere.")
         except:
             st.info("Datele pentru curba randamentelor se încarcă...")
+
+        # --- AICI CONTINUĂ RESTUL CODULUI TĂU (HARTA, RADAR, MATRICE, TABELE) ---
         st.markdown("---")    
 
         # --- PASUL 1: DESCĂRCARE DATE (Trebuie să fie PRIMUL rând!) ---
@@ -2805,65 +3099,83 @@ def main():
                     * Gazele naturale: Influențate masiv de contextul geopolitic și sezonier.
                     """)
 
-                # --- MODUL NOU: INDICATOR DE ROTAȚIE (GROWTH VS VALUE) ---
+                # =================================================================
+                # MODUL ACTUALIZAT: INDICATOR DE ROTAȚIE (CHART TOP - TEXT BOTTOM)
+                # =================================================================
                 st.markdown("---")
                 st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
                 
                 try:
-                    # Descărcăm date pe 1 an pentru indicii relevanți
-                    # Folosim cache separat pentru a nu încetini restul aplicației
+                    # 1. Date și Calcule (Rămân la fel)
                     rot_data = yf.download(['^IXIC', '^DJI'], period="1y", progress=False)['Close']
-                    
-                    # Calculăm raportul (Ratio) între Nasdaq (Growth) și Dow Jones (Value)
                     ratio = rot_data['^IXIC'] / rot_data['^DJI']
+                    ratio_sma = ratio.rolling(window=50).mean()
                     
-                    # Trendul ultimelor 22 de zile (o lună de tranzacționare)
                     current_ratio = ratio.iloc[-1]
                     prev_ratio = ratio.iloc[-22]
                     rot_change = ((current_ratio - prev_ratio) / prev_ratio) * 100
+
+                    # --- PASUL A: GRAFICUL PE TOATĂ LĂȚIMEA (SUS) ---
+                    fig_rot = go.Figure()
                     
-                    # Structură pe coloane pentru afișare profesională
-                    rc1, rc2 = st.columns([1, 2])
+                    # Linia Principală
+                    fig_rot.add_trace(go.Scatter(
+                        x=ratio.index, y=ratio.values, 
+                        mode='lines', name='Ratio Actual',
+                        line=dict(color='#BF91FF', width=2.5),
+                        fill='tozeroy', fillcolor='rgba(191, 145, 255, 0.05)'
+                    ))
                     
-                    with rc1:
-                        rot_color = "#3FB950" if rot_change > 0 else "#F85149"
-                        rot_status = "🚀 GROWTH (Tech)" if rot_change > 0 else "🏭 VALUE (Industrial)"
-                        
+                    # Linia de Trend (Media SMA 50)
+                    fig_rot.add_trace(go.Scatter(
+                        x=ratio.index, y=ratio_sma, 
+                        mode='lines', name='Trend (SMA 50)',
+                        line=dict(color='rgba(255, 255, 255, 0.4)', dash='dot', width=1.5)
+                    ))
+
+                    # Zoom Dinamic pe Axa Y
+                    y_min = ratio.min() * 0.98 
+                    y_max = ratio.max() * 1.02
+
+                    fig_rot.update_layout(
+                        height=400, # Am mărit puțin înălțimea pentru a profita de lățime
+                        margin=dict(l=0, r=0, t=10, b=0), 
+                        template="plotly_dark",
+                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                        yaxis=dict(
+                            showgrid=True, gridcolor='#30363D',
+                            range=[y_min, y_max],
+                            tickformat=".3f"
+                        ),
+                        xaxis=dict(showgrid=False),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    # Afișăm graficul întâi
+                    st.plotly_chart(fig_rot, use_container_width=True)
+
+                    # --- PASUL B: METRICILE ȘI EXPLICAȚIA (JOS) ---
+                    st.write("") # Mic spațiu între grafic și text
+                    c_inf1, c_inf2 = st.columns([1, 2]) # Organizăm detaliile pe două coloane sub grafic
+                    
+                    with c_inf1:
+                        rot_status = "🚀 GROWTH (Nasdaq)" if rot_change > 0 else "🏭 VALUE (Dow Jones)"
                         st.metric("Trend Rotație (30z)", rot_status, f"{rot_change:+.2f}%")
-                        st.write(f"Scor Relativ Actual: **{current_ratio:.4f}**")
+                        st.write(f"Scor actual: **{current_ratio:.4f}**")
                         
+                    with c_inf2:
                         if rot_change > 1.5:
-                            st.success("Capitalul migrează agresiv spre Tehnologie. Apetit ridicat pentru risc.")
+                            st.success("🔥 **DOMINANȚĂ TECH:** Banii intră agresiv în sectoarele de creștere. Piața caută profituri mari și are apetit pentru risc.")
                         elif rot_change < -1.5:
-                            st.warning("Rotație defensivă confirmată. Investitorii caută siguranță în Value/Industriale.")
+                            st.warning("🛡️ **MOD DEFENSIV:** Investitorii fug în Industriale și Value. Se caută siguranța dividendelor și a companiilor stabile.")
                         else:
-                            st.info("Piața tranzacționează în echilibru între sectoarele Growth și Value.")
+                            st.info("⚖️ **ECHILIBRU:** Rotația este neutră între 'Creștere' și 'Valoare'. Piața își caută o direcție clară.")
                             
-                    with rc2:
-                        # Grafic evoluție ratio pentru context istoric
-                        fig_rot = go.Figure()
-                        fig_rot.add_trace(go.Scatter(
-                            x=ratio.index, 
-                            y=ratio.values, 
-                            line=dict(color='#BF91FF', width=2), 
-                            fill='tozeroy',
-                            name="Ratio Growth/Value"
-                        ))
-                        fig_rot.update_layout(
-                            height=250, 
-                            margin=dict(l=0, r=0, t=0, b=0), 
-                            template="plotly_dark", 
-                            paper_bgcolor='rgba(0,0,0,0)', 
-                            plot_bgcolor='rgba(0,0,0,0)',
-                            yaxis=dict(showgrid=True, gridcolor='#30363D')
-                        )
-                        st.plotly_chart(fig_rot, use_container_width=True)
-                        
                 except Exception as e:
-                    st.info("Indicatorul de rotație este momentan indisponibil (Eroare date index).")
+                    st.info("Indicatorul de rotație se recalibrează...")
+                    
                     # --- MODUL: BAROMETRU DE SENTIMENT GLOBAL (ȘTIRI) ---
                 st.markdown("---")
-                st.subheader("🎭 Barometru Sentiment Global")
+                st.subheader("🎭 Barometru Sentiment Global al Media")
                 
                 try:
                     # Colectăm știrile de la indicii majori pentru un eșantion relevant
@@ -2910,10 +3222,247 @@ def main():
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
         
+        # =================================================================
+        # MODUL NOU: HARTA TERMICĂ A SECTOARELOR (MONEY FLOW)
+        # =================================================================
         st.markdown("---")
-        # ---------------------------------------------------------
+        st.subheader("🗺️ Harta Termică a Sectoarelor (Money Flow)")
+        st.markdown("Radiografia indicelui S&P 500: Urmărește în timp real în ce sectoare își mută instituțiile capitalul astăzi.")
+
+        with st.spinner("Se calculează fluxul de capital pe sectoare..."):
+            df_sectors = get_sector_performance()
+            
+            if not df_sectors.empty:
+                # --- GRAFIC PLOTLY ORIZONTAL ---
+                fig_sec_heat = go.Figure()
+                # Colorăm dinamic: verde pentru plus, roșu pentru minus
+                bar_colors = ['#F85149' if val < 0 else '#3FB950' for val in df_sectors['Variație %']]
+                
+                fig_sec_heat.add_trace(go.Bar(
+                    x=df_sectors['Variație %'],
+                    y=df_sectors['Sector'],
+                    orientation='h',
+                    marker_color=bar_colors,
+                    text=[f"{val:+.2f}%" for val in df_sectors['Variație %']],
+                    textposition='auto',
+                    textfont=dict(color='white', weight='bold')
+                ))
+                
+                fig_sec_heat.update_layout(
+                    height=450,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    template="plotly_dark",
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(showgrid=True, gridcolor='#30363D', ticksuffix="%"),
+                    yaxis=dict(showgrid=False, tickfont=dict(size=13))
+                )
+                
+                c_heat1, c_heat2 = st.columns([2, 1.2])
+                with c_heat1:
+                    st.plotly_chart(fig_sec_heat, use_container_width=True)
+                
+                # --- INTERPRETAREA AI (RISK-ON vs RISK-OFF) ---
+                with c_heat2:
+                    st.markdown("#### 🧠 Analiza AI a Fluxului")
+                    
+                    # Extragem extremele (Păstrăm tot Dataframe-ul pentru a avea și procentele)
+                    top_3 = df_sectors.tail(3).iloc[::-1] # Cele mai mari 3, inversate să fie cel mai mare sus
+                    bottom_3 = df_sectors.head(3) # Cele mai mici 3
+                    
+                    # Definim categoriile de risc
+                    defensive = ['Utilități', 'Consum de Bază', 'Sănătate', 'Imobiliare']
+                    aggressive = ['Tehnologie', 'Consum Discreționar', 'Comunicații', 'Financiar']
+                    
+                    def_count = sum(1 for s in top_3['Sector'] if s in defensive)
+                    agg_count = sum(1 for s in top_3['Sector'] if s in aggressive)
+                    
+                    if agg_count >= 2:
+                        st.success("**🚀 RISK-ON (Atac):**\nBanii intră masiv în sectoarele de creștere. Investitorii sunt optimiști.")
+                    elif def_count >= 2:
+                        st.error("**🛡️ RISK-OFF (Apărare):**\nBanii fug spre sectoarele de siguranță (defensive). Instituțiile se protejează.")
+                    else:
+                        st.warning("**🔄 ROTAȚIE MIXTĂ:**\nFără direcție clară de risc. Capitalul se mută la nivel individual.")
+                        
+                    st.markdown("---")
+                    
+                    # Afișare Lideri cu procente
+                    st.write("**🏆 Liderii Zilei (Top 3):**")
+                    for _, row in top_3.iterrows():
+                        st.write(f"<span style='color:#3FB950;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({row['Variație %']:+.2f}%)</span>", unsafe_allow_html=True)
+                        
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # Afișare Codași cu procente și culori inteligente
+                    st.write("**🐢 Codașii Zilei (Bottom 3):**")
+                    for _, row in bottom_3.iterrows():
+                        if row['Variație %'] < 0:
+                            # E pe minus -> Săgeată roșie
+                            st.write(f"<span style='color:#F85149;'>▼</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({row['Variație %']:+.2f}%)</span>", unsafe_allow_html=True)
+                        else:
+                            # E "codaș", dar e pe plus -> Săgeată galbenă (neutră)
+                            st.write(f"<span style='color:#D29922;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({row['Variație %']:+.2f}%)</span>", unsafe_allow_html=True)
+        st.markdown("---")
+        # =================================================================
+        # MODUL NOU: RADAR DE RISC SISTEMIC (CU SELECTOR ȘI ZOOM)
+        # =================================================================
+        st.subheader("💣 Radar de Risc Sistemic (Piața de Credit)")
+        
+        # --- NOU: SELECTOR DE PERIOADĂ ---
+        col_title, col_time = st.columns([2, 1])
+        with col_time:
+            time_map_bonds = {
+                "1 Lună": "1mo", "3 Luni": "3mo", "6 Luni": "6mo", 
+                "1 An": "1y", "3 Ani": "3y", "5 Ani": "5y"
+            }
+            selected_period_label = st.selectbox("Interval Radar:", list(time_map_bonds.keys()), index=3)
+            selected_period_code = time_map_bonds[selected_period_label]
+
+        with st.spinner(f"Se analizează stresul financiar pe {selected_period_label}..."):
+            ratio_series = get_credit_risk_data(selected_period_code)
+            
+            if not ratio_series.empty:
+                current_ratio = ratio_series.iloc[-1]
+                # Calculăm media pe 20 de zile pentru context
+                sma_20 = ratio_series.rolling(20).mean().iloc[-1] if len(ratio_series) >= 20 else ratio_series.mean()
+                
+                # Calculăm variația procentuală pe intervalul selectat
+                start_ratio = ratio_series.iloc[0]
+                total_change = ((current_ratio - start_ratio) / start_ratio) * 100
+                
+                c_bond1, c_bond2 = st.columns([2, 1.2])
+                
+                with c_bond1:
+                    # --- GRAFIC CU ZOOM DINAMIC ---
+                    fig_bonds = go.Figure()
+                    
+                    # Linia principală
+                    fig_bonds.add_trace(go.Scatter(
+                        x=ratio_series.index, y=ratio_series.values, 
+                        mode='lines', name='Raport HYG/IEF', 
+                        line=dict(color='#BF91FF', width=2.5),
+                        fill='tozeroy', fillcolor='rgba(191, 145, 255, 0.05)'
+                    ))
+                    
+                    # Adăugăm media mobilă pentru a vedea trendul
+                    fig_bonds.add_trace(go.Scatter(
+                        x=ratio_series.index, y=ratio_series.rolling(20).mean(), 
+                        mode='lines', name='Trend (SMA 20)', 
+                        line=dict(color='rgba(255, 255, 255, 0.3)', dash='dot')
+                    ))
+
+                    # TRUCUL PENTRU VIZIBILITATE: Zoom pe axa Y
+                    y_min = ratio_series.min() * 0.99  # Luăm valoarea minimă și mai scădem 1%
+                    y_max = ratio_series.max() * 1.01  # Luăm valoarea maximă și mai adăugăm 1%
+
+                    fig_bonds.update_layout(
+                        height=350, margin=dict(l=0, r=0, t=10, b=0), 
+                        template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                        yaxis=dict(
+                            showgrid=True, gridcolor='#30363D',
+                            range=[y_min, y_max], # ACEASTA ESTE LINIA CARE FACE ZOOM PE VARIAȚII
+                            fixedrange=False
+                        ),
+                        xaxis=dict(showgrid=False),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig_bonds, use_container_width=True)
+                    
+                with c_bond2:
+                    st.markdown("#### 🌡️ Termometrul Creditării")
+                    st.metric(f"Raport ({selected_period_label})", f"{current_ratio:.3f}", f"{total_change:+.2f}%")
+                    
+                    # Logica de interpretare adaptată
+                    if current_ratio < sma_20:
+                        st.error("🚨 **SCĂDERE DETECTATĂ:** Pofta de risc scade. Banii ies din obligațiunile firmelor și intră în titluri de stat.")
+                    else:
+                        st.success("✅ **STABILITATE:** Piața de credit susține încă evaluările acțiunilor.")
+                        
+                    st.info(f"💡 **Interpretare:** În intervalul de **{selected_period_label}**, linia s-a mișcat cu **{total_change:+.2f}%**. Orice pantă bruscă în jos pe grafic indică faptul că băncile devin nervoase.")
+            else:
+                st.info("Sincronizare date obligațiuni...")
+        
+        # =================================================================
+        # MODUL NOU: MATRICEA CROSS-ASSET (CORELAȚII MACRO)
+        # =================================================================
+        st.markdown("---")
+        st.subheader("🕸️ Matricea Cross-Asset (Lichiditate & Refugiu)")
+        st.markdown("Analizează cum interacționează marile clase de active în ultimele 3 luni. Corelațiile neobișnuite trădează mișcările tectonice din economie.")
+
+        with st.spinner("Se construiește matricea quant..."):
+            corr_matrix = get_cross_asset_correlation()
+            
+            if not corr_matrix.empty:
+                c_cross1, c_cross2 = st.columns([1.5, 1])
+                
+                with c_cross1:
+                    # Formatăm textul numerelor pentru a arăta curat (2 zecimale)
+                    text_matrix = []
+                    for i in range(len(corr_matrix)):
+                        row_text = []
+                        for j in range(len(corr_matrix)):
+                            val = corr_matrix.iloc[i, j]
+                            row_text.append(f"{val:.2f}")
+                        text_matrix.append(row_text)
+
+                    # Desenăm Heatmap-ul (Verde = merg împreună, Roșu = opuse)
+                    fig_corr = go.Figure(data=go.Heatmap(
+                        z=corr_matrix.values,
+                        x=corr_matrix.columns,
+                        y=corr_matrix.columns,
+                        colorscale=[[0.0, '#F85149'], [0.5, '#161B22'], [1.0, '#3FB950']], 
+                        zmin=-1, zmax=1,
+                        text=text_matrix,
+                        texttemplate="%{text}",
+                        hoverinfo="text"
+                    ))
+                    
+                    fig_corr.update_layout(
+                        height=400,
+                        template="plotly_dark",
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                    
+                with c_cross2:
+                    st.markdown("#### 🧠 Radiografia Fluxului Global")
+                    
+                    # AI-ul trage concluzii automate pe baza intersecțiilor critice
+                    try:
+                        spy_tlt = corr_matrix.loc['Acțiuni (SPY)', 'Bonduri (TLT)']
+                        spy_uup = corr_matrix.loc['Acțiuni (SPY)', 'Dolar (UUP)']
+                        gld_uup = corr_matrix.loc['Aur (GLD)', 'Dolar (UUP)']
+                        
+                        # Regula 1: Risc vs Siguranță (SPY vs TLT)
+                        if spy_tlt > 0.4:
+                            st.error(f"🚨 **Șoc Inflaționist:** Acțiunile și Obligațiunile se mișcă împreună (Corelație +{spy_tlt:.2f}). Diversificarea clasică (60/40) nu te protejează. Cash-ul este rege.")
+                        elif spy_tlt < -0.4:
+                            st.success(f"✅ **Piață Normală:** Corelația Acțiuni/Bonduri este negativă ({spy_tlt:.2f}). Banii se mută ordonat între Risc și Siguranță.")
+                        else:
+                            st.warning(f"⚖️ **Tranziție:** Fără direcție clară între Acțiuni și Bonduri ({spy_tlt:.2f}).")
+                        
+                        # Regula 2: Dolarul (Wrecking Ball)
+                        if spy_uup < -0.5:
+                            st.info(f"💵 **Dolarul dictează:** Dolarul puternic lovește acțiunile (Corelație {spy_uup:.2f}). Urmărește moneda americană; dacă ea scade, bursa explodează.")
+                            
+                        # Regula 3: Aurul ca panică pură
+                        if gld_uup > 0.3:
+                            st.warning(f"🥇 **Frică Extremă:** Aurul crește ÎMPREUNĂ cu Dolarul (Corelație {gld_uup:.2f}). Marile fonduri cumpără masiv orice activ de refugiu, ignorând matematica standard.")
+                    except:
+                        st.write("Date insuficiente pentru diagnoza automată.")
+                        
+                    with st.expander("📖 Cum citești matricea?"):
+                        st.write("""
+                        * **Pătrate Verzi (+0.5 la +1.0):** Activele sunt "prietene". Dacă unul crește, crește și celălalt.
+                        * **Pătrate Roșii (-0.5 la -1.0):** Activele sunt "inamice". Când unul urcă, celălalt scade (Corelație Inversă). Aceasta este cheia hedging-ului perfect.
+                        * **Pătrate Negre (în jur de 0.0):** Activele se ignoră complet reciproc.
+                        """)
+            else:
+                st.info("Sincronizare date Cross-Asset...")
         
         # --- TABELELE VECHI ---
+        st.markdown("---")
         with st.spinner("Descărcăm datele acțiunilor..."):
             df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
 
@@ -3601,8 +4150,8 @@ def main():
     # ==================================================
     # 8. WATCHLIST (FINAL FIX - TIMEZONE PROOF)
     # ==================================================
-    elif sectiune == "8. Watchlist 🎯":
-        st.title("🎯 Lista de Urmărire (Watchlist)")
+    elif sectiune == "8. Watchlist":
+        st.title("Lista de Urmărire (Watchlist)")
         st.markdown("Monitorizează acțiunile pe care vrei să le cumperi când prețul scade.")
 
         # --- FORMULAR ADĂUGARE ---
