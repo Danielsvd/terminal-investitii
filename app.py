@@ -3521,7 +3521,7 @@ def main():
                             "Volum Azi": curr_vol,
                             "Volum Mediu (20z)": avg_vol_20,
                             "RVOL": rvol,
-                            "Alertă AI": "🚨 ANOMALIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
+                            "Alertă AI": "🚨 ATENTIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
                             "Status": "🚀 BREAKOUT" if (rvol > 2.0 and change_pct > 1.5) 
                                      else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
                                      else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
