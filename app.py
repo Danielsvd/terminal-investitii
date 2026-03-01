@@ -404,6 +404,34 @@ def get_peers_analysis(sector, industry, current_ticker):
         except: continue
     return pd.DataFrame(peer_results)
 
+def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
+    """
+    Rulează o simulare stocastică pentru a prezice evoluția portofoliului.
+    """
+    if portfolio_curve is None or len(portfolio_curve) < 10:
+        return None, 0
+    
+    # Calculăm randamentele logaritmice pentru stabilitate matematică
+    returns = np.log(portfolio_curve / portfolio_curve.shift(1)).dropna()
+    mu = returns.mean()
+    var = returns.var()
+    # Drift-ul reprezintă direcția medie ajustată cu volatilitatea
+    drift = mu - (0.5 * var)
+    stdev = returns.std()
+    
+    # Generăm șocuri aleatorii (Z ~ N(0,1))
+    # Matrice de (zile x simulări)
+    daily_returns = np.exp(drift + stdev * norm.ppf(np.random.rand(days_ahead, simulations)))
+    
+    # Proiecția prețului
+    price_paths = np.zeros_like(daily_returns)
+    price_paths[0] = portfolio_curve.iloc[-1]
+    
+    for t in range(1, days_ahead):
+        price_paths[t] = price_paths[t-1] * daily_returns[t]
+        
+    return price_paths, portfolio_curve.iloc[-1]
+
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_news_data():
@@ -2295,38 +2323,40 @@ def main():
             
             # --- PARTEA ACTUALIZATĂ (Scorul FinBERT cu Legendă) ---
             with cai1:
-                st.write("📊 **Analiză Sentiment (FinBERT)**")
+                st.write("📊 **Analiză Sentiment AI (Context 24h)**")
                 if c_news_ai:
-                    with st.spinner("AI-ul analizează contextul..."):
-                        from ai_engine import analyze_sentiment_ai
+                    with st.spinner("FinBERT procesează narațiunea pieței..."):
                         s_score = analyze_sentiment_ai(c_news_ai)
                         
-                        # Definim intervalele profesionale și etichetele
+                        # --- LOGICĂ EXTINSĂ PE 5 PRAGURI ---
                         if s_score >= 0.25:
-                            c_ai, status_text = "#3FB950", "🚀 Puternic Pozitiv"
-                        elif s_score > 0.05:
-                            c_ai, status_text = "#3FB950", "📈 Pozitiv (Bullish)"
+                            c_ai, status_text = "#3FB950", "🚀 Euforie media"
+                        elif s_score >= 0.05:
+                            c_ai, status_text = "#3FB950", "📈 Optimism moderat"
                         elif s_score <= -0.25:
-                            c_ai, status_text = "#F85149", "🚨 Puternic Negativ"
-                        elif s_score < -0.05:
-                            c_ai, status_text = "#F85149", "📉 Negativ (Bearish)"
+                            c_ai, status_text = "#F85149", "🚨 Panică extremă"
+                        elif s_score <= -0.05:
+                            c_ai, status_text = "#F85149", "📉 Îngrijorare / Pesimism"
                         else:
-                            c_ai, status_text = "#8B949E", "⚖️ Neutru"
-
-                        # Randăm Cardul și Legenda explicativă
+                            c_ai, status_text = "#8B949E", "⚖️ Zgomot neutru"
+                        
+                        # UI PRO: Indicator vizual de încredere
+                        confidence = "RIDICATĂ" if len(c_news_ai) > 5 else "MODERATĂ"
+                        
                         st.markdown(f"""
-                        <div style='background:#161B22; padding:20px; border-radius:15px; border:1px solid {c_ai}; text-align:center;'>
+                        <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {c_ai}; text-align:center;'>
                             <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{s_score:.2f}</h1>
-                            <div style='color:{c_ai}; font-weight:bold; font-size:16px; margin-top:5px;'>{status_text}</div>
+                            <div style='color:{c_ai}; font-weight:bold; font-size:18px; margin-top:5px;'>{status_text}</div>
+                            <p style='color:#8B949E; font-size:11px; margin-top:10px;'>Încredere Model: {confidence} ({len(c_news_ai)} surse)</p>
                         </div>
                         
                         <div style='margin-top: 15px; padding: 15px; background: #21262D; border-radius: 10px; border-left: 3px solid #58A6FF;'>
                             <p style='color:#8B949E; font-size: 11px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Ghid Intervale (Scală -1 la +1)</p>
-                            <div style='color:#C9D1D9; font-size: 13px; line-height: 1.6;'>
+                            <div style='color:#C9D1D9; font-size: 13px; line-height: 1.8;'>
                                 <div><span style='color:#3FB950;'>■</span> <b>+0.25 la +1.00:</b> Euforie media</div>
-                                <div><span style='color:#3FB950; opacity: 0.7;'>■</span> <b>+0.05 la +0.24:</b> Optimism moderat</div>
+                                <div><span style='color:#3FB950; opacity:0.7;'>■</span> <b>+0.05 la +0.24:</b> Optimism moderat</div>
                                 <div><span style='color:#8B949E;'>■</span> <b>-0.05 la +0.05:</b> Zgomot neutru</div>
-                                <div><span style='color:#F85149; opacity: 0.7;'>■</span> <b>-0.24 la -0.06:</b> Îngrijorare / Pesimism</div>
+                                <div><span style='color:#F85149; opacity:0.7;'>■</span> <b>-0.24 la -0.06:</b> Îngrijorare / Pesimism</div>
                                 <div><span style='color:#F85149;'>■</span> <b>-1.00 la -0.25:</b> Panică extremă</div>
                             </div>
                         </div>
@@ -2418,87 +2448,115 @@ def main():
                     st.info(df_stats)
             
             # =================================================================
-            # MODUL PRO: RAZE X - ANALIZĂ FLUX DERIVATE (FINAL & CURAT)
-            # =================================================================
-            st.markdown("---")
-            st.subheader("🕵️‍♂️ Raze X: Fluxul de Bani din Opțiuni (Pro)")
+        # 🕵️‍♂️ MODUL PRO: RAZE X - ANALIZĂ GEX & OPTIUNI (VERSIUNE COMPLETĂ)
+        # =================================================================
+        st.markdown("---")
+        st.subheader("🕵️‍♂️ Raze X: Fluxul de Bani din Opțiuni (Pro)")
+
+        from ai_engine import get_options_analysis_ai
+        with st.spinner("Se decodează contractele Market Makerilor..."):
+            # Folosim simbolul real identificat anterior
+            opt_data, opt_msg = get_options_analysis_ai(real_sym)
             
-            from ai_engine import get_options_analysis_ai
-            with st.spinner("Se decodează contractele Market Makerilor..."):
-                opt_data, opt_msg = get_options_analysis_ai(real_sym)
+        if opt_data:
+            # FIX DEFINIȚIE PREȚ: Luăm prețul curent din variabila 'hist' deja existentă
+            current_market_price = hist['Close'].iloc[-1] if not hist.empty else 0
+
+            # --- 1. CARD GEX (NOUA FUNCȚIONALITATE) ---
+            st.markdown(f"""
+                <div style="background:{opt_data['gex_color']}22; padding:25px; border-radius:15px; border-left: 10px solid {opt_data['gex_color']}; margin-bottom:25px; border: 1px solid {opt_data['gex_color']}44;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:bold;">Expunere Netă la Radiații Gamma (Proxy)</p>
+                            <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{opt_data['net_gex']:,.0f} unități</h1>
+                        </div>
+                        <div style="text-align:right;">
+                            <span style="background:{opt_data['gex_color']}; color:white; padding:8px 16px; border-radius:25px; font-weight:bold; font-size:13px;">
+                                {opt_data['gex_verdict'].split(':')[0]}
+                            </span>
+                        </div>
+                    </div>
+                    <p style="margin:10px 0 0 0; font-size:15px; color:#C9D1D9;">{opt_data['gex_verdict'].split(': ')[1]}</p>
+                </div>
+            """, unsafe_allow_html=True)
+
+            # --- RÂNDUL 1: VITEZOMETRU ȘI METRICE ---
+            col_gau, col_met = st.columns([1.5, 2])
+
+            with col_gau:
+                # Preluăm culoarea din opt_data calculată mai sus
+                iv_display_color = opt_data.get('iv_color', '#FFFFFF')
                 
-                if opt_data:
-                    # --- RÂNDUL 1: VITEZOMETRU ȘI METRICE ---
-                    col_gau, col_met = st.columns([1.5, 2])
-                    
-                    with col_gau:
-                        fig_iv = go.Figure(go.Indicator(
-                            mode = "gauge+number",
-                            value = opt_data['iv'],
-                            domain = {'x': [0, 1], 'y': [0, 1]},
-                            title = {'text': f"Termometru IV ({opt_data['iv_status']})", 'font': {'size': 18}},
-                            number = {'suffix': "%", 'font': {'color': opt_data['iv_color']}},
-                            gauge = {
-                                'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
-                                'bar': {'color': opt_data['iv_color']},
-                                'bgcolor': "rgba(0,0,0,0)",
-                                'borderwidth': 2,
-                                'bordercolor': "#30363D",
-                                'steps': [
-                                    {'range': [0, 20], 'color': 'rgba(63, 185, 80, 0.2)'},
-                                    {'range': [20, 45], 'color': 'rgba(210, 153, 34, 0.2)'},
-                                    {'range': [45, 100], 'color': 'rgba(248, 81, 73, 0.2)'}
-                                ],
-                                'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': opt_data['iv']}
-                            }
-                        ))
-                        fig_iv.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_iv, use_container_width=True)
+                fig_iv = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = opt_data['iv'],
+                    domain = {'x': [0, 1], 'y': [0, 1]},
+                    title = {'text': "Termometru IV", 'font': {'size': 18, 'color': '#8B949E'}},
+                    # --- AICI COLORĂM NUMĂRUL (Procentul) ---
+                    number = {
+                        'suffix': "%", 
+                        'font': {'color': iv_display_color, 'size': 50} 
+                    },
+                    gauge = {
+                        'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                        'bar': {'color': iv_display_color}, # Bara urmărește culoarea textului
+                        'bgcolor': "rgba(0,0,0,0)",
+                        'borderwidth': 2,
+                        'bordercolor': "#30363D",
+                        'steps': [
+                            {'range': [0, 25], 'color': 'rgba(63, 185, 80, 0.1)'},
+                            {'range': [25, 50], 'color': 'rgba(210, 153, 34, 0.1)'},
+                            {'range': [50, 100], 'color': 'rgba(248, 81, 73, 0.1)'}
+                        ]
+                    }
+                ))
+                fig_iv.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_iv, use_container_width=True)
 
-                    with col_met:
-                        m1, m2 = st.columns(2)
-                        m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}")
-                        m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}")
-                        
-                        m3, m4 = st.columns(2)
-                        mp = opt_data['max_pain']
-                        diff_mp = ((mp / curr_price) - 1) * 100 if curr_price > 0 else 0
-                        m3.metric("Preț Max Pain", f"${mp:.1f}", f"{diff_mp:.1f}%")
-                        m4.metric("Data Expirării", opt_data['expiration'])
+            with col_met:
+                m1, m2 = st.columns(2)
+                m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}")
+                m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}")
+                
+                m3, m4 = st.columns(2)
+                mp = opt_data['max_pain']
+                diff_mp = ((mp / current_market_price) - 1) * 100 if current_market_price > 0 else 0
+                m3.metric("Preț Max Pain", f"${mp:.1f}", f"{diff_mp:.1f}%")
+                m4.metric("Data Expirării", opt_data['expiration'])
 
-                    # --- RÂNDUL 2: VERDICTUL INTELIGENT ---
-                    oi_pc = opt_data['oi_pc_ratio']
-                    vol_pc = opt_data['vol_pc_ratio']
-                    iv_val = opt_data['iv']
-                    
-                    if oi_pc < 0.7 and vol_pc < 0.7:
-                        v_text, v_col = "🚀 **BULLISH CONVINCED:** Instituțiile cumpără masiv. Trend ascendent solid.", "#3FB950"
-                    elif oi_pc < 0.7 and vol_pc > 1.1:
-                        v_text, v_col = "🔄 **DIVERGENȚĂ:** Optimism pe termen lung, dar azi apare frică (Puts). Posibilă corecție!", "#D29922"
-                    elif oi_pc > 1.1:
-                        v_text, v_col = "🐻 **BEARISH DOMINANT:** Piața pariază pe scădere. Opțiunile Put domină peisajul.", "#F85149"
-                    else:
-                        v_text, v_col = "⚖️ **NEUTRU:** Echilibru între cumpărători și vânzători.", "#8B949E"
+            # --- RÂNDUL 2: VERDICTUL INTELIGENT (RESTABILIT) ---
+            oi_pc = opt_data['oi_pc_ratio']
+            vol_pc = opt_data['vol_pc_ratio']
+            iv_val = opt_data['iv']
 
-                    st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_text}</div>", unsafe_allow_html=True)
+            if oi_pc < 0.7 and vol_pc < 0.7:
+                v_text, v_col = "🚀 **BULLISH CONVINCED:** Instituțiile cumpără masiv. Trend ascendent solid.", "#3FB950"
+            elif oi_pc < 0.7 and vol_pc > 1.1:
+                v_text, v_col = "🔄 **DIVERGENȚĂ:** Optimism pe termen lung, dar azi apare frică (Puts). Posibilă corecție!", "#D29922"
+            elif oi_pc > 1.1:
+                v_text, v_col = "🐻 **BEARISH DOMINANT:** Piața pariază pe scădere. Opțiunile Put domină peisajul.", "#F85149"
+            else:
+                v_text, v_col = "⚖️ **NEUTRU:** Echilibru între cumpărători și vânzători.", "#8B949E"
 
-                    # --- RÂNDUL 3: STRATEGIA IV (AICI EXPLICI CONTRADICȚIA) ---
-                    if iv_val > 45:
-                        st.warning(f"⚠️ **ALERTA IV:** Deși direcția pare {v_text.split(':')[0][2:]}, opțiunile sunt **prea scumpe** ({iv_val:.1f}%). Riscul de scădere a valorii prin volatilitate este uriaș. Recomandare: Acțiuni direct, nu derivate.")
-                    elif iv_val < 20:
-                        st.success(f"💎 **OPORTUNITATE IV:** Opțiunile sunt foarte ieftine ({iv_val:.1f}%). Moment ideal pentru a paria pe direcția identificată.")
+            st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_text}</div>", unsafe_allow_html=True)
 
-                    # --- RÂNDUL 4: GHID DINAMIC (TABELUL FIXAT) ---
-                    st.markdown("#### 🔍 Detalierea Indicatorilor")
-                    interpretare_data = [
-                        {"Indicator": "📉 Put/Call (OI)", "Valoare": f"{oi_pc:.2f}", "Interpretare": "Bullish" if oi_pc < 0.7 else "Bearish" if oi_pc > 1.1 else "Neutru"},
-                        {"Indicator": "⚡ Put/Call (Volum)", "Valoare": f"{vol_pc:.2f}", "Interpretare": "Sentiment Bullish" if vol_pc < 0.7 else "Panică" if vol_pc > 1.1 else "Normal"},
-                        {"Indicator": "🧲 Max Pain Price", "Valoare": f"${mp:.1f}", "Interpretare": f"Prețul tinde spre ${mp:.1f}"},
-                        {"Indicator": "🌡️ Volatilitate (IV)", "Valoare": f"{iv_val:.1f}%", "Interpretare": "EVITĂ derivate (Scump)" if iv_val > 40 else "OK de cumpărat (Ieftin)"}
-                    ]
-                    st.table(interpretare_data)
-                else:
-                    st.info(opt_msg)
+            # --- RÂNDUL 3: STRATEGIA IV (RESTABILIT) ---
+            if iv_val > 45:
+                st.warning(f"⚠️ **ALERTA IV:** Deși direcția pare {v_text.split(':')[0][2:]}, opțiunile sunt **prea scumpe** ({iv_val:.1f}%). Riscul de scădere a valorii prin volatilitate este uriaș.")
+            elif iv_val < 20:
+                st.success(f"💎 **OPORTUNITATE IV:** Opțiunile sunt foarte ieftine ({iv_val:.1f}%). Moment ideal pentru a paria pe direcția identificată.")
+
+            # --- RÂNDUL 4: DETALIEREA INDICATORILOR (RESTABILIT) ---
+            st.markdown("#### 🔍 Detalierea Indicatorilor")
+            interpretare_data = [
+                {"Indicator": "📉 Put/Call (OI)", "Valoare": f"{oi_pc:.2f}", "Interpretare": "Bullish" if oi_pc < 0.7 else "Bearish" if oi_pc > 1.1 else "Neutru"},
+                {"Indicator": "⚡ Put/Call (Volum)", "Valoare": f"{vol_pc:.2f}", "Interpretare": "Sentiment Bullish" if vol_pc < 0.7 else "Panică" if vol_pc > 1.1 else "Normal"},
+                {"Indicator": "🧲 Max Pain Price", "Valoare": f"${mp:.1f}", "Interpretare": f"Prețul tinde spre ${mp:.1f}"},
+                {"Indicator": "🌡️ Volatilitate (IV)", "Valoare": f"{iv_val:.1f}%", "Interpretare": "EVITĂ derivate (Scump)" if iv_val > 40 else "OK de cumpărat (Ieftin)"}
+            ]
+            st.table(interpretare_data)
+        else:
+            st.info(opt_msg)
                         
             # =================================================================
             # 👑 VERDICT FINAL MASTER AI: DECIZIA DE INVESTIȚIE (RADIOGRAFIE)
@@ -2609,7 +2667,7 @@ def main():
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
             
             tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
-
+            
             def render_portfolio_tab(df_subset, currency_symbol):
                 if df_subset.empty:
                     st.info(f"Nu ai poziții deschise în {currency_symbol}.")
@@ -2629,7 +2687,50 @@ def main():
                 c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{total_current:,.2f} {currency_symbol}")
                 c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{total_profit_val:,.2f} {currency_symbol}", f"{total_profit_pct:.2f}%")
 
+                # --- INTEGRARE MONTE CARLO ---
                 st.markdown("---")
+                st.subheader("🔮 Proiecție Probabilistă Monte Carlo (1 An)")
+
+                with st.spinner("Se simulează 1000 de scenarii de piață..."):
+                    paths, last_val = run_monte_carlo_sim(hist_curve)
+
+                if paths is not None:
+                    # Calculăm percentilele de risc
+                    # Ce se întâmplă în cel mai rău caz (5%) și cel mai bun (95%)
+                    p5 = np.percentile(paths[-1, :], 5)
+                    p50 = np.percentile(paths[-1, :], 50)
+                    p95 = np.percentile(paths[-1, :], 95)
+                    
+                    fig_mc = go.Figure()
+                    
+                    # Afișăm primele 100 de traiectorii (pentru a nu supraîncărca browser-ul)
+                    x_range = list(range(252))
+                    for i in range(100):
+                        fig_mc.add_trace(go.Scatter(x=x_range, y=paths[:, i], mode='lines', 
+                                                line=dict(width=0.5, color='rgba(3, 247, 6, 0.45)'),
+                                                showlegend=False))
+                    
+                    # Adăugăm liniile critice
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=[p50]*252, line=dict(color='white', dash='dash'), name='Așteptare Medie'))
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=[p5]*252, line=dict(color='#F85149', width=2), name='Worst Case (5%)'))
+                    
+                    fig_mc.update_layout(height=400, template="plotly_dark", 
+                                        hovermode="x", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                        yaxis_title=f"Valoare Portofoliu ({currency_symbol})")
+                    
+                    st.plotly_chart(fig_mc, use_container_width=True)
+                    
+                    # Dashboard de Risc sub grafic
+                    c_mc1, c_mc2, c_mc3 = st.columns(3)
+                    
+                    # Calculăm Value at Risk Proiectat
+                    expected_loss = ((last_val - p5) / last_val) * 100
+                    
+                    c_mc1.metric("Worst Case Value", f"{p5:,.2f} {currency_symbol}")
+                    c_mc2.metric("Maximum Expected Loss", f"-{expected_loss:.2f}%", delta_color="inverse")
+                    c_mc3.metric("Probability of Profit", f"{(np.sum(paths[-1, :] > last_val) / 1000 * 100):.1f}%")
+                    
+                    st.info(f"💡 **Analiza Quant:** Există o probabilitate de 95% ca peste un an, portofoliul tău să nu scadă sub valoarea de **{p5:,.2f} {currency_symbol}**. Acest model ia în calcul volatilitatea ta istorică.")
                 
                 if not hist_curve.empty:
                     fig_hist = go.Figure()
