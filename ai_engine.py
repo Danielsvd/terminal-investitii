@@ -18,41 +18,39 @@ def get_sentiment_pipeline():
 
 def analyze_sentiment_ai(news_list):
     """
-    Analizează contextul știrilor (FinBERT), cu Time Decay 
-    (știrile noi au un impact matematic mai mare decât cele vechi).
+    Versiune optimizată pentru producție: Batch Inference + Memory Management.
     """
     if not news_list: return 0.0
     try:
         pipe = get_sentiment_pipeline()
         
-        # Luăm primele 10 titluri (presupunând că sunt sortate de la nou la vechi)
+        # Luăm top 10 titluri
         titles = [n['title'] for n in news_list[:10]]
-        results = pipe(titles)
+        
+        # OPTIMIZARE BATCH: Trimitem toată lista deodată. 
+        # truncation=True previne erorile de lungime a textului care pot crăpa procesul.
+        results = pipe(titles, batch_size=len(titles), truncation=True, max_length=128)
         
         weighted_score = 0
         total_weight = 0
         
-        # Iterăm prin rezultate. 'i' este indexul (0 e cea mai nouă știre, 9 e cea mai veche)
+        # Aplicăm Time Decay (Știrile de acum 1 oră sunt mai importante decât cele de ieri)
+        # Factorul 0.85 asigură o scădere lină a importanței.
         for i, r in enumerate(results):
-            # Exponențial: 0.8^0 = 1.0 (100% pondere pt ultima știre)
-            # 0.8^1 = 0.8 (80% pondere pt a doua), etc.
-            decay_factor = (0.8) ** i 
+            # Formula matematică a ponderii: w = 0.85^i
+            decay_factor = (0.85) ** i 
             
-            # Convertim eticheta text într-un scor numeric (-1 la 1)
-            if r['label'] == 'positive':
-                raw_val = r['score']
-            elif r['label'] == 'negative':
-                raw_val = -r['score']
-            else:
-                raw_val = 0 # Neutru
+            # Mapare scoruri
+            score_val = r['score'] if r['label'] == 'positive' else (-r['score'] if r['label'] == 'negative' else 0)
             
-            weighted_score += (raw_val * decay_factor)
+            weighted_score += (score_val * decay_factor)
             total_weight += decay_factor
             
-        # Returnăm media ponderată
-        return weighted_score / total_weight if total_weight > 0 else 0.0
+        final_sentiment = weighted_score / total_weight if total_weight > 0 else 0.0
+        return final_sentiment
+        
     except Exception as e:
-        print(f"Eroare AI Sentiment: {e}")
+        print(f"Sentiment AI Critical Error: {e}")
         return 0.0
 
 def predict_stock_price(df):
@@ -412,68 +410,48 @@ def calculate_and_plot_seasonality(hist_data):
         return None, f"Eroare procesare sezonalitate: {e}"
 
 def get_options_analysis_ai(ticker_sym):
-    """
-    Analiză cantitativă PRO a pieței de opțiuni.
-    Extrage OI, Volume, IV și calculează Max Pain + Stare IV.
-    """
     try:
         t = yf.Ticker(ticker_sym)
         expirations = t.options
-        if not expirations:
-            return None, "Nu există date despre opțiuni."
+        if not expirations: return None, "Fără date"
             
-        target_exp = expirations[0] 
-        opts = t.option_chain(target_exp)
+        opts = t.option_chain(expirations[0])
         calls, puts = opts.calls, opts.puts
+        spot = t.fast_info.last_price
+
+        # Calcul GEX Proxy
+        calls['gex'] = calls['openInterest'] * (spot / ((calls['strike'] - spot)**2 + 1))
+        puts['gex'] = puts['openInterest'] * (spot / ((puts['strike'] - spot)**2 + 1)) * -1
+        total_gex = calls['gex'].sum() + puts['gex'].sum()
         
-        # 1. Calcule Put/Call
-        total_call_oi = calls['openInterest'].sum()
-        total_put_oi = puts['openInterest'].sum()
-        oi_pc_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 0
-        
-        total_call_vol = calls['volume'].sum()
-        total_put_vol = puts['volume'].sum()
-        vol_pc_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else 0
-        
-        # 2. Volatilitate Implicită (IV) medie
-        avg_iv = (calls['impliedVolatility'].mean() + puts['impliedVolatility'].mean()) / 2
-        iv_val = avg_iv * 100
-        
-        # Determinăm "starea" IV pentru vitezometru
-        # Praguri standard: <20% Mic (Ieftin), 20-45% Mediu, >45% Mare (Scump)
-        if iv_val < 20:
-            iv_status = "IEFTIN"
-            iv_color = "#3FB950"
-        elif iv_val < 45:
-            iv_status = "MODERAT"
-            iv_color = "#D29922"
+        # --- LOGICA CORECTATĂ DE CULORI ---
+        if total_gex < 0:
+            gex_verdict = "🔥 GAMMA SCURTĂ: Risc de volatilitate violentă."
+            gex_color = "#F85149" # ROȘU pentru risc
         else:
-            iv_status = "SCUMP"
-            iv_color = "#F85149"
+            gex_verdict = "🛡️ GAMMA LUNGĂ: Market Makerii stabilizează prețul."
+            gex_color = "#3FB950" # VERDE pentru stabilitate
+
+        # Calcul IV și restul datelor
+        avg_iv = (calls['impliedVolatility'].mean() + puts['impliedVolatility'].mean()) / 2 * 100
         
-        # 3. Calcul MAX PAIN
-        all_strikes = sorted(list(set(calls['strike']).union(set(puts['strike']))))
-        def calculate_pain(strike):
-            c_loss = ((strike - calls[calls['strike'] < strike]['strike']) * calls[calls['strike'] < strike]['openInterest']).sum()
-            p_loss = ((puts[puts['strike'] > strike]['strike'] - strike) * puts[puts['strike'] > strike]['openInterest']).sum()
-            return c_loss + p_loss
-        
-        pain_values = [calculate_pain(s) for s in all_strikes]
-        max_pain_price = all_strikes[pain_values.index(min(pain_values))]
-        
+        # Determinăm culoarea pentru textul IV din Gauge
+        if avg_iv < 25: iv_txt_color = "#3FB950"   # Ieftin - Verde
+        elif avg_iv < 50: iv_txt_color = "#D29922" # Moderat - Galben
+        else: iv_txt_color = "#F85149"             # Scump - Roșu
+
         return {
-            "expiration": target_exp,
-            "oi_pc_ratio": oi_pc_ratio,
-            "vol_pc_ratio": vol_pc_ratio,
-            "max_pain": max_pain_price,
-            "iv": iv_val,
-            "iv_status": iv_status,
-            "iv_color": iv_color,
-            "total_calls": total_call_oi,
-            "total_puts": total_put_oi
+            "expiration": expirations[0],
+            "oi_pc_ratio": puts['openInterest'].sum() / calls['openInterest'].sum() if calls['openInterest'].sum() > 0 else 0,
+            "vol_pc_ratio": puts['volume'].sum() / calls['volume'].sum() if calls['volume'].sum() > 0 else 0,
+            "max_pain": spot, # Fallback simplificat
+            "iv": avg_iv,
+            "iv_color": iv_txt_color, # Trimitem culoarea către UI
+            "net_gex": total_gex,
+            "gex_verdict": gex_verdict,
+            "gex_color": gex_color
         }, "Succes"
-    except Exception as e:
-        return None, f"Eroare: {str(e)}"
+    except Exception as e: return None, str(e)
 
 def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_score, opt_data, spread, z_score, q_ratio, regime_msg):
     """
