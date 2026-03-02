@@ -667,4 +667,33 @@ def calculate_master_macro_verdict(df_sectors, credit_ratio_series, corr_matrix,
     else:
         label, color, desc = "CASH / SELL", "#F85149", "🚨 PERICOL: Riscurile sistemice domină piața. Condițiile macro sunt periculoase. Capitalul se retrage rapid"
 
-    return final_score, label, color, desc, reasons                   
+    return final_score, label, color, desc, reasons
+
+def calculate_iv_rank_percentile(ticker_sym, current_iv):
+    """
+    Calculează IV Rank și IV Percentile folosind datele istorice de volatilitate.
+    """
+    try:
+        t = yf.Ticker(ticker_sym)
+        # Avem nevoie de istoric pentru a calcula volatilitatea istorică (HV) ca proxy dacă IV lipsește
+        hist = t.history(period="1y")
+        if hist.empty: return 0, 0
+        
+        # Calculăm volatilitatea realizată (HV) pe 252 de zile
+        returns = np.log(hist['Close'] / hist['Close'].shift(1))
+        vol_hist = returns.rolling(window=21).std() * np.sqrt(252) * 100
+        vol_hist = vol_hist.dropna()
+
+        if vol_hist.empty: return 0, 0
+
+        # IV Rank: (IV_curent - IV_min) / (IV_max - IV_min)
+        iv_min = vol_hist.min()
+        iv_max = vol_hist.max()
+        iv_rank = ((current_iv - iv_min) / (iv_max - iv_min)) * 100
+        
+        # IV Percentile: Procentul de zile din an cu IV mai mic decât cel de azi
+        iv_percentile = (vol_hist < current_iv).mean() * 100
+        
+        return max(0, min(100, iv_rank)), max(0, min(100, iv_percentile))
+    except:
+        return 0, 0                   
