@@ -701,4 +701,55 @@ def calculate_iv_rank_percentile(ticker_sym, current_iv):
         
         return max(0, min(100, iv_rank)), max(0, min(100, iv_percentile))
     except:
-        return 0, 0                   
+        return 0, 0
+
+def get_detailed_ownership_and_execs(ticker_sym):
+    try:
+        t = yf.Ticker(ticker_sym)
+        info = t.info
+        
+        # 1. Extragere CEO
+        ceo_name = "N/A"
+        officers = info.get('companyOfficers', [])
+        for officer in officers:
+            if 'ceo' in officer.get('title', '').lower():
+                ceo_name = officer.get('name', 'N/A')
+                break
+
+        # 2. PROCESARE SIGURĂ ACȚIONARI
+        major = t.major_holders
+        insider_pct, inst_pct = 0.0, 0.0
+        
+        if major is not None and not major.empty:
+            # Transformăm totul în string-uri pentru a căuta etichetele
+            major_df = major.reset_index().astype(str)
+            for _, row in major_df.iterrows():
+                row_str = " ".join(row.values).lower()
+                # Căutăm valoarea numerică în rând
+                nums = [pd.to_numeric(v.replace('%', ''), errors='coerce') for v in row.values]
+                val = next((v for v in nums if not pd.isna(v)), 0.0)
+                
+                # Normalizăm (0.7 -> 70%)
+                val_clean = val * 100 if 0 < val <= 1.0 else val
+                
+                if 'insider' in row_str: insider_pct = val_clean
+                if 'instituti' in row_str or 'held by inst' in row_str: inst_pct = val_clean
+        
+        retail_pct = max(0, 100 - (insider_pct + inst_pct))
+        df_summary = pd.DataFrame({
+            "Tip Acționar": ["Insideri", "Instituții", "Retail / Alții"],
+            "Procent (%)": [insider_pct, inst_pct, retail_pct]
+        })
+
+        # 3. Lista nominală
+        inst_holders = t.institutional_holders
+        if inst_holders is not None and not inst_holders.empty:
+            df_details = inst_holders[['Holder', 'pctHeld', 'Value']].copy()
+            df_details['pctHeld'] = df_details['pctHeld'] * 100
+            df_details.columns = ['Nume Acționar', 'Deținere (%)', 'Valoare ($)']
+        else:
+            df_details = pd.DataFrame()
+
+        return df_summary, df_details, ceo_name, "Succes"
+    except Exception as e:
+        return None, None, "N/A", f"Date indisponibile."                       
