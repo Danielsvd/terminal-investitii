@@ -2267,41 +2267,7 @@ def main():
                 * **Peste 80%:** Zona de pericol. Firma dă aproape tot profitul afară; orice scădere a vânzărilor va duce la tăierea dividendului.
                 """)
 
-            # --- MODUL: ANALIZĂ STRATEGICĂ IA (SWOT) ---
-            st.markdown("---")
-            st.subheader("🎯 Analiză Strategică IA (SWOT)")
-            try:
-                # Importuri din modulul extern
-                from ai_engine import analyze_sentiment_ai, generate_ai_swot_analysis
-                
-                # Colectare date necesare pentru SWOT
-                c_news_ai = get_company_news_rss(real_sym)
-                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
-                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if dcf_calc > 0 else 0
-                z_val_swot, _, _, _ = calculate_altman_z(info)
-                
-                # Generare date SWOT
-                swot_res = generate_ai_swot_analysis(info, h_score, z_val_swot, mos_swot, alpha_val, s_score_val)
-                
-                # Randare vizuală pe coloane
-                s_col1, s_col2 = st.columns(2)
-                with s_col1:
-                    st.success("**💪 PUNCTE TARI**")
-                    for item in swot_res["Strengths"]:
-                        st.write(f"• {item}")
-                    st.warning("**🌟 OPORTUNITĂȚI**")
-                    for item in swot_res["Opportunities"]:
-                        st.write(f"• {item}")
-                with s_col2:
-                    st.error("**⚠️ PUNCTE SLABE**")
-                    for item in swot_res["Weaknesses"]:
-                        st.write(f"• {item}")
-                    st.info("**🚩 AMENINȚĂRI**")
-                    for item in swot_res["Threats"]:
-                        st.write(f"• {item}")
-            except Exception as e:
-                st.warning(f"Modulul SWOT IA este momentan indisponibil.")
-                # --- 1. PROFILUL COMPANIEI (EXECUTIVE SUMMARY) ---
+            # --- 1. PROFILUL COMPANIEI (EXECUTIVE SUMMARY) ---
             st.markdown("---")
             with st.expander("🏢 Vezi Profilul Companiei & Modelul de Business", expanded=True):
                 col_desc1, col_desc2 = st.columns([2, 1])
@@ -2337,8 +2303,42 @@ def main():
                 if info.get('debtToEquity', 0) > 150: st.write("• **Levier ridicat:** Expunere mare la creșterea dobânzilor.")
                 if info.get('payoutRatio', 0) > 0.80: st.write("• **Dividend la limită:** Spațiu restrâns pentru investiții viitoare.")
                 if info.get('forwardPE', 0) > info.get('trailingPE', 0): st.write("• **Așteptări în scădere:** Piața anticipează o încetinire a profitului.")
-                if info.get('beta', 1) > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.") 
-
+                if info.get('beta', 1) > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.")
+            
+            # --- MODUL: ANALIZĂ STRATEGICĂ IA (SWOT) ---
+            st.markdown("---")
+            st.subheader("🎯 Analiză Strategică IA (SWOT)")
+            try:
+                # Importuri din modulul extern
+                from ai_engine import analyze_sentiment_ai, generate_ai_swot_analysis
+                
+                # Colectare date necesare pentru SWOT
+                c_news_ai = get_company_news_rss(real_sym)
+                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
+                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if dcf_calc > 0 else 0
+                z_val_swot, _, _, _ = calculate_altman_z(info)
+                
+                # Generare date SWOT
+                swot_res = generate_ai_swot_analysis(info, h_score, z_val_swot, mos_swot, alpha_val, s_score_val)
+                
+                # Randare vizuală pe coloane
+                s_col1, s_col2 = st.columns(2)
+                with s_col1:
+                    st.success("**💪 PUNCTE TARI**")
+                    for item in swot_res["Strengths"]:
+                        st.write(f"• {item}")
+                    st.warning("**🌟 OPORTUNITĂȚI**")
+                    for item in swot_res["Opportunities"]:
+                        st.write(f"• {item}")
+                with s_col2:
+                    st.error("**⚠️ PUNCTE SLABE**")
+                    for item in swot_res["Weaknesses"]:
+                        st.write(f"• {item}")
+                    st.info("**🚩 AMENINȚĂRI**")
+                    for item in swot_res["Threats"]:
+                        st.write(f"• {item}")
+            except Exception as e:
+                st.warning(f"Modulul SWOT IA este momentan indisponibil.")
             st.markdown("---")
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
