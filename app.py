@@ -2343,15 +2343,19 @@ def main():
 
             # 6. Terminal Intelligence AI (SENTIMENT & PROGNOZĂ)
             st.subheader("🤖 Terminal Intelligence (AI & ML)")
-            # --- NOU: RADAR REGIM DE PIAȚĂ AI (K-Means) ---
-            with st.spinner("AI-ul clasifică regimul de piață..."):
+            # --- RADAR REGIM DE PIAȚĂ CU VALIDARE STATISTICĂ ---
+            with st.spinner("AI-ul validează regimul de piață..."):
                 from ai_engine import detect_market_regime_ai
-                regime_msg, regime_color = detect_market_regime_ai(hist)
+                # Primim acum 3 valori: mesaj, culoare și statistica de backtest
+                regime_msg, regime_color, backtest_info = detect_market_regime_ai(hist)
                 
                 st.markdown(f"""
-                <div style='background:#161B22; padding:15px; border-radius:10px; border-left: 5px solid {regime_color}; margin-bottom: 20px;'>
-                    <p style='margin:0; color:#8B949E; font-size: 11px; text-transform: uppercase; font-weight: bold;'>Radar AI: Regimul Curent al Pieței (K-Means)</p>
-                    <h3 style='margin:5px 0 0 0; color:{regime_color}; font-size: 18px;'>{regime_msg}</h3>
+                <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {regime_color}; margin-bottom: 20px;'>
+                    <p style='margin:0; color:#8B949E; font-size: 11px; text-transform: uppercase; font-weight: bold; letter-spacing:1px;'>Radar AI: Clasificare Regim (K-Means)</p>
+                    <h3 style='margin:10px 0; color:{regime_color}; font-size: 22px;'>{regime_msg}</h3>
+                    <div style='background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border: 1px dashed {regime_color}55;'>
+                        <p style='margin:0; font-size:13px; color:#C9D1D9;'>{backtest_info}</p>
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
                        
