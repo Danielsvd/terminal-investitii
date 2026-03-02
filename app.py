@@ -2280,7 +2280,12 @@ def main():
                 
                 with col_desc2:
                     st.markdown("#### 🛠️ Detalii Tehnice")
-                    st.write(f"**Angajați:** {info.get('fullTimeEmployees', 'N/A'):,}")
+                    
+                    # Extragem valoarea și verificăm dacă este număr
+                    emp = info.get('fullTimeEmployees')
+                    emp_display = f"{emp:,}" if isinstance(emp, (int, float)) else "N/A"
+                    
+                    st.write(f"**Angajați:** {emp_display}")
                     st.write(f"**Sediu:** {info.get('city', 'N/A')}, {info.get('country', 'N/A')}")
                     st.write(f"**Website:** [Vizitează site]({info.get('website', '#')})")
                     st.write(f"**Industrie:** {info.get('industry', 'N/A')}")
