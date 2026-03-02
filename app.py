@@ -1967,7 +1967,7 @@ def main():
                         st.markdown("🚀 **CONCLUZIE:** Achiziție agresivă detectată (Bullish Breakout).")
                     elif rvol > 1.3 and day_change < -1.5:
                         st.markdown("🚨 **CONCLUZIE:** Vânzare de panică sau descărcare instituțională (Bearish Distribution).")
-            
+
             # --- MODUL REPARAT: SMART MONEY FLOW (FIX PROCENT) ---
             st.markdown("---")
             st.subheader("🐳 Smart Money Flow: Dețineri Instituționale")
@@ -2056,6 +2056,69 @@ def main():
                     """, unsafe_allow_html=True)
             except Exception as e:
                 st.caption("Analiza deținerilor este optimizată pentru acțiunile listate în SUA.")
+            
+            # --- MODUL NOU: RADIOGRAFIA ACȚIONARIATULUI & LEADERSHIP ---
+            st.markdown("---")
+            st.subheader("👥 Structura Acționariatului & Leadership")
+
+            from ai_engine import get_detailed_ownership_and_execs
+            with st.spinner("Se analizează registrul acționarilor..."):
+                df_summ, df_inst_list, ceo_name, h_msg = get_detailed_ownership_and_execs(real_sym)
+
+            # --- ACESTA ESTE FIX-UL PENTRU RESTUL CODULUI ---
+            # Extragem procentul de instituții din tabelul de rezumat pentru a-l da mai departe la Master AI
+            if df_summ is not None:
+                inst_percent = df_summ[df_summ['Tip Acționar'] == 'Instituții']['Procent (%)'].values[0]
+            else:
+                inst_percent = 0.0 # Valoare default dacă datele lipsesc
+            # ------------------------------------------------
+
+            if df_summ is not None:
+                # Rândul 1: CEO Card & Rezumat Vizual
+                c_ceo, c_pie = st.columns([1, 1.5])
+                
+                with c_ceo:
+                    st.markdown(f"""
+                    <div style='background:#161B22; padding:25px; border-radius:15px; border-top: 5px solid #58A6FF; text-align:center;'>
+                        <p style='color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;'>Chief Executive Officer (CEO)</p>
+                        <h2 style='margin:10px 0; color:white;'>{ceo_name}</h2>
+                        <div style='background:#23863622; color:#238636; padding:5px; border-radius:5px; font-size:12px; font-weight:bold;'>
+                            👤 Key Personnel Verified
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with c_pie:
+                    fig_h = go.Figure(data=[go.Pie(
+                        labels=df_summ['Tip Acționar'],
+                        values=df_summ['Procent (%)'],
+                        hole=.5,
+                        marker=dict(colors=['#FFAB00', '#58A6FF', '#8B949E']),
+                        textinfo='percent+label'
+                    )])
+                    fig_h.update_layout(height=250, margin=dict(t=0, b=0, l=0, r=0), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_h, use_container_width=True)
+
+                # Rândul 2: Tabel Nominal
+                st.markdown("#### 🏛️ Top 10 Deținători Instituționali (Smart Money)")
+                if not df_inst_list.empty:
+                    st.dataframe(
+                        df_inst_list.style.format({
+                            'Deținere (%)': '{:.2f}%',
+                            'Valoare ($)': '${:,.0f}'
+                        }), 
+                        hide_index=True, 
+                        use_container_width=True
+                    )
+                    
+                    # ALERTĂ GIGANȚI
+                    holders_text = " ".join(df_inst_list['Nume Acționar'].tolist())
+                    if "Vanguard" in holders_text or "BlackRock" in holders_text:
+                        st.success("✅ **Calitate Acționariat:** Gigantii (Vanguard/BlackRock) sunt prezenți. Semnal de stabilitate ridicată.")
+                else:
+                    st.info("Lista nominală a instituțiilor nu este publică pentru acest simbol.")
+            else:
+                st.error(f"Eroare: {h_msg}")    
             st.markdown("---")
 
             # 5. Calculator Fair Value (REPARAT - REACTIVITATE TOTALĂ)
