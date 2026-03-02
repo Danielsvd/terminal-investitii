@@ -169,29 +169,30 @@ def render_ai_chart(forecast, hist):
 
 def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score):
     """
-    Sintetizează datele fundamentale din app.py cu datele AI.
-    Include și s_score (Sentiment Score) în logica SWOT.
+    Sintetizează datele fundamentale cu contextul de business.
     """
     swot = {"Strengths": [], "Weaknesses": [], "Opportunities": [], "Threats": []}
+    sector = info.get('sector', 'General')
     
     # --- STRENGTHS ---
-    if h_score >= 8: swot["Strengths"].append("Sănătate financiară de elită.")
-    if z_val > 3.0: swot["Strengths"].append("Risc de insolvență neglijabil (Z-Score safe).")
-    if s_score > 0.3: swot["Strengths"].append("Sentiment pozitiv puternic în media financiară.")
+    if h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
+    if info.get('profitMargins', 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
+    if s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
-    de = info.get('debtToEquity', 0) or 0
-    if de > 150: swot["Weaknesses"].append("Levier ridicat (Îndatorare peste medie).")
-    if s_score < -0.2: swot["Weaknesses"].append("Sentiment negativ dominant în presă.")
-    if alpha and alpha < -0.05: swot["Weaknesses"].append("Subperformanță cronică față de piață.")
+    if z_val < 1.8: swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
+    if alpha and alpha < -0.05: swot["Weaknesses"].append("Subperformanță cronică (Acțiunea pierde momentum).")
+    if info.get('currentRatio', 1) < 1.0: swot["Weaknesses"].append("Probleme potențiale de lichiditate pe termen scurt.")
 
     # --- OPPORTUNITIES ---
-    if mos_val > 25: swot["Opportunities"].append(f"Sub-evaluare masivă ({mos_val:.1f}% discount).")
-    if s_score > 0.1 and mos_val > 10: swot["Opportunities"].append("Convergență: Preț atractiv + Sentiment în creștere.")
+    if mos_val > 25: swot["Opportunities"].append(f"Fereastră de achiziție sub-evaluată ({mos_val:.1f}% discount).")
+    if sector == "Technology": swot["Opportunities"].append("Expansiune prin integrare AI și automatizare.")
+    if sector == "Energy": swot["Opportunities"].append("Tranziția către surse regenerabile și eficiență carbon.")
 
     # --- THREATS ---
-    if mos_val < -20: swot["Threats"].append("Supra-evaluare critică (Risc de corecție).")
-    if z_val < 1.8: swot["Threats"].append("Vulnerabilitate structurală (Zona de risc financiar).")
+    if mos_val < -20: swot["Threats"].append("Bula de evaluare (Risc major de corecție a prețului).")
+    if yield_spread := info.get('yield_spread', 0.5) < 0: swot["Threats"].append("Recesiune iminentă (Curba dobânzilor inversată).")
+    if sector == "Financial Services": swot["Threats"].append("Risc sistemic de credit și reglementări stricte.")
     
     return swot
 
