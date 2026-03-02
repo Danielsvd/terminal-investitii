@@ -721,27 +721,34 @@ def get_detailed_ownership_and_execs(ticker_sym):
         insider_pct, inst_pct = 0.0, 0.0
         
         if major is not None and not major.empty:
-            # Transformăm totul în string-uri pentru a căuta etichetele
             major_df = major.reset_index().astype(str)
             for _, row in major_df.iterrows():
                 row_str = " ".join(row.values).lower()
-                # Căutăm valoarea numerică în rând
-                nums = [pd.to_numeric(v.replace('%', ''), errors='coerce') for v in row.values]
-                val = next((v for v in nums if not pd.isna(v)), 0.0)
+                # Extragem valoarea numerică curată
+                raw_val = row.iloc[0].replace('%', '').replace(',', '') if isinstance(row.iloc[0], str) else row.iloc[0]
+                val = pd.to_numeric(raw_val, errors='coerce')
                 
-                # Normalizăm (0.7 -> 70%)
-                val_clean = val * 100 if 0 < val <= 1.0 else val
-                
-                if 'insider' in row_str: insider_pct = val_clean
-                if 'instituti' in row_str or 'held by inst' in row_str: inst_pct = val_clean
+                if not pd.isna(val):
+                    # --- LOGICĂ DE NORMALIZARE ANTI-1400% ---
+                    # Dacă valoarea e sub 1.0 (ex: 0.51), e fracție și o înmulțim cu 100
+                    # Dacă e peste 1.0 (ex: 51.78), e deja procent și o lăsăm așa
+                    val_clean = val * 100 if 0 < val <= 1.0 else val
+                    
+                    if 'insider' in row_str: insider_pct = val_clean
+                    if 'instituti' in row_str or 'held by inst' in row_str: inst_pct = val_clean
         
+        # Fallback: Dacă tabelul major_holders e gol, luăm din info direct
+        if inst_pct == 0:
+            val_info = info.get('heldPercentInstitutions', 0)
+            inst_pct = val_info * 100 if val_info <= 1.0 else val_info
+
         retail_pct = max(0, 100 - (insider_pct + inst_pct))
         df_summary = pd.DataFrame({
             "Tip Acționar": ["Insideri", "Instituții", "Retail / Alții"],
             "Procent (%)": [insider_pct, inst_pct, retail_pct]
         })
 
-        # 3. Lista nominală
+        # 3. Lista nominală (Top 10)
         inst_holders = t.institutional_holders
         if inst_holders is not None and not inst_holders.empty:
             df_details = inst_holders[['Holder', 'pctHeld', 'Value']].copy()
@@ -750,6 +757,6 @@ def get_detailed_ownership_and_execs(ticker_sym):
         else:
             df_details = pd.DataFrame()
 
-        return df_summary, df_details, ceo_name, "Succes"
-    except Exception as e:
-        return None, None, "N/A", f"Date indisponibile."                       
+        return df_summary, df_details, ceo_name, inst_pct
+    except:
+        return None, None, "N/A", 0.0
