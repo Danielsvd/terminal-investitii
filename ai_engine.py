@@ -198,48 +198,53 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score):
 
 def detect_market_regime_ai(hist_data):
     """
-    Folosește K-Means Clustering (Machine Learning) pentru a clasifica
-    automat regimul curent al pieței pe baza volatilității și randamentului.
+    Folosește K-Means pentru clasificare și calculează Win Rate-ul istoric al regimului.
     """
     try:
-        if hist_data is None or len(hist_data) < 50:
-            return "Date insuficiente pentru ML", "#8B949E"
+        if hist_data is None or len(hist_data) < 60:
+            return "Date insuficiente", "#8B949E", "ℹ️ Minim 60 de zile necesare pentru backtest."
 
-        # 1. Extragem "Trăsăturile" (Features) pentru modelul AI
+        # 1. Feature Engineering
         df_ml = pd.DataFrame()
-        # Randamentul zilnic
         df_ml['Return'] = hist_data['Close'].pct_change() * 100
-        # Volatilitatea (cât de agresiv se mișcă prețul)
-        df_ml['Volatility'] = df_ml['Return'].rolling(window=10).std() 
-        df_ml = df_ml.dropna()
+        df_ml['Volatility'] = df_ml['Return'].rolling(window=10).std()
         
-        # 2. Antrenăm modelul K-Means (Găsește 3 comportamente distincte ale pieței)
+        # Calculăm "Forward Return" la 20 de zile (ce s-a întâmplat după semnal)
+        # Shift(-20) aduce prețul din viitor în rândul curent pentru calcul
+        df_ml['Fwd_20d_Ret'] = df_ml['Return'].shift(-20).rolling(20).sum()
+        df_ml = df_ml.dropna(subset=['Return', 'Volatility'])
+        
+        # 2. Clustering K-Means (3 regimuri)
         X = df_ml[['Return', 'Volatility']].values
         kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
         df_ml['Cluster'] = kmeans.fit_predict(X)
         
-        # 3. Analizăm centrele clusterelor pentru a ști care e "Panică" și care e "Bull"
         centers = kmeans.cluster_centers_
-        
-        # Clusterul cu cea mai mare volatilitate este clar regimul de Panică
-        panic_cluster = np.argmax(centers[:, 1])
-        # Clusterul cu cel mai mare randament mediu este regimul Bull
-        bull_cluster = np.argmax(centers[:, 0])
-        
-        # Ce a decis AI-ul pentru ZIUA DE AZI?
+        panic_cluster = np.argmax(centers[:, 1]) # Volatilitate maximă
+        bull_cluster = np.argmax(centers[:, 0])  # Randament maxim
         current_cluster = df_ml['Cluster'].iloc[-1]
         
-        # 4. Formulăm Verdictul
-        if current_cluster == panic_cluster:
-            return "🚨 REGIM PANICĂ (Volatilitate Extremă - Prudență maximă)", "#F85149"
-        elif current_cluster == bull_cluster:
-            return "🚀 REGIM TREND ASCENDENT (Acumulare instituțională)", "#3FB950"
+        # 3. LOGICA DE BACKTESTING
+        # Analizăm toate zilele din trecut care au fost în același cluster cu ziua de azi
+        cluster_history = df_ml[df_ml['Cluster'] == current_cluster].dropna(subset=['Fwd_20d_Ret'])
+        
+        if not cluster_history.empty:
+            win_rate = (cluster_history['Fwd_20d_Ret'] > 0).mean() * 100
+            avg_fwd_ret = cluster_history['Fwd_20d_Ret'].mean()
+            backtest_msg = f"📊 **Backtest:** Rata de succes istorică {win_rate:.1f}% | Profit mediu forward (20z): {avg_fwd_ret:+.2f}%"
         else:
-            return "⚖️ REGIM CONSOLIDARE (Zgomot de piață / Așteptare)", "#D29922"
+            backtest_msg = "ℹ️ Date istorice insuficiente pentru un backtest relevant."
+
+        # Verdict
+        if current_cluster == panic_cluster:
+            return "🚨 REGIM PANICĂ (Volatilitate Extremă)", "#F85149", backtest_msg
+        elif current_cluster == bull_cluster:
+            return "🚀 REGIM TREND ASCENDENT (Bullish)", "#3FB950", backtest_msg
+        else:
+            return "⚖️ REGIM CONSOLIDARE (Lateral)", "#D29922", backtest_msg
 
     except Exception as e:
-        print(f"Eroare AI Market Regime: {e}")
-        return "Model AI Offline", "#8B949E"
+        return "Model Offline", "#8B949E", f"Eroare: {str(e)}"
     
 def optimize_portfolio_ai(hist_data):
     """
