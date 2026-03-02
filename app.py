@@ -1690,7 +1690,7 @@ def main():
             c1.metric("Sector", info.get('sector', 'N/A'))
             c2.metric("Industrie", info.get('industry', 'N/A'))
             c3.metric("Capitalizare", format_num(info.get('marketCap')))             
-         
+        
         # --- 1. DEFINIREA PREȚULUI (VITAL PENTRU CALCULE) ---
             # Luăm ultimul preț disponibil din istoricul deja descărcat
             curr_price = hist['Close'].iloc[-1] if not hist.empty else 0
@@ -2301,6 +2301,43 @@ def main():
                         st.write(f"• {item}")
             except Exception as e:
                 st.warning(f"Modulul SWOT IA este momentan indisponibil.")
+                # --- 1. PROFILUL COMPANIEI (EXECUTIVE SUMMARY) ---
+            st.markdown("---")
+            with st.expander("🏢 Vezi Profilul Companiei & Modelul de Business", expanded=True):
+                col_desc1, col_desc2 = st.columns([2, 1])
+                
+                with col_desc1:
+                    st.markdown("#### 📖 Descriere Activitate")
+                    summary = info.get('longBusinessSummary', 'Descriere indisponibilă.')
+                    # Afișăm doar primele 600 de caractere cu opțiune de expandare dacă e prea lungă
+                    st.write(summary if len(summary) < 600 else summary[:600] + "...")
+                
+                with col_desc2:
+                    st.markdown("#### 🛠️ Detalii Tehnice")
+                    st.write(f"**Angajați:** {info.get('fullTimeEmployees', 'N/A'):,}")
+                    st.write(f"**Sediu:** {info.get('city', 'N/A')}, {info.get('country', 'N/A')}")
+                    st.write(f"**Website:** [Vizitează site]({info.get('website', '#')})")
+                    st.write(f"**Industrie:** {info.get('industry', 'N/A')}")
+
+            # --- 2. PUNCTE FORTE ȘI SLABE (DETECȚIE AUTOMATĂ) ---
+            st.markdown("#### 🧠 Analiză Calitativă Rapidă")
+            q_col1, q_col2 = st.columns(2)
+            
+            # Logica de generare a punctelor (bazată pe datele din INFO)
+            with q_col1:
+                st.success("**✅ Puncte Forte (Competitive Advantages)**")
+                # Detectăm "Moat"-ul prin marje și cash
+                if info.get('profitMargins', 0) > 0.20: st.write("• **Marje ridicate:** Putere mare de stabilire a prețurilor (Pricing Power).")
+                if info.get('totalCash', 0) > info.get('totalDebt', 0): st.write("• **Poziție Net Cash:** Bilanț extrem de rezistent la crize.")
+                if info.get('returnOnEquity', 0) > 0.15: st.write("• **Eficiență Capital:** Management performant în alocarea resurselor.")
+                if "Technology" in info.get('sector', ''): st.write("• **Scalabilitate:** Model de business bazat pe IP și software.")
+
+            with q_col2:
+                st.error("**⚠️ Vulnerabilități (Potential Risks)**")
+                if info.get('debtToEquity', 0) > 150: st.write("• **Levier ridicat:** Expunere mare la creșterea dobânzilor.")
+                if info.get('payoutRatio', 0) > 0.80: st.write("• **Dividend la limită:** Spațiu restrâns pentru investiții viitoare.")
+                if info.get('forwardPE', 0) > info.get('trailingPE', 0): st.write("• **Așteptări în scădere:** Piața anticipează o încetinire a profitului.")
+                if info.get('beta', 1) > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.") 
 
             st.markdown("---")
 
