@@ -1967,140 +1967,55 @@ def main():
                         st.markdown("🚀 **CONCLUZIE:** Achiziție agresivă detectată (Bullish Breakout).")
                     elif rvol > 1.3 and day_change < -1.5:
                         st.markdown("🚨 **CONCLUZIE:** Vânzare de panică sau descărcare instituțională (Bearish Distribution).")
-
-            # --- MODUL REPARAT: SMART MONEY FLOW (FIX PROCENT) ---
-            st.markdown("---")
-            st.subheader("🐳 Smart Money Flow: Dețineri Instituționale")
-
-            try:
-                t_whale = yf.Ticker(real_sym)
-                major_df = t_whale.major_holders
-                
-                inst_percent = 0.0
-                
-                if major_df is not None and not major_df.empty:
-                    # Resetăm indexul pentru a procesa corect ambele coloane
-                    major_df = major_df.reset_index()
-                    
-                    for _, row in major_df.iterrows():
-                        label = str(row.iloc[1]).lower() # De obicei a doua coloană e textul
-                        value = row.iloc[0]              # Prima coloană e valoarea
-                        
-                        if 'institutions' in label or 'institu' in label:
-                            try:
-                                # Conversie sigură la float
-                                raw_val = float(value)
-                                # FIX: Dacă valoarea este > 1, înseamnă că e deja procent (ex: 60.5)
-                                # Dacă este < 1, este fracție (ex: 0.605)
-                                if 0 < raw_val <= 1.0:
-                                    inst_percent = raw_val * 100
-                                elif 1.0 < raw_val <= 100.0:
-                                    inst_percent = raw_val
-                                else:
-                                    # Dacă e peste 100, e probabil numărul de instituții, nu procentul
-                                    # Căutăm în cealaltă coloană sau rândul următor
-                                    continue
-                                break
-                            except: continue
-
-                # Dacă tot e 0, încercăm o metodă secundară din info
-                if inst_percent == 0:
-                    inst_percent = info.get('heldPercentInstitutions', 0) * 100
-
-                iw_col1, iw_col2 = st.columns([1, 2])
-                
-                with iw_col1:
-                    # Determinarea culorii și mesajului pe baza pragurilor profesionale
-                    if inst_percent > 70:
-                        status_msg = "💎 SUPORT ELITĂ"
-                        status_desc = "Instituțiile domină total. Volatilitate scăzută."
-                        status_color = "#3FB950" # Verde aprins
-                    elif inst_percent > 50:
-                        status_msg = "✅ SUPORT SOLID"
-                        status_desc = "Majoritate instituțională. Bază de investitori stabilă."
-                        status_color = "#238636" # Verde închis
-                    elif inst_percent > 30:
-                        status_msg = "⚖️ POZIȚIONARE MIXTĂ"
-                        status_desc = "Echilibru între fonduri și retail. Atenție la știri."
-                        status_color = "#D29922" # Galben/Portocaliu
-                    else:
-                        status_msg = "🚨 EXTREM DE SLAB"
-                        status_desc = "Retail dominant. Risc ridicat de mișcări speculative."
-                        status_color = "#F85149" # Roșu
-
-                    st.markdown(f"""
-                        <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {status_color}; text-align:center;">
-                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Dețineri Instituționale Totale</p>
-                            <h1 style="color:{status_color}; margin:10px 0;">{inst_percent:.2f}%</h1>
-                            <div style="background:{status_color}22; color:{status_color}; padding:5px; border-radius:5px; font-weight:bold; font-size:14px;">
-                                {status_msg}
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                with iw_col2:
-                    st.markdown(f"### 🚩 Analiză Acționariat: {real_sym}")
-                    st.write(f"**Verdict:** {status_desc}")
-                    
-                    # Bara de progres vizuală pentru context rapid
-                    st.progress(inst_percent / 100)
-                    
-                    st.markdown(f"""
-                    <div style="background:#21262D; padding:15px; border-radius:10px; margin-top:10px;">
-                        <p style="font-size:14px; margin-bottom:5px;">💡 <b>De ce contează?</b></p>
-                        <p style="font-size:13px; color:#8B949E; line-height:1.4;">
-                            {'Fondurile mari (Vanguard, BlackRock) au "mâini puternice" și nu vând în panică, oferind un prag de suport prețului.' if inst_percent > 50 
-                            else 'Lipsa instituțiilor înseamnă că prețul este dictat de investitori mici, care pot vinde agresiv la prima veste negativă.'}
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-            except Exception as e:
-                st.caption("Analiza deținerilor este optimizată pentru acțiunile listate în SUA.")
             
-            # --- MODUL NOU: RADIOGRAFIA ACȚIONARIATULUI & LEADERSHIP ---
+            # --- 🕵️‍♂️ MODUL CONSOLIDAT: LEADERSHIP & ACȚIONARIAT ---
             st.markdown("---")
             st.subheader("👥 Structura Acționariatului & Leadership")
 
             from ai_engine import get_detailed_ownership_and_execs
-            with st.spinner("Se analizează registrul acționarilor..."):
-                df_summ, df_inst_list, ceo_name, h_msg = get_detailed_ownership_and_execs(real_sym)
+            with st.spinner("Se decodează registrul acționarilor..."):
+                df_summ, df_inst_list, ceo_name, total_inst_val = get_detailed_ownership_and_execs(real_sym)
 
-            # --- ACESTA ESTE FIX-UL PENTRU RESTUL CODULUI ---
-            # Extragem procentul de instituții din tabelul de rezumat pentru a-l da mai departe la Master AI
-            if df_summ is not None:
-                inst_percent = df_summ[df_summ['Tip Acționar'] == 'Instituții']['Procent (%)'].values[0]
-            else:
-                inst_percent = 0.0 # Valoare default dacă datele lipsesc
-            # ------------------------------------------------
+            # FIX CRITIC PENTRU MASTER AI:
+            # Această variabilă va fi folosită mai jos de algoritmul de decizie
+            inst_percent = total_inst_val 
 
             if df_summ is not None:
-                # Rândul 1: CEO Card & Rezumat Vizual
-                c_ceo, c_pie = st.columns([1, 1.5])
+                # Rândul 1: Carduri de Status
+                c_ceo, c_total, c_graph = st.columns([1.2, 1.2, 1])
                 
                 with c_ceo:
                     st.markdown(f"""
-                    <div style='background:#161B22; padding:25px; border-radius:15px; border-top: 5px solid #58A6FF; text-align:center;'>
-                        <p style='color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;'>Chief Executive Officer (CEO)</p>
-                        <h2 style='margin:10px 0; color:white;'>{ceo_name}</h2>
-                        <div style='background:#23863622; color:#238636; padding:5px; border-radius:5px; font-size:12px; font-weight:bold;'>
-                            👤 Key Personnel Verified
-                        </div>
+                    <div style='background:#161B22; padding:20px; border-radius:15px; border-top: 4px solid #58A6FF; text-align:center; height:130px;'>
+                        <p style='color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;'>Director Executiv (CEO)</p>
+                        <h3 style='margin:10px 0; color:white; font-size:18px;'>{ceo_name}</h3>
                     </div>
                     """, unsafe_allow_html=True)
 
-                with c_pie:
-                    fig_h = go.Figure(data=[go.Pie(
+                with c_total:
+                    # Calculăm culoarea în funcție de dominanță
+                    i_col = "#3FB950" if inst_percent > 50 else "#D29922"
+                    st.markdown(f"""
+                    <div style='background:#161B22; padding:20px; border-radius:15px; border-top: 4px solid {i_col}; text-align:center; height:130px;'>
+                        <p style='color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;'>Dețineri Instituționale Totale</p>
+                        <h2 style='margin:10px 0; color:{i_col};'>{inst_percent:.2f}%</h2>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with c_graph:
+                    # Donut chart minimalist pentru context
+                    fig_mini = go.Figure(data=[go.Pie(
                         labels=df_summ['Tip Acționar'],
                         values=df_summ['Procent (%)'],
-                        hole=.5,
+                        hole=.6,
                         marker=dict(colors=['#FFAB00', '#58A6FF', '#8B949E']),
-                        textinfo='percent+label'
+                        textinfo='none'
                     )])
-                    fig_h.update_layout(height=250, margin=dict(t=0, b=0, l=0, r=0), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_h, use_container_width=True)
+                    fig_mini.update_layout(height=130, margin=dict(t=0, b=0, l=0, r=0), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_mini, use_container_width=True)
 
-                # Rândul 2: Tabel Nominal
-                st.markdown("#### 🏛️ Top 10 Deținători Instituționali (Smart Money)")
+                # Rândul 2: Tabelul Nominal (Balenele)
+                st.markdown("#### 🏛️ Top 10 Deținători Instituționali")
                 if not df_inst_list.empty:
                     st.dataframe(
                         df_inst_list.style.format({
@@ -2110,15 +2025,10 @@ def main():
                         hide_index=True, 
                         use_container_width=True
                     )
-                    
-                    # ALERTĂ GIGANȚI
-                    holders_text = " ".join(df_inst_list['Nume Acționar'].tolist())
-                    if "Vanguard" in holders_text or "BlackRock" in holders_text:
-                        st.success("✅ **Calitate Acționariat:** Gigantii (Vanguard/BlackRock) sunt prezenți. Semnal de stabilitate ridicată.")
                 else:
-                    st.info("Lista nominală a instituțiilor nu este publică pentru acest simbol.")
+                    st.info("Detaliile nominale nu sunt publice pentru acest simbol.")
             else:
-                st.error(f"Eroare: {h_msg}")    
+                st.warning("Datele despre acționari sunt momentan indisponibile.")    
             st.markdown("---")
 
             # 5. Calculator Fair Value (REPARAT - REACTIVITATE TOTALĂ)
