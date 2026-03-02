@@ -2560,6 +2560,28 @@ def main():
                     diff_mp = ((mp / current_market_price) - 1) * 100 if current_market_price > 0 else 0
                     m3.metric("Preț Max Pain", f"${mp:.1f}", f"{diff_mp:.1f}%")
                     m4.metric("Data Expirării", opt_data['expiration'])
+                # --- INTEGRARE IV RANK & PERCENTILE ---
+                with col_met:
+                    # Obținem datele din motorul AI
+                    from ai_engine import calculate_iv_rank_percentile
+                    iv_rank, iv_pct = calculate_iv_rank_percentile(real_sym, opt_data['iv'])
+                    
+                    st.write("") # Spațiu vizual
+                    c_rank1, c_rank2 = st.columns(2)
+                    
+                    # Interpretare culori
+                    rank_col = "#F85149" if iv_rank > 70 else ("#3FB950" if iv_rank < 30 else "#D29922")
+                    
+                    c_rank1.metric("IV Rank", f"{iv_rank:.1f}%", 
+                                help="Unde se află IV-ul de azi între minimul și maximul din ultimul an.")
+                    c_rank2.metric("IV Percentile", f"{iv_pct:.1f}%",
+                                help="Câte zile din ultimul an au avut un IV mai mic decât cel de azi.")
+
+                # --- VERDICT FINAL OPȚIUNI (ACTUALIZAT) ---
+                if iv_rank > 80:
+                    st.warning(f"💎 **STRATEGIE SHORT VOL:** Opțiunile sunt la extreme istorice. Este un moment excelent pentru a VINDE volatilitate (ex: Covered Calls), nu pentru a cumpăra.")
+                elif iv_rank < 20:
+                    st.success(f"🛒 **STRATEGIE LONG VOL:** Opțiunile sunt neobișnuit de ieftine față de istoric. Moment ideal pentru achiziție de protecție (Puts) sau speculă (Calls).")    
 
                 # --- RÂNDUL 2: VERDICTUL INTELIGENT (RESTABILIT) ---
                 oi_pc = opt_data['oi_pc_ratio']
