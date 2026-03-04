@@ -375,9 +375,9 @@ def get_watchlist_target(symbol):
 def get_peers_analysis(sector, industry, current_ticker):
     """Extrage competitori și include datoria pentru o analiză de risc."""
     peers_map = {
-        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "META", "TSM", "QCOM"],
+        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "FSLR", "META", "TSM", "QCOM"],
         "Financial Services": ["JPM", "BAC", "GS", "WFC", "C", "V", "MS", "MA", "AXP", "SCHW"],
-        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "FSLR", "VST", 'VG', "UUUU", "LEU", "CEG"],
+        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "D", "VST", 'VG', "UUUU", "LEU", "CEG"],
         "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
         "Industrials": ["LMT", "RTX", "NOC", "BA", "GD", "MMM", "CAT", "DAL", "UAL"],
         "Basic Materials": ["RIO", "VALE", "BHP", "FCX", "NEM", "AEM", "GLNCY", "USAR", "AREC", "MP", "METC", "LAC"],
@@ -1840,6 +1840,107 @@ def main():
                     st.metric("Alpha (1Y)", format_num(alpha_val, True))
             
             # ==================================================
+            # MODUL NOU: DATE FINANCIARE VIZUALE (STIL XTB)
+            # ==================================================
+            st.markdown("---")
+            st.subheader("📊 Evoluție Financiară (Venit vs. Profit Net)")
+            
+            with st.spinner("Extragem datele contabile..."):
+                try:
+                    t_fin = yf.Ticker(real_sym)
+                    
+                    # Preluăm datele (yfinance le aduce cu datele pe coloane, deci facem Transpose .T)
+                    df_ann = t_fin.financials.T
+                    df_qtr = t_fin.quarterly_financials.T
+                    
+                    # Curățăm și ordonăm cronologic (cele mai vechi primele)
+                    if not df_ann.empty and not df_qtr.empty:
+                        df_ann = df_ann.sort_index(ascending=True)
+                        df_qtr = df_qtr.sort_index(ascending=True)
+                        
+                        # Creăm Tab-uri exact ca în XTB
+                        tab_anual, tab_trimestrial = st.tabs(["🗓️ Anual", "📅 Trimestrial"])
+                        
+                        def draw_financial_chart(df, title, is_quarterly=False):
+                            from plotly.subplots import make_subplots # Asigură-te că e importat
+                            
+                            # Identificăm coloanele corecte
+                            rev_col = 'Total Revenue' if 'Total Revenue' in df.columns else 'Operating Revenue'
+                            net_col = 'Net Income' if 'Net Income' in df.columns else 'Net Income Common Stockholders'
+                            
+                            if rev_col not in df.columns or net_col not in df.columns:
+                                return st.info("Date financiare incomplete pentru grafic.")
+                                
+                            # Păstrăm ultimele 5 perioade și folosim .copy() pentru a evita erorile de manipulare pandas
+                            df_plot = df.tail(5).copy()
+                            
+                            # CALCULĂM MARJA NETĂ (%) LA CALD
+                            df_plot['Net Margin'] = (df_plot[net_col] / df_plot[rev_col]) * 100
+                            
+                            # Formatăm axa X
+                            if is_quarterly:
+                                x_labels = [f"T{d.quarter} {d.year}" for d in df_plot.index]
+                            else:
+                                x_labels = [str(d.year) for d in df_plot.index]
+
+                            # CREĂM UN GRAFIC CU AXĂ SECUNDARĂ (Y2)
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            
+                            # Bara 1: Venit (Axa Principală Stânga)
+                            fig.add_trace(go.Bar(
+                                x=x_labels, y=df_plot[rev_col],
+                                name='Venit', marker_color='#58A6FF', opacity=0.8,
+                                text=df_plot[rev_col].apply(lambda x: format_num(x)), textposition='auto'
+                            ), secondary_y=False)
+                            
+                            # Bara 2: Profit Net (Axa Principală Stânga)
+                            colors_net = ['#3FB950' if val > 0 else '#F85149' for val in df_plot[net_col]]
+                            fig.add_trace(go.Bar(
+                                x=x_labels, y=df_plot[net_col],
+                                name='Venit Net', marker_color=colors_net, opacity=0.9,
+                                text=df_plot[net_col].apply(lambda x: format_num(x)), textposition='auto'
+                            ), secondary_y=False)
+
+                            # Linia: Marja Netă (Axa Secundară Dreapta)
+                            fig.add_trace(go.Scatter(
+                                x=x_labels, y=df_plot['Net Margin'],
+                                name='Marja Netă (%)', mode='lines+markers+text',
+                                line=dict(color='#FFAB00', width=3),
+                                marker=dict(size=10, symbol='diamond', color='#FFAB00', line=dict(width=1, color='white')),
+                                text=df_plot['Net Margin'].apply(lambda x: f"{x:.1f}%"),
+                                textposition='top center',
+                                textfont=dict(color='#FFAB00', weight='bold')
+                            ), secondary_y=True)
+
+                            # Stilizare layout pentru un aspect curat și "aerisit"
+                            fig.update_layout(
+                                barmode='group',
+                                height=450, # Am mărit un pic înălțimea pentru a acomoda textul de deasupra liniei
+                                template="plotly_dark",
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+                                margin=dict(l=0, r=0, t=50, b=0),
+                                hovermode="x unified"
+                            )
+                            
+                            # Setări specifice pentru cele două axe Y
+                            fig.update_yaxes(title_text="", showgrid=True, gridcolor='#30363D', secondary_y=False)
+                            fig.update_yaxes(title_text="Marjă (%)", showgrid=False, ticksuffix="%", color="#FFAB00", secondary_y=True)
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+
+                        with tab_anual:
+                            draw_financial_chart(df_ann, "Evoluție Anuală")
+                            
+                        with tab_trimestrial:
+                            draw_financial_chart(df_qtr, "Evoluție Trimestrială", is_quarterly=True)
+                            
+                    else:
+                        st.info("Bilanțurile detaliate nu sunt disponibile pentru acest simbol.")
+                except Exception as e:
+                    st.warning(f"A apărut o problemă la generarea graficului contabil: {e}")
+            # ==================================================
             # MODUL PRO: PEER ANALYSIS (CARDURI SUS + TABEL JOS)
             # ==================================================
             st.markdown("---")
@@ -2662,7 +2763,126 @@ def main():
                         st.markdown(f"<div style='background:rgba(63, 185, 80, 0.05); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3FB950;'>{reason}</div>", unsafe_allow_html=True)
                     else:
                         st.markdown(f"<div style='background:#21262D; padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #8B949E;'>{reason}</div>", unsafe_allow_html=True)
+            
+            # ==================================================
+            # MODUL NOU: PREZENTARE GENERALĂ AI (CLONA XTB PERPLEXITY)
+            # ==================================================
             st.markdown("---")
+            st.subheader("✨ Prezentare generală cu inteligența artificială")
+            
+            with st.spinner("Motorul Quant-AI sintetizează fundamentele și media..."):
+                bullets = []
+                
+                # Extragem datele vitale la cald
+                pe_ratio = info.get('trailingPE', 0) or 0
+                pb_ratio = info.get('priceToBook', 0) or 0
+                margins = (info.get('profitMargins', 0) or 0) * 100
+                beta = info.get('beta', 1) or 1
+                
+                # --- BULLET 1: Profitabilitate & Venituri ---
+                if margins > 0:
+                    if margins > 15:
+                        text_fin = f"Compania raportează rezultate fundamentale puternice, cu o marjă netă de profit de {margins:.2f}%. Această eficiență operațională ridicată consolidează încrederea investitorilor pe termen lung."
+                        bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_fin})
+                    else:
+                        text_fin = f"Compania menține o profitabilitate moderată, operând cu o marjă netă de {margins:.2f}%, o valoare standard pentru dinamica actuală a sectorului său."
+                        bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_fin})
+                elif margins < 0:
+                    text_fin = f"Rezultatele recente indică presiuni operaționale, compania raportând pierderi cu o marjă netă negativă de {margins:.2f}%, un factor de risc major pentru acționari."
+                    bullets.append({"icon": "↘️", "color": "#F85149", "text": text_fin})
+
+                # --- BULLET 2: Sentimentul Știrilor (Context) ---
+                c_news_ai = get_company_news_rss(real_sym)
+                if c_news_ai:
+                    top_news = c_news_ai[0]['title']
+                    from ai_engine import analyze_sentiment_ai
+                    s_score = analyze_sentiment_ai(c_news_ai)
+                    
+                    if s_score > 0.15:
+                        text_news = f"Sentimentul media general este optimist. Atenția presei este captată de evoluții pozitive, un catalizator recent fiind: «{top_news}»."
+                        bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_news})
+                    elif s_score < -0.15:
+                        text_news = f"Narațiunea mediatică este dominată de îngrijorări sau reglementări stricte. Titlurile recente reflectă pesimism, precum: «{top_news}»."
+                        bullets.append({"icon": "↘️", "color": "#F85149", "text": text_news})
+                    else:
+                        text_news = f"Acoperirea în presă este neutră, fără șocuri reputaționale majore în ultimele 24 de ore. Subiectul momentului: «{top_news}»."
+                        bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_news})
+
+                # --- BULLET 3: Volatilitate / Risc (Analiză Beta) ---
+                if beta > 1.3:
+                    text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața din SUA (Beta de {beta:.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
+                    bullets.append({"icon": "↘️", "color": "#F85149", "text": text_vol})
+                elif beta < 0.8:
+                    text_vol = f"Acțiunea prezintă o volatilitate redusă față de piața generală (Beta de {beta:.2f}), comportându-se ca un activ defensiv în perioadele de incertitudine."
+                    bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_vol})
+
+                # --- BULLET 4: Evaluare Multipli ---
+                if pe_ratio > 30:
+                    text_val = f"Multipli de evaluare ridicați, inclusiv un raport P/E de {pe_ratio:.2f} și P/B de {pb_ratio:.2f}, sugerează că acțiunea ar putea fi supraevaluată în raport cu fundamentele contabile curente."
+                    bullets.append({"icon": "↘️", "color": "#F85149", "text": text_val})
+                elif 0 < pe_ratio < 15:
+                    text_val = f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {pe_ratio:.2f}), indicând o potențială subevaluare din partea pieței raportat la capacitatea sa de generare a profitului."
+                    bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_val})
+
+                # --- RANDARE UI PREMIUM ---
+                if bullets:
+                    st.markdown("""
+                    <style>
+                    .xtb-bullet-container {
+                        background-color: #161B22; 
+                        padding: 25px; 
+                        border-radius: 12px; 
+                        border: 1px solid #30363D;
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    }
+                    .xtb-row {
+                        display: flex; 
+                        align-items: flex-start; 
+                        margin-bottom: 20px;
+                    }
+                    .xtb-icon {
+                        margin-right: 15px; 
+                        font-size: 20px; 
+                        margin-top: -2px;
+                    }
+                    .xtb-text {
+                        font-size: 15px; 
+                        color: #C9D1D9; 
+                        line-height: 1.5;
+                        font-weight: 400;
+                    }
+                    .xtb-footer {
+                        margin-top: 10px; 
+                        font-size: 12px; 
+                        color: #8B949E; 
+                        border-top: 1px solid #30363D; 
+                        padding-top: 15px; 
+                        display: flex; 
+                        justify-content: space-between;
+                        align-items: center;
+                    }
+                    </style>
+                    <div class="xtb-bullet-container">
+                    """, unsafe_allow_html=True)
+                    
+                    for b in bullets:
+                        st.markdown(f"""
+                        <div class="xtb-row">
+                            <div class="xtb-icon" style="color: {b['color']};">{b['icon']}</div>
+                            <div class="xtb-text">{b['text']}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    st.markdown("""
+                        <div class="xtb-footer">
+                            <span>Informațiile de mai sus au fost generate algoritmic. Nu le trata ca recomandare sau sfat de investiții.</span>
+                            <span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.info("Date insuficiente pentru generarea sintezei AI.")
+            st.markdown("---")    
             
             # 7. Ultimele Știri (RESTABILITE)
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
