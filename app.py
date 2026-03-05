@@ -2851,8 +2851,10 @@ def main():
 
                 with col_met:
                     m1, m2 = st.columns(2)
-                    m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}")
-                    m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}")
+                    m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}",
+                              help="Open Interest (Banii blocați): Raportul total al pariurilor pe scădere (Puts) vs creștere (Calls). Sub 0.7 = Optimism (Bullish); Peste 1.0 = Pesimism/Frică (Bearish).")
+                    m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}",
+                              help="Volum (Banii de azi): Indică panica sau entuziasmul intraday. Se mișcă mai rapid decât OI. Valori mari bruste indică vânzări de panică.")
                     
                     m3, m4 = st.columns(2)
                     mp = opt_data['max_pain']
