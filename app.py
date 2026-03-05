@@ -1750,10 +1750,18 @@ def main():
 
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
-            # --- CALCULĂM INDICATORII ȘI ATR STOP LÂNGĂ DATELE DE BAZĂ ---
-            hist = calculate_technical_indicators(hist)
-            hist = calculate_atr_trailing_stop(hist)
-            sl_price = hist['ATR_Stop'].iloc[-1] if 'ATR_Stop' in hist.columns else 0
+            
+            # --- VERIFICARE DE SIGURANȚĂ (OBLIGATORIE PENTRU CLOUD) ---
+            if hist is not None and not hist.empty:
+                # Doar dacă avem date, calculăm indicatorii
+                hist = calculate_technical_indicators(hist)
+                hist = calculate_atr_trailing_stop(hist)
+                
+                # Extragem prețul SL în siguranță
+                if 'ATR_Stop' in hist.columns:
+                    sl_price = hist['ATR_Stop'].iloc[-1]
+                else:
+                    sl_price = 0
             # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
             try:
                 # Preluăm spread-ul 10Y-2Y pentru rating
@@ -1865,8 +1873,6 @@ def main():
             sl_price = subset['ATR_Stop'].iloc[-1]
             dist_to_sl = ((curr_price - sl_price) / curr_price) * 100
 
-            st.sidebar.markdown("---")
-            st.sidebar.metric("STOP-LOSS RECOMANDAT (ATR)", f"{sl_price:.2f}", f"-{dist_to_sl:.2f}%")
             if show_sma20: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA20'], line=dict(color='orange', width=1), name='SMA 20'), row=1, col=1)
             if show_sma50: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA50'], line=dict(color='cyan', width=1), name='SMA 50'), row=1, col=1)
             if show_sma200: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA200'], line=dict(color='purple', width=1.5), name='SMA 200'), row=1, col=1)
