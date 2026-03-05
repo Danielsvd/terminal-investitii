@@ -3205,9 +3205,14 @@ def main():
                     # Calculăm Value at Risk Proiectat
                     expected_loss = ((last_val - p5) / last_val) * 100
                     
-                    c_mc1.metric("Worst Case Value", f"{p5:,.2f} {currency_symbol}")
-                    c_mc2.metric("Maximum Expected Loss", f"-{expected_loss:.2f}%", delta_color="inverse")
-                    c_mc3.metric("Probability of Profit", f"{(np.sum(paths[-1, :] > last_val) / 1000 * 100):.1f}%")
+                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{p5:,.2f} {currency_symbol}",
+                                help="Value at Risk (VaR): Reprezintă pragul sub care există doar 5% șanse ca portofoliul tău să scadă în următorul an, conform celor 1000 de scenarii simulate.")
+
+                    c_mc2.metric("Pierderea maximă așteptată", f"-{expected_loss:.2f}%", delta_color="inverse",
+                                help="Procentul maxim de scădere din valoarea curentă în scenariul pesimist (cel de la linia roșie din grafic).")
+
+                    c_mc3.metric("Probabilitatea de profit", f"{(np.sum(paths[-1, :] > last_val) / 1000 * 100):.1f}%",
+                                help="Câte scenarii din cele 1000 simulate au terminat pe profit (peste valoarea actuală). O valoare peste 50% indică un avantaj statistic pe termen lung.")
                     
                     st.info(f"💡 **Analiza Quant:** Există o probabilitate de 95% ca peste un an, portofoliul tău să nu scadă sub valoarea de **{p5:,.2f} {currency_symbol}**. Acest model ia în calcul volatilitatea ta istorică.")
                 
@@ -3448,12 +3453,18 @@ def main():
                             )
                             st.plotly_chart(fig_opt, use_container_width=True, key=f"opt_bar_{currency_symbol}")
 
-                            # 4. Afișăm Metricele Portofoliului Ideal
+                            # 4. Afișăm Metricele Portofoliului Ideal cu explicații
                             st.markdown("##### 🏆 Cum ar arăta Portofoliul Ideal (Conform AI):")
                             c_op1, c_opt2, c_opt3 = st.columns(3)
-                            c_op1.metric("Randament Anual Așteptat", f"{opt_res['expected_return']:.2f}%")
-                            c_opt2.metric("Volatilitate (Risc)", f"{opt_res['expected_volatility']:.2f}%")
-                            c_opt3.metric("Sharpe Ratio Optim", f"{opt_res['sharpe_ratio']:.2f}")
+                            
+                            c_op1.metric("Randament Anual Așteptat", f"{opt_res['expected_return']:.2f}%",
+                                        help="Randamentul anual pe care modelul matematic îl estimează pentru această alocare, bazat pe performanța istorică a activelor tale.")
+                            
+                            c_opt2.metric("Volatilitate (Risc)", f"{opt_res['expected_volatility']:.2f}%",
+                                        help="Măsură a fluctuațiilor prețului. AI-ul încearcă să găsească ponderile care oferă cel mai mic 'stres' (swing-uri de preț) pentru randamentul țintit.")
+                            
+                            c_opt3.metric("Sharpe Ratio Optim", f"{opt_res['sharpe_ratio']:.2f}",
+                                        help="Indicatorul de aur al eficienței: Profitul raportat la Risc. O valoare peste 1.0 este considerată bună, iar peste 2.0 este excelentă, indicând un profit mare cu riscuri bine controlate.")
 
                             st.info("💡 **Strategie Quant:** Barele verzi îți arată unde ar trebui să muți banii. Algoritmul îți sugerează să crești expunerea pe activele cu randament stabil și să o reduci pe cele care aduc doar 'zgomot' (volatilitate inutilă).")
                         else:
