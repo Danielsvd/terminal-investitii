@@ -12,29 +12,41 @@ import socket
 import numpy as np
 import re
 import requests
+import asyncio
+import httpx
 # --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
 import gspread
 from google.oauth2.service_account import Credentials
 import concurrent.futures # Pune acest import la începutul fișierului, sus de tot
 from scipy.stats import norm
 
-def fetch_portfolio_prices_parallel(tickers):
-    """Descarcă prețurile pentru tot portofoliul simultan."""
-    def get_price(ticker):
-        try:
-            t = yf.Ticker(ticker)
-            # Folosim fast_info pentru că este mult mai rapidă decât .info
-            return ticker, t.fast_info.last_price
-        except:
-            return ticker, 0.0
+async def fetch_ticker_price_async(client, ticker):
+    """Cere prețul unui singur ticker în mod asincron."""
+    # Folosim API-ul intern de chart al Yahoo pentru viteză maximă și date 'light'
+    url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    try:
+        response = await client.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            price = data['chart']['result'][0]['meta']['regularMarketPrice']
+            return ticker, float(price)
+    except:
+        pass
+    return ticker, 0.0
 
-    prices = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_ticker = {executor.submit(get_price, t): t for t in tickers}
-        for future in concurrent.futures.as_completed(future_to_ticker):
-            ticker, price = future.result()
-            prices[ticker] = price
-    return prices
+async def get_all_portfolio_prices(tickers):
+    """Lansează toate cererile simultan."""
+    async with httpx.AsyncClient() as client:
+        tasks = [fetch_ticker_price_async(client, t) for t in tickers]
+        results = await asyncio.gather(*tasks)
+        return dict(results)
+
+# Wrapper pentru a putea rula cod asincron în interiorul Streamlit (care e sincron)
+def get_fast_live_prices(tickers):
+    if not tickers: return {}
+    return asyncio.run(get_all_portfolio_prices(tickers))
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
@@ -300,6 +312,34 @@ def get_macro_interpretation(ticker_data):
     except:
         return ["⚠️ Date insuficiente pentru procesarea corelațiilor macro."]
 
+def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
+    """
+    Calculează Sortino Ratio izoland exclusiv deviația standard negativă.
+    Standardul de aur pentru hedge-fund-uri.
+    """
+    if portfolio_curve is None or len(portfolio_curve) < 5:
+        return 0.0
+        
+    try:
+        returns = portfolio_curve.pct_change().dropna()
+        # Randament mediu anualizat
+        mean_return = returns.mean() * 252
+        
+        # Păstrăm doar randamentele sub zero (Downside Risk)
+        negative_returns = returns[returns < 0]
+        
+        if len(negative_returns) < 2:
+            return 0.0 # Prea puține date negative pentru calcul
+            
+        # Volatilitate negativă anualizată
+        downside_std = np.sqrt((negative_returns**2).sum() / len(returns)) * np.sqrt(252)
+        
+        if downside_std == 0: return 0.0
+        
+        return (mean_return - risk_free_rate) / downside_std
+    except:
+        return 0.0
+
 def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
     score = 50
     details = []
@@ -432,6 +472,42 @@ def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
         price_paths[t] = price_paths[t-1] * daily_returns[t]
         
     return price_paths, portfolio_curve.iloc[-1]
+
+def calculate_atr_trailing_stop(df, window=14, multiplier=2.5):
+    """
+    Calculează pragul de Stop-Loss bazat pe volatilitatea istorică (ATR).
+    Un multiplicator de 2.5 este standardul pentru investitori 'swing'.
+    """
+    if df is None or len(df) < window:
+        return None
+
+    # 1. Calculăm True Range (TR)
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    
+    # 2. Calculăm ATR (media TR)
+    df['ATR'] = true_range.rolling(window=window).mean()
+    
+    # 3. Calculăm Trailing Stop (pentru poziții Long)
+    # Stop-ul este Preț - (ATR * Multiplicator)
+    raw_stop = df['Close'] - (df['ATR'] * multiplier)
+    
+    # Logica de 'Trailing': Stop-ul poate doar să urce
+    trailing_stop = [raw_stop.iloc[0]]
+    for i in range(1, len(raw_stop)):
+        if pd.isna(raw_stop.iloc[i]):
+            trailing_stop.append(np.nan)
+        else:
+            # Dacă prețul crește, stop-ul urcă. Dacă prețul scade, stop-ul rămâne pe loc.
+            new_stop = max(raw_stop.iloc[i], trailing_stop[-1])
+            trailing_stop.append(new_stop)
+            
+    df['ATR_Stop'] = trailing_stop
+    return df
 
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1274,8 +1350,8 @@ def calculate_portfolio_performance(df, history_range="1A"):
     tickers = df['Symbol'].unique().tolist()
     
     # --- SCHIMBARE MAJORĂ: Descărcăm totul dintr-o singură lovitură ---
-    with st.spinner("Actualizăm prețurile în timp real..."):
-        current_prices = fetch_portfolio_prices_parallel(tickers)
+    with st.spinner("Actualizăm portofoliul prin Motor Asincron..."):
+        current_prices = get_fast_live_prices(tickers)
         # Descărcăm istoricul bulk pentru grafic
         hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False)
 
@@ -1781,7 +1857,25 @@ def main():
 
             fig = make_subplots(rows=rows_needed, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=row_heights)
             fig.add_trace(go.Candlestick(x=subset.index, open=subset['Open'], high=subset['High'], low=subset['Low'], close=subset['Close'], name='Preț', hovertext=subset['Volume'].apply(lambda x: f"Volum: {format_num(x)}")), row=1, col=1)
-            
+            # --- CALCUL ATR STOP ---
+            subset = calculate_atr_trailing_stop(subset)
+
+            # Adăugăm linia de Stop-Loss pe grafic (Etajul 1)
+            if subset is not None and 'ATR_Stop' in subset.columns:
+                fig.add_trace(go.Scatter(
+                    x=subset.index, 
+                    y=subset['ATR_Stop'],
+                    line=dict(color='#F85149', width=2, dash='dot'),
+                    name='ATR Trailing Stop (Exit)',
+                    hovertemplate="Stop-Loss: %{y:.2f}"
+                ), row=1, col=1)
+
+            # Adăugăm un Metric nou sub grafic pentru vizibilitate rapidă
+            sl_price = subset['ATR_Stop'].iloc[-1]
+            dist_to_sl = ((curr_price - sl_price) / curr_price) * 100
+
+            st.sidebar.markdown("---")
+            st.sidebar.metric("STOP-LOSS RECOMANDAT (ATR)", f"{sl_price:.2f}", f"-{dist_to_sl:.2f}%")
             if show_sma20: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA20'], line=dict(color='orange', width=1), name='SMA 20'), row=1, col=1)
             if show_sma50: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA50'], line=dict(color='cyan', width=1), name='SMA 50'), row=1, col=1)
             if show_sma200: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA200'], line=dict(color='purple', width=1.5), name='SMA 200'), row=1, col=1)
@@ -2484,12 +2578,19 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
             
+            # --- PREDICȚIE AI CU CACHING ---
             with cai2:
                 st.write("📈 **Prognoză Algoritmică (Next 90 Days)**")
                 if len(hist) > 100:
-                    from ai_engine import predict_stock_price, render_ai_chart
-                    forecast = predict_stock_price(hist)
-                    render_ai_chart(forecast, hist)
+                    from ai_engine import get_cached_prophet_prediction, get_daily_hash, render_ai_chart
+                    
+                    # Trimitem 'get_daily_hash()' ca parametru pentru a reseta cache-ul automat a doua zi
+                    forecast = get_cached_prophet_prediction(real_sym, hist, get_daily_hash())
+                    
+                    if forecast is not None:
+                        render_ai_chart(forecast, hist)
+                    else:
+                        st.warning("Modelul AI nu a putut genera predicția.")
             
             # ==================================================
             # CALCUL RATING FINAL (CONCLUZIA)
@@ -3069,6 +3170,24 @@ def main():
                 div_score = (1 - abs(global_corr)) * 100
                 c_b4.metric("Scor Diversificare", f"{div_score:.1f}%", 
                            help="Indică cât de independentă este strategia ta față de restul pieței.")
+                
+                sortino_val = calculate_sortino_ratio(hist_curve)
+                # Creăm un rând nou de metrici sau adăugăm la cel existent
+                st.write("") 
+                c_s1, c_s2 = st.columns(2)
+
+                with c_s1:
+                    s_color = "#3FB950" if sortino_val > 2 else ("#D29922" if sortino_val > 1 else "#F85149")
+                    st.metric("Sortino Ratio (Calitate Profit)", f"{sortino_val:.2f}", 
+                            help="Ideal > 2. Arată cât de mult câștigi pentru fiecare unitate de risc la scădere.")
+
+                with c_s2:
+                    if sortino_val > 2:
+                        st.success("🌟 **Excelent:** Portofoliul tău produce profituri cu un risc minim de scădere majoră.")
+                    elif sortino_val > 1:
+                        st.info("⚖️ **Acceptabil:** Profitul justifică riscul asumat.")
+                    else:
+                        st.warning("⚠️ **Risc Ridicat:** Obții profit, dar ești expus la scăderi violente. Verifică diversificarea.")
 
                 st.markdown("---")
 
@@ -4937,3 +5056,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
