@@ -1750,6 +1750,10 @@ def main():
 
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
+            # --- CALCULĂM INDICATORII ȘI ATR STOP LÂNGĂ DATELE DE BAZĂ ---
+            hist = calculate_technical_indicators(hist)
+            hist = calculate_atr_trailing_stop(hist)
+            sl_price = hist['ATR_Stop'].iloc[-1] if 'ATR_Stop' in hist.columns else 0
             # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
             try:
                 # Preluăm spread-ul 10Y-2Y pentru rating
@@ -1778,48 +1782,35 @@ def main():
             
             st.markdown("---") # Separator vizual între info generale și țintă
 
-            # --- 3. AFIȘARE CARD DINAMIC ȚINTĂ ---
-            if target_p and curr_price > 0:
-                # Calculăm distanța procentuală (Cât de mult trebuie să mai scadă)
-                # Dacă prețul e sub țintă, rezultatul va fi negativ
-                dist_pct = ((curr_price - target_p) / target_p) * 100
-                is_hit = curr_price <= target_p
+            # --- 3. AFIȘARE CARD DINAMIC CONSOLIDAT (ȚINTĂ | LIVE | STOP) ---
+            if curr_price > 0:
+                dist_pct = ((curr_price - target_p) / target_p) * 100 if target_p else 0
+                dist_sl = ((curr_price - sl_price) / curr_price) * 100 if sl_price else 0
                 
-                # Culoare dinamică: Verde dacă e sub țintă, Galben dacă e aproape (sub 5%)
-                if is_hit:
-                    t_color = "#3FB950"  # Verde (Zona de cumpărare)
-                    t_status = "🚀 ZONĂ ACHIZIȚIE (Țintă Atinsă!)"
-                elif dist_pct < 5:
-                    t_color = "#D29922"  # Galben (Aproape de țintă)
-                    t_status = f"⚠️ ATENȚIE: Doar {dist_pct:.1f}% peste țintă"
-                else:
-                    t_color = "#8B949E"  # Gri (Încă scump)
-                    t_status = f"⏳ +{dist_pct:.1f}% peste țintă"
-                
+                # Culori pentru statusul țintei
+                t_color = "#3FB950" if curr_price <= (target_p or 0) else ("#D29922" if dist_pct < 5 else "#8B949E")
+                t_status = "🚀 ZONĂ ACHIZIȚIE" if curr_price <= (target_p or 0) else f"⏳ +{dist_pct:.1f}% peste țintă"
+
                 st.markdown(f"""
-                    <div style="background:#161B22; padding:25px; border-radius:15px; border-left: 10px solid {t_color}; margin-bottom:20px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Ținta ta de intrare</p>
-                                <h2 style="color:white; margin:5px 0;">{target_p:.2f} <span style="font-size:16px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
+                    <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid #30363D; margin-bottom:20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                            <div style="flex: 1; min-width: 100px;">
+                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Țintă Intrare</p>
+                                <h2 style="color:white; margin:5px 0; font-size:22px;">{target_p or 0:.2f} <span style="font-size:12px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
                             </div>
-                            <div style="text-align:right;">
-                                <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
-                                <h2 style="color:{t_color}; margin:5px 0;">{curr_price:.2f}</h2>
+                            <div style="flex: 1; min-width: 100px; text-align: center; border-left: 1px solid #30363D; border-right: 1px solid #30363D;">
+                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
+                                <h2 style="color:{t_color}; margin:5px 0; font-size:28px;">{curr_price:.2f}</h2>
+                            </div>
+                            <div style="flex: 1; min-width: 100px; text-align: right;">
+                                <p style="color:#F85149; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Stop-Loss (Exit)</p>
+                                <h2 style="color:#F85149; margin:5px 0; font-size:22px;">{sl_price:.2f}</h2>
+                                <small style="color:#8B949E;">Risc: -{dist_sl:.1f}%</small>
                             </div>
                         </div>
-                        <div style="background:{t_color}22; color:{t_color}; padding:8px; border-radius:8px; font-weight:bold; font-size:16px; text-align:center; margin-top:10px; border: 1px solid {t_color}44;">
+                        <div style="background:{t_color}22; color:{t_color}; padding:6px; border-radius:8px; font-weight:bold; font-size:14px; text-align:center; margin-top:15px; border: 1px solid {t_color}44;">
                             {t_status}
                         </div>
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                # Afișare în caz că nu ai setat o țintă pentru acest simbol
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid #30363D; text-align:center; margin-bottom:20px; opacity:0.7;">
-                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Strategie Watchlist</p>
-                        <h3 style="color:#8B949E; margin:10px 0;">Fără Țintă Stabilită</h3>
-                        <p style="font-size:13px; color:#58A6FF;">Adaugă o alertă în capitolul Watchlist pentru a monitoriza {real_sym}.</p>
                     </div>
                 """, unsafe_allow_html=True)
             st.markdown("---") # Separator vizual între info generale și țintă    
@@ -2680,7 +2671,11 @@ def main():
             with st.spinner("Se decodează contractele Market Makerilor..."):
                 # Folosim simbolul real identificat anterior
                 opt_data, opt_msg = get_options_analysis_ai(real_sym)
+            if opt_data:
+                # Afișăm ora la care au fost preluate datele din Yahoo
+                st.caption(f"⏱️ Date opțiuni actualizate la ora: {opt_data.get('timestamp', 'N/A')}")
                 
+                # ... restul codului de afișare GEX, IV, etc.    
             if opt_data:
                 # FIX DEFINIȚIE PREȚ: Luăm prețul curent din variabila 'hist' deja existentă
                 current_market_price = hist['Close'].iloc[-1] if not hist.empty else 0
