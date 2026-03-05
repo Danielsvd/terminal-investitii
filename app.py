@@ -1764,12 +1764,13 @@ def main():
                     sl_price = 0
             # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
             try:
-                # Preluăm spread-ul 10Y-2Y pentru rating
+                # Înlocuim 2Y=F (delistat) cu ^IRX (3-Month Yield)
                 t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_2y = yf.Ticker("2Y=F").fast_info.last_price
-                spread = t_10y - t_2y
+                t_3m = yf.Ticker("^IRX").fast_info.last_price
+                # Spread-ul preferat de FED: 10Y - 3M
+                spread = t_10y - t_3m
             except:
-                spread = 0.5 # Fallback neutru dacă API-ul eșuează
+                spread = 0.5 # Fallback neutru
             
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
@@ -2599,8 +2600,8 @@ def main():
             # Luăm spread-ul din piață direct pentru rating
             try:
                 t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_2y = yf.Ticker("2Y=F").fast_info.last_price
-                curr_spread = t_10y - t_2y
+                t_3m = yf.Ticker("^IRX").fast_info.last_price
+                curr_spread = t_10y - t_3m
             except:
                 curr_spread = 0.5
 
@@ -2608,8 +2609,8 @@ def main():
             s_mos = mos_val if 'mos_val' in locals() else 0
             s_rvol = rvol if 'rvol' in locals() else 1.0
             
-            # Apelăm funcția PRO care returnează SCOR + DETALII
-            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, curr_spread, s_mos)
+            # Apelăm funcția PRO folosind noul spread 10Y-3M
+            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos)
             
             r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
             r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
@@ -2825,8 +2826,8 @@ def main():
             # Extragem Spread-ul Macro la cald
             try:
                 t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_2y = yf.Ticker("2Y=F").fast_info.last_price
-                curr_spread = t_10y - t_2y
+                t_3m = yf.Ticker("^IRX").fast_info.last_price
+                curr_spread = t_10y - t_3m
             except: curr_spread = 0.5
 
             # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
@@ -3368,89 +3369,153 @@ def main():
             #     st.rerun()
         
     # =================================================================
-    # 4. PIAȚĂ GLOBALĂ (CU MASTER VERDICT AI INTEGRAT)
+    # 4. PIAȚĂ GLOBALĂ (CU MASTER VERDICT AI INTEGRAT & SINTEZĂ DEEP DIVE)
     # =================================================================
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
         st.caption("Date în timp real (cu întârziere minimă) furnizate via Yahoo Finance.")
 
-        # --- MODUL ACTUALIZAT: MASTER MACRO VERDICT (V2 CU VIX INTEGRAT) ---
-        with st.spinner("Motorul Macro AI analizează corelațiile și frica în piață..."):
-            # A. Colectăm datele existente
+        with st.spinner("Motorul Macro AI descarcă și corelează indicatorii globali..."):
+            # --- 1. DESCĂRCĂM ABSOLUT TOATE DATELE LA ÎNCEPUT ---
             macro_sectors = get_sector_performance()
             macro_risk_ratio = get_credit_risk_data("1y")
             macro_corr = get_cross_asset_correlation()
+            macro_tickers, macro_data = get_macro_data_visuals() # Mutat aici sus!
             
-            # B. Obținem VIX-ul (Frica) în timp real
+            try: vix_val = yf.Ticker("^VIX").fast_info.last_price
+            except: vix_val = 20.0
+            
             try:
-                vix_val = yf.Ticker("^VIX").fast_info.last_price
-            except:
-                vix_val = 20.0 # Valoare neutră în caz de eroare
+                t_10y = yf.Ticker("^TNX").fast_info.last_price
+                t_3m = yf.Ticker("^IRX").fast_info.last_price
+                curr_yield_spread = t_10y - t_3m
+            except: curr_yield_spread = 0.5
 
-            # C. Preluăm sentimentul global din știri
             news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
             from ai_engine import analyze_sentiment_ai
             macro_sentiment = analyze_sentiment_ai(news_samples) if news_samples else 0
-            
-            # D. Preluăm spread-ul 10Y-2Y
-            try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_2y = yf.Ticker("2Y=F").fast_info.last_price
-                curr_yield_spread = t_10y - t_2y
-            except: curr_yield_spread = 0.5
 
-            # E. Apelăm noua funcție cu 6 parametri (am adăugat vix_val la final)
+            # --- 2. CALCULĂM SCORUL GLOBAL ---
             from ai_engine import calculate_master_macro_verdict
             m_score, m_label, m_col, m_desc, m_reasons = calculate_master_macro_verdict(
                 macro_sectors, macro_risk_ratio, macro_corr, macro_sentiment, curr_yield_spread, vix_val
             )
 
-            # AFIȘARE VIZUALĂ BANNER SUPREM
-            st.markdown(f"""
-                <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:30px; border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:30px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Verdict Sănătate Piață Globală</h4>
-                            <h1 style="color:{m_col}; margin:10px 0; font-size:38px;">{m_label}</h1>
-                            <p style="color:#C9D1D9; font-size:16px;">{m_desc}</p>
-                        </div>
-                        <div style="text-align:center; min-width: 120px;">
-                            <div style="font-size:12px; color:#8B949E;">SCOR MACRO AI</div>
-                            <div style="font-size:56px; font-weight:bold; color:{m_col};">{int(m_score)}</div>
-                            <div style="font-size:14px; color:#8B949E;">/ 100</div>
-                        </div>
+        # --- 3. AFIȘARE BANNER SUPREM ---
+        st.markdown(f"""
+            <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:30px; border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Verdict Sănătate Piață Globală</h4>
+                        <h1 style="color:{m_col}; margin:10px 0; font-size:38px;">{m_label}</h1>
+                        <p style="color:#C9D1D9; font-size:16px;">{m_desc}</p>
+                    </div>
+                    <div style="text-align:center; min-width: 120px;">
+                        <div style="font-size:12px; color:#8B949E;">SCOR MACRO AI</div>
+                        <div style="font-size:56px; font-weight:bold; color:{m_col};">{int(m_score)}</div>
+                        <div style="font-size:14px; color:#8B949E;">/ 100</div>
                     </div>
                 </div>
-            """, unsafe_allow_html=True)
+            </div>
+        """, unsafe_allow_html=True)
 
-            # Afișăm motivele pe două coloane
-            st.markdown("#### 🔍 Argumentele Modelului (Analiză Cross-Asset):")
-            c_re1, c_re2 = st.columns(2)
-            for i, reason in enumerate(m_reasons):
-                if i % 2 == 0: c_re1.markdown(f"{reason}")
-                else: c_re2.markdown(f"{reason}")       
+        # --- 4. RESTAURAREA ARGUMENTELOR VECHI ---
+        st.markdown("#### 🔍 Argumentele Modelului (Scurt pe 2 coloane):")
+        c_re1, c_re2 = st.columns(2)
+        for i, reason in enumerate(m_reasons):
+            if i % 2 == 0: c_re1.markdown(f"{reason}")
+            else: c_re2.markdown(f"{reason}")
+
+        # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
+        st.subheader("✨ Sinteza Inteligenței Artificiale (Intersecție Cross-Asset)")
+        
+        with st.spinner("Sintetizăm intersecțiile de metale, valute, dobânzi și opțiuni..."):
+            from ai_engine import generate_macro_ai_summary
+            macro_bullets = generate_macro_ai_summary(
+                vix_val, curr_yield_spread, macro_risk_ratio, macro_sectors, macro_corr, macro_data
+            )
+            
+            if macro_bullets:
+                st.markdown("""
+                <style>
+                .xtb-bullet-container {
+                    background-color: #161B22; 
+                    padding: 25px; 
+                    border-radius: 12px; 
+                    border: 1px solid #30363D;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                }
+                .xtb-row {
+                    display: flex; 
+                    align-items: flex-start; 
+                    margin-bottom: 20px;
+                }
+                .xtb-icon {
+                    margin-right: 15px; 
+                    font-size: 20px; 
+                    margin-top: -2px;
+                }
+                .xtb-text {
+                    font-size: 15px; 
+                    color: #C9D1D9; 
+                    line-height: 1.5;
+                    font-weight: 400;
+                }
+                .xtb-footer {
+                    margin-top: 10px; 
+                    font-size: 12px; 
+                    color: #8B949E; 
+                    border-top: 1px solid #30363D; 
+                    padding-top: 15px; 
+                    display: flex; 
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                </style>
+                <div class="xtb-bullet-container">
+                """, unsafe_allow_html=True)
+                
+                for b in macro_bullets:
+                    st.markdown(f"""
+                    <div class="xtb-row">
+                        <div class="xtb-icon" style="color: {b['color']};">{b['icon']}</div>
+                        <div class="xtb-text">{b['text']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                st.markdown("""
+                    <div class="xtb-footer">
+                        <span>Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri (Aur, Petrol, Cupru), sentimentului și pieței de credit.</span>
+                        <span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("Așteptăm date suficiente pentru generarea sintezei.")
 
-        # --- BUTON REFRESH ȘI MODULELE TALE VECHI CONTINUĂ AICI ---
+        st.markdown("---")
+        
         if st.button("🔄 Reîmprospătează Piața"):
             get_global_market_data.clear()
             get_macro_data_visuals.clear()
             st.rerun()
 
-        st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-2Y)")
+        # Urmează restul codului tău cu "🚨 Early Warning System..."
+
+        st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-3M)")
         
         try:
-            tickers_yield = ['^TNX', '^IRX'] 
-            yield_data = yf.download(tickers_yield, period="5d", progress=False)['Close']
+            # Preluăm datele pentru 10 ani și 3 luni (standardul FED)
             t_10y = yf.Ticker("^TNX").fast_info.last_price
-            try:
-                t_2y = yf.Ticker("2Y=F").fast_info.last_price 
-                spread = t_10y - t_2y
-                label_spread = "Spread 10Y - 2Y"
-            except:
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
+            t_3m = yf.Ticker("^IRX").fast_info.last_price 
+            
+            if t_10y > 0 and t_3m > 0:
                 spread = t_10y - t_3m
-                label_spread = "Spread 10Y - 3M (Fallback)"
+                label_spread = "SPREAD 10Y - 3M (SĂNĂTATE MACRO)"
+            else:
+                spread = 0.5
+                label_spread = "Spread indisponibil (Data Delay)"
 
             y_col1, y_col2 = st.columns([1, 2])
             with y_col1:
@@ -3461,15 +3526,17 @@ def main():
                         <h1 style="color:{spread_color}; margin:10px 0;">{spread:.3f}</h1>
                     </div>
                 """, unsafe_allow_html=True)
+            
             with y_col2:
                 if spread < 0:
-                    st.error(f"⚠️ **CURBĂ INVERSATĂ:** Diferența este de {spread:.3f}. Istoric, acest semnal a precedat fiecare recesiune majoră.")
-                    st.write("👉 **Strategie:** Redu expunerea pe acțiuni ciclice.")
+                    st.error(f"⚠️ **INVERSIUNE CONFIRMATĂ:** Spread-ul de {spread:.3f} indică o curbă a randamentelor inversată. Istoric, acest semnal a precedat fiecare recesiune majoră..")
+                    st.write("👉 **Strategie:** Protejează capitalul. Redu expunerea pe acțiuni ciclice și crește ponderea în Cash/Aur.")
                 else:
-                    st.success(f"✅ **CURBĂ NORMALĂ:** Diferența de {spread:.3f} indică expansiune economică.")
-                    st.write("👉 **Strategie:** Poți menține o strategie de creștere.")
-        except:
-            st.info("Datele pentru curba randamentelor se încarcă...")
+                    st.success(f"✅ **SĂNĂTATE MACRO:** Spread-ul de {spread:.3f} indică o curbă a randamentelor normală. Indică expansiune economică")
+                    st.write("👉 **Strategie:** Poți menține o strategie de creștere (Growth). Mediul economic susține expansiunea bursieră.")
+
+        except Exception as e:
+            st.info("Sistemul de monitorizare a curbei randamentelor se recalibrează...")
 
         # --- AICI CONTINUĂ RESTUL CODULUI TĂU (HARTA, RADAR, MATRICE, TABELE) ---
         st.markdown("---")    
