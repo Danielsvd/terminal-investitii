@@ -17,4 +17,5 @@ torch
 scipy
 numpy
 scikit-learn
-
+httpx
+httpx[http2]
