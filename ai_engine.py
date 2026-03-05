@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 from scipy.optimize import minimize
 from sklearn.ensemble import IsolationForest
 import yfinance as yf
+from datetime import date
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
@@ -53,27 +54,22 @@ def analyze_sentiment_ai(news_list):
         print(f"Sentiment AI Critical Error: {e}")
         return 0.0
 
-def predict_stock_price(df):
+# Funcție utilitară pentru a crea un "cheie" de timp (ziua curentă)
+def get_daily_hash():
+    return str(date.today())
+
+@st.cache_data(ttl=86400, show_spinner=False) # Cache valabil 24 ore (86400 secunde)
+def get_cached_prophet_prediction(symbol, _hist_data, daily_hash):
     """
-    Predicție Machine Learning pe 90 de zile folosind Facebook Prophet.
-    Acum modelul este MULTIVARIAT (include și variațiile de Volum).
+    Antrenează modelul ML o singură dată pe zi per simbol.
+    Prefixul '_' la _hist_data îi spune lui Streamlit să NU facă hashing pe tot tabelul (viteză extra).
     """
     try:
-        # 1. Fallback de siguranță: dacă nu avem date de volum (se poate întâmpla la unii indici)
-        if 'Volume' not in df.columns or df['Volume'].sum() == 0:
-            df_p = df.reset_index()[['Date', 'Close']]
-            df_p.columns = ['ds', 'y']
-            df_p['ds'] = df_p['ds'].dt.tz_localize(None)
-            m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True, changepoint_prior_scale=0.05)
-            m.fit(df_p)
-            future = m.make_future_dataframe(periods=90)
-            return m.predict(future)
-
-        # 2. Modelul Avansat (cu Volum ca Regresor Extern)
-        df_p = df.reset_index()[['Date', 'Close', 'Volume']]
+        # Pregătire date (identic cu ce aveai, dar optimizat)
+        df_p = _hist_data.reset_index()[['Date', 'Close', 'Volume']]
         df_p.columns = ['ds', 'y', 'volume_regressor']
         df_p['ds'] = df_p['ds'].dt.tz_localize(None)
-        
+
         m = Prophet(
             daily_seasonality=False, 
             weekly_seasonality=True, 
@@ -81,22 +77,15 @@ def predict_stock_price(df):
             changepoint_prior_scale=0.05
         )
         
-        # Învățăm modelul să coreleze prețul cu volumele tranzacționate
         m.add_regressor('volume_regressor')
         m.fit(df_p)
         
-        # 3. Pregătim dataframe-ul pentru proiecția pe următoarele 90 de zile
         future = m.make_future_dataframe(periods=90)
-        
-        # Estimăm volumul viitor ca fiind media volumelor din ultimele 20 de zile
         avg_recent_vol = df_p['volume_regressor'].tail(20).mean()
         historical_vols = df_p['volume_regressor'].values
-        future_vols = np.full(90, avg_recent_vol) # Umplem cele 90 de zile viitoare cu media
-        
-        # Combinăm array-ul istoric cu cel viitor și îl adăugăm în DF-ul 'future'
+        future_vols = np.full(90, avg_recent_vol)
         future['volume_regressor'] = np.concatenate((historical_vols, future_vols))
         
-        # Generăm predicția
         forecast = m.predict(future)
         return forecast
     except Exception as e:
