@@ -4214,6 +4214,57 @@ def main():
                         """)
             else:
                 st.info("Sincronizare date Cross-Asset...")
+        # =================================================================
+        # MODUL NOU: TABEL MACROECONOMIE & SĂNĂTATEA ECONOMIEI REALE
+        # =================================================================
+        st.markdown("---")
+        st.subheader("🏛️ Barometrul Economiei Reale (Date Oficiale FED)")
+        st.markdown("Aceste date dictează politica Rezervei Federale (dobânzile). Piața reacționează violent la publicarea lor (NFP, CPI).")
+        
+        with st.spinner("Se interoghează baza de date a Rezervei Federale SUA..."):
+            df_macro = get_fred_macro_data()
+            
+            if not df_macro.empty:
+                col_tab, col_ai = st.columns([1.2, 1])
+                
+                with col_tab:
+                    # Stilizare tabel: Evidențiem creșterile/scăderile
+                    def color_macro_trend(val):
+                        if isinstance(val, str):
+                            if '+' in val: return 'color: #3FB950; font-weight: bold'
+                            elif '-' in val: return 'color: #F85149; font-weight: bold'
+                        return ''
+                    
+                    st.dataframe(
+                        df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)']].style
+                        .map(color_macro_trend, subset=['Evoluție (MoM)'])
+                        .format({
+                            'Valoare Curentă': '{:.2f}',
+                            'Lună Precedentă': '{:.2f}'
+                        }),
+                        use_container_width=True, hide_index=True
+                    )
+                    st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = Month over Month.")
+                
+                with col_ai:
+                    st.markdown("#### 🧠 Interpretare Strategică")
+                    macro_insights = interpret_macro_data_ai(df_macro)
+                    
+                    if macro_insights:
+                        for insight in macro_insights:
+                            # Colorare automată în funcție de iconiță
+                            bg_col = "rgba(248, 81, 73, 0.1)" if "🔥" in insight or "🚨" in insight else ("rgba(63, 185, 80, 0.1)" if "💪" in insight or "❄️" in insight else "#21262D")
+                            b_col = "#F85149" if "🔥" in insight or "🚨" in insight else ("#3FB950" if "💪" in insight or "❄️" in insight else "#8B949E")
+                            
+                            st.markdown(f"""
+                            <div style="background:{bg_col}; padding:15px; border-radius:10px; border-left: 4px solid {b_col}; margin-bottom: 10px; font-size:14px; line-height:1.5;">
+                                {insight}
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("Piața se află în parametrii așteptați. Nicio anomalie macroeconomică detectată luna aceasta.")
+            else:
+                st.warning("Datele FRED sunt momentan indisponibile. Verifică conexiunea.")
         
         # --- TABELELE VECHI ---
         st.markdown("---")
@@ -4291,58 +4342,6 @@ def main():
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
                     use_container_width=True, hide_index=True
                 )
-
-        # =================================================================
-        # MODUL NOU: TABEL MACROECONOMIE & SĂNĂTATEA ECONOMIEI REALE
-        # =================================================================
-        st.markdown("---")
-        st.subheader("🏛️ Barometrul Economiei Reale (Date Oficiale FED)")
-        st.markdown("Aceste date dictează politica Rezervei Federale (dobânzile). Piața reacționează violent la publicarea lor (NFP, CPI).")
-        
-        with st.spinner("Se interoghează baza de date a Rezervei Federale SUA..."):
-            df_macro = get_fred_macro_data()
-            
-            if not df_macro.empty:
-                col_tab, col_ai = st.columns([1.2, 1])
-                
-                with col_tab:
-                    # Stilizare tabel: Evidențiem creșterile/scăderile
-                    def color_macro_trend(val):
-                        if isinstance(val, str):
-                            if '+' in val: return 'color: #3FB950; font-weight: bold'
-                            elif '-' in val: return 'color: #F85149; font-weight: bold'
-                        return ''
-                    
-                    st.dataframe(
-                        df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)']].style
-                        .map(color_macro_trend, subset=['Evoluție (MoM)'])
-                        .format({
-                            'Valoare Curentă': '{:.2f}',
-                            'Lună Precedentă': '{:.2f}'
-                        }),
-                        use_container_width=True, hide_index=True
-                    )
-                    st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = Month over Month.")
-                
-                with col_ai:
-                    st.markdown("#### 🧠 Interpretare Strategică")
-                    macro_insights = interpret_macro_data_ai(df_macro)
-                    
-                    if macro_insights:
-                        for insight in macro_insights:
-                            # Colorare automată în funcție de iconiță
-                            bg_col = "rgba(248, 81, 73, 0.1)" if "🔥" in insight or "🚨" in insight else ("rgba(63, 185, 80, 0.1)" if "💪" in insight or "❄️" in insight else "#21262D")
-                            b_col = "#F85149" if "🔥" in insight or "🚨" in insight else ("#3FB950" if "💪" in insight or "❄️" in insight else "#8B949E")
-                            
-                            st.markdown(f"""
-                            <div style="background:{bg_col}; padding:15px; border-radius:10px; border-left: 4px solid {b_col}; margin-bottom: 10px; font-size:14px; line-height:1.5;">
-                                {insight}
-                            </div>
-                            """, unsafe_allow_html=True)
-                    else:
-                        st.info("Piața se află în parametrii așteptați. Nicio anomalie macroeconomică detectată luna aceasta.")
-            else:
-                st.warning("Datele FRED sunt momentan indisponibile. Verifică conexiunea.")
 
     # ==================================================
     # 5. IMPORT DATE (GOOGLE SHEETS) - BVB EXTINS & GLOBAL FIX
