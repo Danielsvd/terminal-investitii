@@ -757,14 +757,16 @@ def get_detailed_ownership_and_execs(ticker_sym):
     except:
         return None, None, "N/A", 0.0
 
-def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data):
+def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data, df_fred):
     """
-    Sinteză Macro de nivel Instituțional. Corelează mărfurile, valutele, 
-    dobânzile și rotația sectorială pentru a deduce intenția ascunsă a pieței.
+    Sinteză Macro de nivel Instituțional Suprem (Comprehensive). 
+    Corelează datele și raportează statusul pentru ABSOLUT TOȚI parametrii vitali (Piață + Economie Reală).
     """
     bullets = []
-
-    # 1. Extragem trendul pe termen scurt (ultimele 5 zile) pentru Mărfuri & Valute
+    
+    # =========================================================
+    # 1. EXTRAGERE DATE PIAȚĂ (Trend pe o lună / 20 zile)
+    # =========================================================
     def get_trend(ticker):
         try:
             if isinstance(macro_data.columns, pd.MultiIndex):
@@ -774,8 +776,9 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
             else:
                 series = macro_data['Close'].dropna()
             
-            if len(series) >= 5:
-                # Variația procentuală față de acum 5 zile
+            if len(series) >= 20: 
+                return (series.iloc[-1] / series.iloc[-20]) - 1
+            elif len(series) >= 5:
                 return (series.iloc[-1] / series.iloc[-5]) - 1
             return 0
         except: return 0
@@ -785,66 +788,118 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     copper_trend = get_trend('HG=F')
     dxy_trend = get_trend('DX-Y.NYB')
 
-    # --- REGULA 1: RISC SISTEMIC (Curba Dobânzilor + VIX) ---
-    if yield_spread < 0 and vix_val > 20:
-        bullets.append({
-            "icon": "🚨", "color": "#F85149",
-            "text": f"ALARMĂ MACRO: Curba randamentelor este inversată ({yield_spread:.2f}), iar VIX-ul este ridicat ({vix_val:.1f}). Această combinație letală indică faptul că „banii inteligenți” fug din activele de risc anticipând un șoc economic iminent."
-        })
-    elif yield_spread < 0:
-        bullets.append({
-            "icon": "⚠️", "color": "#D29922",
-            "text": f"AVERTISMENT DE RECESIUNE: Curba randamentelor (10Y-3M) este inversată ({yield_spread:.2f}). Deși VIX-ul este calm deocamdată, piața obligațiunilor semnalează o contracție economică pe termen mediu. Rămâi defensiv."
-        })
-
-    # --- REGULA 2: CORELAȚIA AUR / DOLAR / FRICĂ (Paradoxul de refugiu) ---
-    if gold_trend > 0.02 and dxy_trend > 0.01:
-        bullets.append({
-            "icon": "🥇", "color": "#FFAB00",
-            "text": f"PARADOX DE REFUGIU: Aurul (+{gold_trend*100:.1f}%) și Dolarul (+{dxy_trend*100:.1f}%) cresc simultan. Aceasta este o anomalie majoră (în mod normal se mișcă în direcții opuse) și trădează o panică globală subiacentă. Capitalul caută siguranță absolută, ignorând prețurile."
-        })
-    elif dxy_trend > 0.015:
-        bullets.append({
-            "icon": "💵", "color": "#F85149",
-            "text": f"PRESIUNEA DOLARULUI: Dolarul american se întărește rapid (+{dxy_trend*100:.1f}%). Un dolar puternic acționează ca o „taxă gravă” pe profiturile companiilor din S&P 500 și trage în jos prețul mărfurilor."
-        })
-
-    # --- REGULA 3: DR. COPPER VS PETROL (Creștere vs Inflație) ---
-    if copper_trend > 0.03:
-        bullets.append({
-            "icon": "🏗️", "color": "#3FB950",
-            "text": f"EXPANSIUNE INDUSTRIALĂ: Cuprul, supranumit „Dr. Copper” pentru abilitatea sa de a diagnostica economia, este în creștere (+{copper_trend*100:.1f}%). Acest lucru semnalează o cerere globală robustă și sprijină teza unui Bull Market continuu."
-        })
-    if oil_trend > 0.04:
-        bullets.append({
-            "icon": "🛢️", "color": "#F85149",
-            "text": f"ȘOC INFLAȚIONIST: Petrolul a crescut abrupt (+{oil_trend*100:.1f}%). Dacă această tendință persistă, va forța băncile centrale să amâne tăierea dobânzilor, distrugând evaluările companiilor de creștere (Growth/Tech)."
-        })
-
-    # --- REGULA 4: CREDIT & ROTAȚIE SECTORIALĂ (Confirmarea Instituțională) ---
-    if not credit_ratio_series.empty:
-        curr_r = credit_ratio_series.iloc[-1]
-        sma_20 = credit_ratio_series.rolling(20).mean().iloc[-1]
+    # =========================================================
+    # 2. EXTRAGERE DATE FRED (Economia Reală)
+    # =========================================================
+    fred_dict = {}
+    if df_fred is not None and not df_fred.empty:
+        fred_dict = {row['_simbol']: row for _, row in df_fred.iterrows()}
         
-        top_sectors = df_sectors.tail(3)['Sector'].tolist() if not df_sectors.empty else []
-        defensives = ['Utilități', 'Consum de Bază', 'Sănătate', 'Imobiliare']
-        
-        if curr_r < sma_20 and any(s in top_sectors for s in defensives):
-            bullets.append({
-                "icon": "🛡️", "color": "#D29922",
-                "text": "SINCRONIZARE RISK-OFF: Piața de obligațiuni (scăderea cererii pentru High Yield) confirmă comportamentul bursei (rotația spre Utilități/Defensive). Banii inteligenți sunt în modul de 'conservare a capitalului', nu caută profit."
-            })
-        elif curr_r > sma_20 and "Tehnologie" in top_sectors:
-            bullets.append({
-                "icon": "🚀", "color": "#3FB950",
-                "text": "SINCRONIZARE RISK-ON: Piața de credit este sănătoasă și curajoasă, iar banii pe bursă intră agresiv în Tehnologie. Raliul actual este susținut de fundații solide, nu doar de speculă."
-            })
+    cpi_change = fred_dict.get('CPIAUCSL', {}).get('_change_raw', 0)
+    unrate_curr = fred_dict.get('UNRATE', {}).get('Valoare Curentă', 4.0)
+    unrate_change = fred_dict.get('UNRATE', {}).get('_change_raw', 0)
+    nfp_change = fred_dict.get('PAYEMS', {}).get('_change_raw', 0)
+    retail_change = fred_dict.get('RSAFS', {}).get('_change_raw', 0)
+    fed_change = fred_dict.get('FEDFUNDS', {}).get('_change_raw', 0)
+    indpro_change = fred_dict.get('INDPRO', {}).get('_change_raw', 0)
 
-    # Fallback dacă piața e "plată" (fără extreme)
-    if len(bullets) == 0:
-        bullets.append({
-            "icon": "⚖️", "color": "#8B949E",
-            "text": "CONSOLIDARE MACRO: Aurul, petrolul, dobânzile și dolarul nu prezintă deviații majore în ultimele zile. Piețele se află într-o stare de așteptare echilibrată (wait-and-see) înaintea unor noi catalizatori."
-        })
+    cross_asset_flags = 0 
+
+    # =========================================================
+    # STRATUL 1: SUPRA-CORELAȚII (BOMBE MACROECONOMICE)
+    # =========================================================
+    if oil_trend > 0.05 and cpi_change > 0.2:
+        bullets.append({"icon": "🌪️", "color": "#F85149", "text": f"BUCLA INFLAȚIEI: Petrolul crește violent (+{oil_trend*100:.1f}%), iar datele CPI confirmă scumpirile. FED este blocată. Mediu toxic pentru acțiunile de creștere (Growth)."})
+        cross_asset_flags += 1
         
-    return bullets    
+    if cpi_change > 0.2 and unrate_change > 0:
+        bullets.append({"icon": "☠️", "color": "#F85149", "text": "ALERTĂ STAGFLAȚIE: Șomajul crește, dar prețurile (CPI) refuză să scadă. Este cel mai prost mediu economic: acțiunile și obligațiunile pot pierde valoare simultan."})
+        cross_asset_flags += 1
+
+    if gold_trend > 0.03 and dxy_trend > 0.015:
+        bullets.append({"icon": "🥇", "color": "#FFAB00", "text": f"PARADOXUL FRICII: Aurul (+{gold_trend*100:.1f}%) și Dolarul (+{dxy_trend*100:.1f}%) cresc simultan. Marile fonduri acumulează orice activ de siguranță, semn de panică sistemică."})
+        cross_asset_flags += 1
+
+    if copper_trend < -0.04 and indpro_change < -0.5:
+        bullets.append({"icon": "📉", "color": "#F85149", "text": "CONTRACȚIE EXTREMĂ: Scăderea cuprului se aliniază cu prăbușirea producției industriale (FRED). Motorul global frânează puternic."})
+        cross_asset_flags += 1
+
+    # =========================================================
+    # STRATUL 2: ECONOMIA REALĂ (Datele FRED)
+    # =========================================================
+    # Inflație
+    if cpi_change > 0.2:
+        bullets.append({"icon": "🔥", "color": "#F85149", "text": f"INFLAȚIE (CPI): Accelerare ({cpi_change:+.2f} pct). Prețurile nu cedează, menținând presiunea pe consumatori și pe dobânzile FED."})
+    elif cpi_change <= 0:
+        bullets.append({"icon": "❄️", "color": "#3FB950", "text": f"INFLAȚIE (CPI): Dezinflație confirmată ({cpi_change:+.2f} pct). Oferă băncii centrale motive să reducă dobânzile (Dovish)."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"INFLAȚIE (CPI): Creștere sub control ({cpi_change:+.2f} pct). Prețurile se stabilizează fără șocuri majore."})
+
+    # Piața Muncii
+    if unrate_change > 0 or nfp_change < 50:
+        bullets.append({"icon": "⚠️", "color": "#D29922", "text": f"PIAȚA MUNCII: Se răcește. Șomajul e la {unrate_curr:.1f}%, iar joburile noi scârțâie ({nfp_change:+.0f}K). Risc de recesiune dacă trendul continuă."})
+    elif nfp_change > 150:
+        bullets.append({"icon": "💪", "color": "#3FB950", "text": f"PIAȚA MUNCII: Robustă (Soft Landing). Crearea a {nfp_change:+.0f}K joburi arată o economie de fier care ignoră dobânzile mari."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"PIAȚA MUNCII: Echilibrată ({nfp_change:+.0f}K joburi adăugate). Angajările sunt la un nivel sustenabil, fără surprize."})
+
+    # Consum
+    if retail_change < -0.5:
+        bullets.append({"icon": "🛒", "color": "#F85149", "text": f"CONSUM: Fragil. Vânzările de retail au scăzut ({retail_change:+.2f} pct). Motorul economiei americane dă semne de oboseală."})
+    elif retail_change > 0.5:
+        bullets.append({"icon": "🛍️", "color": "#3FB950", "text": f"CONSUM: Puternic. Populația cheltuie masiv ({retail_change:+.2f} pct), ceea ce va susține direct profiturile companiilor."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"CONSUM: Stabil. Vânzările de retail sunt constante ({retail_change:+.2f} pct). Fără anomalii în comportamentul de cumpărare."})
+
+    # Decizia FED
+    if fed_change < -0.1:
+        bullets.append({"icon": "💸", "color": "#3FB950", "text": f"POLITICA FED: Ciclu de relaxare (Tăieri de {fed_change:+.2f} pct). Banii mai ieftini acționează ca un stimulent major pentru bursa de acțiuni."})
+    elif fed_change > 0.1:
+        bullets.append({"icon": "🏦", "color": "#F85149", "text": f"POLITICA FED: Restrictivă (Creșteri de {fed_change:+.2f} pct). Dobânzile mari atrag capitalul dinspre acțiuni spre depozite și obligațiuni."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": "POLITICA FED: Dobânda menținută. Banca Centrală este în faza de așteptare ('Wait and See')."})
+
+    # =========================================================
+    # STRATUL 3: PIAȚA FINANCIARĂ (Dolar, Petrol, Cupru, Opțiuni)
+    # =========================================================
+    
+    if dxy_trend > 0.015 and cross_asset_flags == 0:
+        bullets.append({"icon": "💵", "color": "#F85149", "text": f"DOLAR: Puternic (+{dxy_trend*100:.1f}% într-o lună). Moneda americană acționează ca un obstacol major pentru S&P 500."})
+    elif dxy_trend < -0.015:
+        bullets.append({"icon": "💸", "color": "#3FB950", "text": f"DOLAR: Slab (-{abs(dxy_trend)*100:.1f}%). Oferă o fereastră de oportunitate masivă pentru piețele globale și cripto."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"DOLAR: Consolidare ({dxy_trend*100:+.1f}%). Valuta se tranzacționează în interval neutru."})
+
+    if oil_trend > 0.06 and cross_asset_flags == 0:
+        bullets.append({"icon": "🛢️", "color": "#D29922", "text": f"PETROL: Scumpire abruptă (+{oil_trend*100:.1f}%). Risc de strivire a marjelor de profit din industrie."})
+    elif oil_trend < -0.06:
+        bullets.append({"icon": "⛽", "color": "#3FB950", "text": f"PETROL: Scădere (-{abs(oil_trend)*100:.1f}%). Acționează ca o reducere de taxe nesperată pentru consumatori."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"PETROL: Preț stabil ({oil_trend*100:+.1f}%). Sectorul energetic nu prezintă șocuri pe lanțul global."})
+
+    if yield_spread < 0:
+        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({yield_spread:.2f}). Semnalul istoric de recesiune este în continuare aprins."})
+    else:
+        bullets.append({"icon": "📈", "color": "#3FB950", "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({yield_spread:.2f}). Creditarea corporativă este sănătoasă."})
+
+    if vix_val > 22:
+        bullets.append({"icon": "⚡", "color": "#F85149", "text": f"VIX (OPȚIUNI): Panică ({vix_val:.1f}). Cererea pentru contracte Put explodează. Volatilitatea e la putere."})
+    elif vix_val < 14:
+        bullets.append({"icon": "🧘", "color": "#3FB950", "text": f"VIX (OPȚIUNI): Liniște absolută ({vix_val:.1f}). Piața e calmă, dar favorizează apariția unor „Black Swans”."})
+    else:
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"VIX (OPȚIUNI): Moderație ({vix_val:.1f}). Investitorii nu evaluează riscuri imediate majore."})
+
+    # =========================================================
+    # SORTARE (Sistem Profesional de Prioritizare Vizuală)
+    # =========================================================
+    def sort_key(b):
+        if b['color'] == "#F85149": return 0 # Roșu Critic (Pe primul loc)
+        if b['color'] == "#FFAB00": return 1 # Portocaliu Avertisment
+        if b['color'] == "#D29922": return 2 # Galben Atenție
+        if b['color'] == "#3FB950": return 3 # Verde (Pozitiv)
+        return 4 # Gri (Neutru/Stabil) pus la final ca informare
+        
+    bullets.sort(key=sort_key)
+    
+    # Returnăm TOATE argumentele posibile (până la 15)
+    return bullets[:15]    
