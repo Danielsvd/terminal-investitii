@@ -11,6 +11,7 @@ from textblob import TextBlob
 import socket
 import numpy as np
 import re
+import requests
 # --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
 import gspread
 from google.oauth2.service_account import Credentials
@@ -796,13 +797,13 @@ def analyze_dividend_quality(info):
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
     try:
-        # FĂRĂ requests.Session, FĂRĂ curl_cffi forțat.
-        # yfinance va alege singur cea mai bună metodă.
-
+        # Lăsăm yfinance să gestioneze conexiunea automat pentru a evita eroarea curl_cffi
         t = yf.Ticker(symbol)
+        
+        # Încercăm să descărcăm datele istorice
         hist = t.history(period="5y")
 
-        # Fallback BVB
+        # Fallback pentru Bursa de Valori București (BVB)
         if hist.empty and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
@@ -816,7 +817,8 @@ def get_stock_data(symbol):
         return hist, t.info, getattr(t, 'earnings_history', None), symbol
 
     except Exception as e:
-        print(f"Eroare: {e}")
+        # Dacă apare o eroare de conexiune, o afișăm în consolă pentru debug, nu blocăm UI-ul
+        print(f"DEBUG: Eroare yfinance pentru {symbol}: {e}")
         return None, None, None, symbol
 
 def calculate_technical_indicators(df):
