@@ -10,6 +10,7 @@ from scipy.optimize import minimize
 from sklearn.ensemble import IsolationForest
 import yfinance as yf
 from datetime import date
+from datetime import datetime
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
@@ -404,49 +405,55 @@ def calculate_and_plot_seasonality(hist_data):
     except Exception as e:
         return None, f"Eroare procesare sezonalitate: {e}"
 
+@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute
 def get_options_analysis_ai(ticker_sym):
     try:
         t = yf.Ticker(ticker_sym)
+        
+        # Pasul 1: Obținem datele de expirare (Primul apel API)
         expirations = t.options
-        if not expirations: return None, "Fără date"
+        if not expirations: 
+            return None, "Fără date de opțiuni disponibile pentru acest simbol."
             
+        # Pasul 2: Obținem lanțul de opțiuni (Al doilea apel API - cel mai greu)
         opts = t.option_chain(expirations[0])
         calls, puts = opts.calls, opts.puts
+        
+        # Preluăm prețul curent rapid
         spot = t.fast_info.last_price
+        if spot == 0: spot = calls['strike'].median() # Fallback dacă lipsește prețul
 
-        # Calcul GEX Proxy
+        # --- Calcule GEX & IV (identic cu ce ai deja) ---
         calls['gex'] = calls['openInterest'] * (spot / ((calls['strike'] - spot)**2 + 1))
         puts['gex'] = puts['openInterest'] * (spot / ((puts['strike'] - spot)**2 + 1)) * -1
         total_gex = calls['gex'].sum() + puts['gex'].sum()
         
-        # --- LOGICA CORECTATĂ DE CULORI ---
-        if total_gex < 0:
-            gex_verdict = "🔥 GAMMA SCURTĂ: Risc de volatilitate violentă."
-            gex_color = "#F85149" # ROȘU pentru risc
-        else:
-            gex_verdict = "🛡️ GAMMA LUNGĂ: Market Makerii stabilizează prețul."
-            gex_color = "#3FB950" # VERDE pentru stabilitate
-
-        # Calcul IV și restul datelor
         avg_iv = (calls['impliedVolatility'].mean() + puts['impliedVolatility'].mean()) / 2 * 100
         
-        # Determinăm culoarea pentru textul IV din Gauge
-        if avg_iv < 25: iv_txt_color = "#3FB950"   # Ieftin - Verde
-        elif avg_iv < 50: iv_txt_color = "#D29922" # Moderat - Galben
-        else: iv_txt_color = "#F85149"             # Scump - Roșu
+        gex_verdict = "🛡️ GAMMA LUNGĂ: Stabilitate" if total_gex > 0 else "🔥 GAMMA SCURTĂ: Volatilitate"
+        gex_color = "#3FB950" if total_gex > 0 else "#F85149"
+        
+        iv_txt_color = "#3FB950" if avg_iv < 25 else ("#D29922" if avg_iv < 50 else "#F85149")
 
         return {
             "expiration": expirations[0],
             "oi_pc_ratio": puts['openInterest'].sum() / calls['openInterest'].sum() if calls['openInterest'].sum() > 0 else 0,
             "vol_pc_ratio": puts['volume'].sum() / calls['volume'].sum() if calls['volume'].sum() > 0 else 0,
-            "max_pain": spot, # Fallback simplificat
+            "max_pain": spot, 
             "iv": avg_iv,
-            "iv_color": iv_txt_color, # Trimitem culoarea către UI
+            "iv_color": iv_txt_color,
             "net_gex": total_gex,
             "gex_verdict": gex_verdict,
-            "gex_color": gex_color
+            "gex_color": gex_color,
+            "timestamp": datetime.now().strftime("%H:%M") # Adăugăm ora salvării în cache
         }, "Succes"
-    except Exception as e: return None, str(e)
+
+    except Exception as e:
+        # Dacă Yahoo ne blochează (Eroare 429), returnăm un mesaj specific
+        error_msg = str(e)
+        if "429" in error_msg or "Too Many Requests" in error_msg:
+            return None, "🚨 LIMITĂ ATINSĂ: Yahoo Finance a restricționat temporar accesul. Reîncearcă în 15 minute."
+        return None, f"Eroare Opțiuni: {error_msg}"
 
 def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_score, opt_data, spread, z_score, q_ratio, regime_msg):
     """
