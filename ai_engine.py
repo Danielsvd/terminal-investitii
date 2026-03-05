@@ -756,3 +756,95 @@ def get_detailed_ownership_and_execs(ticker_sym):
         return df_summary, df_details, ceo_name, inst_pct
     except:
         return None, None, "N/A", 0.0
+
+def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data):
+    """
+    Sinteză Macro de nivel Instituțional. Corelează mărfurile, valutele, 
+    dobânzile și rotația sectorială pentru a deduce intenția ascunsă a pieței.
+    """
+    bullets = []
+
+    # 1. Extragem trendul pe termen scurt (ultimele 5 zile) pentru Mărfuri & Valute
+    def get_trend(ticker):
+        try:
+            if isinstance(macro_data.columns, pd.MultiIndex):
+                if ticker in macro_data.columns.levels[0]:
+                    series = macro_data[ticker]['Close'].dropna()
+                else: return 0
+            else:
+                series = macro_data['Close'].dropna()
+            
+            if len(series) >= 5:
+                # Variația procentuală față de acum 5 zile
+                return (series.iloc[-1] / series.iloc[-5]) - 1
+            return 0
+        except: return 0
+
+    gold_trend = get_trend('GC=F')
+    oil_trend = get_trend('CL=F')
+    copper_trend = get_trend('HG=F')
+    dxy_trend = get_trend('DX-Y.NYB')
+
+    # --- REGULA 1: RISC SISTEMIC (Curba Dobânzilor + VIX) ---
+    if yield_spread < 0 and vix_val > 20:
+        bullets.append({
+            "icon": "🚨", "color": "#F85149",
+            "text": f"ALARMĂ MACRO: Curba randamentelor este inversată ({yield_spread:.2f}), iar VIX-ul este ridicat ({vix_val:.1f}). Această combinație letală indică faptul că „banii inteligenți” fug din activele de risc anticipând un șoc economic iminent."
+        })
+    elif yield_spread < 0:
+        bullets.append({
+            "icon": "⚠️", "color": "#D29922",
+            "text": f"AVERTISMENT DE RECESIUNE: Curba randamentelor (10Y-3M) este inversată ({yield_spread:.2f}). Deși VIX-ul este calm deocamdată, piața obligațiunilor semnalează o contracție economică pe termen mediu. Rămâi defensiv."
+        })
+
+    # --- REGULA 2: CORELAȚIA AUR / DOLAR / FRICĂ (Paradoxul de refugiu) ---
+    if gold_trend > 0.02 and dxy_trend > 0.01:
+        bullets.append({
+            "icon": "🥇", "color": "#FFAB00",
+            "text": f"PARADOX DE REFUGIU: Aurul (+{gold_trend*100:.1f}%) și Dolarul (+{dxy_trend*100:.1f}%) cresc simultan. Aceasta este o anomalie majoră (în mod normal se mișcă în direcții opuse) și trădează o panică globală subiacentă. Capitalul caută siguranță absolută, ignorând prețurile."
+        })
+    elif dxy_trend > 0.015:
+        bullets.append({
+            "icon": "💵", "color": "#F85149",
+            "text": f"PRESIUNEA DOLARULUI: Dolarul american se întărește rapid (+{dxy_trend*100:.1f}%). Un dolar puternic acționează ca o „taxă gravă” pe profiturile companiilor din S&P 500 și trage în jos prețul mărfurilor."
+        })
+
+    # --- REGULA 3: DR. COPPER VS PETROL (Creștere vs Inflație) ---
+    if copper_trend > 0.03:
+        bullets.append({
+            "icon": "🏗️", "color": "#3FB950",
+            "text": f"EXPANSIUNE INDUSTRIALĂ: Cuprul, supranumit „Dr. Copper” pentru abilitatea sa de a diagnostica economia, este în creștere (+{copper_trend*100:.1f}%). Acest lucru semnalează o cerere globală robustă și sprijină teza unui Bull Market continuu."
+        })
+    if oil_trend > 0.04:
+        bullets.append({
+            "icon": "🛢️", "color": "#F85149",
+            "text": f"ȘOC INFLAȚIONIST: Petrolul a crescut abrupt (+{oil_trend*100:.1f}%). Dacă această tendință persistă, va forța băncile centrale să amâne tăierea dobânzilor, distrugând evaluările companiilor de creștere (Growth/Tech)."
+        })
+
+    # --- REGULA 4: CREDIT & ROTAȚIE SECTORIALĂ (Confirmarea Instituțională) ---
+    if not credit_ratio_series.empty:
+        curr_r = credit_ratio_series.iloc[-1]
+        sma_20 = credit_ratio_series.rolling(20).mean().iloc[-1]
+        
+        top_sectors = df_sectors.tail(3)['Sector'].tolist() if not df_sectors.empty else []
+        defensives = ['Utilități', 'Consum de Bază', 'Sănătate', 'Imobiliare']
+        
+        if curr_r < sma_20 and any(s in top_sectors for s in defensives):
+            bullets.append({
+                "icon": "🛡️", "color": "#D29922",
+                "text": "SINCRONIZARE RISK-OFF: Piața de obligațiuni (scăderea cererii pentru High Yield) confirmă comportamentul bursei (rotația spre Utilități/Defensive). Banii inteligenți sunt în modul de 'conservare a capitalului', nu caută profit."
+            })
+        elif curr_r > sma_20 and "Tehnologie" in top_sectors:
+            bullets.append({
+                "icon": "🚀", "color": "#3FB950",
+                "text": "SINCRONIZARE RISK-ON: Piața de credit este sănătoasă și curajoasă, iar banii pe bursă intră agresiv în Tehnologie. Raliul actual este susținut de fundații solide, nu doar de speculă."
+            })
+
+    # Fallback dacă piața e "plată" (fără extreme)
+    if len(bullets) == 0:
+        bullets.append({
+            "icon": "⚖️", "color": "#8B949E",
+            "text": "CONSOLIDARE MACRO: Aurul, petrolul, dobânzile și dolarul nu prezintă deviații majore în ultimele zile. Piețele se află într-o stare de așteptare echilibrată (wait-and-see) înaintea unor noi catalizatori."
+        })
+        
+    return bullets    
