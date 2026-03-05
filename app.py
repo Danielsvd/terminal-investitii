@@ -14,6 +14,7 @@ import re
 import requests
 import asyncio
 import httpx
+import pandas_datareader.data as web
 # --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
 import gspread
 from google.oauth2.service_account import Credentials
@@ -1688,6 +1689,116 @@ def get_volume_analysis(symbol):
         }
     except:
         return None
+
+import pandas_datareader.data as web
+
+@st.cache_data(ttl=86400)
+def get_fred_macro_data():
+    """Descarcă date macro reale de la Rezerva Federală (FRED). Varianta Extinsă."""
+    end = datetime.today()
+    start = end - timedelta(days=365) # Luăm 1 an ca să fim siguri că prindem rapoartele lunare
+    
+    # Simbolurile oficiale FRED (The Big 8)
+    indicators = {
+        'CPIAUCSL': 'Inflație CPI (General)',
+        'CPILFESL': 'Inflație Core CPI (Fără Energie/Hrană)',
+        'UNRATE': 'Rata Șomajului (%)',
+        'PAYEMS': 'Nonfarm Payrolls (Total Angajați)',
+        'FEDFUNDS': 'Dobânda Cheie FED (%)',
+        'RSAFS': 'Vânzări de Retail (Consum)',
+        'INDPRO': 'Producție Industrială',
+        'UMCSENT': 'Sentiment Consumatori (U. Mich)'
+    }
+    
+    try:
+        # Descărcăm datele
+        df = web.DataReader(list(indicators.keys()), 'fred', start, end)
+        
+        results = []
+        for col, name in indicators.items():
+            # Eliminăm rândurile goale specifice doar acestei coloane pentru a evita bug-ul cu +0.00
+            col_data = df[col].dropna()
+            
+            if len(col_data) >= 2:
+                val_curr = col_data.iloc[-1]
+                val_prev = col_data.iloc[-2]
+                
+                # Logică diferită de calcul în funcție de metrica economică
+                if col == 'PAYEMS':
+                    change = val_curr - val_prev # Diferența ne dă numărul de joburi create
+                    trend = f"{change:+.0f}K joburi"
+                elif col in ['UNRATE', 'FEDFUNDS', 'UMCSENT']:
+                    change = val_curr - val_prev # Puncte absolute
+                    trend = f"{change:+.2f} pct."
+                else:
+                    change = ((val_curr - val_prev) / val_prev) * 100 # Procent MoM (Lună vs Lună)
+                    trend = f"{change:+.2f}%"
+                    
+                results.append({
+                    "Indicator": name,
+                    "Valoare Curentă": val_curr,
+                    "Lună Precedentă": val_prev,
+                    "Evoluție (MoM)": trend,
+                    "_simbol": col,
+                    "_change_raw": change
+                })
+        return pd.DataFrame(results)
+    except Exception as e:
+        print(f"Eroare FRED: {e}")
+        return pd.DataFrame()
+
+def interpret_macro_data_ai(df_macro):
+    """
+    Motor logic avansat care traduce cifrele economice complexe în decizii bursiere.
+    """
+    if df_macro.empty: return []
+    
+    bullets = []
+    macro_dict = {row['_simbol']: row for _, row in df_macro.iterrows()}
+    
+    # 1. Analiză Inflație & Core CPI
+    if 'CPIAUCSL' in macro_dict and 'CPILFESL' in macro_dict:
+        cpi = macro_dict['CPIAUCSL']
+        core_cpi = macro_dict['CPILFESL']
+        
+        if core_cpi['_change_raw'] > 0.3: # Peste 0.3% MoM e prea fierbinte
+            bullets.append("🔥 **Inflație Core 'Lipicioasă':** Core CPI (care exclude energia) crește prea repede. FED-ul va menține dobânzile sus. Negativ pentru acțiunile de creștere și imobiliare.")
+        elif cpi['_change_raw'] <= 0.1 and core_cpi['_change_raw'] <= 0.2:
+            bullets.append("❄️ **Dezinflație Confirmată:** Prețurile se răcesc sustenabil. Băncile centrale au undă verde să pompeze lichiditate. Mediu favorabil pentru acțiuni (Risk-On).")
+
+    # 2. Analiză Consumator & Vânzări (Motorul Economiei)
+    if 'RSAFS' in macro_dict and 'UMCSENT' in macro_dict:
+        retail = macro_dict['RSAFS']
+        sentiment = macro_dict['UMCSENT']
+        
+        if retail['_change_raw'] < -0.5 and sentiment['_change_raw'] < -2.0:
+            bullets.append("🚨 **Avertisment Consum:** Vânzările de retail și sentimentul populației scad simultan. Consumatorul american, motorul economiei globale, cedează sub presiunea prețurilor. Risc de contracție a profiturilor corporate.")
+        elif retail['_change_raw'] > 0.5:
+            bullets.append("🛒 **Consum Robust:** Cheltuielile populației susțin economia. Profiturile companiilor din sectorul de consum discreționar ar trebui să surprindă pozitiv.")
+
+    # 3. Analiză Piața Muncii (Șomaj & NFP)
+    if 'UNRATE' in macro_dict and 'PAYEMS' in macro_dict:
+        unrate = macro_dict['UNRATE']
+        nfp = macro_dict['PAYEMS']
+        
+        if unrate['Valoare Curentă'] >= 4.2 and unrate['_change_raw'] > 0:
+            bullets.append("⚠️ **Piața Muncii se Răcește:** Șomajul este în creștere. Deși piețele sărbătoresc inițial sperând la dobânzi mici, pe termen mediu acest lucru indică probleme în economia reală (Regula Sahm).")
+        elif nfp['_change_raw'] > 200:
+            bullets.append("💪 **Economie de 'Teflon' (Soft Landing):** S-au creat peste 200K joburi noi. Economia funcționează perfect, dar acest lucru lasă fereastra deschisă pentru ca inflația să revină.")
+
+    # 4. Producția Industrială
+    if 'INDPRO' in macro_dict:
+        indpro = macro_dict['INDPRO']
+        if indpro['_change_raw'] < -0.5:
+            bullets.append("🏭 **Contracție Industrială:** Sectorul de producție frânează. Acțiunile din sectorul Industrial și cel al Mărfurilor (Materials) ar putea sub-performa.")
+
+    # 5. Dobânda FED
+    if 'FEDFUNDS' in macro_dict:
+        fed = macro_dict['FEDFUNDS']
+        if fed['_change_raw'] < -0.1:
+            bullets.append("💸 **Ciclu de Relaxare:** FED taie dobânzile. Istoric, atâta timp cât nu intrăm oficial în recesiune, piețele de acțiuni au o performanță excelentă în următoarele 12 luni.")
+            
+    return bullets
 
 # --- MAIN APP ---
 def main():
@@ -3367,20 +3478,23 @@ def main():
             # if st.button("⚠️ Șterge TOT Portofoliul (Reset)"):
             #     os.remove(FILE_PORTOFOLIU)
             #     st.rerun()
-        
+
     # =================================================================
     # 4. PIAȚĂ GLOBALĂ (CU MASTER VERDICT AI INTEGRAT & SINTEZĂ DEEP DIVE)
     # =================================================================
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
-        st.caption("Date în timp real (cu întârziere minimă) furnizate via Yahoo Finance.")
+        st.caption("Date în timp real și macroeconomie instituțională.")
 
         with st.spinner("Motorul Macro AI descarcă și corelează indicatorii globali..."):
             # --- 1. DESCĂRCĂM ABSOLUT TOATE DATELE LA ÎNCEPUT ---
             macro_sectors = get_sector_performance()
             macro_risk_ratio = get_credit_risk_data("1y")
             macro_corr = get_cross_asset_correlation()
-            macro_tickers, macro_data = get_macro_data_visuals() # Mutat aici sus!
+            macro_tickers, macro_data = get_macro_data_visuals() 
+            
+            # --- NOU: Descărcăm datele FRED aici sus pentru a le da motorului AI ---
+            df_fred = get_fred_macro_data()
             
             try: vix_val = yf.Ticker("^VIX").fast_info.last_price
             except: vix_val = 20.0
@@ -3428,12 +3542,12 @@ def main():
 
         # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
-        st.subheader("✨ Sinteza Inteligenței Artificiale (Intersecție Cross-Asset)")
+        st.subheader("✨ Sinteza Inteligenței Artificiale")
         
         with st.spinner("Sintetizăm intersecțiile de metale, valute, dobânzi și opțiuni..."):
             from ai_engine import generate_macro_ai_summary
             macro_bullets = generate_macro_ai_summary(
-                vix_val, curr_yield_spread, macro_risk_ratio, macro_sectors, macro_corr, macro_data
+                vix_val, curr_yield_spread, macro_risk_ratio, macro_sectors, macro_corr, macro_data, df_fred
             )
             
             if macro_bullets:
@@ -4164,6 +4278,58 @@ def main():
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
                     use_container_width=True, hide_index=True
                 )
+
+        # =================================================================
+        # MODUL NOU: TABEL MACROECONOMIE & SĂNĂTATEA ECONOMIEI REALE
+        # =================================================================
+        st.markdown("---")
+        st.subheader("🏛️ Barometrul Economiei Reale (Date Oficiale FED)")
+        st.markdown("Aceste date dictează politica Rezervei Federale (dobânzile). Piața reacționează violent la publicarea lor (NFP, CPI).")
+        
+        with st.spinner("Se interoghează baza de date a Rezervei Federale SUA..."):
+            df_macro = get_fred_macro_data()
+            
+            if not df_macro.empty:
+                col_tab, col_ai = st.columns([1.2, 1])
+                
+                with col_tab:
+                    # Stilizare tabel: Evidențiem creșterile/scăderile
+                    def color_macro_trend(val):
+                        if isinstance(val, str):
+                            if '+' in val: return 'color: #3FB950; font-weight: bold'
+                            elif '-' in val: return 'color: #F85149; font-weight: bold'
+                        return ''
+                    
+                    st.dataframe(
+                        df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)']].style
+                        .map(color_macro_trend, subset=['Evoluție (MoM)'])
+                        .format({
+                            'Valoare Curentă': '{:.2f}',
+                            'Lună Precedentă': '{:.2f}'
+                        }),
+                        use_container_width=True, hide_index=True
+                    )
+                    st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = Month over Month.")
+                
+                with col_ai:
+                    st.markdown("#### 🧠 Interpretare Strategică")
+                    macro_insights = interpret_macro_data_ai(df_macro)
+                    
+                    if macro_insights:
+                        for insight in macro_insights:
+                            # Colorare automată în funcție de iconiță
+                            bg_col = "rgba(248, 81, 73, 0.1)" if "🔥" in insight or "🚨" in insight else ("rgba(63, 185, 80, 0.1)" if "💪" in insight or "❄️" in insight else "#21262D")
+                            b_col = "#F85149" if "🔥" in insight or "🚨" in insight else ("#3FB950" if "💪" in insight or "❄️" in insight else "#8B949E")
+                            
+                            st.markdown(f"""
+                            <div style="background:{bg_col}; padding:15px; border-radius:10px; border-left: 4px solid {b_col}; margin-bottom: 10px; font-size:14px; line-height:1.5;">
+                                {insight}
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("Piața se află în parametrii așteptați. Nicio anomalie macroeconomică detectată luna aceasta.")
+            else:
+                st.warning("Datele FRED sunt momentan indisponibile. Verifică conexiunea.")
 
     # ==================================================
     # 5. IMPORT DATE (GOOGLE SHEETS) - BVB EXTINS & GLOBAL FIX
