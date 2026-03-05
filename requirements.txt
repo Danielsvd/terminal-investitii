@@ -19,3 +19,4 @@ numpy
 scikit-learn
 httpx
 httpx[http2]
+pandas-datareader
