@@ -1695,44 +1695,45 @@ import pandas_datareader.data as web
 
 @st.cache_data(ttl=86400)
 def get_fred_macro_data():
-    """Descarcă date macro reale de la Rezerva Federală (FRED). Varianta Extinsă."""
+    """Descărcare individuală pentru reziliență maximă. Dacă un simbol e picat, restul merg."""
     end = datetime.today()
-    start = end - timedelta(days=365) # Luăm 1 an ca să fim siguri că prindem rapoartele lunare
+    start = end - timedelta(days=365)
     
-    # Simbolurile oficiale FRED (The Big 8)
     indicators = {
         'CPIAUCSL': 'Inflație CPI (General)',
-        'CPILFESL': 'Inflație Core CPI (Fără Energie/Hrană)',
+        'CPILFESL': 'Inflație Core CPI',
+        'PCEPILFE': 'Core PCE (Favorita FED)',
         'UNRATE': 'Rata Șomajului (%)',
-        'PAYEMS': 'Nonfarm Payrolls (Total Angajați)',
+        'PAYEMS': 'Nonfarm Payrolls (NFP Oficial)',
+        'ADPCHGS': 'ADP Private Payrolls',
+        'JTSJOL': 'JOLTS (Job Openings)',
         'FEDFUNDS': 'Dobânda Cheie FED (%)',
         'RSAFS': 'Vânzări de Retail (Consum)',
         'INDPRO': 'Producție Industrială',
+        'HOUST': 'Housing Starts (Case Noi)',
         'UMCSENT': 'Sentiment Consumatori (U. Mich)'
     }
     
-    try:
-        # Descărcăm datele
-        df = web.DataReader(list(indicators.keys()), 'fred', start, end)
-        
-        results = []
-        for col, name in indicators.items():
-            # Eliminăm rândurile goale specifice doar acestei coloane pentru a evita bug-ul cu +0.00
-            col_data = df[col].dropna()
+    results = []
+    
+    # Descarcă fiecare indicator separat pentru a nu bloca tot tabelul
+    for code, name in indicators.items():
+        try:
+            df_item = web.DataReader(code, 'fred', start, end)
+            col_data = df_item[code].dropna()
             
             if len(col_data) >= 2:
                 val_curr = col_data.iloc[-1]
                 val_prev = col_data.iloc[-2]
                 
-                # Logică diferită de calcul în funcție de metrica economică
-                if col == 'PAYEMS':
-                    change = val_curr - val_prev # Diferența ne dă numărul de joburi create
-                    trend = f"{change:+.0f}K joburi"
-                elif col in ['UNRATE', 'FEDFUNDS', 'UMCSENT']:
-                    change = val_curr - val_prev # Puncte absolute
+                if code in ['PAYEMS', 'ADPCHGS', 'JTSJOL']:
+                    change = val_curr - val_prev
+                    trend = f"{change:+.0f}K"
+                elif code in ['UNRATE', 'FEDFUNDS', 'UMCSENT']:
+                    change = val_curr - val_prev
                     trend = f"{change:+.2f} pct."
                 else:
-                    change = ((val_curr - val_prev) / val_prev) * 100 # Procent MoM (Lună vs Lună)
+                    change = ((val_curr - val_prev) / val_prev) * 100
                     trend = f"{change:+.2f}%"
                     
                 results.append({
@@ -1740,65 +1741,83 @@ def get_fred_macro_data():
                     "Valoare Curentă": val_curr,
                     "Lună Precedentă": val_prev,
                     "Evoluție (MoM)": trend,
-                    "_simbol": col,
+                    "_simbol": code,
                     "_change_raw": change
                 })
-        return pd.DataFrame(results)
-    except Exception as e:
-        print(f"Eroare FRED: {e}")
-        return pd.DataFrame()
+        except Exception:
+            continue # Dacă un simbol are probleme, trecem la următorul fără să oprim aplicația
+            
+    return pd.DataFrame(results)
 
 def interpret_macro_data_ai(df_macro):
     """
-    Motor logic avansat care traduce cifrele economice complexe în decizii bursiere.
+    Analiză Macro de nivel Senior Fund Manager.
+    Sintetizează 12 indicatori FRED pentru a detecta schimbările de paradigmă economică.
     """
     if df_macro.empty: return []
     
     bullets = []
-    macro_dict = {row['_simbol']: row for _, row in df_macro.iterrows()}
+    m = {row['_simbol']: row for _, row in df_macro.iterrows()}
     
-    # 1. Analiză Inflație & Core CPI
-    if 'CPIAUCSL' in macro_dict and 'CPILFESL' in macro_dict:
-        cpi = macro_dict['CPIAUCSL']
-        core_cpi = macro_dict['CPILFESL']
-        
-        if core_cpi['_change_raw'] > 0.3: # Peste 0.3% MoM e prea fierbinte
-            bullets.append("🔥 **Inflație Core 'Lipicioasă':** Core CPI (care exclude energia) crește prea repede. FED-ul va menține dobânzile sus. Negativ pentru acțiunile de creștere și imobiliare.")
-        elif cpi['_change_raw'] <= 0.1 and core_cpi['_change_raw'] <= 0.2:
-            bullets.append("❄️ **Dezinflație Confirmată:** Prețurile se răcesc sustenabil. Băncile centrale au undă verde să pompeze lichiditate. Mediu favorabil pentru acțiuni (Risk-On).")
+    # --- HELPER: Extragere Valori ---
+    def gv(sym): return m.get(sym, {}).get('Valoare Curentă', 0)
+    def gc(sym): return m.get(sym, {}).get('_change_raw', 0)
 
-    # 2. Analiză Consumator & Vânzări (Motorul Economiei)
-    if 'RSAFS' in macro_dict and 'UMCSENT' in macro_dict:
-        retail = macro_dict['RSAFS']
-        sentiment = macro_dict['UMCSENT']
-        
-        if retail['_change_raw'] < -0.5 and sentiment['_change_raw'] < -2.0:
-            bullets.append("🚨 **Avertisment Consum:** Vânzările de retail și sentimentul populației scad simultan. Consumatorul american, motorul economiei globale, cedează sub presiunea prețurilor. Risc de contracție a profiturilor corporate.")
-        elif retail['_change_raw'] > 0.5:
-            bullets.append("🛒 **Consum Robust:** Cheltuielile populației susțin economia. Profiturile companiilor din sectorul de consum discreționar ar trebui să surprindă pozitiv.")
+    # 1. ANALIZA INFLAȚIEI (Cea mai mare frică a pieței)
+    pce = gc('PCEPILFE') # Core PCE MoM
+    cpi_core = gc('CPILFESL') # Core CPI MoM
+    fed_rate = gv('FEDFUNDS')
+    
+    # Calculăm Rata Reală (Dobânda Fed - Inflația)
+    # Dacă e pozitivă și mare, Fed-ul "strânge de gât" economia.
+    real_rate = fed_rate - gv('CPIAUCSL')
 
-    # 3. Analiză Piața Muncii (Șomaj & NFP)
-    if 'UNRATE' in macro_dict and 'PAYEMS' in macro_dict:
-        unrate = macro_dict['UNRATE']
-        nfp = macro_dict['PAYEMS']
-        
-        if unrate['Valoare Curentă'] >= 4.2 and unrate['_change_raw'] > 0:
-            bullets.append("⚠️ **Piața Muncii se Răcește:** Șomajul este în creștere. Deși piețele sărbătoresc inițial sperând la dobânzi mici, pe termen mediu acest lucru indică probleme în economia reală (Regula Sahm).")
-        elif nfp['_change_raw'] > 200:
-            bullets.append("💪 **Economie de 'Teflon' (Soft Landing):** S-au creat peste 200K joburi noi. Economia funcționează perfect, dar acest lucru lasă fereastra deschisă pentru ca inflația să revină.")
+    if pce > 0.2 or cpi_core > 0.3:
+        bullets.append("🔥 **INFLAȚIE REZISTENTĂ:** Datele Core PCE și CPI indică prețuri 'lipicioase'. Fed-ul nu poate tăia dobânzile fără riscul unui al doilea val inflaționar. Rămâneți prudenți pe sectorul imobiliar și Tech cu evaluări mari.")
+    elif pce <= 0.15 and real_rate > 2:
+        bullets.append("❄️ **DEZINFLAȚIE CU DOBÂNZI REALE MARI:** Inflația scade, dar dobânzile rămân sus. Aceasta este o rețetă pentru 'Pivot' – momentul în care Fed va trebui să taie rapid pentru a nu strivi economia.")
 
-    # 4. Producția Industrială
-    if 'INDPRO' in macro_dict:
-        indpro = macro_dict['INDPRO']
-        if indpro['_change_raw'] < -0.5:
-            bullets.append("🏭 **Contracție Industrială:** Sectorul de producție frânează. Acțiunile din sectorul Industrial și cel al Mărfurilor (Materials) ar putea sub-performa.")
+    # 2. RADIOGRAFIA PIEȚEI MUNCII (Motorul consumului)
+    nfp = gc('PAYEMS')
+    adp = gc('ADPCHGS')
+    unrate = gv('UNRATE')
+    jolts_chg = gc('JTSJOL')
 
-    # 5. Dobânda FED
-    if 'FEDFUNDS' in macro_dict:
-        fed = macro_dict['FEDFUNDS']
-        if fed['_change_raw'] < -0.1:
-            bullets.append("💸 **Ciclu de Relaxare:** FED taie dobânzile. Istoric, atâta timp cât nu intrăm oficial în recesiune, piețele de acțiuni au o performanță excelentă în următoarele 12 luni.")
-            
+    # Corelația ADP vs NFP
+    if nfp > 200 and adp < 100:
+        bullets.append("🔄 **DIVERGENȚĂ PRIVAT-STAT:** Angajările oficiale (NFP) sunt susținute de sectorul public, în timp ce sectorul privat (ADP) frânează. Este un semnal 'Late Cycle' – economia reală încetinește sub suprafață.")
+    
+    # Regula Sahm & Tightness
+    if gc('UNRATE') > 0.1 and unrate > 4.0:
+        bullets.append("🚨 **RECESIUNEA 'BATE LA UȘĂ':** Șomajul crește constant. Istoric, o creștere de 0.5% a ratei șomajului de la minimul anului declanșează Regula Sahm (recesiune inevitabilă).")
+    
+    if jolts_chg < -400:
+        bullets.append("📉 **CAPITULAREA ANGAJATORILOR:** Scăderea masivă a joburilor vacante (JOLTS) arată că firmele au tăiat bugetele de expansiune. Presiunea pe creșterea salariilor va scădea, ajutând inflația, dar lovind consumul.")
+
+    # 3. CONSUMUL ȘI SENTIMENTUL (Inima PIB-ului)
+    retail = gc('RSAFS')
+    sentiment = gc('UMCSENT')
+
+    if retail < 0 and sentiment < 0:
+        bullets.append("⚠️ **STAGNARE CONSUM:** Americanii nu mai au încredere în viitor și au tăiat cheltuielile de retail. Deoarece consumul este 70% din PIB, acesta este un semnal de alarmă pentru profiturile companiilor din S&P 500.")
+    elif retail > 0.5 and sentiment < -2.0:
+        bullets.append("💸 **SPENDING DE NECESITATE:** Vânzările cresc, dar încrederea scade. Oamenii cheltuie mai mult pe aceleași bunuri (din cauza inflației), nu pentru că au surplus. Este un semnal negativ pentru marjele de profit.")
+
+    # 4. INDICATORI AVANSAȚI (Leading Indicators)
+    housing = gc('HOUST')
+    ind_prod = gc('INDPRO')
+
+    if housing < -3.0 and ind_prod < -0.3:
+        bullets.append("🏗️ **FRÂNĂ INDUSTRIALĂ ȘI IMOBILIARĂ:** Cele mai sensibile sectoare la dobânzi sunt în contracție. Acest duo anticipează de obicei o scădere a PIB-ului în următoarele 2-3 trimestre.")
+    elif housing > 2.0:
+        bullets.append("🏠 **RELIENȚĂ IMOBILIARĂ:** Sectorul construcțiilor sfidează dobânzile mari. Acest lucru oferă un suport solid economiei și sugerează că o recesiune 'hard' este puțin probabilă acum.")
+
+    # 5. VERDICTUL MASTER (SINTEZA)
+    if unrate < 4.0 and pce < 0.2 and retail > 0:
+        bullets.append("🌟 **REGIM GOLDILOCKS:** Nici prea cald, nici prea rece. Joburi sunt, inflația e stabilă, consumul merge. Este mediul ideal pentru investiții în acțiuni (Equity Bull Market).")
+    elif unrate > 4.2 and pce > 0.25:
+        bullets.append("🌪️ **SCENARIU DE COȘMAR (STAGFLAȚIE):** Șomaj în creștere + Inflație persistentă. Este singurul mediu în care portofoliile diversificate eșuează. Cash-ul și Aurul sunt singurele refugii.")
+
     return bullets
 
 # --- MAIN APP ---
