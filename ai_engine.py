@@ -870,12 +870,25 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     else:
         bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"DOLAR: Consolidare ({dxy_trend*100:+.1f}%). Valuta se tranzacționează în interval neutru."})
 
-    if oil_trend > 0.06 and cross_asset_flags == 0:
-        bullets.append({"icon": "🛢️", "color": "#D29922", "text": f"PETROL: Scumpire abruptă (+{oil_trend*100:.1f}%). Risc de strivire a marjelor de profit din industrie."})
+    if oil_trend > 0.06:
+        bullets.append({
+            "icon": "🛢️", 
+            "color": "#F85149", # Schimbăm în Roșu (era Galben) pentru că +40% e critic
+            "text": f"ȘOC PETROLIER: Țițeiul a explodat (+{oil_trend*100:.1f}%). Această creștere violentă a costurilor la energie va pune o presiune imensă pe inflație și va forța FED-ul să rămână Hawkish."
+        })
     elif oil_trend < -0.06:
-        bullets.append({"icon": "⛽", "color": "#3FB950", "text": f"PETROL: Scădere (-{abs(oil_trend)*100:.1f}%). Acționează ca o reducere de taxe nesperată pentru consumatori."})
+        bullets.append({
+            "icon": "⛽", 
+            "color": "#3FB950", 
+            "text": f"RELAXARE ENERGETICĂ: Petrolul scade semnificativ (-{abs(oil_trend)*100:.1f}%). Este un semnal puternic de dezinflație care ajută marjele de profit ale companiilor."
+        })
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"PETROL: Preț stabil ({oil_trend*100:+.1f}%). Sectorul energetic nu prezintă șocuri pe lanțul global."})
+        # Mesajul de stabilitate apare DOAR dacă variația e mică
+        bullets.append({
+            "icon": "⚖️", 
+            "color": "#8B949E", 
+            "text": f"PETROL: Preț stabil ({oil_trend*100:+.1f}%). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
+        })
 
     if yield_spread < 0:
         bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({yield_spread:.2f}). Semnalul istoric de recesiune este în continuare aprins."})
