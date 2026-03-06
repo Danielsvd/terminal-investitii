@@ -417,14 +417,14 @@ def get_watchlist_target(symbol):
 def get_peers_analysis(sector, industry, current_ticker):
     """Extrage competitori și include datoria pentru o analiză de risc."""
     peers_map = {
-        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "AVGO", "MU", "FSLR", "META", "TSM", "QCOM"],
+        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "INTC", "PLTR", "T", "AVGO", "MU", "FSLR", "META", "TSM", "QCOM"],
         "Financial Services": ["JPM", "BAC", "GS", "WFC", "C", "V", "MS", "MA", "AXP", "SCHW"],
         "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "D", "VST", 'VG', "UUUU", "LEU", "CEG"],
         "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
         "Industrials": ["LMT", "RTX", "NOC", "BA", "GD", "MMM", "CAT", "DAL", "UAL"],
         "Basic Materials": ["RIO", "VALE", "BHP", "FCX", "NEM", "AEM", "GLNCY", "USAR", "AREC", "MP", "METC", "LAC"],
         "Consumer Defensive": ["WMT", "KO", "CL", "KHC", "PG", "SFD", "PEP", "PM"], 
-        "Consumer Cyclical": ["MCD", "CMG", "SBUX", "DPZ", "NKE", "RCL", "GM", "F"]
+        "Consumer Cyclical": ["MCD", "CMG", "SBUX", "DPZ", "NKE", "RCL", "MBG.DE","VOW.DE","BMW.DE","GM", "F"]
     }
     
     potential_peers = peers_map.get(sector, ["SPY", "QQQ", "DIA"])
@@ -437,6 +437,7 @@ def get_peers_analysis(sector, industry, current_ticker):
             inf = t.info
             peer_results.append({
                 "Simbol": p_sym,
+                "Capitalizare": inf.get('marketCap', 0),
                 "P/E": inf.get('trailingPE', 0),
                 "ROE (%)": inf.get('returnOnEquity', 0) * 100,
                 "ROA (%)": inf.get('returnOnAssets', 0) * 100,
@@ -2187,6 +2188,7 @@ def main():
                 if not df_peers.empty:
                     # Aplicăm stilizare profesională tabelului
                     st.dataframe(df_peers.style.format({
+                        "Capitalizare": lambda x: format_num(x),
                         "P/E": "{:.2f}",
                         "ROE (%)": "{:.1f}%",
                         "ROA (%)": "{:.1f}%",
@@ -3912,9 +3914,29 @@ def main():
                     c_inf1, c_inf2 = st.columns([1, 2]) # Organizăm detaliile pe două coloane sub grafic
                     
                     with c_inf1:
-                        rot_status = "🚀 GROWTH (Nasdaq)" if rot_change > 0 else "🏭 VALUE (Dow Jones)"
-                        st.metric("Trend Rotație (30z)", rot_status, f"{rot_change:+.2f}%")
-                        st.write(f"Scor actual: **{current_ratio:.4f}**")
+                        # Păstrăm logica de determinare a statusului
+                        rot_status = "🚀 CREȘTERE (Nasdaq)" if rot_change > 0 else "🏭 VALUE (Dow Jones)"
+                        delta_color = "#3FB950" if rot_change > 0 else "#F85149"
+                        
+                        # Randăm cardul consolidat cu HTML/CSS
+                        st.markdown(f"""
+                            <div style="background-color: #161B22; padding: 22px; border-radius: 12px; border: 1px solid #30363D; height: 100%;">
+                                <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
+                                    Trend Rotație (30z)
+                                </div>
+                                <div style="font-size: 22px; font-weight: bold; color: #FFFFFF; margin-bottom: 18px;">
+                                    {rot_status}
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <div style="background: {delta_color}22; color: {delta_color}; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; border: 1px solid {delta_color}44;">
+                                        {rot_change:+.2f}%
+                                    </div>
+                                    <div style="color: #8B949E; font-size: 13px;">
+                                        Scor real: <span style="color: #FFFFFF; font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{current_ratio:.4f}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
                         
                     with c_inf2:
                         if rot_change > 1.5:
