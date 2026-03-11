@@ -4072,24 +4072,48 @@ def main():
                 with c_heat2:
                     st.markdown("#### 🧠 Analiza AI a Fluxului")
                     
-                    # Extragem extremele (Păstrăm tot Dataframe-ul pentru a avea și procentele)
-                    top_3 = df_sectors.tail(3).iloc[::-1] # Cele mai mari 3, inversate să fie cel mai mare sus
+                    # Extragem extremele
+                    top_3 = df_sectors.tail(3).iloc[::-1] # Cele mai mari 3, liderii
                     bottom_3 = df_sectors.head(3) # Cele mai mici 3
                     
-                    # Definim categoriile de risc
+                    # 1. Filtrăm doar sectoarele care au crescut REA (pe verde) din TOATĂ piața
+                    sectoare_verzi = df_sectors[df_sectors['Variație %'] > 0]
+                    
+                    # Definim categoriile macro
                     defensive = ['Utilități', 'Consum de Bază', 'Sănătate', 'Imobiliare']
                     aggressive = ['Tehnologie', 'Consum Discreționar', 'Comunicații', 'Financiar']
                     
-                    def_count = sum(1 for s in top_3['Sector'] if s in defensive)
-                    agg_count = sum(1 for s in top_3['Sector'] if s in aggressive)
+                    # 2. Logică Financiară Avansată
+                    top_sector = top_3.iloc[0] # Liderul absolut al zilei
                     
-                    if agg_count >= 2:
-                        st.success("**🚀 RISK-ON (Atac):**\nBanii intră masiv în sectoarele de creștere. Investitorii sunt optimiști.")
-                    elif def_count >= 2:
-                        st.error("**🛡️ RISK-OFF (Apărare):**\nBanii fug spre sectoarele de siguranță (defensive). Instituțiile se protejează.")
+                    if len(sectoare_verzi) == 0:
+                        # Dacă absolut totul e pe roșu
+                        st.markdown("<div style='background:rgba(248, 81, 73, 0.15); padding:15px; border-radius:10px; border-left: 5px solid #F85149;'><b>🩸 SELL-OFF GENERAL:</b><br>Niciun sector nu este pe plus. Banii ies complet din piața de acțiuni, semn de panică macro.</div>", unsafe_allow_html=True)
+                    
+                    elif top_sector['Sector'] == 'Energie' and top_sector['Variație %'] > 1.0 and len(sectoare_verzi) <= 3:
+                        # Dacă energia explodează, iar restul pieței sângerează (Șoc de inflație)
+                        st.markdown("<div style='background:rgba(210, 153, 34, 0.15); padding:15px; border-radius:10px; border-left: 5px solid #D29922;'><b>🛢️ TRADE DE INFLAȚIE (Commodity Shock):</b><br>Capitalul se refugiază agresiv în Energie în timp ce restul pieței sângerează. Acesta este un tipar clasic de frică față de inflație sau șocuri geopolitice.</div>", unsafe_allow_html=True)
+                    
                     else:
-                        st.warning("**🔄 ROTAȚIE MIXTĂ:**\nFără direcție clară de risc. Capitalul se mută la nivel individual.")
+                        # --- AICI ESTE MODIFICAREA NOUĂ (FINE-TUNING) ---
+                        # Ne uităm STRICT la cine conduce piața AZI (Top 3 lideri care sunt și pe verde)
+                        lideri_verzi = top_3[top_3['Variație %'] > 0]
                         
+                        # Numărăm câți lideri sunt agresivi și câți defensivi
+                        def_count = sum(1 for s in lideri_verzi['Sector'] if s in defensive)
+                        agg_count = sum(1 for s in lideri_verzi['Sector'] if s in aggressive)
+                        
+                        # Cine are mai mulți lideri în Top 3 câștigă direcția zilei
+                        if agg_count > def_count:
+                            st.markdown("<div style='background:rgba(63, 185, 80, 0.15); padding:15px; border-radius:10px; border-left: 5px solid #3FB950;'><b>🚀 RISK-ON (Atac):</b><br>Banii domină sectoarele de creștere/agresive. Apetit mare pentru risc.</div>", unsafe_allow_html=True)
+                        
+                        elif def_count > agg_count:
+                            st.markdown("<div style='background:rgba(248, 81, 73, 0.15); padding:15px; border-radius:10px; border-left: 5px solid #F85149;'><b>🛡️ RISK-OFF (Apărare):</b><br>Capitalul migrează spre dividende sigure și bunuri de necesitate. Instituțiile se protejează de o posibilă scădere.</div>", unsafe_allow_html=True)
+                        
+                        else:
+                            # Dacă e 1 la 1 sau 0 la 0
+                            st.markdown("<div style='background:#21262D; padding:15px; border-radius:10px; border-left: 5px solid #8B949E;'><b>🔄 ROTAȚIE MIXTĂ / TRANZIȚIE:</b><br>Fără o direcție macro clară. Se fac reglaje fine de portofoliu la nivel individual.</div>", unsafe_allow_html=True)
+                    
                     st.markdown("---")
                     
                     # Afișare Lideri cu procente
