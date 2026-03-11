@@ -865,6 +865,18 @@ def analyze_dividend_quality(info):
     return verdicts, quality_ratio, payout * 100
         
 # --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
+import requests
+
+# 1. Creăm o sesiune 'deghizată' ca un browser Chrome real
+cloud_session = requests.Session()
+cloud_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive"
+})
+
+# --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
     try:
