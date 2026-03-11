@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from prophet import Prophet
-from transformers import pipeline
+from transformers import pipeline  # <--- Librăria pentru noul AI
 import plotly.graph_objects as go
 import streamlit as st
 from sklearn.cluster import KMeans
@@ -9,59 +9,44 @@ from plotly.subplots import make_subplots
 from scipy.optimize import minimize
 from sklearn.ensemble import IsolationForest
 import yfinance as yf
-from datetime import date
-from datetime import datetime
-import google.generativeai as genai
-import streamlit as st
-
-# Citim cheia din fișierul de secrete (configurat la Pasul 3)
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
-    st.error("Lipsește cheia API! Verifică fișierul .streamlit/secrets.toml")
+from datetime import date, datetime
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
-def get_sentiment_pipeline():
-    """Incarcă modelul FinBERT optimizat pentru analiză financiară."""
+def get_finbert_pipeline():
+    """
+    Încarcă modelul de inteligență artificială financiară.
+    La prima rulare, va descărca fișierele (~400MB) pe PC-ul tău.
+    Apoi va rula instantaneu, fără să depindă de chei API.
+    """
+    print("⏳ [AI SYSTEM] Se încarcă motorul financiar FinBERT...")
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 def analyze_sentiment_ai(news_list):
     """
-    Analiză de sentiment specializată pe piețe financiare.
-    Înțelege diferența dintre 'boom' (creștere) și 'crash', 
-    și ponderea rezultatelor financiare vs titluri senzaționaliste.
+    Calculează scorul general (Barometrul) folosind FinBERT.
     """
     if not news_list: return 0
-    
-    # Combinăm titlurile pentru o singură interogare (economisim tokeni și timp)
-    titles = "\n".join([f"- {n['title']}" for n in news_list[:10]])
-    
-    prompt = f"""
-    Ești un analist financiar senior la o bancă de investiții de top. 
-    Sarcina ta este să evaluezi sentimentul acestor știri pentru un acționar.
-    
-    REGULI CRITICE:
-    1. "Shares up", "Surging", "Beat expectations", "AI boom", "Price objective raised" sunt ÎNTOTDEAUNA POZITIVE.
-    2. "Cash flow negative" este un risc, dar dacă e însoțit de "Hyper growth", sentimentul poate fi mixt/neutru, nu pur negativ.
-    3. Ignoră zgomotul și concentrează-te pe impactul asupra PREȚULUI ACȚIUNII.
-
-    Iată știrile:
-    {titles}
-
-    Răspunde strict cu un număr între -1 (extrem de negativ) și 1 (extrem de pozitiv). 
-    0 este neutru. Nu adăuga text explicativ.
-    """
-
     try:
-        # Aici apelezi modelul tău (OpenAI/Gemini/etc)
-        # Exemplu pentru structura ta:
-        response = model.generate_content(prompt) # Sau ce funcție de apel folosești
-        sentiment_score = float(response.text.strip())
-        return sentiment_score
-    except:
+        analyzer = get_finbert_pipeline()
+        total_score = 0
+        count = 0
+        
+        # Analizăm top 10 știri
+        for n in news_list[:10]:
+            result = analyzer(n['title'])[0]
+            # Adăugăm sau scădem scorul de încredere (între 0 și 1)
+            if result['label'] == 'positive':
+                total_score += result['score']
+            elif result['label'] == 'negative':
+                total_score -= result['score']
+            count += 1
+            
+        if count == 0: return 0
+        # Returnăm o medie între -1.0 și 1.0
+        return total_score / count
+    except Exception as e:
+        print(f"❌ [FinBERT ERROR] la scor general: {e}")
         return 0
 
 # Funcție utilitară pentru a crea un "cheie" de timp (ziua curentă)
@@ -928,26 +913,23 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
 
 def get_gemini_sentiment_label(title):
     """
-    Analiză individuală Gemini pentru etichetare UI.
-    Returnează: (text_etichetă, clasă_css, iconiță)
-    """
-    prompt = f"""
-    Ești un analist financiar senior. Evaluează sentimentul strict pentru acest titlu: "{title}"
-    
-    REGULI:
-    - "Shares up", "Surge", "AI Boom", "Beat expectations", "Target raised" sunt POZITIVE.
-    - "Shares down", "Missed", "Job cuts", "Lawsuit" sunt NEGATIVE.
-    
-    Răspunde DOAR cu un număr: 1 (Pozitiv), -1 (Negativ) sau 0 (Neutru).
+    Am păstrat numele funcției ca să nu modificăm app.py, 
+    dar acum folosește FinBERT în loc de Gemini.
     """
     try:
-        response = model.generate_content(prompt)
-        val = response.text.strip()
-        # Curățăm răspunsul în caz că AI-ul mai scrie text pe lângă număr
-        score = 1 if "1" in val and "-" not in val else (-1 if "-1" in val else 0)
+        analyzer = get_finbert_pipeline()
+        # FinBERT returnează un dicționar: [{'label': 'positive', 'score': 0.92}]
+        result = analyzer(title)[0]
+        label = result['label']
         
-        if score == 1: return "Pozitiv", "impact-poz", "📈"
-        if score == -1: return "Negativ", "impact-neg", "📉"
+        print(f"🔍 [FinBERT] Titlu: {title[:30]}... -> Răspuns: {label.upper()}")
+
+        if label == "positive":
+            return "Pozitiv", "impact-poz", "📈"
+        elif label == "negative":
+            return "Negativ", "impact-neg", "📉"
+        else:
+            return "Neutru", "impact-neu", "➡️"
+    except Exception as e:
+        print(f"❌ [FinBERT ERROR] {e}")
         return "Neutru", "impact-neu", "➡️"
-    except:
-        return "Neutru", "impact-neu", "➡️"    
