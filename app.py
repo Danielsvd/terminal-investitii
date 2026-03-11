@@ -3119,20 +3119,20 @@ def main():
             # 7. Ultimele Știri (LOGICĂ REPARATĂ)
             st.subheader(f"📰 Ultimele Știri despre {real_sym}")
             if c_news_ai:
-                from ai_engine import get_gemini_sentiment_label
+                from ai_engine import get_gemini_sentiment_label # Importăm o singură dată
                 
                 for n in c_news_ai:
-                    # 1. Preluăm datele de la AI
-                    # Am folosit 'sentiment_text' pentru a fi clar
-                    sentiment_text, css_cls, icon = get_gemini_sentiment_label(n['title'])
+                    # Obținem eticheta de la Gemini
+                    # Folosim 'with st.spinner' doar dacă vrei să vezi că lucrează
+                    label_txt, css_cls, icon = get_gemini_sentiment_label(n['title'])
                     
                     c_t, c_i = st.columns([5, 1.2])
                     with c_t:
                         st.markdown(f"**[{n['title']}]({n['link']})**")
                         st.caption(f"{n['publisher']} • {n['date_str']}")
                     with c_i:
-                        # FIX CRITIC: Aici trebuie să scrie {sentiment_text}, NU {sentiment}
-                        st.markdown(f'<span class="{css_cls}">{icon} {sentiment_text}</span>', unsafe_allow_html=True)
+                        # Folosim label_txt, variabila definită mai sus
+                        st.markdown(f'<span class="{css_cls}">{icon} {label_txt}</span>', unsafe_allow_html=True)
                     st.divider()
                                 
     # ==================================================
