@@ -11,6 +11,16 @@ from sklearn.ensemble import IsolationForest
 import yfinance as yf
 from datetime import date
 from datetime import datetime
+import google.generativeai as genai
+import streamlit as st
+
+# Citim cheia din fișierul de secrete (configurat la Pasul 3)
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    st.error("Lipsește cheia API! Verifică fișierul .streamlit/secrets.toml")
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
@@ -20,40 +30,39 @@ def get_sentiment_pipeline():
 
 def analyze_sentiment_ai(news_list):
     """
-    Versiune optimizată pentru producție: Batch Inference + Memory Management.
+    Analiză de sentiment specializată pe piețe financiare.
+    Înțelege diferența dintre 'boom' (creștere) și 'crash', 
+    și ponderea rezultatelor financiare vs titluri senzaționaliste.
     """
-    if not news_list: return 0.0
+    if not news_list: return 0
+    
+    # Combinăm titlurile pentru o singură interogare (economisim tokeni și timp)
+    titles = "\n".join([f"- {n['title']}" for n in news_list[:10]])
+    
+    prompt = f"""
+    Ești un analist financiar senior la o bancă de investiții de top. 
+    Sarcina ta este să evaluezi sentimentul acestor știri pentru un acționar.
+    
+    REGULI CRITICE:
+    1. "Shares up", "Surging", "Beat expectations", "AI boom", "Price objective raised" sunt ÎNTOTDEAUNA POZITIVE.
+    2. "Cash flow negative" este un risc, dar dacă e însoțit de "Hyper growth", sentimentul poate fi mixt/neutru, nu pur negativ.
+    3. Ignoră zgomotul și concentrează-te pe impactul asupra PREȚULUI ACȚIUNII.
+
+    Iată știrile:
+    {titles}
+
+    Răspunde strict cu un număr între -1 (extrem de negativ) și 1 (extrem de pozitiv). 
+    0 este neutru. Nu adăuga text explicativ.
+    """
+
     try:
-        pipe = get_sentiment_pipeline()
-        
-        # Luăm top 10 titluri
-        titles = [n['title'] for n in news_list[:10]]
-        
-        # OPTIMIZARE BATCH: Trimitem toată lista deodată. 
-        # truncation=True previne erorile de lungime a textului care pot crăpa procesul.
-        results = pipe(titles, batch_size=len(titles), truncation=True, max_length=128)
-        
-        weighted_score = 0
-        total_weight = 0
-        
-        # Aplicăm Time Decay (Știrile de acum 1 oră sunt mai importante decât cele de ieri)
-        # Factorul 0.85 asigură o scădere lină a importanței.
-        for i, r in enumerate(results):
-            # Formula matematică a ponderii: w = 0.85^i
-            decay_factor = (0.85) ** i 
-            
-            # Mapare scoruri
-            score_val = r['score'] if r['label'] == 'positive' else (-r['score'] if r['label'] == 'negative' else 0)
-            
-            weighted_score += (score_val * decay_factor)
-            total_weight += decay_factor
-            
-        final_sentiment = weighted_score / total_weight if total_weight > 0 else 0.0
-        return final_sentiment
-        
-    except Exception as e:
-        print(f"Sentiment AI Critical Error: {e}")
-        return 0.0
+        # Aici apelezi modelul tău (OpenAI/Gemini/etc)
+        # Exemplu pentru structura ta:
+        response = model.generate_content(prompt) # Sau ce funcție de apel folosești
+        sentiment_score = float(response.text.strip())
+        return sentiment_score
+    except:
+        return 0
 
 # Funcție utilitară pentru a crea un "cheie" de timp (ziua curentă)
 def get_daily_hash():
@@ -915,4 +924,30 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     bullets.sort(key=sort_key)
     
     # Returnăm TOATE argumentele posibile (până la 15)
-    return bullets[:15]    
+    return bullets[:15]
+
+def get_gemini_sentiment_label(title):
+    """
+    Analiză individuală Gemini pentru etichetare UI.
+    Returnează: (text_etichetă, clasă_css, iconiță)
+    """
+    prompt = f"""
+    Ești un analist financiar senior. Evaluează sentimentul strict pentru acest titlu: "{title}"
+    
+    REGULI:
+    - "Shares up", "Surge", "AI Boom", "Beat expectations", "Target raised" sunt POZITIVE.
+    - "Shares down", "Missed", "Job cuts", "Lawsuit" sunt NEGATIVE.
+    
+    Răspunde DOAR cu un număr: 1 (Pozitiv), -1 (Negativ) sau 0 (Neutru).
+    """
+    try:
+        response = model.generate_content(prompt)
+        val = response.text.strip()
+        # Curățăm răspunsul în caz că AI-ul mai scrie text pe lângă număr
+        score = 1 if "1" in val and "-" not in val else (-1 if "-1" in val else 0)
+        
+        if score == 1: return "Pozitiv", "impact-poz", "📈"
+        if score == -1: return "Negativ", "impact-neg", "📉"
+        return "Neutru", "impact-neu", "➡️"
+    except:
+        return "Neutru", "impact-neu", "➡️"    
