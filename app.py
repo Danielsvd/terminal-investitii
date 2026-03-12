@@ -2530,38 +2530,43 @@ def main():
                 for line in audit_report:
                     st.info(line)
 
-            # --- MODUL MARJA DE SIGURANȚĂ REPARAT ---
+            # --- MODUL MARJA DE SIGURANȚĂ REPARAT (VARIANTA SENIOR DEV) ---
             st.markdown("---")
             st.subheader("🛡️ Analiza Marjei de Siguranță")
             
+            # 1. INIȚIALIZARE OBLIGATORIE LA NIVEL 0 (Zero UnboundLocalError)
             current_p = info.get('currentPrice', 0)
-            target_val = dcf_calc if dcf_calc and dcf_calc > 0 else 0
-            
+            if current_p == 0:
+                current_p = info.get('previousClose', 0)
+                
+            target_val = 0.0
+            mos_val = 0.0
+            mos_verdict = "N/A"
+            mos_color = "#8B949E"
+
+            # Validăm dacă DCF-ul a întors o valoare validă
+            if dcf_calc is not None and dcf_calc > 0:
+                target_val = dcf_calc
+
+            # 2. LOGICĂ DE CALCUL UNICĂ ȘI SECURIZATĂ
             if target_val > 0 and current_p > 0:
                 mos_val = ((target_val - current_p) / target_val) * 100
-                # ... restul codului de afișare rămâne la fel ...
-            else:
-                st.warning("⚠️ Date insuficiente pentru calculul Marjei de Siguranță.") 
-            
-            if target_val > 0:
-                mos_val = ((target_val - current_p) / target_val) * 100
                 
-                # Logica de culori și mesaje detaliate
                 if mos_val > 30:
-                    mos_verdict = "🚀 **Oportunitate Majoră (Deep Value):** Acțiunea se vinde cu un discount masiv. Aceasta este zona ideală pentru un investitor de valoare."
+                    mos_verdict = "🚀 **Oportunitate Majoră (Deep Value):** Acțiunea se vinde cu un discount masiv."
                     mos_color = "#3FB950" 
                 elif mos_val > 10:
-                    mos_verdict = "✅ **Preț Atractiv:** Există o marjă de siguranță care te protejează împotriva erorilor de estimare în modelul DCF."
+                    mos_verdict = "✅ **Preț Atractiv:** Există o marjă de siguranță rezonabilă."
                     mos_color = "#3FB950"
                 elif mos_val > -10:
-                    mos_verdict = "⚖️ **Evaluare neutră:** Prețul este corect. Nu ai marjă de siguranță, deci orice veste proastă poate duce la scăderi imediate."
+                    mos_verdict = "⚖️ **Evaluare neutră:** Prețul este corect. Nu ai marjă de siguranță clară."
                     mos_color = "#D29922" 
                 else:
-                    mos_verdict = "🚨 **SUPRAEVALUARE CRITICĂ:** Plătești un premium periculos. Riscul de 'reversie la medie' este extrem de ridicat."
+                    mos_verdict = "🚨 **SUPRAEVALUARE CRITICĂ:** Plătești un premium periculos."
                     mos_color = "#F85149"
 
+                # Afișare interfață
                 m_col1, m_col2 = st.columns([1, 2])
-                
                 with m_col1:
                     st.markdown(f"""
                     <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {mos_color}; text-align:center;">
@@ -2571,20 +2576,18 @@ def main():
                     """, unsafe_allow_html=True)
                     
                 with m_col2:
-                    # Afișarea verdictului explicativ
                     if mos_val < -20:
-                        # Avertizarea vizuală agresivă pentru supraevaluare
                         st.error(f"⚠️ **ALERTĂ DE RISC:** {mos_verdict}")
-                        st.write("👉 *Sfat Analist:* Istoric, cumpărarea în această zonă a dus la randamente negative pe termen lung.")
+                        st.write("👉 *Sfat Analist:* Istoric, cumpărarea la acest premium aduce randamente slabe.")
                     elif mos_val > 30:
                         st.success(f"🌟 **SURPRIZĂ DE VALOARE:** {mos_verdict}")
                     else:
                         st.info(mos_verdict)
                     
                     st.write(f"💵 **Preț Actual:** {current_p:.2f} | 🎯 **Fair Value:** {target_val:.2f}")
-                    st.progress(max(0, min(mos_val / 100, 1.0)) if mos_val > 0 else 0)
+                    st.progress(max(0.0, min(mos_val / 100.0, 1.0)))
             else:
-                st.warning("⚠️ Calculul marjei de siguranță necesită un Fair Value DCF valid.")
+                st.warning("⚠️ Date insuficiente (sau EPS negativ) pentru a rula modelul de Marjă de Siguranță.")
 
             # --- MODUL: SUSTENABILITATE ȘI CALITATE (VERSIUNE EXTINSĂ) ---
             st.markdown("---")
