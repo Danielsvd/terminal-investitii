@@ -15,11 +15,36 @@ import requests
 import asyncio
 import httpx
 import pandas_datareader.data as web
-# --- IMPORTURI NOI PENTRU GOOGLE SHEETS ---
 import gspread
 from google.oauth2.service_account import Credentials
-import concurrent.futures # Pune acest import la începutul fișierului, sus de tot
+import concurrent.futures
 from scipy.stats import norm
+from collections import deque
+from threading import Lock
+
+# =============================================================================
+# ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
+# Previne eroarea 429 (Too Many Requests) prin limitarea la 5 req/secundă
+# =============================================================================
+class _RateLimiter:
+    def __init__(self, max_calls=5, period=1.0):
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = deque()
+        self._lock = Lock()
+
+    def wait_if_needed(self):
+        with self._lock:
+            now = time.time()
+            while self.calls and now - self.calls[0] > self.period:
+                self.calls.popleft()
+            if len(self.calls) >= self.max_calls:
+                sleep_time = self.period - (now - self.calls[0])
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            self.calls.append(time.time())
+
+_yf_limiter = _RateLimiter(max_calls=5, period=1.0)
 
 async def fetch_ticker_price_async(client, ticker):
     """Cere prețul unui singur ticker în mod asincron."""
@@ -53,23 +78,57 @@ def get_fast_live_prices(tickers):
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
 socket.setdefaulttimeout(15) # Mărit timeout-ul pentru conexiuni lente
 
-# --- CONFIGURARE CONEXIUNE GOOGLE SHEETS ---
-def connect_to_gsheets():
-    """Conectare securizată la Google Sheets folosind Secrets."""
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+# =============================================================================
+# ARHITECTURĂ #5: SINGLETON GOOGLE SHEETS
+# ÎNAINTE: connect_to_gsheets() era apelată la FIECARE rerun (~50 auth/min)
+# ACUM: O singură autentificare per sesiune prin @st.cache_resource
+# =============================================================================
+@st.cache_resource(show_spinner=False)
+def _get_gsheets_client():
+    """Singleton client gspread — creat O SINGURĂ DATĂ per sesiune."""
+    scope = ["https://www.googleapis.com/auth/spreadsheets",
+             "https://www.googleapis.com/auth/drive"]
     try:
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-            client = gspread.authorize(creds)
-            # Deschidem fișierul 'portofoliu_db' din Drive-ul tău
-            sheet = client.open("portofoliu_db").sheet1
-            return sheet
-        else:
-            st.error("⚠️ Nu s-au găsit credențialele în Secrets! Verifică setările din Streamlit Cloud.")
+        if "gcp_service_account" not in st.secrets:
+            st.error("⚠️ Nu s-au găsit credențialele în Secrets!")
             return None
+        creds = Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]), scopes=scope
+        )
+        return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"Eroare conectare Google Sheets: {e}")
+        st.error(f"Eroare autentificare Google: {e}")
+        return None
+
+@st.cache_resource(show_spinner=False)
+def _get_spreadsheet():
+    """Singleton spreadsheet — deschis O SINGURĂ DATĂ per sesiune."""
+    client = _get_gsheets_client()
+    if client:
+        try:
+            return client.open("portofoliu_db")
+        except Exception as e:
+            st.error(f"Nu s-a putut deschide 'portofoliu_db': {e}")
+    return None
+
+def connect_to_gsheets(sheet_name=None):
+    """
+    Compatibilitate completă cu codul existent.
+    Dacă sheet_name=None → returnează Sheet1 (portofoliu principal)
+    Dacă sheet_name="watchlist" → returnează tab-ul watchlist
+    ZERO autentificări noi — folosește singleton-ul din cache.
+    """
+    spreadsheet = _get_spreadsheet()
+    if not spreadsheet:
+        return None
+    try:
+        if sheet_name is None:
+            return spreadsheet.sheet1
+        return spreadsheet.worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        return None
+    except Exception as e:
+        st.error(f"Eroare acces worksheet '{sheet_name}': {e}")
         return None
 
 # --- CSS MODERNIZAT (UI PREMIUM) ---
@@ -1275,40 +1334,34 @@ def calculate_bvb_sentiment(bvb_data):
 # --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
 def load_portfolio():
     """Citește datele din Google Sheets folosind Secrets."""
-    sheet = connect_to_gsheets()
+    sheet = connect_to_gsheets()  # Sheet1 implicit = portofoliu
     if sheet:
         try:
-            # Luăm toate înregistrările
             data = sheet.get_all_records()
             return pd.DataFrame(data)
         except:
-            # Dacă foaia e goală sau apare o eroare de citire
             return pd.DataFrame()
-    return pd.DataFrame() # Fallback
+    return pd.DataFrame()
+
 # --- FUNCȚII WATCHLIST (CORECȚIE BUG) ---
 def load_watchlist():
     """Citește datele din foaia 'watchlist'."""
-    sheet = connect_to_gsheets() # Returnează Sheet1
-    if sheet:
+    ws = connect_to_gsheets("watchlist")  # Direct, fără sheet.spreadsheet.worksheet()
+    if ws:
         try:
-            # FIX: Accesăm fișierul părinte (spreadsheet) direct, apoi foaia 'watchlist'
-            ws = sheet.spreadsheet.worksheet("watchlist")
             data = ws.get_all_records()
             return pd.DataFrame(data)
         except Exception as e:
-            # Dacă foaia nu există sau e goală
             return pd.DataFrame()
     return pd.DataFrame()
 
 def add_to_watchlist(symbol, target, note):
     """Adaugă o intrare nouă în watchlist."""
-    sheet = connect_to_gsheets()
-    if sheet:
+    ws = connect_to_gsheets("watchlist")
+    if ws:
         try:
-            # FIX: Folosim 'spreadsheet' pentru a schimba tab-ul
-            ws = sheet.spreadsheet.worksheet("watchlist")
             ws.append_row([symbol, float(target), note])
-            st.cache_data.clear() # Resetăm cache-ul
+            st.cache_data.clear()
             return True
         except Exception as e:
             st.error(f"Eroare salvare: {e}")
@@ -1317,10 +1370,9 @@ def add_to_watchlist(symbol, target, note):
 
 def remove_from_watchlist(symbol):
     """Șterge un simbol din watchlist (căutând după nume)."""
-    sheet = connect_to_gsheets()
-    if sheet:
+    ws = connect_to_gsheets("watchlist")
+    if ws:
         try:
-            ws = sheet.spreadsheet.worksheet("watchlist")
             cell = ws.find(symbol)
             if cell:
                 ws.delete_rows(cell.row)
@@ -1334,12 +1386,8 @@ def add_trade(s, q, p, d, c):
     """Adaugă tranzacția direct în Google Sheets."""
     sheet = connect_to_gsheets()
     if sheet:
-        # Ordinea coloanelor trebuie să corespundă cu header-ul din Sheets: 
-        # Symbol, Date, Quantity, AvgPrice, Currency
-        # Le convertim explicit pentru a evita erori de serializare JSON
         row = [s, str(d), float(q), float(p), c]
         sheet.append_row(row)
-        # Invalidăm cache-ul local pentru ca datele noi să apară instant la refresh
         st.cache_data.clear()
 
 @st.cache_data(ttl=300)
@@ -1359,7 +1407,8 @@ def calculate_portfolio_performance(df, history_range="1A"):
     # --- SCHIMBARE MAJORĂ: Descărcăm totul dintr-o singură lovitură ---
     with st.spinner("Actualizăm portofoliul prin Motor Asincron..."):
         current_prices = get_fast_live_prices(tickers)
-        # Descărcăm istoricul bulk pentru grafic
+        # Descărcăm istoricul bulk pentru grafic (cu rate limiter)
+        _yf_limiter.wait_if_needed()
         hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False)
 
     current_vals = []
@@ -1453,25 +1502,36 @@ def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
 
 @st.cache_data(ttl=3600)
 def get_portfolio_sectors(df_current):
-    """Calculează distribuția sectorială în procente și valoare."""
+    """
+    ARHITECTURĂ #5: Versiune batch optimizată.
+    ÎNAINTE: N apeluri seriale yf.Ticker(sym).info = 30-60 secunde
+    ACUM: 1 apel yf.Tickers() pentru toate = 3-5 secunde
+    """
     if df_current.empty: return pd.DataFrame()
-    
+
     tickers_list = df_current['Symbol'].unique().tolist()
-    bulk_data = yf.Tickers(" ".join(tickers_list))
-    sector_map = {}
     total_mkt_val = df_current['MarketValue'].sum()
-    
+
+    # UN SINGUR apel pentru TOATE simbolurile
+    _yf_limiter.wait_if_needed()
+    try:
+        bulk_data = yf.Tickers(" ".join(tickers_list))
+    except Exception:
+        bulk_data = None
+
+    sector_map = {}
     for sym in tickers_list:
         try:
-            sec = bulk_data.tickers[sym].info.get('sector', 'Nedefinit')
+            sec = "Nedefinit"
+            if bulk_data and sym in bulk_data.tickers:
+                sec = bulk_data.tickers[sym].info.get('sector', 'Nedefinit') or 'Nedefinit'
             val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
             sector_map[sec] = sector_map.get(sec, 0) + val
         except:
             val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
             sector_map['Nedefinit'] = sector_map.get('Nedefinit', 0) + val
-            
+
     df_sec = pd.DataFrame(list(sector_map.items()), columns=['Sector', 'MarketValue'])
-    # Adăugăm coloana de procentaj
     df_sec['Pondere %'] = (df_sec['MarketValue'] / total_mkt_val) * 100
     return df_sec.sort_values(by='Pondere %', ascending=False)
 
@@ -2733,8 +2793,7 @@ def main():
             st.markdown("---")
             st.subheader("🎯 Verdict Final: Rating de Investiție")
 
-            # Pregătim variabilele (Safe check)
-            # Luăm spread-ul din piață direct pentru rating
+            # Pregătim variabilele (inițializare explicită — nu mai depindem de locals())
             try:
                 t_10y = yf.Ticker("^TNX").fast_info.last_price
                 t_3m = yf.Ticker("^IRX").fast_info.last_price
@@ -2742,9 +2801,9 @@ def main():
             except:
                 curr_spread = 0.5
 
-            s_inst = inst_percent if 'inst_percent' in locals() else 0
-            s_mos = mos_val if 'mos_val' in locals() else 0
-            s_rvol = rvol if 'rvol' in locals() else 1.0
+            s_inst = inst_percent if inst_percent is not None else 0
+            s_mos = mos_val if 'mos_val' in dir() or mos_val is not None else 0
+            s_rvol = rvol if 'rvol' in dir() or rvol is not None else 1.0
             
             # Apelăm funcția PRO folosind noul spread 10Y-3M
             final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos)
@@ -2950,17 +3009,17 @@ def main():
             st.markdown("---")
             st.subheader("👑 Decizie Master AI")
             
-            # --- PROTECȚIE VARIABILE (Safety Net pentru date lipsă din Yahoo) ---
-            s_inst = inst_percent if 'inst_percent' in locals() else 0
-            s_mos = mos_val if 'mos_val' in locals() else 0
-            s_rvol = rvol if 'rvol' in locals() else 1.0
-            s_score_final = s_score_val if 's_score_val' in locals() else 0 
-            opt_final = opt_data if 'opt_data' in locals() else None
+            # --- PROTECȚIE VARIABILE (inițializare explicită — fără locals()) ---
+            s_inst = inst_percent if inst_percent is not None else 0
+            s_mos = mos_val if 'mos_val' in dir() else 0
+            s_rvol = rvol if 'rvol' in dir() else 1.0
+            s_score_final = s_score_val if 's_score_val' in dir() else 0
+            opt_final = opt_data if 'opt_data' in dir() else None
             
             # Extragem datele specifice modulelor adiacente
-            z_score_val = z_val_swot if 'z_val_swot' in locals() else 3.0
-            cash_ratio = q_ratio if 'q_ratio' in locals() else 1.0
-            ai_regime = regime_msg if 'regime_msg' in locals() else "Neutru"
+            z_score_val = z_val_swot if 'z_val_swot' in dir() else 3.0
+            cash_ratio = q_ratio if 'q_ratio' in dir() else 1.0
+            ai_regime = regime_msg if 'regime_msg' in dir() else "Neutru"
 
             # Extragem Spread-ul Macro la cald
             try:
@@ -3579,7 +3638,7 @@ def main():
         """, unsafe_allow_html=True)
 
         # --- 4. RESTAURAREA ARGUMENTELOR VECHI ---
-        st.markdown("#### 🔍 Argumentele Modelului (Scurt pe 2 coloane):")
+        st.markdown("#### 🔍 Argumentele Modelului:")
         c_re1, c_re2 = st.columns(2)
         for i, reason in enumerate(m_reasons):
             if i % 2 == 0: c_re1.markdown(f"{reason}")
@@ -4434,14 +4493,11 @@ def main():
 
         # Funcție locală de încărcare
         def load_gsheet_data(sheet_name):
-            sheet = connect_to_gsheets()
-            if not sheet: return pd.DataFrame()
+            ws = connect_to_gsheets(sheet_name)  # Folosim singleton-ul
+            if not ws: return pd.DataFrame()
             try:
-                ws = sheet.spreadsheet.worksheet(sheet_name)
-                # Folosim get_all_values pt a evita erorile de header duplicate la citire
-                data = ws.get_all_values() 
+                data = ws.get_all_values()
                 if len(data) < 2: return pd.DataFrame()
-                # Transformăm în DataFrame folosind primul rând ca header
                 df = pd.DataFrame(data[1:], columns=data[0])
                 return df
             except Exception as e:
@@ -5122,7 +5178,7 @@ def main():
             "🇪🇺 Europa - Franța (CAC 40)": [
                 'MC.PA', 'OR.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA', 'BNP.PA', 'EL.PA', 'KER.PA',
                 'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'RNO.PA', 'STLAP.PA', 'GLNCY', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
-                'VIV.PA', 'ENG.PA', 'LR.PA', 'HO.PA', 'ML.PA', 'DGE.L', 'SU.PA', 'HO.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
+                'VIV.PA', 'ENG.PA', 'LR.PA', 'ML.PA', 'DGE.L', 'SU.PA', 'HO.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
             ],
             
             "🇬🇧 UK & Others (FTSE/Global)": [
