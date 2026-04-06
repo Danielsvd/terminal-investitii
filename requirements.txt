@@ -1,6 +1,7 @@
 streamlit
 yfinance>=0.2.40
-pandas
+pandas<=2.1.4
+pandas_datareader==0.10.0
 plotly
 feedparser
 textblob
@@ -20,5 +21,4 @@ numpy
 scikit-learn
 httpx
 httpx[http2]
-pandas-datareader
 html5lib
