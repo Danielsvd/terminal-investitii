@@ -211,7 +211,6 @@ RSS_CONFIG = {
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19832390", # CNBC Asia News
         "http://feeds.bbci.co.uk/news/world/asia/rss.xml", # BBC Asia
         "https://www.scmp.com/rss/91/feed", # South China Morning Post (Excelent pt China/HK)
-        "https://asia.nikkei.com/rss/feed/nar", # Nikkei Asia (Excelent pt Japonia) 
         "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC,EURUSD=X,GC=F,CL=F&region=US&lang=en-US", 
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
         "http://feeds.marketwatch.com/marketwatch/topstories",
