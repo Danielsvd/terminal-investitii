@@ -470,7 +470,7 @@ def get_peers_analysis(sector, industry, current_ticker):
     peers_map = {
         "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "INTC", "PLTR", "T", "AVGO", "MU", "FSLR", "META", "TSM", "QCOM"],
         "Financial Services": ["JPM", "BAC", "GS", "WFC", "C", "V", "MS", "MA", "AXP", "SCHW"],
-        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "D", "VST", 'VG', "UUUU", "LEU", "CEG"],
+        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "D", "VST", 'VG', "UUUU", "LEU", "GPOR", "CEG"],
         "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
         "Industrials": ["LMT", "RTX", "NOC", "BA", "GD", "MMM", "CAT", "DAL", "SPCX", "UAL"],
         "Basic Materials": ["RIO", "VALE", "BHP", "FCX", "NEM", "AEM", "GLNCY", "USAR", "AREC", "MP", "METC", "LAC"],
@@ -1194,7 +1194,7 @@ def get_daily_briefing_data():
         '^GSPC', '^DJI', '^IXIC', '^VIX', 
         'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
         'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'T', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
-        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'UUUU', 'FSLR', 'VG', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
+        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'GPOR', 'UUUU', 'FSLR', 'VG', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
         'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SPCX', 'SMR', 'CMG', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
     ]
     us_data = yf.download(us_tickers, period="1mo", group_by='ticker', progress=False)
@@ -1548,7 +1548,7 @@ def get_global_market_data():
     
     us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
                  'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'SPCX', 'BIIB', 
-                 'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'VG', 'DVN', 'LNG', 'T', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
+                 'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'GPOR', 'COP', 'OXY', 'VG', 'DVN', 'LNG', 'T', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
                  'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'CMG', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
     eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.MI', 'ENR.DE', 'DBK.DE', 'ULVR.L', 'REL.L', 
                  'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'BA.L', 'DGE.L', 'SHEL.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
@@ -5166,7 +5166,7 @@ def main():
             
             "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
                 'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
-                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'VG', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO', 'T',
+                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'GPOR', 'VG', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO', 'T',
                 'CAT', 'DE', 'BA', 'SPCX', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'AMGN', 'BIIB', 'SNY', 'NVS',
                 'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'CMG', 'METC', 'RIO', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
             ],
