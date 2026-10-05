@@ -3487,11 +3487,18 @@ def main():
                 if len(current_tickers) >= 2:
                     with st.spinner("Motorul Quant calculează Frontiera Eficientă..."):
                         # 1. Descărcăm prețurile de închidere curate pentru acțiunile tale
-                        hist_opt = yf.download(current_tickers, period="1y", progress=False)['Close']
+                        # close_frame elimină simbolurile fără nicio cotație (altfel optimizarea eșua cu un mesaj criptic)
+                        hist_opt = close_frame(yf.download(current_tickers, period="1y", progress=False), current_tickers)
+                        skipped_opt = [t for t in current_tickers if t not in hist_opt.columns]
+                        if skipped_opt:
+                            st.caption(f"ℹ️ Fără istoric de preț, excluse din optimizare: {', '.join(skipped_opt)}.")
                         
                         # 2. Trimitem datele la creierul AI
                         from ai_engine import optimize_portfolio_ai
-                        opt_res, opt_msg = optimize_portfolio_ai(hist_opt)
+                        if hist_opt.shape[1] >= 2:
+                            opt_res, opt_msg = optimize_portfolio_ai(hist_opt)
+                        else:
+                            opt_res, opt_msg = None, "Sunt necesare cel puțin 2 active cu istoric de preț pentru optimizare."
 
                         if opt_res:
                             # Calculăm ponderile actuale din portofoliul tău
@@ -5373,7 +5380,7 @@ def main():
             display_rows = []
             for index, row in df_wl.iterrows():
                 sym = row['Symbol']
-                target = float(row['TargetPrice'])
+                target = smart_to_float(row['TargetPrice'])  # acceptă și formatul românesc ("25,5")
                 note = row['Notes']
                 
                 # Extragem prețul curent din seria curățată
