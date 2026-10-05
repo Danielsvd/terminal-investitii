@@ -959,15 +959,10 @@ def calculate_technical_indicators(df):
     df['SMA20'] = df['Close'].rolling(20).mean()
     df['SMA50'] = df['Close'].rolling(50).mean()
     df['SMA200'] = df['Close'].rolling(200).mean()
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    exp1 = df['Close'].ewm(span=12).mean()
-    exp2 = df['Close'].ewm(span=26).mean()
-    df['MACD'] = exp1 - exp2
-    df['Signal'] = df['MACD'].ewm(span=9).mean()
+    # RSI cu netezire Wilder și MACD cu EMA standard (analytics/technical.py, cu teste).
+    # Varianta veche folosea medii simple, deci valorile difereau de TradingView/XTB.
+    df['RSI'] = rsi_wilder(df['Close'], 14)
+    df['MACD'], df['Signal'] = macd_lines(df['Close'])
     return df
 
 def plot_correlation_matrix(tickers):

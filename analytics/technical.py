@@ -11,16 +11,17 @@ def rma(series, window):
     Este netezirea folosită de RSI și ATR în TradingView și în platformele de brokeraj.
     """
     values = pd.Series(series, dtype="float64")
-    out = pd.Series(np.nan, index=values.index, dtype="float64")
-    valid = values.dropna()
-    if window < 1 or len(valid) < window:
-        return out
-    prev = valid.iloc[:window].mean()
-    out.loc[valid.index[window - 1]] = prev
-    for idx, x in valid.iloc[window:].items():
-        prev = (prev * (window - 1) + x) / window
-        out.loc[idx] = prev
-    return out
+    arr = values.to_numpy()
+    out = np.full(len(arr), np.nan)
+    valid_pos = np.flatnonzero(~np.isnan(arr))
+    if window < 1 or len(valid_pos) < window:
+        return pd.Series(out, index=values.index)
+    prev = arr[valid_pos[:window]].mean()
+    out[valid_pos[window - 1]] = prev
+    for pos in valid_pos[window:]:
+        prev = (prev * (window - 1) + arr[pos]) / window
+        out[pos] = prev
+    return pd.Series(out, index=values.index)
 
 
 def true_range(df):
