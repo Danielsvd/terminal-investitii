@@ -2680,7 +2680,7 @@ def main():
                 z_val_swot, _, _, _ = calculate_altman_z(info)
                 
                 # Generare date SWOT
-                swot_res = generate_ai_swot_analysis(info, h_score, z_val_swot, mos_swot, alpha_val, s_score_val)
+                swot_res = generate_ai_swot_analysis(info, h_score, z_val_swot, mos_swot, alpha_val, s_score_val, yield_spread=spread)
                 
                 # Randare vizuală pe coloane
                 s_col1, s_col2 = st.columns(2)

@@ -151,7 +151,7 @@ def render_ai_chart(forecast, hist):
     
     st.plotly_chart(fig, use_container_width=True)
 
-def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score):
+def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yield_spread=None):
     """
     Sintetizează datele fundamentale cu contextul de business.
     """
@@ -175,7 +175,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score):
 
     # --- THREATS ---
     if mos_val < -20: swot["Threats"].append("Bula de evaluare (Risc major de corecție a prețului).")
-    if yield_spread := info.get('yield_spread', 0.5) < 0: swot["Threats"].append("Recesiune iminentă (Curba dobânzilor inversată).")
+    if yield_spread is not None and yield_spread < 0: swot["Threats"].append("Recesiune iminentă (Curba dobânzilor inversată).")
     if sector == "Financial Services": swot["Threats"].append("Risc sistemic de credit și reglementări stricte.")
     
     return swot
