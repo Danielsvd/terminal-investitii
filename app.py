@@ -1472,8 +1472,8 @@ def calculate_portfolio_performance(df, history_range="1A"):
                 portfolio_curve = portfolio_curve.add(term, fill_value=0)
         except: pass
 
-    days_map = {"1Z": 2, "1S": 7, "1L": 30, "3L": 90, "6L": 180, "1A": 365, "3A": 1095, "5A": 1825}
-    portfolio_curve = portfolio_curve.iloc[-days_map.get(history_range, 365):]
+    # Fereastră calendaristică (1A = un an de date, ~252 de ședințe), nu 365 de rânduri
+    portfolio_curve = slice_window(portfolio_curve, history_range)
     total_val_now = portfolio_curve.iloc[-1] if not portfolio_curve.empty else 0
     total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if (total_val_now - total_daily_pl_abs) != 0 else 0
     
@@ -2057,8 +2057,8 @@ def main():
             with col_sel:
                 time_opt = st.selectbox("Interval", ["1 Lună", "3 Luni", "6 Luni", "1 An", "3 Ani", "5 Ani"], index=3)
             
-            days_map = {"1 Lună": 30, "3 Luni": 90, "6 Luni": 180, "1 An": 365, "3 Ani": 1095, "5 Ani": 1825}
-            subset = hist.iloc[-days_map[time_opt]:]
+            # Fereastră calendaristică: "1 An" înseamnă un an de date, nu 365 de rânduri (~1,45 ani)
+            subset = slice_window(hist, time_opt)
             
             if not subset.empty and len(hist) >= 2:
                 curr_price = subset['Close'].iloc[-1]
@@ -3851,9 +3851,7 @@ def main():
 
             if not series.empty:
                 # 1. Date pentru Interval (Subset)
-                days_map = {"1L": 30, "3L": 90, "6L": 180, "1A": 365, "3A": 1095, "5A": 1825}
-                days = days_map.get(time_frame, 365)
-                subset = series.iloc[-days:] # Tăiem exact cât a cerut userul
+                subset = slice_window(series, time_frame)  # fereastră calendaristică, nu număr de rânduri
                 
                 # --- CALCULE METRICI SEPARATE (MODIFICAREA CERUTĂ) ---
                 
