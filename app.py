@@ -717,17 +717,20 @@ def calculate_health_score_ext(info):
     
     try:
         # 1. Analiză Datorii
+        # Pragurile se raportează la limita sectorului (150% implicit, 400% la financiare),
+        # ca băncile să nu fie penalizate pentru un levier normal în industria lor.
         de = info.get('debtToEquity', 0)
+        de_limit = get_sector_benchmarks(info.get('sector'))['de_max']
         if de:
-            if de < 50: 
+            if de < de_limit / 3: 
                 score += 2
                 pros.append("Datorii foarte mici")
-            elif de > 150: 
-                score -= 2
-                cons.append("Îndatorare ridicată")
-            elif de > 300: 
+            elif de > de_limit * 2: 
                 score -= 3
                 cons.append("Risc mare de insolvență")
+            elif de > de_limit: 
+                score -= 2
+                cons.append("Îndatorare ridicată")
 
         # 2. Analiză Rentabilitate (ROE)
         roe = info.get('returnOnEquity', 0)
