@@ -3206,10 +3206,10 @@ def main():
         with st.expander("➕ Adaugă Tranzacție Nouă"):
             with st.form("add_pf"):
                 c1, c2, c3, c4 = st.columns(4)
-                s = c1.text_input("Simbol (ex: AAPL, EUNL.DE)").upper()
+                s = c1.text_input("Simbol (ex: AAPL, EUNL.DE, TLV.RO)").upper()
                 q = c2.number_input("Cantitate", min_value=0.01, value=1.0, format="%.4f")
                 p = c3.number_input("Preț Achiziție", min_value=0.01, value=100.0, format="%.2f")
-                curr = c4.selectbox("Moneda", ["USD", "EUR"]) 
+                curr = c4.selectbox("Moneda", ["USD", "EUR", "RON"]) 
                 
                 d_acq = st.date_input("Data", datetime.today())
                 
