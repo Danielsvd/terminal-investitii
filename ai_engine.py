@@ -11,6 +11,9 @@ from sklearn.ensemble import IsolationForest
 import yfinance as yf
 from datetime import date, datetime
 
+from analytics.options import max_pain
+from data.helpers import num, now_ro
+
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
 def get_finbert_pipeline():
@@ -156,17 +159,17 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     Sintetizează datele fundamentale cu contextul de business.
     """
     swot = {"Strengths": [], "Weaknesses": [], "Opportunities": [], "Threats": []}
-    sector = info.get('sector', 'General')
+    sector = info.get('sector') or 'General'
     
     # --- STRENGTHS ---
     if h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
-    if info.get('profitMargins', 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
+    if (num(info, 'profitMargins') or 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
     if s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
     if z_val < 1.8: swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
     if alpha and alpha < -0.05: swot["Weaknesses"].append("Subperformanță cronică (Acțiunea pierde momentum).")
-    if info.get('currentRatio', 1) < 1.0: swot["Weaknesses"].append("Probleme potențiale de lichiditate pe termen scurt.")
+    if num(info, 'currentRatio') is not None and num(info, 'currentRatio') < 1.0: swot["Weaknesses"].append("Probleme potențiale de lichiditate pe termen scurt.")
 
     # --- OPPORTUNITIES ---
     if mos_val > 25: swot["Opportunities"].append(f"Fereastră de achiziție sub-evaluată ({mos_val:.1f}% discount).")
@@ -486,7 +489,9 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
         reasons.append("🚨 **ALERTĂ ALTMAN Z:** Risc statistic sever de faliment sau restructurare în următorii 2 ani!")
 
     # 3. CALITATEA PROFITULUI (Cash-Flow) (Max 10 puncte)
-    if q_ratio > 1.0:
+    if q_ratio is None:
+        reasons.append("ℹ️ **Calitatea profitului:** nu se poate evalua (date lipsă sau profit net negativ). Pilon neinclus în scor.")
+    elif q_ratio > 1.0:
         score += 10
         reasons.append("✅ **Cash Machine:** Compania generează mai mult cash real (în bancă) decât profit contabil.")
     elif q_ratio > 0.7:
@@ -696,13 +701,13 @@ def calculate_iv_rank_percentile(ticker_sym, current_iv):
 def get_detailed_ownership_and_execs(ticker_sym):
     try:
         t = yf.Ticker(ticker_sym)
-        info = t.info
+        info = t.info or {}
         
         # 1. Extragere CEO
         ceo_name = "N/A"
-        officers = info.get('companyOfficers', [])
+        officers = info.get('companyOfficers') or []
         for officer in officers:
-            if 'ceo' in officer.get('title', '').lower():
+            if 'ceo' in (officer.get('title') or '').lower():
                 ceo_name = officer.get('name', 'N/A')
                 break
 
@@ -729,7 +734,7 @@ def get_detailed_ownership_and_execs(ticker_sym):
         
         # Fallback: Dacă tabelul major_holders e gol, luăm din info direct
         if inst_pct == 0:
-            val_info = info.get('heldPercentInstitutions', 0)
+            val_info = num(info, 'heldPercentInstitutions') or 0
             inst_pct = val_info * 100 if val_info <= 1.0 else val_info
 
         retail_pct = max(0, 100 - (insider_pct + inst_pct))

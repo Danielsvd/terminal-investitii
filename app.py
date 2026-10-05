@@ -298,6 +298,7 @@ def format_num(val, is_pct=False):
     # Asigurăm conversia dacă vine string
     if isinstance(val, str):
         val = smart_to_float(val)
+    if pd.isna(val): return "N/A"
         
     if is_pct: return f"{val * 100:.2f}%"
     if val >= 1e12: return f"{val/1e12:.2f} T"
@@ -429,13 +430,13 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
         details.append("✅ **Macro:** Mediul economic este favorabil expansiunii.")
 
     # 4. SĂNĂTATE FINANCIARĂ
-    roe = info.get('returnOnEquity', 0)
-    if roe > 0.20:
+    roe = num(info, 'returnOnEquity')
+    if roe is not None and roe > 0.20:
         score += 10
         details.append(f"🚀 **Eficiență:** ROE excepțional ({roe*100:.1f}%).")
     
-    debt = info.get('debtToEquity', 0)
-    if debt > 150:
+    debt = num(info, 'debtToEquity')
+    if debt is not None and debt > 150:
         score -= 10
         details.append("🚩 **Datorii:** Grad de îndatorare ridicat.")
     
@@ -490,17 +491,24 @@ def get_peers_analysis(sector, industry, current_ticker):
     for p_sym in peers:
         try:
             t = yf.Ticker(p_sym)
-            inf = t.info
+            inf = t.info or {}
+            # Valorile lipsă rămân None (afișate N/A), nu 0: un competitor fără un
+            # indicator nu mai dispare din tabel și nu mai apare cu zerouri false.
+            def pct(key):
+                v = num(inf, key)
+                return v * 100 if v is not None else None
             peer_results.append({
                 "Simbol": p_sym,
-                "Capitalizare": inf.get('marketCap', 0),
-                "P/E": inf.get('trailingPE', 0),
-                "ROE (%)": inf.get('returnOnEquity', 0) * 100,
-                "ROA (%)": inf.get('returnOnAssets', 0) * 100,
-                "Marjă Netă (%)": inf.get('profitMargins', 0) * 100,
-                "Datorii/Eq (%)": inf.get('debtToEquity', 0)
+                "Capitalizare": num(inf, 'marketCap'),
+                "P/E": num(inf, 'trailingPE'),
+                "ROE (%)": pct('returnOnEquity'),
+                "ROA (%)": pct('returnOnAssets'),
+                "Marjă Netă (%)": pct('profitMargins'),
+                "Datorii/Eq (%)": num(inf, 'debtToEquity')
             })
-        except: continue
+        except Exception as e:
+            print(f"DEBUG: peer {p_sym} indisponibil: {e}")
+            continue
     return pd.DataFrame(peer_results)
 
 def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
@@ -686,13 +694,13 @@ def calculate_alpha(stock_hist, beta):
 def calculate_dcf_dynamic(info, growth_rate_input, discount_rate_input):
     """Calculează DCF folosind estimările tale manuale."""
     try:
-        eps = info.get('trailingEps')
+        eps = num(info, 'trailingEps')
         if not eps or eps <= 0: return 0
         
         # Parametrii tăi din interfață
         growth_rate = growth_rate_input / 100
         discount_rate = discount_rate_input / 100
-        terminal_multiple = min(info.get('trailingPE', 15), 25) 
+        terminal_multiple = min(num(info, 'trailingPE') or 15, 25) 
         
         # Proiecție pe 5 ani
         cash_flows = []
@@ -719,7 +727,7 @@ def calculate_health_score_ext(info):
         # 1. Analiză Datorii
         # Pragurile se raportează la limita sectorului (150% implicit, 400% la financiare),
         # ca băncile să nu fie penalizate pentru un levier normal în industria lor.
-        de = info.get('debtToEquity', 0)
+        de = num(info, 'debtToEquity')
         de_limit = get_sector_benchmarks(info.get('sector'))['de_max']
         if de:
             if de < de_limit / 3: 
@@ -733,24 +741,28 @@ def calculate_health_score_ext(info):
                 cons.append("Îndatorare ridicată")
 
         # 2. Analiză Rentabilitate (ROE)
-        roe = info.get('returnOnEquity', 0)
-        if roe > 0.15: 
-            score += 2
-            pros.append("Profitabilitate excelentă (ROE)")
-        elif roe < 0.05: 
-            score -= 1
-            cons.append("Eficiență scăzută a capitalului")
+        # Un indicator lipsă nu aduce și nu scade puncte.
+        roe = num(info, 'returnOnEquity')
+        if roe is not None:
+            if roe > 0.15: 
+                score += 2
+                pros.append("Profitabilitate excelentă (ROE)")
+            elif roe < 0.05: 
+                score -= 1
+                cons.append("Eficiență scăzută a capitalului")
 
         # 3. Analiză Lichiditate
-        cr = info.get('currentRatio', 1)
-        if cr > 1.5: 
-            score += 1
-            pros.append("Lichiditate solidă")
-        elif cr < 1:
-            score -= 1
-            cons.append("Lichiditate precară")
+        cr = num(info, 'currentRatio')
+        if cr is not None:
+            if cr > 1.5: 
+                score += 1
+                pros.append("Lichiditate solidă")
+            elif cr < 1:
+                score -= 1
+                cons.append("Lichiditate precară")
             
-    except: pass
+    except Exception as e:
+        print(f"DEBUG: scor sănătate incomplet: {e}")
     
     return max(1, min(10, score)), pros, cons
 
@@ -880,30 +892,43 @@ def calculate_margin_of_safety(current_price, fair_value):
     return mos * 100, verdict
 
 def analyze_dividend_quality(info):
-    """Analizează dacă dividendele și profitul sunt sustenabile."""
-    payout = info.get('payoutRatio', 0)
-    net_income = info.get('netIncomeToCommon', 1)
-    cash_flow = info.get('operatingCashflow', 0)
+    """Analizează dacă dividendele și profitul sunt sustenabile.
+
+    Întoarce (verdicte, cash_to_income, payout_pct). Ultimele două sunt None când
+    datele lipsesc sau când raportul nu are sens (profit net zero sau negativ).
+    Înainte, un profit net lipsă era înlocuit cu 1, iar raportul ieșea egal cu
+    fluxul de numerar în dolari (miliarde de „x").
+    """
+    payout = num(info, 'payoutRatio')
+    net_income = num(info, 'netIncomeToCommon')
+    cash_flow = num(info, 'operatingCashflow')
     
     # Calculăm Calitatea Profitului (Cash Flow / Net Income)
-    # Un raport sub 0.8 indică profituri 'pe hârtie', nu în cash.
-    quality_ratio = cash_flow / net_income if net_income != 0 else 0
+    quality_ratio = None
+    if net_income is not None and cash_flow is not None and net_income > 0:
+        quality_ratio = cash_flow / net_income
     
     verdicts = []
     
     # Analiză Payout
-    if payout > 0.80:
-        verdicts.append("🚨 **Dividend Periculos:** Firma distribuie peste 80% din profit. Riscul de tăiere a dividendului este imens.")
-    elif 0.30 < payout <= 0.60:
-        verdicts.append("✅ **Dividend Sustenabil:** Distribuție echilibrată, lăsând loc și pentru reinvestiții.")
+    if payout is not None:
+        if payout > 0.80:
+            verdicts.append("🚨 **Dividend Periculos:** Firma distribuie peste 80% din profit. Riscul de tăiere a dividendului este imens.")
+        elif 0.30 < payout <= 0.60:
+            verdicts.append("✅ **Dividend Sustenabil:** Distribuție echilibrată, lăsând loc și pentru reinvestiții.")
         
     # Analiză Calitate Profit
-    if quality_ratio < 0.7:
-        verdicts.append("⚠️ **Calitate Slabă a Profitului:** Firma raportează profit, dar nu încasează suficient cash. Atenție la contabilitate!")
-    elif quality_ratio > 1.2:
-        verdicts.append("💎 **Profit de Înaltă Calitate:** Cash-flow-ul depășește profitul net. Semn de business ultra-sănătos.")
+    if quality_ratio is not None:
+        if quality_ratio < 0.7:
+            verdicts.append("⚠️ **Calitate Slabă a Profitului:** Firma raportează profit, dar nu încasează suficient cash. Atenție la contabilitate!")
+        elif quality_ratio > 1.2:
+            verdicts.append("💎 **Profit de Înaltă Calitate:** Cash-flow-ul depășește profitul net. Semn de business ultra-sănătos.")
+    elif net_income is not None and net_income <= 0:
+        verdicts.append("ℹ️ **Calitatea profitului nu se poate evalua:** profitul net este zero sau negativ.")
+    else:
+        verdicts.append("ℹ️ **Calitatea profitului nu se poate evalua:** lipsesc profitul net sau fluxul de numerar operațional.")
         
-    return verdicts, quality_ratio, payout * 100
+    return verdicts, quality_ratio, (payout * 100 if payout is not None else None)
         
 # --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
 import requests
@@ -1928,6 +1953,7 @@ def main():
 
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
+            info = info or {}
             
             # --- VERIFICARE DE SIGURANȚĂ (OBLIGATORIE PENTRU CLOUD) ---
             if hist is not None and not hist.empty:
@@ -1960,10 +1986,10 @@ def main():
             st.error("Simbol invalid sau date indisponibile.")
         else:
             # 1. Informații Generaley
-            st.markdown(f"## {info.get('longName', real_sym)}")
+            st.markdown(f"## {info.get('longName') or real_sym}")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Sector", info.get('sector', 'N/A'))
-            c2.metric("Industrie", info.get('industry', 'N/A'))
+            c1.metric("Sector", info.get('sector') or 'N/A')
+            c2.metric("Industrie", info.get('industry') or 'N/A')
             c3.metric("Capitalizare", format_num(info.get('marketCap')))             
         
         # --- 1. DEFINIREA PREȚULUI (VITAL PENTRU CALCULE) ---
@@ -2110,11 +2136,11 @@ def main():
                 with c_indat:
                     st.markdown("**Îndatorare**")
                     st.metric("Datorii/Capital", de_display)
-                    st.metric("Current Ratio", info.get('currentRatio', 'N/A'))
-                    st.metric("Quick Ratio", info.get('quickRatio', 'N/A'))
+                    st.metric("Current Ratio", format_num(info.get('currentRatio')))
+                    st.metric("Quick Ratio", format_num(info.get('quickRatio')))
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
-                    st.metric("Beta", info.get('beta', 'N/A'))
+                    st.metric("Beta", format_num(info.get('beta')))
                     st.metric("Alpha (1Y)", format_num(alpha_val, True))
             
             # ==================================================
@@ -2266,7 +2292,7 @@ def main():
                         "ROA (%)": "{:.1f}%",
                         "Marjă Netă (%)": "{:.1f}%",
                         "Datorii/Eq (%)": "{:.1f}%"
-                    }), use_container_width=True, hide_index=True)
+                    }, na_rep="N/A"), use_container_width=True, hide_index=True)
                 else:
                     st.info("Informații despre competitori indisponibile pentru acest simbol.")
 
@@ -2288,7 +2314,7 @@ def main():
             col_an_left, col_an_right = st.columns([1, 2])
             with col_an_left:
                 st.markdown("""<div class="fin-card"><h4>Analiști</h4></div>""", unsafe_allow_html=True)
-                rec = info.get('recommendationKey', 'N/A').replace('_', ' ').upper()
+                rec = (info.get('recommendationKey') or 'N/A').replace('_', ' ').upper()
                 rec_mean = info.get('recommendationMean')
                 target = info.get('targetMeanPrice')
                 color_rec = "#3FB950" if "BUY" in rec else "#F85149" if "SELL" in rec else "#8B949E"
@@ -2415,10 +2441,12 @@ def main():
             st.subheader("🧮 Calculator Valoare Intrinsecă (Valoare justă)")
             
             # Preluare Date
-            eps_f = info.get('trailingEps', 0)
-            bv_f = info.get('bookValue', 0)
-            price_f = info.get('currentPrice') or info.get('previousClose', 0)
-            t_curr = info.get('currency', 'USD')
+            last_close = float(hist['Close'].iloc[-1]) if pd.notna(hist['Close'].iloc[-1]) else 0
+            eps_f = num(info, 'trailingEps') or 0
+            bv_f = num(info, 'bookValue') or 0
+            # Yahoo nu trimite mereu currentPrice (ETF-uri, BVB): ultima închidere e rezerva.
+            price_f = num(info, 'currentPrice') or num(info, 'previousClose') or last_close
+            t_curr = info.get('currency') or 'USD'
 
             st.write("⚙️ **Configurați Ipotezele: Sliderele influențează acum ambele modele!**")
             ctrl1, ctrl2 = st.columns(2)
@@ -2523,9 +2551,7 @@ def main():
             st.subheader("🛡️ Analiza Marjei de Siguranță")
             
             # 1. INIȚIALIZARE OBLIGATORIE LA NIVEL 0 (Zero UnboundLocalError)
-            current_p = info.get('currentPrice', 0)
-            if current_p == 0:
-                current_p = info.get('previousClose', 0)
+            current_p = num(info, 'currentPrice') or num(info, 'previousClose') or last_close
                 
             target_val = 0.0
             mos_val = 0.0
@@ -2582,7 +2608,12 @@ def main():
             st.subheader("🧬 Sustenabilitate și Calitatea Profitului")
             
             div_verdicts, q_ratio, p_ratio = analyze_dividend_quality(info)
-            q_color = "#3FB950" if q_ratio > 1 else ("#D29922" if q_ratio > 0.7 else "#F85149")
+            q_display = f"{q_ratio:.2f}x" if q_ratio is not None else "N/A"
+            p_display = f"{p_ratio:.1f}%" if p_ratio is not None else "N/A"
+            if q_ratio is None:
+                q_color = "#8B949E"
+            else:
+                q_color = "#3FB950" if q_ratio > 1 else ("#D29922" if q_ratio > 0.7 else "#F85149")
             
             c_q1, c_q2 = st.columns([1, 2])
             
@@ -2591,8 +2622,8 @@ def main():
                 st.markdown(f"""
                 <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {q_color}; text-align:center;">
                     <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Cash-to-Income Ratio</p>
-                    <h1 style="color:{q_color}; margin:10px 0; font-size:35px;">{q_ratio:.2f}x</h1>
-                    <p style="font-size:12px; color:#8B949E;">Plată Dividend (Payout): {p_ratio:.1f}%</p>
+                    <h1 style="color:{q_color}; margin:10px 0; font-size:35px;">{q_display}</h1>
+                    <p style="font-size:12px; color:#8B949E;">Plată Dividend (Payout): {p_display}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -2610,7 +2641,7 @@ def main():
             
             with col_info1:
                 st.markdown(f"""
-                **Ce înseamnă {q_ratio:.2f}x (Cash-to-Income)?**
+                **Ce înseamnă {q_display} (Cash-to-Income)?**
                 * **Peste 1.0x:** Afacere de tip 'Cash Machine'. Firma încasează mai mulți bani reali decât profitul declarat contabil.
                 * **0.7x - 1.0x:** Nivel normal pentru companii în creștere.
                 * **Sub 0.7x:** Profitul este doar pe hârtie. Există riscul ca facturile să nu fie încasate.
@@ -2618,7 +2649,7 @@ def main():
                 
             with col_info2:
                 st.markdown(f"""
-                **Ce înseamnă {p_ratio:.1f}% (Payout Ratio)?**
+                **Ce înseamnă {p_display} (Payout Ratio)?**
                 * **30% - 60%:** Zona ideală (Sweet Spot). Dividend sigur și loc de creștere.
                 * **Peste 80%:** Zona de pericol. Firma dă aproape tot profitul afară; orice scădere a vânzărilor va duce la tăierea dividendului.
                 """)
@@ -2630,7 +2661,7 @@ def main():
                 
                 with col_desc1:
                     st.markdown("#### 📖 Descriere Activitate")
-                    summary = info.get('longBusinessSummary', 'Descriere indisponibilă.')
+                    summary = info.get('longBusinessSummary') or 'Descriere indisponibilă.'
                     # Afișăm doar primele 600 de caractere cu opțiune de expandare dacă e prea lungă
                     st.write(summary if len(summary) < 600 else summary[:600] + "...")
                 
@@ -2654,17 +2685,17 @@ def main():
             with q_col1:
                 st.success("**✅ Puncte Forte (Competitive Advantages)**")
                 # Detectăm "Moat"-ul prin marje și cash
-                if info.get('profitMargins', 0) > 0.20: st.write("• **Marje ridicate:** Putere mare de stabilire a prețurilor (Pricing Power).")
-                if info.get('totalCash', 0) > info.get('totalDebt', 0): st.write("• **Poziție Net Cash:** Bilanț extrem de rezistent la crize.")
-                if info.get('returnOnEquity', 0) > 0.15: st.write("• **Eficiență Capital:** Management performant în alocarea resurselor.")
-                if "Technology" in info.get('sector', ''): st.write("• **Scalabilitate:** Model de business bazat pe IP și software.")
+                if (num(info, 'profitMargins') or 0) > 0.20: st.write("• **Marje ridicate:** Putere mare de stabilire a prețurilor (Pricing Power).")
+                if num(info, 'totalCash') is not None and num(info, 'totalDebt') is not None and num(info, 'totalCash') > num(info, 'totalDebt'): st.write("• **Poziție Net Cash:** Bilanț extrem de rezistent la crize.")
+                if (num(info, 'returnOnEquity') or 0) > 0.15: st.write("• **Eficiență Capital:** Management performant în alocarea resurselor.")
+                if "Technology" in (info.get('sector') or ''): st.write("• **Scalabilitate:** Model de business bazat pe IP și software.")
 
             with q_col2:
                 st.error("**⚠️ Vulnerabilități (Potential Risks)**")
-                if info.get('debtToEquity', 0) > 150: st.write("• **Levier ridicat:** Expunere mare la creșterea dobânzilor.")
-                if info.get('payoutRatio', 0) > 0.80: st.write("• **Dividend la limită:** Spațiu restrâns pentru investiții viitoare.")
-                if info.get('forwardPE', 0) > info.get('trailingPE', 0): st.write("• **Așteptări în scădere:** Piața anticipează o încetinire a profitului.")
-                if info.get('beta', 1) > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.")
+                if (num(info, 'debtToEquity') or 0) > 150: st.write("• **Levier ridicat:** Expunere mare la creșterea dobânzilor.")
+                if (num(info, 'payoutRatio') or 0) > 0.80: st.write("• **Dividend la limită:** Spațiu restrâns pentru investiții viitoare.")
+                if num(info, 'forwardPE') is not None and num(info, 'trailingPE') is not None and num(info, 'forwardPE') > num(info, 'trailingPE') > 0: st.write("• **Așteptări în scădere:** Piața anticipează o încetinire a profitului.")
+                if (num(info, 'beta') or 1) > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.")
             
             # --- MODUL: ANALIZĂ STRATEGICĂ IA (SWOT) ---
             st.markdown("---")
