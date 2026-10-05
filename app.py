@@ -1769,12 +1769,15 @@ import pandas_datareader.data as web
 def get_fred_macro_data():
     """Descărcare individuală pentru reziliență maximă. Dacă un simbol e picat, restul merg."""
     end = datetime.today()
-    start = end - timedelta(days=365)
+    # 500 de zile: variația an/an are nevoie de 13 observații lunare, iar FRED publică cu întârziere.
+    start = end - timedelta(days=500)
+    # Serii exprimate ca indice/nivel, pentru care rata relevantă este variația an/an.
+    yoy_codes = ['CPIAUCSL', 'CPILFESL', 'PCEPILFE', 'RSAFS', 'INDPRO']
     
     indicators = {
-        'CPIAUCSL': 'Inflație CPI (General)',
-        'CPILFESL': 'Inflație Core CPI',
-        'PCEPILFE': 'Core PCE (Favorita FED)',
+        'CPIAUCSL': 'CPI General (indice)',
+        'CPILFESL': 'Core CPI (indice)',
+        'PCEPILFE': 'Core PCE (indice, favorita FED)',
         'UNRATE': 'Rata Șomajului (%)',
         'PAYEMS': 'Nonfarm Payrolls (NFP Oficial)',
         'ADPCHGS': 'ADP Private Payrolls',
@@ -1807,14 +1810,18 @@ def get_fred_macro_data():
                 else:
                     change = ((val_curr - val_prev) / val_prev) * 100
                     trend = f"{change:+.2f}%"
+                
+                yoy = yoy_pct(col_data) if code in yoy_codes else None
                     
                 results.append({
                     "Indicator": name,
                     "Valoare Curentă": val_curr,
                     "Lună Precedentă": val_prev,
                     "Evoluție (MoM)": trend,
+                    "Evoluție (An/An)": f"{yoy:+.2f}%" if yoy is not None else "—",
                     "_simbol": code,
-                    "_change_raw": change
+                    "_change_raw": change,
+                    "_yoy": yoy
                 })
         except Exception:
             continue # Dacă un simbol are probleme, trecem la următorul fără să oprim aplicația
@@ -1840,13 +1847,16 @@ def interpret_macro_data_ai(df_macro):
     cpi_core = gc('CPILFESL') # Core CPI MoM
     fed_rate = gv('FEDFUNDS')
     
-    # Calculăm Rata Reală (Dobânda Fed - Inflația)
+    # Calculăm Rata Reală (Dobânda Fed - Inflația an/an)
     # Dacă e pozitivă și mare, Fed-ul "strânge de gât" economia.
-    real_rate = fed_rate - gv('CPIAUCSL')
+    # CPIAUCSL este un INDICE (nivel ~320), nu o rată: inflația e variația lui an/an.
+    cpi_yoy = m.get('CPIAUCSL', {}).get('_yoy')
+    cpi_yoy = float(cpi_yoy) if cpi_yoy is not None and pd.notna(cpi_yoy) else None
+    real_rate_pct = real_rate(fed_rate if 'FEDFUNDS' in m else None, cpi_yoy)
 
     if pce > 0.2 or cpi_core > 0.3:
         bullets.append("🔥 **INFLAȚIE REZISTENTĂ:** Datele Core PCE și CPI indică prețuri 'lipicioase'. Fed-ul nu poate tăia dobânzile fără riscul unui al doilea val inflaționar. Rămâneți prudenți pe sectorul imobiliar și Tech cu evaluări mari.")
-    elif pce <= 0.15 and real_rate > 2:
+    elif pce <= 0.15 and real_rate_pct is not None and real_rate_pct > 2:
         bullets.append("❄️ **DEZINFLAȚIE CU DOBÂNZI REALE MARI:** Inflația scade, dar dobânzile rămân sus. Aceasta este o rețetă pentru 'Pivot' – momentul în care Fed va trebui să taie rapid pentru a nu strivi economia.")
 
     # 2. RADIOGRAFIA PIEȚEI MUNCII (Motorul consumului)
@@ -4398,7 +4408,7 @@ def main():
                         return ''
                     
                     st.dataframe(
-                        df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)']].style
+                        df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)', 'Evoluție (An/An)']].style
                         .map(color_macro_trend, subset=['Evoluție (MoM)'])
                         .format({
                             'Valoare Curentă': '{:.2f}',
@@ -4406,7 +4416,7 @@ def main():
                         }),
                         use_container_width=True, hide_index=True
                     )
-                    st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = Month over Month.")
+                    st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = față de luna precedentă. An/An = față de aceeași lună a anului trecut; pentru indicii de prețuri, aceasta este rata inflației.")
                 
                 with col_ai:
                     st.markdown("#### 🧠 Interpretare Strategică")
