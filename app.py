@@ -238,15 +238,19 @@ RSS_CONFIG = {
 
 # --- FUNCȚII UTILITARE ---
 def parse_date(entry):
+    """Data publicării unei știri, în ora României.
+
+    feedparser întoarce `published_parsed` în UTC. Serverul rulează tot în UTC,
+    deci fără conversie orele apăreau cu 2-3 ore în urmă față de România.
+    """
     try:
-        if hasattr(entry, 'published_parsed') and entry.published_parsed:
-            return datetime.fromtimestamp(time.mktime(entry.published_parsed))
-        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-            return datetime.fromtimestamp(time.mktime(entry.updated_parsed))
-        elif hasattr(entry, 'published'):
-            return datetime.now()
-    except: pass
-    return datetime.now()
+        if getattr(entry, 'published_parsed', None):
+            return struct_time_utc_to_ro(entry.published_parsed)
+        if getattr(entry, 'updated_parsed', None):
+            return struct_time_utc_to_ro(entry.updated_parsed)
+    except (TypeError, ValueError, OverflowError) as e:
+        print(f"DEBUG: dată de știre neinterpretabilă: {e}")
+    return now_ro()
 
 # --- FUNCȚIE NOUĂ DE PARSARE INTELIGENTĂ (SENIOR FIX) ---
 def smart_to_float(val):
@@ -3257,7 +3261,7 @@ def main():
                 p = c3.number_input("Preț Achiziție", min_value=0.01, value=100.0, format="%.2f")
                 curr = c4.selectbox("Moneda", ["USD", "EUR", "RON"]) 
                 
-                d_acq = st.date_input("Data", datetime.today())
+                d_acq = st.date_input("Data", now_ro().date())
                 
                 if st.form_submit_button("Salvează") and s:
                     add_trade(s, q, p, d_acq, curr)
@@ -4667,8 +4671,9 @@ def main():
         st.title("🗞️ Rezumatul Zilei")
         st.markdown("Raport automat generat la închiderea piețelor.")
         
-        now = datetime.now()
-        current_hour = now.hour
+        now = now_ro()  # ora României, nu ora serverului (UTC)
+        # Bursa din SUA deschide la 16:30, ora României
+        us_market_not_open_yet = (now.hour, now.minute) < (16, 30)
         
         # Obținem datele
         with st.spinner("Generăm rezumatul pieței..."):
@@ -4926,7 +4931,7 @@ def main():
         # === REZUMAT SUA ===
         with tab_us:
             msg_us = ""
-            if current_hour < 16:
+            if us_market_not_open_yet:
                 msg_us = "(Datele afișate sunt de la închiderea precedentă)"
             
             st.markdown(f"### 🌎 Raport Wall Street {msg_us}")

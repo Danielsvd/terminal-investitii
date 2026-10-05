@@ -444,7 +444,7 @@ def get_options_analysis_ai(ticker_sym):
             "net_gex": total_gex,
             "gex_verdict": gex_verdict,
             "gex_color": gex_color,
-            "timestamp": datetime.now().strftime("%H:%M") # Adăugăm ora salvării în cache
+            "timestamp": now_ro().strftime("%H:%M") # Adăugăm ora salvării în cache
         }, "Succes"
 
     except Exception as e:
