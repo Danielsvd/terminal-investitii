@@ -25,6 +25,7 @@ from threading import Lock
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate
+from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro
 
 # =============================================================================
@@ -57,15 +58,17 @@ async def fetch_ticker_price_async(client, ticker):
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     
+    # La eșec întoarce None, nu 0: o poziție evaluată la 0 ar apărea ca pierdere de 100%.
     try:
         response = await client.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
             data = response.json()
             price = data['chart']['result'][0]['meta']['regularMarketPrice']
             return ticker, float(price)
-    except:
-        pass
-    return ticker, 0.0
+        print(f"DEBUG: preț live {ticker}: HTTP {response.status_code}")
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
+        print(f"DEBUG: preț live {ticker} indisponibil: {e}")
+    return ticker, None
 
 async def get_all_portfolio_prices(tickers):
     """Lansează toate cererile simultan."""
@@ -76,8 +79,13 @@ async def get_all_portfolio_prices(tickers):
 
 # Wrapper pentru a putea rula cod asincron în interiorul Streamlit (care e sincron)
 def get_fast_live_prices(tickers):
+    """Prețuri curente: dict simbol -> preț, sau None pentru simbolurile care nu au putut fi citite."""
     if not tickers: return {}
-    return asyncio.run(get_all_portfolio_prices(tickers))
+    try:
+        return asyncio.run(get_all_portfolio_prices(tickers))
+    except (RuntimeError, httpx.HTTPError) as e:
+        print(f"DEBUG: prețuri live indisponibile: {e}")
+        return {t: None for t in tickers}
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
@@ -1408,76 +1416,38 @@ def get_portfolio_history_data(tickers):
     return data
 
 def calculate_portfolio_performance(df, history_range="1A"):
-    if df.empty: return pd.DataFrame(), pd.DataFrame(), 0, 0
+    """Evaluează pozițiile și construiește curba de valoare a portofoliului.
+
+    Întoarce (tabel poziții, curbă, variație zilnică abs, variație zilnică %, note).
+    Calculele sunt în analytics/portfolio.py (testate în tests/test_portfolio.py).
+    `note` spune ce simboluri nu au preț sau istoric și de unde începe curba.
+    """
+    if df.empty: return pd.DataFrame(), pd.Series(dtype=float), 0, 0, {}
     
-    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
-    df['AvgPrice'] = pd.to_numeric(df['AvgPrice'], errors='coerce').fillna(0)
+    positions = df.copy()
+    positions['Quantity'] = pd.to_numeric(positions['Quantity'], errors='coerce').fillna(0)
+    positions['AvgPrice'] = pd.to_numeric(positions['AvgPrice'], errors='coerce').fillna(0)
     
-    tickers = df['Symbol'].unique().tolist()
+    tickers = positions['Symbol'].unique().tolist()
     
-    # --- SCHIMBARE MAJORĂ: Descărcăm totul dintr-o singură lovitură ---
+    # --- Descărcăm totul dintr-o singură lovitură ---
     with st.spinner("Actualizăm portofoliul prin Motor Asincron..."):
         current_prices = get_fast_live_prices(tickers)
         # Descărcăm istoricul bulk pentru grafic (cu rate limiter)
         _yf_limiter.wait_if_needed()
         hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False)
 
-    current_vals = []
-    total_daily_pl_abs = 0 
-    
-    for _, row in df.iterrows():
-        sym = row['Symbol']
-        qty = row['Quantity']
-        avg_p = row['AvgPrice']
-        
-        curr_p = current_prices.get(sym, 0)
-        
-        # Calculăm prețul de ieri din hist_data pentru evoluția zilnică
-        try:
-            if len(tickers) > 1:
-                prev_p = hist_data[sym]['Close'].dropna().iloc[-2]
-            else:
-                prev_p = hist_data['Close'].dropna().iloc[-2]
-        except:
-            prev_p = curr_p
+    # close_frame tratează toate formele întoarse de yf.download (un simbol sau mai multe)
+    closes = close_frame(hist_data, tickers)
 
-        mkt_val = qty * curr_p
-        inv_val = qty * avg_p
-        profit = mkt_val - inv_val
-        profit_pct = (profit / inv_val * 100) if inv_val != 0 else 0
-        
-        total_daily_pl_abs += (curr_p - prev_p) * qty
-        
-        current_vals.append({
-            'Symbol': sym, 'Quantity': qty, 'AvgPrice': avg_p, 'CurrentPrice': curr_p,
-            'MarketValue': mkt_val, 'Profit': profit, 'Profit %': profit_pct
-        })
-    
-    df_result = pd.DataFrame(current_vals)
-    
-    # Generăm curba portofoliului (Corecție aliniere fus orar)
-    portfolio_curve = pd.Series(dtype=float)
-    for _, row in df.iterrows():
-        sym = row['Symbol']
-        qty = row['Quantity']
-        try:
-            # Preluăm prețurile din bulk-ul descărcat anterior
-            prices = hist_data[sym]['Close'] if len(tickers) > 1 else hist_data['Close']
-            # .ffill() umple zilele libere (sărbători locale) cu ultimul preț
-            term = prices.ffill().bfill() * qty
-            if portfolio_curve.empty: 
-                portfolio_curve = term
-            else: 
-                # .add aliniază automat indicii de tip Datetime
-                portfolio_curve = portfolio_curve.add(term, fill_value=0)
-        except: pass
+    df_result, total_daily_pl_abs, total_daily_pl_pct, notes = value_positions(positions, current_prices, closes)
+    portfolio_curve, curve_notes = build_portfolio_curve(positions, closes)
+    notes.update(curve_notes)
 
     # Fereastră calendaristică (1A = un an de date, ~252 de ședințe), nu 365 de rânduri
     portfolio_curve = slice_window(portfolio_curve, history_range)
-    total_val_now = portfolio_curve.iloc[-1] if not portfolio_curve.empty else 0
-    total_daily_pl_pct = (total_daily_pl_abs / (total_val_now - total_daily_pl_abs) * 100) if (total_val_now - total_daily_pl_abs) != 0 else 0
     
-    return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct
+    return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct, notes
 
 from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
 
@@ -3285,18 +3255,36 @@ def main():
                     return
 
                 with st.spinner(f"Calculăm performanța pentru {currency_symbol}..."):
-                    df_calc, hist_curve, daily_abs, daily_pct = calculate_portfolio_performance(df_subset, hist_range)
+                    df_calc, hist_curve, daily_abs, daily_pct, pf_notes = calculate_portfolio_performance(df_subset, hist_range)
 
-                total_invested = (df_subset['Quantity'] * df_subset['AvgPrice']).sum()
-                total_current = df_calc['MarketValue'].sum() if not df_calc.empty else 0
+                # Pozițiile fără preț nu intră în valoarea curentă și în profit (altfel ar apărea ca pierdere de 100%).
+                priced = df_calc.dropna(subset=['MarketValue']) if not df_calc.empty else df_calc
+                total_invested = (df_calc['Quantity'] * df_calc['AvgPrice']).sum() if not df_calc.empty else 0
+                invested_priced = (priced['Quantity'] * priced['AvgPrice']).sum() if not priced.empty else 0
+                total_current = priced['MarketValue'].sum() if not priced.empty else 0
                 
-                total_profit_val = total_current - total_invested
-                total_profit_pct = (total_profit_val / total_invested * 100) if total_invested != 0 else 0
+                total_profit_val = total_current - invested_priced
+                total_profit_pct = (total_profit_val / invested_priced * 100) if invested_priced != 0 else 0
+
+                if pf_notes.get('missing_price'):
+                    st.warning(f"⚠️ Fără preț disponibil pentru: **{', '.join(pf_notes['missing_price'])}**. "
+                               "Aceste poziții nu sunt incluse în valoarea curentă și în profit.")
+                if pf_notes.get('price_from_close'):
+                    st.caption(f"ℹ️ Preț live indisponibil pentru {', '.join(pf_notes['price_from_close'])}: s-a folosit ultima închidere.")
 
                 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
                 c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{total_invested:,.2f} {currency_symbol}")
                 c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{total_current:,.2f} {currency_symbol}")
                 c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{total_profit_val:,.2f} {currency_symbol}", f"{total_profit_pct:.2f}%")
+
+                if pf_notes.get('curve_start') is not None:
+                    st.caption(
+                        f"ℹ️ Graficele și indicatorii de risc de mai jos aplică deținerile de azi pe trecut, începând cu "
+                        f"{pf_notes['curve_start'].strftime('%d.%m.%Y')} (prima zi în care toate pozițiile au preț; "
+                        f"istoricul cel mai scurt: {pf_notes.get('limiting_symbol')}). Nu reprezintă performanța realizată efectiv."
+                    )
+                if pf_notes.get('no_history'):
+                    st.caption(f"ℹ️ Fără istoric de preț, deci neincluse în grafice: {', '.join(pf_notes['no_history'])}.")
 
                 # --- INTEGRARE MONTE CARLO ---
                 st.markdown("---")
@@ -3449,10 +3437,10 @@ def main():
                 
                 with col_pie1:
                     st.caption("**După Companie (Simbol)**")
-                    if not df_calc.empty:
+                    if not priced.empty:
                         fig_sym = go.Figure(data=[go.Pie(
-                            labels=df_calc['Symbol'], 
-                            values=df_calc['MarketValue'], 
+                            labels=priced['Symbol'], 
+                            values=priced['MarketValue'], 
                             hole=.4,
                             textinfo='percent',
                             hovertemplate="<b>%{label}</b><br>Valoare: %{value:,.2f} " + currency_symbol + "<br>Pondere: %{percent}<extra></extra>"
@@ -3467,15 +3455,18 @@ def main():
                     display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
                     
                     def color_profit(val):
+                        if pd.isna(val): return ''
                         color = '#3FB950' if val >= 0 else '#F85149'
                         return f'color: {color}'
 
                     st.dataframe(
                         df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
                         .format({
-                            'Quantity': '{:.1f}', 'AvgPrice': '{:.4f}', 'CurrentPrice': '{:.4f}',
-                            'MarketValue': '{:,.4f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
-                        }),
+                            # până la 4 zecimale, fără zerouri inutile (0.31 nu mai apare ca 0.3)
+                            'Quantity': lambda q: f"{q:,.4f}".rstrip('0').rstrip('.'),
+                            'AvgPrice': '{:.4f}', 'CurrentPrice': '{:.4f}',
+                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                        }, na_rep="N/A"),
                         use_container_width=True
                     )        
 
