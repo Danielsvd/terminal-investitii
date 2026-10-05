@@ -5272,7 +5272,7 @@ def main():
                                 styles = [''] * len(row)
                                 
                             # Evidențiem DOAR coloana de AI dacă e anomalie (O colorăm diferit, gen Wall Street Alert)
-                            if "ANOMALIE" in str(row['Alertă AI']):
+                            if "ATENTIE" in str(row['Alertă AI']):
                                 idx = row.index.get_loc('Alertă AI')
                                 styles[idx] += '; color: #FFAB00; font-weight: bold; background-color: rgba(255, 171, 0, 0.2); border: 1px solid #FFAB00;'
                                 
