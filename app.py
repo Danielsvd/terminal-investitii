@@ -22,6 +22,11 @@ from scipy.stats import norm
 from collections import deque
 from threading import Lock
 
+# Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
+from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
+from analytics.macro import yoy_pct, real_rate
+from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro
+
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
 # Previne eroarea 429 (Too Many Requests) prin limitarea la 5 req/secundă
