@@ -1,0 +1,2 @@
+# Doar pentru rularea testelor local: pip install -r requirements-dev.txt
+pytest
