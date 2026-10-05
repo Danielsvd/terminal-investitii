@@ -418,7 +418,7 @@ def get_options_analysis_ai(ticker_sym):
         
         # Preluăm prețul curent rapid
         spot = t.fast_info.last_price
-        if spot == 0: spot = calls['strike'].median() # Fallback dacă lipsește prețul
+        if not spot: spot = calls['strike'].median() # Fallback dacă lipsește prețul
 
         # --- Calcule GEX & IV (identic cu ce ai deja) ---
         calls['gex'] = calls['openInterest'] * (spot / ((calls['strike'] - spot)**2 + 1))
@@ -436,7 +436,9 @@ def get_options_analysis_ai(ticker_sym):
             "expiration": expirations[0],
             "oi_pc_ratio": puts['openInterest'].sum() / calls['openInterest'].sum() if calls['openInterest'].sum() > 0 else 0,
             "vol_pc_ratio": puts['volume'].sum() / calls['volume'].sum() if calls['volume'].sum() > 0 else 0,
-            "max_pain": spot, 
+            # Max Pain real: strike-ul la care valoarea totală a opțiunilor la expirare e minimă
+            # (analytics/options.py). Înainte era returnat prețul curent. None = fără open interest.
+            "max_pain": max_pain(calls, puts),
             "iv": avg_iv,
             "iv_color": iv_txt_color,
             "net_gex": total_gex,

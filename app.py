@@ -2965,8 +2965,13 @@ def main():
                     
                     m3, m4 = st.columns(2)
                     mp = opt_data['max_pain']
-                    diff_mp = ((mp / current_market_price) - 1) * 100 if current_market_price > 0 else 0
-                    m3.metric("Preț Max Pain", f"${mp:.1f}", f"{diff_mp:.1f}%")
+                    mp_display = f"${mp:.1f}" if mp is not None else "N/A"
+                    if mp is not None and current_market_price > 0:
+                        diff_mp = ((mp / current_market_price) - 1) * 100
+                        m3.metric("Preț Max Pain", mp_display, f"{diff_mp:.1f}% față de preț",
+                                  help="Strike-ul la care opțiunile acestei expirări ar valora cel mai puțin, calculat din open interest. Este un reper, nu o țintă de preț.")
+                    else:
+                        m3.metric("Preț Max Pain", mp_display)
                     m4.metric("Data Expirării", opt_data['expiration'])
                 # --- INTEGRARE IV RANK & PERCENTILE ---
                 with col_met:
@@ -3018,7 +3023,7 @@ def main():
                 interpretare_data = [
                     {"Indicator": "📉 Put/Call (OI)", "Valoare": f"{oi_pc:.2f}", "Interpretare": "Bullish" if oi_pc < 0.7 else "Bearish" if oi_pc > 1.1 else "Neutru"},
                     {"Indicator": "⚡ Put/Call (Volum)", "Valoare": f"{vol_pc:.2f}", "Interpretare": "Sentiment Bullish" if vol_pc < 0.7 else "Panică" if vol_pc > 1.1 else "Normal"},
-                    {"Indicator": "🧲 Max Pain Price", "Valoare": f"${mp:.1f}", "Interpretare": f"Prețul tinde spre ${mp:.1f}"},
+                    {"Indicator": "🧲 Max Pain Price", "Valoare": mp_display, "Interpretare": f"Reper la expirarea din {opt_data['expiration']}, nu țintă de preț"},
                     {"Indicator": "🌡️ Volatilitate (IV)", "Valoare": f"{iv_val:.1f}%", "Interpretare": "EVITĂ derivate (Scump)" if iv_val > 40 else "OK de cumpărat (Ieftin)"}
                 ]
                 st.table(interpretare_data)
