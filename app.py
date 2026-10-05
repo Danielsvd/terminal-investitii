@@ -423,7 +423,7 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
     # 3. ANALIZA MACRO
     if spread_val < 0:
         score -= 20
-        details.append("🚨 **Macro:** Curbă 10Y-2Y inversată. Risc sistemic de recesiune detectat.")
+        details.append("🚨 **Macro:** Curbă 10Y-3M inversată. Risc sistemic de recesiune detectat.")
     else:
         score += 5
         details.append("✅ **Macro:** Mediul economic este favorabil expansiunii.")
@@ -3317,11 +3317,11 @@ def main():
                 elif currency_symbol == "RON":
                     # Schimbăm STOXX 600 cu indicele local BET
                     current_bench_ticker = "TVBETETF.RO"
-                    current_bench_name = "Indice BET (RON)"
+                    current_bench_name = "BET (ETF TVBETETF)"
                 else:
                     # Rămâne STOXX 600 doar pentru portofoliul în EURO
-                    current_bench_ticker = "EXW1.DE"
-                    current_bench_name = "STOXX 600 (EUR)"
+                    current_bench_ticker = "EXSA.DE"
+                    current_bench_name = "STOXX Europe 600 (EXSA.DE)"
 
                 with st.spinner(f"Se compară cu {current_bench_name}..."):
                     # Trimitem ticker-ul și numele corect către funcție
@@ -3338,11 +3338,11 @@ def main():
                 elif currency_symbol == "RON":
                     # Schimbarea crucială pentru piața din România
                     bench_ticker = "TVBETETF.RO"
-                    bench_name = "Indice BET (RON)"
+                    bench_name = "BET (ETF TVBETETF)"
                 else:
                     # Rămâne STOXX 600 doar pentru portofoliul în EUR
-                    bench_ticker = "EXW1.DE"
-                    bench_name = "STOXX 600 (EUR)"
+                    bench_ticker = "EXSA.DE"
+                    bench_name = "STOXX Europe 600 (EXSA.DE)"
                 
                 # 3. Calculăm Corelația Globală și Beta
                 global_corr, portfolio_beta = calculate_portfolio_beta(hist_curve, bench_ticker)

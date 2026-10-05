@@ -567,7 +567,7 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
         score += 5
     else:
         score -= 10
-        reasons.append("🚨 **Avertisment Macro:** Curba randamentelor 10Y-2Y inversată. Risc sistemic!")
+        reasons.append("🚨 **Avertisment Macro:** Curba randamentelor 10Y-3M inversată. Risc sistemic!")
         
     if "PANICĂ" in str(regime_msg).upper():
         score -= 15 # Penalizare drastică
