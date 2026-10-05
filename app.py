@@ -536,36 +536,11 @@ def calculate_atr_trailing_stop(df, window=14, multiplier=2.5):
     Calculează pragul de Stop-Loss bazat pe volatilitatea istorică (ATR).
     Un multiplicator de 2.5 este standardul pentru investitori 'swing'.
     """
-    if df is None or len(df) < window:
-        return None
-
-    # 1. Calculăm True Range (TR)
-    high_low = df['High'] - df['Low']
-    high_close = np.abs(df['High'] - df['Close'].shift())
-    low_close = np.abs(df['Low'] - df['Close'].shift())
-    
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = np.max(ranges, axis=1)
-    
-    # 2. Calculăm ATR (media TR)
-    df['ATR'] = true_range.rolling(window=window).mean()
-    
-    # 3. Calculăm Trailing Stop (pentru poziții Long)
-    # Stop-ul este Preț - (ATR * Multiplicator)
-    raw_stop = df['Close'] - (df['ATR'] * multiplier)
-    
-    # Logica de 'Trailing': Stop-ul poate doar să urce
-    trailing_stop = [raw_stop.iloc[0]]
-    for i in range(1, len(raw_stop)):
-        if pd.isna(raw_stop.iloc[i]):
-            trailing_stop.append(np.nan)
-        else:
-            # Dacă prețul crește, stop-ul urcă. Dacă prețul scade, stop-ul rămâne pe loc.
-            new_stop = max(raw_stop.iloc[i], trailing_stop[-1])
-            trailing_stop.append(new_stop)
-            
-    df['ATR_Stop'] = trailing_stop
-    return df
+    # Logica este în analytics/technical.py (testată în tests/test_technical.py):
+    # ATR cu netezire Wilder; stopul urcă odată cu prețul și se resetează când
+    # închiderea ajunge la sau sub el. Întoarce o copie cu coloanele
+    # ATR, ATR_Stop și ATR_Stop_Hit, sau None dacă istoricul e prea scurt.
+    return atr_trailing_stop(df, window=window, multiplier=multiplier)
 
 # --- FUNCȚII ȘTIRI ---
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1955,13 +1930,19 @@ def main():
             if hist is not None and not hist.empty:
                 # Doar dacă avem date, calculăm indicatorii
                 hist = calculate_technical_indicators(hist)
-                hist = calculate_atr_trailing_stop(hist)
+                # Stopul se calculează o singură dată, pe tot istoricul; graficul doar îl afișează.
+                hist_with_stop = calculate_atr_trailing_stop(hist)
+                if hist_with_stop is not None:
+                    hist = hist_with_stop
                 
-                # Extragem prețul SL în siguranță
-                if 'ATR_Stop' in hist.columns:
-                    sl_price = hist['ATR_Stop'].iloc[-1]
-                else:
-                    sl_price = 0
+                # Extragem prețul SL în siguranță (0 = indisponibil)
+                sl_price = 0
+                sl_hit_note = ""
+                if 'ATR_Stop' in hist.columns and pd.notna(hist['ATR_Stop'].iloc[-1]):
+                    sl_price = float(hist['ATR_Stop'].iloc[-1])
+                    hit_positions = np.flatnonzero(hist['ATR_Stop_Hit'].to_numpy())
+                    if len(hit_positions) and (len(hist) - 1 - hit_positions[-1]) <= 5:
+                        sl_hit_note = f" · stop atins pe {hist.index[hit_positions[-1]].strftime('%d.%m')}, resetat"
             # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
             try:
                 # Înlocuim 2Y=F (delistat) cu ^IRX (3-Month Yield)
@@ -1995,6 +1976,8 @@ def main():
             if curr_price > 0:
                 dist_pct = ((curr_price - target_p) / target_p) * 100 if target_p else 0
                 dist_sl = ((curr_price - sl_price) / curr_price) * 100 if sl_price else 0
+                sl_display = f"{sl_price:.2f}" if sl_price else "N/A"
+                sl_risk_display = f"Risc: -{dist_sl:.1f}%{sl_hit_note}" if sl_price else "Istoric insuficient pentru ATR"
                 
                 # Culori pentru statusul țintei
                 t_color = "#3FB950" if curr_price <= (target_p or 0) else ("#D29922" if dist_pct < 5 else "#8B949E")
@@ -2013,8 +1996,8 @@ def main():
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: right;">
                                 <p style="color:#F85149; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Stop-Loss (Exit)</p>
-                                <h2 style="color:#F85149; margin:5px 0; font-size:22px;">{sl_price:.2f}</h2>
-                                <small style="color:#8B949E;">Risc: -{dist_sl:.1f}%</small>
+                                <h2 style="color:#F85149; margin:5px 0; font-size:22px;">{sl_display}</h2>
+                                <small style="color:#8B949E;">{sl_risk_display}</small>
                             </div>
                         </div>
                         <div style="background:{t_color}22; color:{t_color}; padding:6px; border-radius:8px; font-weight:bold; font-size:14px; text-align:center; margin-top:15px; border: 1px solid {t_color}44;">
@@ -2057,11 +2040,13 @@ def main():
 
             fig = make_subplots(rows=rows_needed, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=row_heights)
             fig.add_trace(go.Candlestick(x=subset.index, open=subset['Open'], high=subset['High'], low=subset['Low'], close=subset['Close'], name='Preț', hovertext=subset['Volume'].apply(lambda x: f"Volum: {format_num(x)}")), row=1, col=1)
-            # --- CALCUL ATR STOP ---
-            subset = calculate_atr_trailing_stop(subset)
+            # --- ATR STOP ---
+            # `subset` este o felie din `hist`, care are deja coloana ATR_Stop calculată
+            # pe tot istoricul. Nu se recalculează pe fereastră: altfel valoarea din
+            # card ar diferi de cea de pe grafic și s-ar schimba odată cu intervalul ales.
 
             # Adăugăm linia de Stop-Loss pe grafic (Etajul 1)
-            if subset is not None and 'ATR_Stop' in subset.columns:
+            if 'ATR_Stop' in subset.columns:
                 fig.add_trace(go.Scatter(
                     x=subset.index, 
                     y=subset['ATR_Stop'],
@@ -2069,10 +2054,6 @@ def main():
                     name='ATR Trailing Stop (Exit)',
                     hovertemplate="Stop-Loss: %{y:.2f}"
                 ), row=1, col=1)
-
-            # Adăugăm un Metric nou sub grafic pentru vizibilitate rapidă
-            sl_price = subset['ATR_Stop'].iloc[-1]
-            dist_to_sl = ((curr_price - sl_price) / curr_price) * 100
 
             if show_sma20: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA20'], line=dict(color='orange', width=1), name='SMA 20'), row=1, col=1)
             if show_sma50: fig.add_trace(go.Scatter(x=subset.index, y=subset['SMA50'], line=dict(color='cyan', width=1), name='SMA 50'), row=1, col=1)
