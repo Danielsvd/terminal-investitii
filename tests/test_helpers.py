@@ -121,3 +121,31 @@ def test_struct_time_utc_to_ro_summer_and_winter():
     assert (summer.hour, summer.utcoffset().total_seconds()) == (13, 3 * 3600)
     winter = struct_time_utc_to_ro(time.strptime("2026-01-15 10:00", "%Y-%m-%d %H:%M"))
     assert (winter.hour, winter.utcoffset().total_seconds()) == (12, 2 * 3600)
+
+
+# --- smart_to_float ---------------------------------------------------------
+
+from data.helpers import smart_to_float  # noqa: E402
+
+
+def test_smart_to_float_formats():
+    cases = {
+        "1.000,50": 1000.5, "1,000.50": 1000.5, "50,5": 50.5, "50.5": 50.5,
+        "24,49": 24.49, "3,17%": 3.17, "0,8699 lei": 0.8699, "-12,5": -12.5,
+        "1,000,000": 1_000_000.0, "1.000.000": 1_000_000.0, "6.9378": 6.9378, "0.70": 0.7,
+    }
+    for text, expected in cases.items():
+        assert smart_to_float(text) == expected, text
+
+
+def test_smart_to_float_numeric_inputs_pass_through():
+    assert smart_to_float(5) == 5.0
+    assert smart_to_float(0.31) == 0.31
+    assert smart_to_float(np.float64(2.5)) == 2.5
+    assert smart_to_float(np.int64(7)) == 7.0
+    assert smart_to_float(1e-05) == 1e-05   # înainte: str -> "1e-05" -> "1-05" -> 0.0
+
+
+def test_smart_to_float_empty_and_errors_give_zero():
+    for bad in ("", None, float("nan"), "#DIV/0!", "N/A", "lei", True):
+        assert smart_to_float(bad) == 0.0

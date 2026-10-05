@@ -1,5 +1,6 @@
 """Utilitare de citire sigură a datelor. Fără Streamlit, fără rețea."""
 import calendar
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -118,3 +119,49 @@ def slice_window(obj, label, default="1A"):
     offset = WINDOW_OFFSETS.get(label, WINDOW_OFFSETS[default])
     start = obj.index[-1] - offset
     return obj.loc[obj.index >= start]
+
+
+# --- Numere din Google Sheets -----------------------------------------------
+
+def smart_to_float(val):
+    """Transformă un număr scris în format US sau RO/EU în float.
+
+    Exemple: "1.000,50" -> 1000.5, "1,000.50" -> 1000.5, "50,5" -> 50.5,
+    "3,17%" -> 3.17, "0,8699 lei" -> 0.8699. Valorile deja numerice trec neschimbate.
+    Celulele goale, textul nenumeric și erorile de foaie ("#DIV/0!") dau 0.0.
+
+    Limită cunoscută: un singur separator e ambiguu ("1.250" poate fi 1,25 sau 1250).
+    Un singur punct e citit ca zecimală US, o singură virgulă ca zecimală RO.
+    """
+    if isinstance(val, bool):
+        return 0.0
+    if isinstance(val, (int, float)):
+        return 0.0 if val != val else float(val)
+    if val is None or pd.isna(val) or val == '':
+        return 0.0
+    s = str(val).strip()
+    # Păstrăm doar cifre, punct, virgulă și minus
+    s = re.sub(r'[^\d.,-]', '', s)
+    if not s:
+        return 0.0
+
+    # Logică de detecție a formatului
+    if ',' in s and '.' in s:
+        if s.rfind(',') > s.rfind('.'):  # Format EU: 1.000,50
+            s = s.replace('.', '').replace(',', '.')
+        else:  # Format US: 1,000.50
+            s = s.replace(',', '')
+    elif ',' in s:
+        if s.count(',') > 1:  # US Thousands: 1,000,000
+            s = s.replace(',', '')
+        else:  # RO Decimal: 50,5
+            s = s.replace(',', '.')
+    elif '.' in s:
+        if s.count('.') > 1:  # RO Thousands: 1.000.000
+            s = s.replace('.', '')
+        # Altfel e US Decimal: 50.5
+
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0

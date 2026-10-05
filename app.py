@@ -26,7 +26,7 @@ from threading import Lock
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
-from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro
+from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -261,35 +261,7 @@ def parse_date(entry):
     return now_ro()
 
 # --- FUNCȚIE NOUĂ DE PARSARE INTELIGENTĂ (SENIOR FIX) ---
-def smart_to_float(val):
-    """Transformă orice număr (format US sau EU) în float curat."""
-    if pd.isna(val) or val == '': return 0.0
-    s = str(val).strip()
-    # Păstrăm doar cifre, punct, virgulă și minus
-    s = re.sub(r'[^\d.,-]', '', s)
-    if not s: return 0.0
-
-    # Logică de detecție a formatului
-    if ',' in s and '.' in s:
-        if s.rfind(',') > s.rfind('.'): # Format EU: 1.000,50
-            s = s.replace('.', '').replace(',', '.')
-        else: # Format US: 1,000.50
-            s = s.replace(',', '')
-    elif ',' in s:
-        if s.count(',') > 1: # US Thousands: 1,000,000
-            s = s.replace(',', '')
-        else: # RO Decimal: 50,5
-            s = s.replace(',', '.')
-    elif '.' in s:
-        if s.count('.') > 1: # RO Thousands: 1.000.000
-            s = s.replace('.', '')
-        # Altfel e US Decimal: 50.5
-            
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-    
+# smart_to_float este acum în data/helpers.py (aceeași logică, cu teste în tests/test_helpers.py)
 def format_large_currency(val):
     """Formatează numerele mari (Trilioane, Miliarde) pentru afișare string."""
     try:
@@ -1425,8 +1397,9 @@ def calculate_portfolio_performance(df, history_range="1A"):
     if df.empty: return pd.DataFrame(), pd.Series(dtype=float), 0, 0, {}
     
     positions = df.copy()
-    positions['Quantity'] = pd.to_numeric(positions['Quantity'], errors='coerce').fillna(0)
-    positions['AvgPrice'] = pd.to_numeric(positions['AvgPrice'], errors='coerce').fillna(0)
+    # smart_to_float înțelege și formatul românesc ("100,5"); pd.to_numeric îl transforma în 0.
+    positions['Quantity'] = positions['Quantity'].apply(smart_to_float)
+    positions['AvgPrice'] = positions['AvgPrice'].apply(smart_to_float)
     
     tickers = positions['Symbol'].unique().tolist()
     
