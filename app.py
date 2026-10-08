@@ -2128,6 +2128,10 @@ def main():
             if not info.get('_fundamentals_available', True):
                 st.warning(f"⚠️ Yahoo nu a trimis datele fundamentale pentru {real_sym} (P/E, ROE, datorii, sector, analiști, acționariat). "
                            "Indicatorii bazați pe ele apar N/A și nu intră în scoruri. Prețurile, graficele și situațiile financiare anuale sunt disponibile.")
+                # Un refuz temporar al Yahoo rămâne altfel în cache 15 minute.
+                if st.button("🔄 Reîncearcă citirea datelor de la Yahoo", key="retry_fundamentals"):
+                    get_stock_data.clear()
+                    st.rerun()
         
         # --- 1. DEFINIREA PREȚULUI (VITAL PENTRU CALCULE) ---
             # Luăm ultimul preț disponibil din istoricul deja descărcat
@@ -2603,6 +2607,12 @@ def main():
                                      fin.get("q_cashflow"), fin.get("q_balance"))
             dcf_na = fund.dcf_not_applicable_reason(info.get('sector'), info.get('industry'), real_sym)
             fin_curr = info.get('financialCurrency')
+            if (dcf_na is None and not info.get('sector') and not fin_curr
+                    and not real_sym.upper().endswith(".RO")):
+                # Fără sector și fără moneda de raportare nu se poate exclude o bancă sau un ADR.
+                # (La BVB Yahoo nu trimite de regulă sectorul: acolo decide lista emitenților financiari.)
+                dcf_na = ("Yahoo nu a trimis sectorul și moneda de raportare: nu pot verifica dacă DCF se aplică "
+                          "(bancă, asigurător sau ADR). Reîncearcă citirea datelor.")
             if dcf_na is None and fin_curr and fin_curr != t_curr:
                 dcf_na = (f"Situațiile financiare sunt în {fin_curr}, iar acțiunea se tranzacționează în {t_curr}: "
                           "valoarea pe acțiune cere conversie valutară, care nu e încă implementată.")
