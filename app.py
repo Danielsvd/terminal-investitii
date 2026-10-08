@@ -1063,10 +1063,14 @@ def _safe_info(t):
     Moneda, capitalizarea și prețul vin din endpoint-ul de prețuri, care funcționează.
     Cheia `_fundamentals_available` spune interfeței dacă există date fundamentale.
     """
+    info_error = None
     try:
         info = dict(t.info or {})
+        if len(info) < 10:
+            info_error = f"răspuns aproape gol de la Yahoo ({len(info)} câmpuri)"
     except Exception as e:
         print(f"DEBUG: info indisponibil pentru {getattr(t, 'ticker', '?')}: {e}")
+        info_error = f"{type(e).__name__}: {str(e)[:300]}"
         info = {}
     try:
         fi = t.fast_info
@@ -1084,6 +1088,8 @@ def _safe_info(t):
     info["_fundamentals_available"] = any(
         num(info, k) is not None for k in ("trailingPE", "returnOnEquity", "debtToEquity", "profitMargins", "bookValue")
     )
+    # Motivul tehnic, afișat sub banner: fără el nu se poate deosebi o limitare (429) de alt defect.
+    info["_info_error"] = info_error
     return info
 
 
@@ -2128,6 +2134,8 @@ def main():
             if not info.get('_fundamentals_available', True):
                 st.warning(f"⚠️ Yahoo nu a trimis datele fundamentale pentru {real_sym} (P/E, ROE, datorii, sector, analiști, acționariat). "
                            "Indicatorii bazați pe ele apar N/A și nu intră în scoruri. Prețurile, graficele și situațiile financiare anuale sunt disponibile.")
+                st.caption(f"Detaliu tehnic: {info.get('_info_error') or 'Yahoo a răspuns, dar fără indicatorii fundamentali.'} "
+                           f"· yfinance {yf.__version__} · citit la {now_ro():%H:%M:%S}")
                 # Un refuz temporar al Yahoo rămâne altfel în cache 15 minute.
                 if st.button("🔄 Reîncearcă citirea datelor de la Yahoo", key="retry_fundamentals"):
                     get_stock_data.clear()
