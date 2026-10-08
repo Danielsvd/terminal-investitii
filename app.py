@@ -1900,6 +1900,20 @@ def main():
     ])
     st.sidebar.markdown("---")
 
+    # Versiunile instalate pe server: necesare ca requirements.txt să fixeze exact ce funcționează
+    with st.sidebar.expander("ℹ️ Despre aplicație"):
+        import platform
+        from importlib import metadata as _md
+        rows = [f"Python {platform.python_version()}"]
+        for pkg in ("streamlit", "yfinance", "pandas", "numpy", "scipy", "plotly", "curl_cffi", "httpx",
+                    "gspread", "google-auth", "feedparser", "pandas-datareader", "scikit-learn",
+                    "prophet", "torch", "transformers", "lxml", "requests", "matplotlib", "textblob", "html5lib"):
+            try:
+                rows.append(f"{pkg} {_md.version(pkg)}")
+            except _md.PackageNotFoundError:
+                rows.append(f"{pkg} —")
+        st.code("\n".join(rows), language=None)
+
     # ==================================================
     # 1. AGREGATOR ȘTIRI
     # ==================================================
