@@ -1,12 +1,14 @@
 """Citirea foii `BVB` din `portofoliu_db`. Fără Streamlit, fără rețea.
 
 Structura foii: indicatorii pe rânduri (numele în coloana B), companiile pe coloane
-(simbolul BVB în primul rând, de la coloana C). Coloana A e un agregat și nu se citește.
+(simbolul BVB în primul rând, de la coloana C). Coloana A este media tuturor companiilor
+pe fiecare indicator, calculată în foaie; se afișează ca reper, alături de mediana calculată aici.
 Între indicatori sunt rânduri-titlu de secțiune și rânduri goale. Numerele sunt în
 format românesc, cu sufixe („24,49", „3,17%", „0,8699 lei"), iar celulele pot conține
 erori de foaie („#DIV/0!").
 """
 import re
+import statistics
 import unicodedata
 
 from data.helpers import smart_to_float
@@ -54,8 +56,11 @@ PERIOD_LABEL = "raportare"
 def parse_bvb_sheet(values):
     """Transformă `get_all_values()` al foii BVB într-un dict pe simbol.
 
-    Rezultat: {"SNP": {"indicators": [(nume afișat, text din foaie, număr sau None), ...],
+    Rezultat: {"SNP": {"indicators": [(nume afișat, text din foaie, număr sau None,
+                                         media din foaie ca text, mediana ca text), ...],
                         "info": {cheie info: valoare}, "period": "Q2 26" sau None}, ...}
+    Media e cea din coloana A a foii; mediana se calculează aici din companiile cu valoare
+    și e mai puțin sensibilă la extreme (un P/E de 200 trage media, nu și mediana).
     Rândurile fără nume de indicator și rândurile-titlu (fără nicio valoare) sunt sărite.
     Dacă un indicator apare de două ori, contează prima apariție.
     """
@@ -74,16 +79,53 @@ def parse_bvb_sheet(values):
         if not any(cells.values()):
             continue                      # rând-titlu de secțiune
         seen.add(key)
+        numbers = [n for n in (sheet_number(raw) for raw in cells.values()) if n is not None]
+        sample = next((raw for raw in cells.values() if sheet_number(raw) is not None), "")
+        median_text = _format_like(statistics.median(numbers), sample) if numbers else "N/A"
+        average_raw = str(row[0]).strip() if row and row[0] is not None else ""
+        average_text = average_raw if sheet_number(average_raw) is not None else "N/A"
         for idx, sym in columns.items():
             raw = cells[idx]
             if key == PERIOD_LABEL:
                 out[sym]["period"] = raw or None
                 continue
             number = sheet_number(raw)
-            out[sym]["indicators"].append((label, raw, number))
+            out[sym]["indicators"].append((label, raw, number, average_text, median_text))
             if key in INFO_MAP and number is not None:
                 info_key, divisor = INFO_MAP[key]
                 out[sym]["info"][info_key] = number / divisor
+    return out
+
+
+def _format_like(value, sample):
+    """Formatează un număr ca celulele din foaie: „3,17%", „0,8699 lei" sau „24,49"."""
+    if "%" in sample:
+        text = f"{value:.2f}%"
+    elif "lei" in sample.lower():
+        text = f"{value:.4f} lei"
+    else:
+        text = f"{value:.2f}"
+    return text.replace(".", ",")
+
+
+def reprice(sheet_info, price):
+    """P/E și P/BV la prețul curent, din EPS-ul și valoarea contabilă din foaie.
+
+    Foaia dă multiplii la prețul din ziua actualizării ei. Valoarea contabilă pe acțiune
+    nu e în foaie, dar rezultă din ea: P/E = preț / EPS și P/BV = preț / BVPS la același
+    preț, deci BVPS = EPS × (P/E) / (P/BV). Întoarce doar cheile care se pot recalcula:
+    P/E cere EPS > 0; BVPS cere EPS > 0, P/E și P/BV pozitive. Fără preț, dict gol.
+    """
+    out = {}
+    eps, pe, pbv = sheet_info.get("trailingEps"), sheet_info.get("trailingPE"), sheet_info.get("priceToBook")
+    if price is None or price != price or price <= 0:
+        return out
+    if eps is not None and eps > 0:
+        out["trailingPE"] = price / eps
+        if pe is not None and pe > 0 and pbv is not None and pbv > 0:
+            book = eps * pe / pbv
+            out["bookValue"] = book
+            out["priceToBook"] = price / book
     return out
 
 

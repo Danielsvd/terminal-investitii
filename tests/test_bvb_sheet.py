@@ -1,7 +1,7 @@
 """Teste pentru data/bvb_sheet.py, pe structura reală a foii BVB (cifre inventate)."""
 import pytest
 
-from data.bvb_sheet import bvb_symbol, normalize_label, parse_bvb_sheet, sheet_number
+from data.bvb_sheet import bvb_symbol, normalize_label, parse_bvb_sheet, reprice, sheet_number
 
 SHEET = [
     ["Multipli", "Multilpi de preț", "AG", "SNP", "tlv", "", ""],
@@ -62,14 +62,14 @@ def test_parse_erori_si_celule_goale_nu_devin_zero():
     assert "operatingMargins" not in tlv["info"]    # text
     assert "currentRatio" not in tlv["info"]        # rând mai scurt decât antetul
     assert tlv["info"]["returnOnEquity"] == pytest.approx(0.221)
-    by_name = {name.strip(): (raw, number) for name, raw, number in tlv["indicators"]}
+    by_name = {row[0].strip(): (row[1], row[2]) for row in tlv["indicators"]}
     assert by_name["P/E TTM"] == ("#DIV/0!", None)
 
 
 def test_parse_nu_mapeaza_indicatorii_cu_alt_inteles_si_sare_titlurile():
     data = parse_bvb_sheet(SHEET)
     assert "debtToEquity" not in data["AG"]["info"] and "forwardPE" not in data["AG"]["info"]
-    names = [name.strip() for name, _, _ in data["AG"]["indicators"]]
+    names = [row[0].strip() for row in data["AG"]["indicators"]]
     assert "Levier financiar" in names and "Debt/EBIDTA" in names and "P/E 2025" in names
     assert "Multipli de preț" not in names and "Indicatori de rentabilitate" not in names
     assert names.count("P/E TTM") == 1 and data["AG"]["info"]["trailingPE"] == 12.67   # prima apariție
@@ -83,3 +83,31 @@ def test_parse_foaie_goala():
 def test_bvb_symbol():
     assert bvb_symbol("SNP.RO") == "SNP" and bvb_symbol("snp.ro") == "SNP"
     assert bvb_symbol("AAPL") is None and bvb_symbol("SAP.DE") is None and bvb_symbol(None) is None
+
+
+def test_media_din_foaie_si_mediana_calculata():
+    rows = {row[0].strip(): row for row in parse_bvb_sheet(SHEET)["SNP"]["indicators"]}
+    # P/E TTM: AG 12,67, SNP 30,85, TLV #DIV/0! -> mediana celor două = 21,76; media e textul din coloana A
+    assert rows["P/E TTM"][3] == "24,19" and rows["P/E TTM"][4] == "21,76"
+    # ROE: 12,96%, 7,41%, 22,10% -> mediana 12,96%
+    assert rows["Rentabilitate capital (ROE)"][3] == "5,50%" and rows["Rentabilitate capital (ROE)"][4] == "12,96%"
+    # EPS: 0,1066 / 0,0400 / 1,8417 lei -> mediana 0,1066 lei
+    assert rows["EPS TTM"][4] == "0,1066 lei"
+    no_avg = parse_bvb_sheet([["", "x", "A", "B"], ["#DIV/0!", "P/E TTM", "#DIV/0!", ""]])["A"]["indicators"][0]
+    assert no_avg[3] == "N/A" and no_avg[4] == "N/A"
+
+
+def test_reprice_la_pretul_curent():
+    # foaia: EPS 0,04, P/E 30,85, P/BV 2,11 -> BVPS = 0,04 × 30,85 / 2,11 = 0,58483
+    # la prețul 1,23: P/E = 1,23 / 0,04 = 30,75; P/BV = 1,23 / 0,58483 = 2,1032
+    out = reprice({"trailingEps": 0.04, "trailingPE": 30.85, "priceToBook": 2.11}, 1.23)
+    assert out["trailingPE"] == pytest.approx(30.75)
+    assert out["bookValue"] == pytest.approx(0.58483, abs=1e-5)
+    assert out["priceToBook"] == pytest.approx(2.1032, abs=1e-4)
+
+
+def test_reprice_nu_inventeaza():
+    assert reprice({"trailingEps": -0.1, "trailingPE": None, "priceToBook": 1.5}, 2.0) == {}      # pierdere
+    assert reprice({"trailingEps": 0.04, "trailingPE": 30.85, "priceToBook": 2.11}, None) == {}   # fără preț
+    assert reprice({"trailingEps": 0.04, "priceToBook": 2.11}, 1.23) == {"trailingPE": pytest.approx(30.75)}
+    assert reprice({}, 1.23) == {}

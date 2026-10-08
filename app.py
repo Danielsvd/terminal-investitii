@@ -29,7 +29,7 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
-from data.bvb_sheet import parse_bvb_sheet, bvb_symbol
+from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
 # =============================================================================
@@ -755,10 +755,13 @@ def load_bvb_fundamentals():
         return {}
 
 
-def apply_bvb_sheet(info, symbol):
+def apply_bvb_sheet(info, symbol, hist=None):
     """Pentru simbolurile .RO prezente în foaia `BVB`, indicatorii din foaie înlocuiesc valorile
-    Yahoo (rare și nesigure la BVB). Ce a fost preluat ajunge în `info['_from_bvb_sheet']`."""
+    Yahoo (rare și nesigure la BVB). Ce a fost preluat ajunge în `info['_from_bvb_sheet']`.
+    P/E și P/BV se recalculează la prețul curent din EPS-ul și multiplii din foaie; cheile
+    recalculate ajung în `info['_bvb_repriced']`."""
     info["_from_bvb_sheet"], info["_bvb_period"], info["_bvb_indicators"] = [], None, []
+    info["_bvb_repriced"] = []
     sheet_symbol = bvb_symbol(symbol)
     if not sheet_symbol:
         return info
@@ -769,6 +772,12 @@ def apply_bvb_sheet(info, symbol):
         info[key] = value
         info["_from_bvb_sheet"].append(key)
     info["_bvb_period"], info["_bvb_indicators"] = entry["period"], entry["indicators"]
+    price = num(info, 'currentPrice') or num(info, 'previousClose')
+    if price is None and hist is not None and not hist.empty and pd.notna(hist['Close'].iloc[-1]):
+        price = float(hist['Close'].iloc[-1])
+    for key, value in reprice_bvb(entry["info"], price).items():
+        info[key] = value
+        info["_bvb_repriced"].append(key)
     if info["_from_bvb_sheet"]:
         info["_fundamentals_available"] = True
     return info
@@ -2227,7 +2236,7 @@ def main():
             hist, info, earn_df, real_sym = get_stock_data(sym)
             info = info or {}
             if hist is not None and not hist.empty:
-                info = apply_bvb_sheet(info, real_sym)                       # BVB: foaia proprie are prioritate
+                info = apply_bvb_sheet(info, real_sym, hist)                    # BVB: foaia proprie are prioritate
                 info = enrich_info_from_statements(info, real_sym, hist)     # apoi golurile, din situațiile financiare
             
             # --- VERIFICARE DE SIGURANȚĂ (OBLIGATORIE PENTRU CLOUD) ---
@@ -2402,14 +2411,24 @@ def main():
                 st.caption("Calculat de aplicație din situațiile financiare (Yahoo nu a trimis valoarea): "
                            + ", ".join(from_statements) + ". Rentabilitățile folosesc soldul de la sfârșitul perioadei.")
             if info.get('_from_bvb_sheet'):
-                st.caption(f"Din foaia BVB (raportare {info.get('_bvb_period') or 'N/A'}), cu prioritate față de Yahoo: "
-                           + ", ".join(STATEMENT_RATIO_LABELS[k] for k in info['_from_bvb_sheet'])
-                           + ". P/E și P/BV sunt la prețul din momentul actualizării foii, nu la prețul de acum.")
+                bvb_note = (f"Din foaia BVB (raportare {info.get('_bvb_period') or 'N/A'}), cu prioritate față de Yahoo: "
+                            + ", ".join(STATEMENT_RATIO_LABELS[k] for k in info['_from_bvb_sheet']) + ". ")
+                repriced = info.get('_bvb_repriced', [])
+                if 'trailingPE' in repriced and 'priceToBook' in repriced:
+                    bvb_note += "P/E și P/BV sunt recalculate la prețul curent, din EPS-ul și valoarea contabilă din foaie."
+                elif 'trailingPE' in repriced:
+                    bvb_note += "P/E e recalculat la prețul curent din EPS-ul din foaie; P/BV rămâne cel din foaie, la prețul actualizării ei."
+                else:
+                    bvb_note += "P/E și P/BV nu au putut fi recalculate la prețul curent (EPS lipsă sau negativ): sunt cele din foaie."
+                st.caption(bvb_note)
             if info.get('_bvb_indicators'):
-                with st.expander(f"📄 Toți indicatorii din foaia BVB pentru {bvb_symbol(real_sym)}"):
+                with st.expander(f"📄 Toți indicatorii din foaia BVB pentru {bvb_symbol(real_sym)}, față de piață"):
                     st.dataframe(pd.DataFrame(
-                        [(name.strip(), raw if number is not None else "N/A") for name, raw, number in info['_bvb_indicators']],
-                        columns=["Indicator", "Valoare"]), hide_index=True, width='stretch')
+                        [(row[0].strip(), row[1] if row[2] is not None else "N/A", row[3], row[4]) for row in info['_bvb_indicators']],
+                        columns=["Indicator", bvb_symbol(real_sym), "Media BVB (din foaie)", "Mediana BVB (calculată)"]),
+                        hide_index=True, width='stretch')
+                    st.caption("Valorile companiei sunt cele din foaie, la prețul actualizării ei. Media e coloana A a foii; mediana e calculată "
+                               "din aceleași companii și nu e trasă de extreme (un singur P/E foarte mare ridică media, nu și mediana).")
             risk_stats = resolve_beta_alpha(real_sym, info, hist)
             beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
             de_ratio = info.get('debtToEquity')
