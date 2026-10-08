@@ -1906,7 +1906,7 @@ def main():
         from importlib import metadata as _md
         rows = [f"Python {platform.python_version()}"]
         for pkg in ("streamlit", "yfinance", "pandas", "numpy", "scipy", "plotly", "curl_cffi", "httpx",
-                    "gspread", "google-auth", "feedparser", "pandas-datareader", "scikit-learn",
+                    "gspread", "google-auth", "google-auth-oauthlib", "h2", "feedparser", "pandas-datareader", "scikit-learn",
                     "prophet", "torch", "transformers", "lxml", "requests", "matplotlib", "textblob", "html5lib"):
             try:
                 rows.append(f"{pkg} {_md.version(pkg)}")
