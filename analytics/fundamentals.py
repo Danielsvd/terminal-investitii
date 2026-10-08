@@ -651,6 +651,15 @@ def altman_z(annual_income, annual_balance, quarterly_income=None, quarterly_bal
 
 # --- Piotroski F-Score -------------------------------------------------------
 
+def _short(value):
+    """Sumă scurtă pentru tabele: 111,48 mld, 626,6 mil. Destule zecimale ca două sume apropiate să se distingă."""
+    a = abs(value)
+    for limit, unit in ((1e9, "mld"), (1e6, "mil")):
+        if a >= limit:
+            return f"{value / limit:,.2f} {unit}"
+    return f"{value:,.2f}"
+
+
 GROSS_PROFIT_ROWS = ("Gross Profit",)
 EBITDA_ROWS = ("EBITDA", "Normalized EBITDA")
 SHARES_COUNT_ROWS = ("Ordinary Shares Number", "Share Issued")
@@ -704,7 +713,7 @@ def piotroski(annual_income, annual_balance, annual_cashflow):
     add("3. ROA în creștere", compare(roa[0], roa[1], lambda a, b: a > b, pct))
     add("4. Flux din exploatare peste profitul net",
         (None if cfo is None or ni[0] is None else cfo > ni[0],
-         "N/A" if cfo is None or ni[0] is None or ni[0] == 0 else f"CFO / profit net = {cfo / ni[0]:.2f}"))
+         "N/A" if cfo is None or ni[0] is None else f"CFO {_short(cfo)} față de profit net {_short(ni[0])}"))
     add("5. Datorie pe termen lung / active în scădere",
         compare(leverage[0], leverage[1], lambda a, b: a < b or (a == 0 and b == 0), pct))
     add("6. Lichiditate curentă în creștere", compare(liquidity[0], liquidity[1], lambda a, b: a > b, num2))

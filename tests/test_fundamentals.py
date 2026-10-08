@@ -475,6 +475,7 @@ def test_piotroski_criterii_picate():
     r = F.piotroski(income, balance, cashflow)
     assert [c["passed"] for c in r["criteria"]] == [True, True, False, False, True, True, False, True, True]
     assert r["passed"] == 6 and r["evaluable"] == 9
+    assert r["criteria"][3]["detail"] == "CFO 50.00 față de profit net 60.00"   # sumele, nu un raport rotunjit la 1,00
 
 
 def test_piotroski_date_lipsa_sunt_na_nu_picate():
