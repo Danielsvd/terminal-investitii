@@ -1047,7 +1047,7 @@ def plot_correlation_matrix(tickers):
             xaxis=dict(side="bottom")
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # 4. RAPORT VIZUAL STILIZAT (Cards)
         st.markdown("### 📋 Analiză Strategica a Diversificării")
@@ -1153,7 +1153,7 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         # Afișare Alpha Card (Rămâne neschimbat, dar folosim variabilele noi)
         alpha_color = "#3FB950" if alpha > 0 else "#F85149"
@@ -2111,7 +2111,7 @@ def main():
                 fig.add_trace(go.Bar(x=subset.index, y=subset['MACD']-subset['Signal'], name='Hist'), row=current_row, col=1)
 
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
             st.markdown("---")
@@ -2242,7 +2242,7 @@ def main():
                             fig.update_yaxes(title_text="", showgrid=True, gridcolor='#30363D', secondary_y=False)
                             fig.update_yaxes(title_text="Marjă (%)", showgrid=False, ticksuffix="%", color="#FFAB00", secondary_y=True)
                             
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
 
                         with tab_anual:
                             draw_financial_chart(df_ann, "Evoluție Anuală")
@@ -2314,7 +2314,7 @@ def main():
                         "ROA (%)": "{:.1f}%",
                         "Marjă Netă (%)": "{:.1f}%",
                         "Datorii/Eq (%)": "{:.1f}%"
-                    }, na_rep="N/A"), use_container_width=True, hide_index=True)
+                    }, na_rep="N/A"), width='stretch', hide_index=True)
                 else:
                     st.info("Informații despre competitori indisponibile pentru acest simbol.")
 
@@ -2354,7 +2354,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
-                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': '{:.2f}', 'Realizat': '{:.2f}', 'Diferență': '{:.2f}', 'Surpriză %': '{:.2%}'}), use_container_width=True)
+                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': '{:.2f}', 'Realizat': '{:.2f}', 'Diferență': '{:.2f}', 'Surpriză %': '{:.2%}'}), width='stretch')
                 else: st.info("Date earnings indisponibile.")
             
             # --- MODUL NOU: ANALIZA VOLUMULUI INSTITUȚIONAL ---
@@ -2440,7 +2440,7 @@ def main():
                         textinfo='none'
                     )])
                     fig_mini.update_layout(height=130, margin=dict(t=0, b=0, l=0, r=0), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_mini, use_container_width=True)
+                    st.plotly_chart(fig_mini, width='stretch')
 
                 # Rândul 2: Tabelul Nominal (Balenele)
                 st.markdown("#### 🏛️ Top 10 Deținători Instituționali")
@@ -2451,7 +2451,7 @@ def main():
                             'Valoare ($)': '${:,.0f}'
                         }), 
                         hide_index=True, 
-                        use_container_width=True
+                        width='stretch'
                     )
                 else:
                     st.info("Detaliile nominale nu sunt publice pentru acest simbol.")
@@ -2900,7 +2900,7 @@ def main():
                 if fig_season is not None:
                     s_col1, s_col2 = st.columns([2, 1])
                     with s_col1:
-                        st.plotly_chart(fig_season, use_container_width=True)
+                        st.plotly_chart(fig_season, width='stretch')
                     
                     with s_col2:
                         # Extragem extremele pentru a oferi un verdict clar utilizatorului
@@ -2990,7 +2990,7 @@ def main():
                         }
                     ))
                     fig_iv.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_iv, use_container_width=True)
+                    st.plotly_chart(fig_iv, width='stretch')
 
                 with col_met:
                     m1, m2 = st.columns(2)
@@ -3369,7 +3369,7 @@ def main():
                                         hovermode="x", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                                         yaxis_title=f"Valoare Portofoliu ({currency_symbol})")
                     
-                    st.plotly_chart(fig_mc, use_container_width=True)
+                    st.plotly_chart(fig_mc, width='stretch')
                     
                     # Dashboard de Risc sub grafic
                     c_mc1, c_mc2, c_mc3 = st.columns(3)
@@ -3395,7 +3395,7 @@ def main():
                         fill='tozeroy', line=dict(color='#238636'), name=f'Valoare {currency_symbol}'
                     ))
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width='stretch')
                     # --- NOU: COMPARAȚIE BENCHMARK ---
                 st.markdown("---")
                 st.subheader("🏁 Performanță Relativă (Benchmark)")
@@ -3499,7 +3499,7 @@ def main():
                         )])
                         fig_sym.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_sym, use_container_width=True, key=f"pie_sym_{currency_symbol}")
+                        st.plotly_chart(fig_sym, width='stretch', key=f"pie_sym_{currency_symbol}")
 
                 # 4. Detaliu Poziții
                 st.subheader("Detaliu Poziții")
@@ -3519,7 +3519,7 @@ def main():
                             'AvgPrice': '{:.4f}', 'CurrentPrice': '{:.4f}',
                             'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
                         }, na_rep="N/A"),
-                        use_container_width=True
+                        width='stretch'
                     )        
 
                 with col_pie2:
@@ -3538,7 +3538,7 @@ def main():
                         )])
                         fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_sec, use_container_width=True, key=f"pie_sec_{currency_symbol}")
+                        st.plotly_chart(fig_sec, width='stretch', key=f"pie_sec_{currency_symbol}")
 
                         # VERDICT DIVERSIFICARE
                         # 'Nedefinit' = Yahoo nu a trimis sectorul (sau ETF): nu e un sector real și nu se evaluează.
@@ -3641,7 +3641,7 @@ def main():
                                 yaxis=dict(ticksuffix="%"),    # Adaugă % pe axa verticală (Y)
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                             )
-                            st.plotly_chart(fig_opt, use_container_width=True, key=f"opt_bar_{currency_symbol}")
+                            st.plotly_chart(fig_opt, width='stretch', key=f"opt_bar_{currency_symbol}")
 
                             # 4. Afișăm Metricele Portofoliului Ideal cu explicații
                             st.markdown("##### 🏆 Cum ar arăta Portofoliul Ideal (Conform AI):")
@@ -3978,7 +3978,7 @@ def main():
                     )
                 )
                 
-                st.plotly_chart(fig_macro, use_container_width=True)
+                st.plotly_chart(fig_macro, width='stretch')
                 # --- NOU: MODUL INTERPRETARE DINAMICĂ MACRO ---
                 st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
                 
@@ -4093,7 +4093,7 @@ def main():
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
                     # Afișăm graficul întâi
-                    st.plotly_chart(fig_rot, use_container_width=True)
+                    st.plotly_chart(fig_rot, width='stretch')
 
                     # --- PASUL B: METRICILE ȘI EXPLICAȚIA (JOS) ---
                     st.write("") # Mic spațiu între grafic și text
@@ -4222,7 +4222,7 @@ def main():
                 
                 c_heat1, c_heat2 = st.columns([2, 1.2])
                 with c_heat1:
-                    st.plotly_chart(fig_sec_heat, use_container_width=True)
+                    st.plotly_chart(fig_sec_heat, width='stretch')
                 
                 # --- INTERPRETAREA AI (RISK-ON vs RISK-OFF) ---
                 with c_heat2:
@@ -4352,7 +4352,7 @@ def main():
                         xaxis=dict(showgrid=False),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-                    st.plotly_chart(fig_bonds, use_container_width=True)
+                    st.plotly_chart(fig_bonds, width='stretch')
                     
                 with c_bond2:
                     st.markdown("#### 🌡️ Termometrul Creditării")
@@ -4409,7 +4409,7 @@ def main():
                         margin=dict(l=0, r=0, t=10, b=0),
                         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
                     )
-                    st.plotly_chart(fig_corr, use_container_width=True)
+                    st.plotly_chart(fig_corr, width='stretch')
                     
                 with c_cross2:
                     st.markdown("#### 🧠 Radiografia Fluxului Global")
@@ -4474,7 +4474,7 @@ def main():
                             'Valoare Curentă': '{:.2f}',
                             'Lună Precedentă': '{:.2f}'
                         }),
-                        use_container_width=True, hide_index=True
+                        width='stretch', hide_index=True
                     )
                     st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = față de luna precedentă. An/An = față de aceeași lună a anului trecut; pentru indicii de prețuri, aceasta este rata inflației.")
                 
@@ -4514,7 +4514,7 @@ def main():
             st.dataframe(
                 df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
                 .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                use_container_width=True, hide_index=True
+                width='stretch', hide_index=True
             )
             
         with col_m2:
@@ -4522,7 +4522,7 @@ def main():
             st.dataframe(
                 df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
                 .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                use_container_width=True, hide_index=True
+                width='stretch', hide_index=True
             )
 
         st.markdown("---")
@@ -4537,7 +4537,7 @@ def main():
                     us_gain[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                    use_container_width=True, hide_index=True
+                    width='stretch', hide_index=True
                 )
         
         with c_us2:
@@ -4547,7 +4547,7 @@ def main():
                     us_lose[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                    use_container_width=True, hide_index=True
+                    width='stretch', hide_index=True
                 )
 
         st.markdown("---")
@@ -4562,7 +4562,7 @@ def main():
                     eu_gain[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                    use_container_width=True, hide_index=True
+                    width='stretch', hide_index=True
                 )
         
         with c_eu2:
@@ -4572,7 +4572,7 @@ def main():
                     eu_lose[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
                     .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
-                    use_container_width=True, hide_index=True
+                    width='stretch', hide_index=True
                 )
 
     # ==================================================
@@ -4635,7 +4635,7 @@ def main():
                             final_df[col] = final_df[col].apply(smart_to_float)
 
                     st.dataframe(
-                        final_df, height=600, use_container_width=True,
+                        final_df, height=600, width='stretch',
                         column_config={
                             # Rentabilitate & Marje
                             "Rentabilitate active (ROA)": st.column_config.NumberColumn(format="%.2f%%"),
@@ -4695,7 +4695,7 @@ def main():
                         display_df["Val. intrinsecă"] = display_df["Val. intrinsecă"].apply(format_large_currency)
 
                     st.dataframe(
-                        display_df, height=600, use_container_width=True,
+                        display_df, height=600, width='stretch',
                         column_config={
                             "Capitalizare": st.column_config.TextColumn("Capitalizare", help="Valoare formatată"),
                             
@@ -4911,7 +4911,7 @@ def main():
                         gainers[['Simbol', 'Preț', 'Variație']].style
                         .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
                         .map(lambda x: 'color: #3FB950', subset=['Variație']),
-                        use_container_width=True, hide_index=True
+                        width='stretch', hide_index=True
                     )
                 else: st.info("Date indisponibile.")
                 
@@ -4922,7 +4922,7 @@ def main():
                         losers[['Simbol', 'Preț', 'Variație']].style
                         .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
                         .map(lambda x: 'color: #F85149', subset=['Variație']),
-                        use_container_width=True, hide_index=True
+                        width='stretch', hide_index=True
                     )
                 else: st.info("Date indisponibile.")
             
@@ -4943,7 +4943,7 @@ def main():
                     vol_display[['Simbol', 'Preț', 'Volum', 'Variație']].style
                     .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
                     .applymap(lambda x: 'color: #3FB950' if x > 0 else 'color: #F85149', subset=['Variație']),
-                    use_container_width=True, hide_index=True
+                    width='stretch', hide_index=True
                 )
             else:
                 st.info("Nu există date despre volume.")
@@ -5182,7 +5182,7 @@ def main():
                         us_gainers[['Simbol', 'Preț', 'Variație']].style
                         .format({'Preț': '${:.2f}', 'Variație': '{:+.2f}%'})
                         .map(lambda x: 'color: #3FB950', subset=['Variație']),
-                        use_container_width=True, hide_index=True
+                        width='stretch', hide_index=True
                     )
             
             with c_us2:
@@ -5192,7 +5192,7 @@ def main():
                         us_losers[['Simbol', 'Preț', 'Variație']].style
                         .format({'Preț': '${:.2f}', 'Variație': '{:+.2f}%'})
                         .map(lambda x: 'color: #F85149', subset=['Variație']),
-                        use_container_width=True, hide_index=True
+                        width='stretch', hide_index=True
                     )
 
             # --- 3. Top Știri Wall Street ---
@@ -5396,7 +5396,7 @@ def main():
                                 "Volum Mediu (20z)": "{:,.0f}",
                                 "RVOL": "{:.2f}x"
                             }),
-                            use_container_width=True, 
+                            width='stretch', 
                             height=600,
                             hide_index=True  # <--- ACEASTA ESTE LINIA CARE ELIMINĂ NUMERELE DIN STÂNGA
                         )
@@ -5511,7 +5511,7 @@ def main():
             st.dataframe(
                 df_res.style.apply(highlight_buy, axis=1)
                 .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
-                use_container_width=True,
+                width='stretch',
                 height=500,
                 column_config={
                     "_is_buy": None, 

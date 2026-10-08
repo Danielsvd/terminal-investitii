@@ -152,7 +152,7 @@ def render_ai_chart(forecast, hist):
     # Ascundem axa X dintre cele două grafice pentru continuitate
     fig.update_xaxes(showticklabels=False, row=1, col=1)
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yield_spread=None):
     """
