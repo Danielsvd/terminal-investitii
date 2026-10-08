@@ -11,6 +11,7 @@ from textblob import TextBlob
 import socket
 import numpy as np
 import re
+import html
 import requests
 import asyncio
 import httpx
@@ -26,6 +27,7 @@ from threading import Lock
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
+from analytics import fundamentals as fund
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float
 
 # =============================================================================
@@ -290,6 +292,17 @@ def format_num(val, is_pct=False):
     if val >= 1e6: return f"{val/1e6:.2f} M"
     return f"{val:,.2f}"
 
+def format_amount(val):
+    """Sumă din situațiile financiare, scalată (mld / mil), cu semn. None sau NaN -> 'N/A'."""
+    if val is None or pd.isna(val):
+        return "N/A"
+    sign = "-" if val < 0 else ""
+    a = abs(val)
+    if a >= 1e12: return f"{sign}{a/1e12:,.2f} T"
+    if a >= 1e9: return f"{sign}{a/1e9:,.2f} mld"
+    if a >= 1e6: return f"{sign}{a/1e6:,.2f} mil"
+    return f"{sign}{a:,.2f}"
+
 def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
     """Calculează Beta și Corelația globală a întregului portofoliu."""
     if portfolio_curve is None or portfolio_curve.empty:
@@ -401,7 +414,7 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
 
     # 2. ANALIZA EVALUARE
     if mos_val is None:
-        details.append("ℹ️ **Evaluare:** modelul DCF nu are date suficiente. Pilon neinclus.")
+        details.append("ℹ️ **Evaluare:** DCF indisponibil sau neaplicabil acestui emitent. Pilon neinclus.")
     elif mos_val > 25:
         score += 15
         details.append(f"✅ **Evaluare:** Marjă de siguranță excelentă ({mos_val:.1f}%). Preț subevaluat.")
@@ -679,31 +692,65 @@ def calculate_alpha(stock_hist, beta):
         return alpha
     except: return None
 
-def calculate_dcf_dynamic(info, growth_rate_input, discount_rate_input):
-    """Calculează DCF folosind estimările tale manuale."""
-    try:
-        eps = num(info, 'trailingEps')
-        if not eps or eps <= 0: return 0
-        
-        # Parametrii tăi din interfață
-        growth_rate = growth_rate_input / 100
-        discount_rate = discount_rate_input / 100
-        terminal_multiple = min(num(info, 'trailingPE') or 15, 25) 
-        
-        # Proiecție pe 5 ani
-        cash_flows = []
-        for i in range(1, 6):
-            fcf = eps * ((1 + growth_rate) ** i)
-            discounted_fcf = fcf / ((1 + discount_rate) ** i)
-            cash_flows.append(discounted_fcf)
-            
-        # Valoare Terminală la finalul anului 5
-        terminal_val = (eps * ((1 + growth_rate) ** 5)) * terminal_multiple
-        discounted_terminal = terminal_val / ((1 + discount_rate) ** 5)
-        
-        return sum(cash_flows) + discounted_terminal
-    except:
-        return 0
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_financial_statements(symbol):
+    """Situațiile financiare anuale și trimestriale din yfinance, pentru analytics/fundamentals.py.
+
+    Întoarce un dict cu cheile income, balance, cashflow, q_income, q_balance, q_cashflow
+    (DataFrame sau None) și `errors`: lista situațiilor care nu au putut fi citite.
+    Nu afișează nimic: interfața decide ce mesaj arată.
+    """
+    out = {"errors": []}
+    t = yf.Ticker(symbol)
+    for key, attr in (("income", "financials"), ("balance", "balance_sheet"), ("cashflow", "cashflow"),
+                      ("q_income", "quarterly_financials"), ("q_balance", "quarterly_balance_sheet"),
+                      ("q_cashflow", "quarterly_cashflow")):
+        df = None
+        try:
+            raw = getattr(t, attr)
+            if isinstance(raw, pd.DataFrame) and not raw.empty:
+                df = raw
+        except Exception as e:
+            print(f"DEBUG: {attr} indisponibil pentru {symbol}: {e}")
+        out[key] = df
+        if df is None:
+            out["errors"].append(attr)
+    return out
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_risk_free_for_currency(currency):
+    """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
+
+    USD: randamentul titlurilor SUA pe 10 ani (^TNX, Yahoo). EUR: Bund 10 ani (FRED, lunar).
+    Pentru celelalte valute (inclusiv RON) nu există încă o sursă automată: întoarce None,
+    iar interfața cere o rată de scont manuală. Nu există valoare de rezervă: o rată
+    presupusă ar arăta ca una citită din piață.
+    """
+    def _valid(value):
+        # ^TNX și seria FRED sunt în procente (4,25 = 4,25%). Orice în afara 0–25% e eroare de date.
+        return value is not None and value == value and 0 < value < 25
+
+    cur = (currency or "").upper()
+    if cur == "USD":
+        try:
+            closes = yf.Ticker("^TNX").history(period="5d")['Close'].dropna()
+            if len(closes) and _valid(float(closes.iloc[-1])):
+                return float(closes.iloc[-1]) / 100, f"titluri SUA 10 ani (^TNX, {closes.index[-1]:%d.%m.%Y})"
+        except Exception as e:
+            print(f"DEBUG: ^TNX indisponibil: {e}")
+        return None, "Randamentul titlurilor SUA pe 10 ani (^TNX) nu a putut fi citit."
+    if cur == "EUR":
+        try:
+            end = datetime.today()
+            serie = web.DataReader('IRLTLT01DEM156N', 'fred', end - timedelta(days=200), end).iloc[:, 0].dropna()
+            if len(serie) and _valid(float(serie.iloc[-1])):
+                return float(serie.iloc[-1]) / 100, f"Bund 10 ani (FRED IRLTLT01DEM156N, {serie.index[-1]:%m.%Y})"
+        except Exception as e:
+            print(f"DEBUG: Bund 10 ani (FRED) indisponibil: {e}")
+        return None, "Randamentul Bund pe 10 ani (FRED) nu a putut fi citit."
+    return None, f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}."
+
 # --- Pune acest bloc sus, lângă celelalte funcții (calculate_alpha, etc.) ---
 
 def calculate_health_score_ext(info):
@@ -2470,16 +2517,28 @@ def main():
             price_f = num(info, 'currentPrice') or num(info, 'previousClose') or last_close
             t_curr = info.get('currency') or 'USD'
 
-            st.write("⚙️ **Configurați Ipotezele: Sliderele influențează acum ambele modele!**")
-            ctrl1, ctrl2 = st.columns(2)
-            
-            # Explicații profesionale pentru Tooltips
-            eps_help = """
-            **Creșterea EPS (Earnings Per Share):**
-            Reprezintă rata anuală compusă cu care estimezi că vor crește profiturile companiei în următorii 5-10 ani.
-            - 0-5%: Companii mature (Utility, Consumer Staples)
-            - 10-20%: Companii de creștere (Tech, Healthcare)
-            - 25%: Estimare foarte optimistă, greu de susținut pe termen lung.
+            # --- Datele DCF-ului vin din situațiile financiare, nu din `info` ---
+            fin = get_financial_statements(real_sym)
+            dcf_in = fund.dcf_inputs(fin.get("income"), fin.get("balance"), fin.get("cashflow"),
+                                     fin.get("q_cashflow"), fin.get("q_balance"))
+            dcf_na = fund.dcf_not_applicable_reason(info.get('sector'), info.get('industry'), real_sym)
+            fin_curr = info.get('financialCurrency')
+            if dcf_na is None and fin_curr and fin_curr != t_curr:
+                dcf_na = (f"Situațiile financiare sunt în {fin_curr}, iar acțiunea se tranzacționează în {t_curr}: "
+                          "valoarea pe acțiune cere conversie valutară, care nu e încă implementată.")
+            rf_val, rf_label = get_risk_free_for_currency(t_curr)
+            wacc_res = fund.wacc(rf_val, num(info, 'beta'), num(info, 'marketCap'), dcf_in["total_debt"],
+                                 dcf_in["interest_expense"], dcf_in["tax_rate"])
+
+            st.write("⚙️ **Ipoteze.** Creșterea se aplică ambelor modele; rata de scont și creșterea terminală, doar DCF-ului.")
+            ctrl1, ctrl2, ctrl3 = st.columns(3)
+
+            growth_help = """
+            **Creșterea anuală estimată:**
+            - În Graham: creșterea profitului pe acțiune (EPS).
+            - În DCF: creșterea free cash flow-ului în primul an; apoi scade liniar, an de an, până la creșterea terminală din anul 5.
+
+            Repere: 0-5% companii mature (utilități, bunuri de bază), 10-20% companii de creștere, peste 25% greu de susținut.
             """
 
             discount_help = """
@@ -2491,28 +2550,60 @@ def main():
             Cu cât rata de scont e mai mare, cu atât valoarea justă calculată va fi mai mică.
             """
 
-            # Sliderele cu pas de 1% și explicații incluse
+            gterm_help = """
+            **Creșterea terminală (g):**
+            Ritmul în care crește free cash flow-ul la nesfârșit după anul 5 (formula Gordon).
+            Nu poate depăși creșterea economiei pe termen lung, de aceea e limitată la 3%,
+            și trebuie să fie sub rata de scont. Reper uzual: 2-2,5%.
+            """
+
             growth_val = ctrl1.slider(
-                "Creștere anuală EPS (%)", 
-                -5, 40, 15, step=1, 
-                help=eps_help,
+                "Creștere anuală estimată (%)",
+                -5, 40, 15, step=1,
+                help=growth_help,
                 key="v_final_g"
             )
-            
+            if dcf_in["fcf_cagr"] is not None and len(dcf_in["fcf_history"]) >= 2:
+                ctrl1.caption(
+                    f"Reper: FCF a crescut cu {dcf_in['fcf_cagr'] * 100:.1f}% pe an între "
+                    f"{dcf_in['fcf_history'].index[0]:%Y} și {dcf_in['fcf_history'].index[-1]:%Y} "
+                    f"({len(dcf_in['fcf_history'])} ani raportați)."
+                )
+
+            use_wacc = False
+            if wacc_res is not None:
+                use_wacc = ctrl2.toggle(
+                    f"Folosește WACC calculat ({wacc_res['wacc'] * 100:.1f}%)",
+                    value=True, key="v_final_use_wacc"
+                )
+            else:
+                ctrl2.caption("WACC nu se poate calcula (lipsește rata fără risc, beta sau capitalizarea): alege rata manual.")
             discount_val = ctrl2.slider(
-                "Rata de scont (%)", 
-                5, 20, 9, step=1, 
+                "Rata de scont manuală (%)",
+                5, 20, 9, step=1,
                 help=discount_help,
-                key="v_final_d"
+                key="v_final_d",
+                disabled=use_wacc
             )
-            
+            gterm_val = ctrl3.slider(
+                "Creștere terminală g (%)",
+                0.0, 3.0, 2.0, step=0.5,
+                help=gterm_help,
+                key="v_final_gt"
+            )
+            discount_rate = wacc_res['wacc'] if use_wacc else discount_val / 100
+
             # --- LOGICĂ REACTIVĂ ---
             # 1. Graham Revizuit: V = EPS * (8.5 + 2 * Growth)
             # Folosim formula adaptată a lui Graham pentru a fi influențată de slider-ul de creștere
             graham_calc = eps_f * (8.5 + 2 * growth_val) if eps_f > 0 else 0
             
-            # 2. DCF Reactiv
-            dcf_calc = calculate_dcf_dynamic(info, growth_val, discount_val)
+            # 2. DCF pe free cash flow (analytics/fundamentals.py). None = modelul nu se aplică.
+            dcf_res = fund.dcf_fcf(dcf_in["fcf"], growth_val / 100, discount_rate, gterm_val / 100,
+                                   dcf_in["net_debt"], dcf_in["shares"])
+            if dcf_na:
+                dcf_res = dict(dcf_res, per_share=None, reason=dcf_na, warnings=[])
+            dcf_calc = dcf_res["per_share"]
 
             # --- AFISARE REZULTATE ---
             if price_f > 0:
@@ -2531,11 +2622,104 @@ def main():
                         st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E;">Graham N/A</p></div>', unsafe_allow_html=True)
 
                 with cv3:
-                    if dcf_calc > 0:
+                    if dcf_calc is not None and dcf_calc > 0:
                         diff_d = ((price_f - dcf_calc) / dcf_calc) * 100
                         d_col = "#3FB950" if price_f < dcf_calc else "#F85149"
-                        st.markdown(f'<div style="{css.format(c=d_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Valoare Justă (DCF)</p><h1 style="color:{d_col}; margin:10px 0;">{dcf_calc:.2f}</h1><p style="color:{d_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
-         
+                        st.markdown(f'<div style="{css.format(c=d_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Valoare Justă (DCF pe FCF)</p><h1 style="color:{d_col}; margin:10px 0;">{dcf_calc:.2f}</h1><p style="color:{d_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">DCF N/A</p><p style="color:#8B949E; font-size:12px;">{html.escape(dcf_res["reason"] or "Date insuficiente.")}</p></div>', unsafe_allow_html=True)
+
+            for dcf_warning in dcf_res["warnings"]:
+                st.warning(f"⚠️ DCF: {dcf_warning}")
+
+            if dcf_calc is not None:
+                # Un singur număr induce în eroare: valoarea pe acțiune pe o grilă de ipoteze.
+                st.markdown(f"**Sensibilitatea DCF** — valoare pe acțiune ({t_curr}) în funcție de rata de scont și de creșterea terminală")
+                r_grid = [discount_rate + d for d in (-0.02, -0.01, 0.0, 0.01, 0.02)]
+                g_grid = [0.01, 0.015, 0.02, 0.025, 0.03]
+                sens = fund.dcf_sensitivity(dcf_in["fcf"], growth_val / 100, dcf_in["net_debt"], dcf_in["shares"], r_grid, g_grid)
+                sens.index = [f"scont {r * 100:.1f}%" for r in r_grid]
+                sens.columns = [f"g {g * 100:.1f}%" for g in g_grid]
+
+                def _sens_color(v):
+                    if pd.isna(v) or not price_f:
+                        return "color: #8B949E"
+                    return "color: #3FB950" if v > price_f else "color: #F85149"
+
+                st.dataframe(sens.style.format("{:.2f}", na_rep="N/A").map(_sens_color), width='stretch')
+                st.caption(
+                    f"Verde = peste prețul curent ({price_f:.2f} {t_curr}), roșu = sub. Rândul din mijloc e rata de scont folosită. "
+                    "Dacă verdictul se schimbă între celule vecine, modelul nu susține o concluzie fermă."
+                )
+
+            with st.expander("🔎 Baza de calcul a DCF-ului (de verificat față de situațiile financiare)"):
+                if fin["errors"]:
+                    st.caption("Situații financiare pe care Yahoo nu le-a trimis: " + ", ".join(fin["errors"]))
+                bal_date = f"{dcf_in['balance_date']:%d.%m.%Y}" if dcf_in["balance_date"] is not None else "N/A"
+                if dcf_in["shares"] is None:
+                    shares_src = "N/A"
+                else:
+                    shares_src = "medie diluată, ultimul an fiscal" if dcf_in["shares_diluted"] else "din bilanț, NEDILUAT (media diluată lipsește)"
+                base_rows = [
+                    ("Flux de numerar din exploatare (CFO)", format_amount(dcf_in["cfo"]), dcf_in["fcf_basis"] or "N/A"),
+                    ("Cheltuieli de capital (capex)", format_amount(dcf_in["capex"]), dcf_in["fcf_basis"] or "N/A"),
+                    ("Free cash flow = CFO − |capex|", format_amount(dcf_in["fcf"]), dcf_in["fcf_basis"] or "N/A"),
+                    ("Datorie totală", format_amount(dcf_in["total_debt"]), f"bilanț {bal_date}"),
+                    ("Numerar și plasamente pe termen scurt", format_amount(dcf_in["cash"]), f"bilanț {bal_date}"),
+                    ("Datorie netă", format_amount(dcf_in["net_debt"]), "datorie totală − numerar"),
+                    ("Număr de acțiuni", format_amount(dcf_in["shares"]), shares_src),
+                ]
+                st.dataframe(pd.DataFrame(base_rows, columns=["Element", f"Valoare ({fin_curr or t_curr})", "Sursă"]),
+                             hide_index=True, width='stretch')
+
+                st.markdown("**Rata de scont**")
+                if wacc_res is not None:
+                    kd_txt = f"{wacc_res['kd'] * 100:.2f}%" if wacc_res['kd'] is not None else "N/A"
+                    tax_txt = f"{wacc_res['tax'] * 100:.1f}%" if wacc_res['tax'] is not None else "N/A"
+                    st.write(
+                        f"WACC = **{wacc_res['wacc'] * 100:.2f}%** "
+                        f"= {wacc_res['w_e'] * 100:.0f}% × cost capital propriu {wacc_res['ke'] * 100:.2f}% "
+                        f"+ {wacc_res['w_d'] * 100:.0f}% × cost datorie {kd_txt} × (1 − impozit {tax_txt})"
+                    )
+                    st.write(
+                        f"Cost capital propriu (CAPM) = rată fără risc {wacc_res['rf'] * 100:.2f}% [{rf_label}] "
+                        f"+ beta {wacc_res['beta']:.2f} (Yahoo) × primă de risc {wacc_res['erp'] * 100:.1f}% (ipoteză fixă)"
+                    )
+                    for wacc_note in wacc_res["notes"]:
+                        st.caption(f"Aproximare: {wacc_note}")
+                else:
+                    st.write(f"WACC indisponibil. Rata fără risc: {rf_label if rf_val is None else f'{rf_val * 100:.2f}% [{rf_label}]'}")
+                st.write(f"Rata de scont folosită în calcul: **{discount_rate * 100:.2f}%** ({'WACC calculat' if use_wacc else 'aleasă manual'}).")
+
+                if dcf_res["flows"]:
+                    st.markdown("**Proiecția pe 5 ani**")
+                    df_flows = pd.DataFrame(dcf_res["flows"])
+                    df_flows = pd.DataFrame({
+                        "An": df_flows["year"],
+                        "Creștere": df_flows["growth"].map(lambda v: f"{v * 100:.1f}%"),
+                        "FCF proiectat": df_flows["fcf"].map(format_amount),
+                        "Valoare actualizată": df_flows["pv"].map(format_amount),
+                    })
+                    st.dataframe(df_flows, hide_index=True, width='stretch')
+                    st.write(
+                        f"Valoarea întreprinderii {format_amount(dcf_res['enterprise_value'])} "
+                        f"= fluxuri actualizate {format_amount(dcf_res['pv_fcf'])} "
+                        f"+ valoare terminală actualizată {format_amount(dcf_res['pv_terminal'])} "
+                        f"({dcf_res['terminal_share'] * 100:.0f}% din total). "
+                        f"Minus datoria netă {format_amount(dcf_in['net_debt'])} "
+                        f"= valoarea capitalului {format_amount(dcf_res['equity_value'])}."
+                    )
+                if len(dcf_in["fcf_history"]):
+                    st.markdown("**Istoricul FCF (ani fiscali)**")
+                    st.dataframe(pd.DataFrame({
+                        "An fiscal încheiat": [f"{d:%d.%m.%Y}" for d in dcf_in["fcf_history"].index],
+                        "FCF": [format_amount(v) for v in dcf_in["fcf_history"].values],
+                    }), hide_index=True, width='stretch')
+                st.caption(
+                    "Limite: modelul proiectează un singur scenariu de creștere; beta este cel publicat de Yahoo "
+                    "(față de un indice ales de Yahoo); prima de risc de 5% este o ipoteză, nu o măsurătoare."
+                )
+
             # --- RAPORT FINAL PE CATEGORII ---
             st.markdown("---")
             st.subheader("🕵️‍♂️ Audit Instituțional (6 Piloni)")
@@ -2627,7 +2811,7 @@ def main():
                     st.write(f"💵 **Preț Actual:** {current_p:.2f} | 🎯 **Fair Value:** {target_val:.2f}")
                     st.progress(max(0.0, min(mos_val / 100.0, 1.0)))
             else:
-                st.warning("⚠️ Date insuficiente (sau EPS negativ) pentru a rula modelul de Marjă de Siguranță.")
+                st.warning(f"⚠️ Marja de siguranță indisponibilă: {dcf_res['reason'] or 'lipsește prețul curent.'}")
 
             # --- MODUL: SUSTENABILITATE ȘI CALITATE (VERSIUNE EXTINSĂ) ---
             st.markdown("---")
@@ -2733,7 +2917,7 @@ def main():
                 # Colectare date necesare pentru SWOT
                 c_news_ai = get_company_news_rss(real_sym)
                 s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
-                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if dcf_calc > 0 else None
+                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if (dcf_calc is not None and dcf_calc > 0) else None
                 z_val_swot, _, _, _ = calculate_altman_z(info)
                 
                 # Generare date SWOT

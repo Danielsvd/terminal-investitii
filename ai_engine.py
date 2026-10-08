@@ -468,7 +468,7 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     # 1. EVALUARE (DCF Margin of Safety) - MAX 20 puncte
     if mos_val is None:
         missing.append("evaluare DCF")
-        reasons.append("ℹ️ **Evaluare:** modelul DCF nu are date suficiente (EPS lipsă sau negativ). Pilon neinclus în scor.")
+        reasons.append("ℹ️ **Evaluare:** DCF indisponibil sau neaplicabil acestui emitent (vezi motivul în calculatorul de valoare intrinsecă). Pilon neinclus în scor.")
     elif mos_val > 25:
         score += 20
         reasons.append("✅ **Subevaluare Masivă:** Discount excelent față de valoarea intrinsecă (Model DCF).")
