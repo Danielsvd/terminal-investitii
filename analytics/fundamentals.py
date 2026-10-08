@@ -647,3 +647,96 @@ def altman_z(annual_income, annual_balance, quarterly_income=None, quarterly_bal
     if all(x[k] is not None for k in ("X1", "X2", "X3", "X4_book")):
         out["z2"] = 6.56 * x["X1"] + 3.26 * x["X2"] + 6.72 * x["X3"] + 1.05 * x["X4_book"]
     return out
+
+
+# --- Piotroski F-Score -------------------------------------------------------
+
+GROSS_PROFIT_ROWS = ("Gross Profit",)
+EBITDA_ROWS = ("EBITDA", "Normalized EBITDA")
+SHARES_COUNT_ROWS = ("Ordinary Shares Number", "Share Issued")
+
+
+def piotroski(annual_income, annual_balance, annual_cashflow):
+    """Piotroski F-Score: 9 criterii, ultimul an fiscal față de cel precedent.
+
+    Întoarce {"passed", "evaluable", "criteria", "year", "prior_year"}; `criteria` e o listă de
+    dict-uri {"name", "passed" (True / False / None), "detail"}. Un criteriu fără date e None,
+    nu picat: scorul se citește „passed din evaluable". Fără doi ani de situații, toate sunt None.
+    Rentabilitatea și rotația folosesc activele de la sfârșitul anului.
+    """
+    def val(df, rows, col):
+        return stmt_value(df, rows, col)
+
+    def pct(v):
+        return "N/A" if v is None else f"{v * 100:.1f}%"
+
+    def num2(v):
+        return "N/A" if v is None else f"{v:.2f}"
+
+    def compare(now, before, better, fmt):
+        if now is None or before is None:
+            return None, f"{fmt(now)} față de {fmt(before)}"
+        return better(now, before), f"{fmt(now)} față de {fmt(before)}"
+
+    ni = [val(annual_income, NET_INCOME_ROWS, c) for c in (0, 1)]
+    rev = [val(annual_income, REVENUE_ROWS, c) for c in (0, 1)]
+    gp = [val(annual_income, GROSS_PROFIT_ROWS, c) for c in (0, 1)]
+    ta = [val(annual_balance, TOTAL_ASSETS_ROWS, c) for c in (0, 1)]
+    ltd = [val(annual_balance, LONG_DEBT_ROWS, c) for c in (0, 1)]
+    ca = [val(annual_balance, CURRENT_ASSETS_ROWS, c) for c in (0, 1)]
+    cl = [val(annual_balance, CURRENT_LIABILITIES_ROWS, c) for c in (0, 1)]
+    shares = [val(annual_balance, SHARES_COUNT_ROWS, c) or val(annual_income, DILUTED_SHARES_ROWS, c) for c in (0, 1)]
+    cfo = val(annual_cashflow, CFO_ROWS, 0)
+
+    roa = [_ratio(ni[c], ta[c]) for c in (0, 1)]
+    leverage = [_ratio(ltd[c], ta[c]) for c in (0, 1)]
+    liquidity = [_ratio(ca[c], cl[c]) for c in (0, 1)]
+    margin = [_ratio(gp[c], rev[c]) for c in (0, 1)]
+    turnover = [_ratio(rev[c], ta[c]) for c in (0, 1)]
+
+    criteria = []
+
+    def add(name, result):
+        criteria.append({"name": name, "passed": result[0], "detail": result[1]})
+
+    add("1. Rentabilitatea activelor (ROA) pozitivă", (None if roa[0] is None else roa[0] > 0, pct(roa[0])))
+    add("2. Flux de numerar din exploatare pozitiv", (None if cfo is None else cfo > 0, "pozitiv" if (cfo or 0) > 0 else ("N/A" if cfo is None else "negativ")))
+    add("3. ROA în creștere", compare(roa[0], roa[1], lambda a, b: a > b, pct))
+    add("4. Flux din exploatare peste profitul net",
+        (None if cfo is None or ni[0] is None else cfo > ni[0],
+         "N/A" if cfo is None or ni[0] is None or ni[0] == 0 else f"CFO / profit net = {cfo / ni[0]:.2f}"))
+    add("5. Datorie pe termen lung / active în scădere",
+        compare(leverage[0], leverage[1], lambda a, b: a < b or (a == 0 and b == 0), pct))
+    add("6. Lichiditate curentă în creștere", compare(liquidity[0], liquidity[1], lambda a, b: a > b, num2))
+    # Toleranță de 0,1% pentru rotunjiri; orice emisiune reală de acțiuni pică criteriul.
+    add("7. Fără emisiune de acțiuni noi",
+        (None if shares[0] is None or shares[1] is None else shares[0] <= shares[1] * 1.001,
+         "N/A" if shares[0] is None or shares[1] is None else f"{(shares[0] / shares[1] - 1) * 100:+.1f}% acțiuni"))
+    add("8. Marjă brută în creștere", compare(margin[0], margin[1], lambda a, b: a > b, pct))
+    add("9. Rotația activelor în creștere", compare(turnover[0], turnover[1], lambda a, b: a > b, num2))
+
+    return {"passed": sum(1 for c in criteria if c["passed"] is True),
+            "evaluable": sum(1 for c in criteria if c["passed"] is not None),
+            "criteria": criteria,
+            "year": stmt_date(annual_balance, 0), "prior_year": stmt_date(annual_balance, 1)}
+
+
+# --- Îndatorare --------------------------------------------------------------
+
+def leverage_ratios(annual_income, annual_balance, quarterly_income=None, quarterly_balance=None):
+    """Datorie netă / EBITDA și acoperirea dobânzii (EBIT / cheltuieli cu dobânzile).
+
+    Fluxurile sunt TTM când există 4 trimestre, altfel ultimul an fiscal; datoria netă, din
+    cel mai recent bilanț. Datorie netă / EBITDA e None când EBITDA ≤ 0 (raportul nu are sens)
+    și poate fi negativ (numerar net). Acoperirea e None când dobânda lipsește sau e zero.
+    """
+    balance = quarterly_balance if net_debt(quarterly_balance) is not None else annual_balance
+    net = net_debt(balance)
+    ebitda = _flow(quarterly_income, annual_income, EBITDA_ROWS)
+    ebit = _flow(quarterly_income, annual_income, EBIT_ROWS)
+    interest = _flow(quarterly_income, annual_income, INTEREST_ROWS)
+    coverage = None
+    if _is_num(ebit) and _is_num(interest) and interest != 0:
+        coverage = ebit / abs(interest)
+    return {"net_debt": net, "ebitda": ebitda, "ebit": ebit, "interest_expense": interest,
+            "net_debt_to_ebitda": _ratio(net, ebitda), "interest_coverage": coverage}

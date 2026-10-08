@@ -3017,6 +3017,50 @@ def main():
                         st.caption(f"Bilanț: {az_date} · Z = {z_txt} · Z'' = {z2_txt}. Model statistic din 1968/1995: "
                                    "un semnal de avertizare, nu o predicție.")
 
+            # --- PIOTROSKI F-SCORE și îndatorare, din situațiile financiare anuale ---
+            st.markdown("---")
+            st.subheader("📋 Calitate financiară (Piotroski F-Score)")
+            pio = fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow"))
+            lev = fund.leverage_ratios(fin.get("income"), fin.get("balance"), fin.get("q_income"), fin.get("q_balance"))
+            pio_left, pio_right = st.columns([1, 2])
+            with pio_left:
+                if pio["evaluable"] == 0:
+                    pio_color, pio_value, pio_label = "#8B949E", "N/A", "Situații financiare indisponibile"
+                else:
+                    pio_share = pio["passed"] / pio["evaluable"]
+                    pio_color = "#3FB950" if pio_share >= 7 / 9 else ("#D29922" if pio_share >= 4 / 9 else "#F85149")
+                    pio_value = f"{pio['passed']}/{pio['evaluable']}"
+                    pio_label = ("toate cele 9 criterii evaluate" if pio["evaluable"] == 9
+                                 else f"{9 - pio['evaluable']} criterii fără date (N/A)")
+                st.markdown(f"""
+                <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {pio_color}; text-align:center;">
+                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Criterii trecute</p>
+                    <h1 style="color:{pio_color}; margin:10px 0; font-size:40px;">{pio_value}</h1>
+                    <p style="color:#C9D1D9; font-size:12px; margin:0;">{pio_label}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                nd_ebitda = lev["net_debt_to_ebitda"]
+                st.metric("Datorie netă / EBITDA", "N/A" if nd_ebitda is None else f"{nd_ebitda:.2f}x",
+                          help="Câți ani de EBITDA ar acoperi datoria netă. Negativ = numerar net. N/A când EBITDA e negativ sau lipsește. "
+                               f"Datorie netă {format_amount(lev['net_debt'])}, EBITDA {format_amount(lev['ebitda'])}.")
+                int_cov = lev["interest_coverage"]
+                st.metric("Acoperirea dobânzii", "N/A" if int_cov is None else f"{int_cov:.1f}x",
+                          help="EBIT împărțit la cheltuielile cu dobânzile raportate. Sub 1,5x profitul operațional abia acoperă dobânda. "
+                               f"EBIT {format_amount(lev['ebit'])}, dobânzi {format_amount(lev['interest_expense'])}. "
+                               "Atenție: la unele companii „dobânzile” raportate includ și alte costuri financiare.")
+            with pio_right:
+                pio_icons = {True: "✅ trecut", False: "❌ picat", None: "➖ N/A"}
+                st.dataframe(pd.DataFrame(
+                    [(c["name"], pio_icons[c["passed"]], c["detail"]) for c in pio["criteria"]],
+                    columns=["Criteriu", "Rezultat", "Valoare (an curent față de precedent)"]),
+                    hide_index=True, width='stretch')
+                if pio["year"] is not None and pio["prior_year"] is not None:
+                    st.caption(f"An fiscal încheiat la {pio['year']:%d.%m.%Y} față de {pio['prior_year']:%d.%m.%Y}. "
+                               "Scorul măsoară direcția (îmbunătățire sau deteriorare), nu nivelul: 7–9 solid, 0–3 slab. "
+                               "La bănci, criteriile de lichiditate și marjă brută nu au date.")
+                else:
+                    st.caption("Piotroski are nevoie de doi ani fiscali de situații financiare.")
+
             # --- RAPORT FINAL PE CATEGORII ---
             st.markdown("---")
             st.subheader("🕵️‍♂️ Audit Instituțional (6 Piloni)")

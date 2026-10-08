@@ -443,3 +443,75 @@ def test_altman_varianta_si_zone():
     assert F.altman_zone(3.0, "Z") == "safe" and F.altman_zone(2.5, "Z") == "grey" and F.altman_zone(1.8, "Z") == "distress"
     assert F.altman_zone(2.7, "Z''") == "safe" and F.altman_zone(1.5, "Z''") == "grey" and F.altman_zone(1.0, "Z''") == "distress"
     assert F.altman_zone(None, "Z") is None and F.altman_zone(2.0, None) is None
+
+
+# --- Piotroski ---------------------------------------------------------------
+
+def _piotroski_frames():
+    years = ["2025-12-31", "2024-12-31"]
+    income = _frame({"Net Income": [100.0, 80.0], "Total Revenue": [1000.0, 900.0],
+                     "Gross Profit": [400.0, 342.0]}, years)
+    balance = _frame({"Total Assets": [1000.0, 1000.0], "Long Term Debt": [200.0, 250.0],
+                      "Current Assets": [300.0, 280.0], "Current Liabilities": [150.0, 160.0],
+                      "Ordinary Shares Number": [50.0, 50.0]}, years)
+    cashflow = _frame({"Operating Cash Flow": [130.0, 90.0]}, years)
+    return income, balance, cashflow
+
+
+def test_piotroski_toate_criteriile_trecute():
+    # ROA 10% > 0 și > 8%; CFO 130 > 0 și > profit 100; datorie TL/active 20% < 25%;
+    # lichiditate 2,00 > 1,75; acțiuni neschimbate; marjă brută 40% > 38%; rotație 1,00 > 0,90
+    r = F.piotroski(*_piotroski_frames())
+    assert r["passed"] == 9 and r["evaluable"] == 9
+    assert [c["passed"] for c in r["criteria"]] == [True] * 9
+    assert r["year"] == pd.Timestamp("2025-12-31") and r["prior_year"] == pd.Timestamp("2024-12-31")
+
+
+def test_piotroski_criterii_picate():
+    income, balance, cashflow = _piotroski_frames()
+    income.loc["Net Income", pd.Timestamp("2025-12-31")] = 60.0        # ROA 6% < 8% -> criteriul 3 picat
+    balance.loc["Ordinary Shares Number", pd.Timestamp("2025-12-31")] = 55.0   # +10% acțiuni -> 7 picat
+    cashflow.loc["Operating Cash Flow", pd.Timestamp("2025-12-31")] = 50.0     # CFO 50 < profit 60 -> 4 picat
+    r = F.piotroski(income, balance, cashflow)
+    assert [c["passed"] for c in r["criteria"]] == [True, True, False, False, True, True, False, True, True]
+    assert r["passed"] == 6 and r["evaluable"] == 9
+
+
+def test_piotroski_date_lipsa_sunt_na_nu_picate():
+    income, balance, cashflow = _piotroski_frames()
+    r = F.piotroski(income.drop(index="Gross Profit"), balance.drop(index=["Current Assets", "Current Liabilities"]), cashflow)
+    assert r["criteria"][5]["passed"] is None and r["criteria"][7]["passed"] is None     # ca la o bancă
+    assert r["passed"] == 7 and r["evaluable"] == 7
+    one_year = F.piotroski(income.iloc[:, :1], balance.iloc[:, :1], cashflow.iloc[:, :1])
+    assert [c["passed"] for c in one_year["criteria"]] == [True, True, None, True, None, None, None, None, None]
+    empty = F.piotroski(None, None, None)
+    assert empty["passed"] == 0 and empty["evaluable"] == 0
+
+
+def test_piotroski_fara_datorie_in_ambii_ani_trece_criteriul_5():
+    income, balance, cashflow = _piotroski_frames()
+    balance.loc["Long Term Debt"] = 0.0
+    assert F.piotroski(income, balance, cashflow)["criteria"][4]["passed"] is True
+
+
+# --- Îndatorare --------------------------------------------------------------
+
+def test_leverage_ratios():
+    income = _frame({"EBITDA": [250.0], "EBIT": [200.0], "Interest Expense": [-25.0]}, ["2025-12-31"])
+    balance = _frame({"Total Debt": [600.0], "Cash And Cash Equivalents": [100.0]}, ["2025-12-31"])
+    r = F.leverage_ratios(income, balance)
+    assert r["net_debt_to_ebitda"] == pytest.approx(2.0)       # (600 - 100) / 250
+    assert r["interest_coverage"] == pytest.approx(8.0)        # 200 / 25
+
+
+def test_leverage_ratios_cazuri_limita():
+    balance = _frame({"Total Debt": [50.0], "Cash And Cash Equivalents": [150.0]}, ["2025-12-31"])
+    income = _frame({"EBITDA": [100.0], "EBIT": [80.0]}, ["2025-12-31"])
+    r = F.leverage_ratios(income, balance)
+    assert r["net_debt_to_ebitda"] == pytest.approx(-1.0)      # numerar net
+    assert r["interest_coverage"] is None                       # dobânda nu e raportată
+    loss = _frame({"EBITDA": [-10.0], "EBIT": [-30.0], "Interest Expense": [5.0]}, ["2025-12-31"])
+    r = F.leverage_ratios(loss, balance)
+    assert r["net_debt_to_ebitda"] is None                      # EBITDA negativ
+    assert r["interest_coverage"] == pytest.approx(-6.0)        # EBIT negativ nu acoperă dobânda
+    assert F.leverage_ratios(None, None)["net_debt_to_ebitda"] is None

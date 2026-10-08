@@ -147,9 +147,10 @@ class FakeTicker:
         if self.ticker.endswith(".RO"):
             return pd.DataFrame()
         return pd.DataFrame([[1e9 * (i + 5) for i in range(n)], [1e8 * (i - 1) for i in range(n)],
-                             [1.55e10] * n, [3.5e9] * n, [1.8e10] * n, [1.15e11] * n, [3e8 * (i + 5) for i in range(n)]],
+                             [1.55e10] * n, [3.5e9] * n, [1.8e10] * n, [1.15e11] * n, [3e8 * (i + 5) for i in range(n)],
+                             [4e8 * (i + 5) for i in range(n)], [3.6e8 * (i + 5) for i in range(n)]],
                             index=["Total Revenue", "Net Income", "Diluted Average Shares",
-                                   "Interest Expense", "Tax Provision", "Pretax Income", "EBIT"], columns=cols)
+                                   "Interest Expense", "Tax Provision", "Pretax Income", "EBIT", "Gross Profit", "EBITDA"], columns=cols)
 
     def _stmt(self, freq, n, rows):
         """Bilanț / flux de numerar sintetic. .RO: gol (ca la Yahoo). NEWCO: capex peste CFO (FCF negativ)."""
@@ -165,7 +166,8 @@ class FakeTicker:
                 "Ordinary Shares Number": (1.5e10, False), "Total Assets": (3.6e11, False),
                 "Stockholders Equity": (7e10, False), "Current Assets": (1.4e11, False),
                 "Current Liabilities": (1.3e11, False), "Inventory": (7e9, False),
-                "Retained Earnings": (2e10, False), "Total Liabilities Net Minority Interest": (2.9e11, False)}
+                "Retained Earnings": (2e10, False), "Total Liabilities Net Minority Interest": (2.9e11, False),
+                "Long Term Debt": (9e10, False)}
 
     def _cash_rows(self):
         capex = -3e11 if self.ticker == "NEWCO" else -1.0e10
