@@ -29,6 +29,7 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
+from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
@@ -474,45 +475,32 @@ def get_watchlist_target(symbol):
         pass
     return None
 
-def get_peers_analysis(sector, industry, current_ticker):
-    """Extrage competitori și include datoria pentru o analiză de risc."""
-    peers_map = {
-        "Technology": ["MSFT", "GOOGL", "NVDA", "AAPL", "AMD", "INTC", "PLTR", "T", "AVGO", "MU", "FSLR", "META", "TSM", "QCOM"],
-        "Financial Services": ["JPM", "BAC", "GS", "WFC", "C", "V", "MS", "MA", "AXP", "SCHW"],
-        "Energy": ["XOM", "CVX", "LNG", "OXY", "COP", "OXY", "DVN", "D", "VST", 'VG', "UUUU", "LEU", "GPOR", "CEG"],
-        "Healthcare": ["LLY", "JNJ", "NVO", "NVS", "PFE", "SNY", "MRK"],
-        "Industrials": ["LMT", "RTX", "NOC", "BA", "GD", "MMM", "CAT", "DAL", "SPCX", "UAL"],
-        "Basic Materials": ["RIO", "VALE", "BHP", "FCX", "NEM", "AEM", "GLNCY", "USAR", "AREC", "MP", "METC", "LAC"],
-        "Consumer Defensive": ["WMT", "KO", "CL", "KHC", "PG", "SFD", "PEP", "PM"], 
-        "Consumer Cyclical": ["MCD", "CMG", "SBUX", "DPZ", "NKE", "RCL", "MBG.DE","VOW.DE","BMW.DE","GM", "F"]
-    }
-    
-    potential_peers = peers_map.get(sector, ["SPY", "QQQ", "DIA"])
-    peers = [p for p in potential_peers if p != current_ticker][:15]
-    
-    peer_results = []
-    for p_sym in peers:
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_peer_rows(region, sector):
+    """Indicatorii comparabililor dintr-o regiune și un sector (listele din analytics/peers.py).
+
+    Întoarce (rânduri, simboluri fără date). În cache 6 ore, pe (regiune, sector): fiecare
+    comparabil costă o cerere la endpoint-ul Yahoo cel mai limitat, iar înainte tabelul era
+    recitit la fiecare interacțiune cu pagina. Valorile lipsă rămân None (afișate N/A).
+    """
+    rows, failed = [], []
+    for p_sym in PEERS.get(region, {}).get(sector or "", []):
+        _yf_limiter.wait_if_needed()
         try:
-            t = yf.Ticker(p_sym)
-            inf = t.info or {}
-            # Valorile lipsă rămân None (afișate N/A), nu 0: un competitor fără un
-            # indicator nu mai dispare din tabel și nu mai apare cu zerouri false.
-            def pct(key):
-                v = num(inf, key)
-                return v * 100 if v is not None else None
-            peer_results.append({
-                "Simbol": p_sym,
-                "Capitalizare": num(inf, 'marketCap'),
-                "P/E": num(inf, 'trailingPE'),
-                "ROE (%)": pct('returnOnEquity'),
-                "ROA (%)": pct('returnOnAssets'),
-                "Marjă Netă (%)": pct('profitMargins'),
-                "Datorii/Eq (%)": num(inf, 'debtToEquity')
-            })
+            inf = yf.Ticker(p_sym).info or {}
         except Exception as e:
-            print(f"DEBUG: peer {p_sym} indisponibil: {e}")
+            print(f"DEBUG: comparabil {p_sym} indisponibil: {e}")
+            failed.append(p_sym)
             continue
-    return pd.DataFrame(peer_results)
+        row = {"Simbol": p_sym, "Capitalizare": num(inf, 'marketCap'), "Monedă": inf.get('currency') or ""}
+        for key, label, mult in PEER_METRICS:
+            value = num(inf, key)
+            row[label] = None if value is None else value * mult
+        if all(row[label] is None for _, label, _ in PEER_METRICS):
+            failed.append(p_sym)       # simbol delistat, redenumit sau refuzat de Yahoo
+            continue
+        rows.append(row)
+    return rows, failed
 
 def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
     """
@@ -2571,65 +2559,77 @@ def main():
             st.markdown("---")
             st.subheader("🏁 Peer Review: Poziționarea față de Liderii de Sector")
             
-            # Datele firmei curente
-            # None = indicator lipsă: cardul arată N/A, nu „0.0 🟢 Atractiv"
-            my_pe = num(info, 'trailingPE')
-            pct_or_none = lambda k: num(info, k) * 100 if num(info, k) is not None else None
-            my_roe, my_roa, my_margin = pct_or_none('returnOnEquity'), pct_or_none('returnOnAssets'), pct_or_none('profitMargins')
-            
-            # --- PASUL 1: CARDURILE DE STATUS (SUS) ---
-            c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-            
-            with c_p1:
-                if my_pe is not None and my_pe > 0:
-                    st.metric("P/E vs Sector", f"{my_pe:.1f}", 
-                              f"{'🔴 Scump' if my_pe > 25 else '🟢 Atractiv'}")
-                else:
-                    st.metric("P/E vs Sector", "N/A")
-            
-            with c_p2:
-                if my_roe is not None:
-                    st.metric("ROE vs Sector", f"{my_roe:.1f}%", 
-                              f"{'🟢 Lider' if my_roe > 15 else '🟡 Mediu'}")
-                else:
-                    st.metric("ROE vs Sector", "N/A")
+            # Compania față de mediana comparabililor din același sector și aceeași regiune.
+            p_region = peer_region(real_sym)
+            p_sector = info.get('sector')
+            own_row = {"Simbol": real_sym, "Capitalizare": num(info, 'marketCap'), "Monedă": info.get('currency') or ""}
+            for p_key, p_label, p_mult in PEER_METRICS:
+                p_val = num(info, p_key)
+                own_row[p_label] = None if p_val is None else p_val * p_mult
 
-            with c_p3:
-                # Interpretare profesională pentru ROA (peste 5% e considerat bun)
-                if my_roa is not None:
-                    roa_status = "💎 Excelent" if my_roa > 5 else "⚠️ Scăzut"
-                    st.metric("ROA vs Sector", f"{my_roa:.1f}%", roa_status)
-                else:
-                    st.metric("ROA vs Sector", "N/A")
-            
-            with c_p4:
-                if my_margin is not None:
-                    st.metric("Marjă Netă", f"{my_margin:.1f}%", 
-                              f"{'🚀 Eficient' if my_margin > 15 else '⚖️ Standard'}")
-                else:
-                    st.metric("Marjă Netă", "N/A")
+            peer_rows, peer_failed = [], []
+            if peer_list(real_sym, p_sector):
+                with st.spinner("Se citesc comparabilii (o singură dată la 6 ore pe sector)..."):
+                    all_rows, peer_failed = get_peer_rows(p_region, p_sector)
+                peer_rows = [r for r in all_rows if r["Simbol"].upper() != real_sym.upper()]
+            medians = peer_medians(peer_rows)
 
-            st.write("") # Mic spațiu între carduri și tabel
-
-            # --- PASUL 2: TABELUL COMPARATIV (JOS) ---
-            st.markdown("**🔍 Comparație Detaliată cu Benchmark-urile Industriei:**")
-            with st.spinner("Se analizează competitorii..."):
-                df_peers = get_peers_analysis(info.get('sector'), info.get('industry'), real_sym)
-                
-                if not df_peers.empty:
-                    # Aplicăm stilizare profesională tabelului
-                    st.dataframe(df_peers.style.format({
-                        "Capitalizare": lambda x: format_num(x),
-                        "P/E": "{:.2f}",
-                        "ROE (%)": "{:.1f}%",
-                        "ROA (%)": "{:.1f}%",
-                        "Marjă Netă (%)": "{:.1f}%",
-                        "Datorii/Eq (%)": "{:.1f}%"
-                    }, na_rep="N/A"), width='stretch', hide_index=True)
+            # --- PASUL 1: compania față de mediană (fără verdict: eșantionul e mic) ---
+            p_cards = st.columns(4)
+            for p_col, p_label, p_fmt in zip(p_cards, ("P/E", "ROE (%)", "ROA (%)", "Marjă netă (%)"),
+                                             ("{:.1f}", "{:.1f}%", "{:.1f}%", "{:.1f}%")):
+                p_own = own_row[p_label]
+                p_med, p_n = medians[p_label]
+                p_diff = versus_median(p_own, p_med)
+                p_title = p_label.replace(" (%)", "")
+                if p_own is None:
+                    p_col.metric(p_title, "N/A")
+                elif p_diff is None:
+                    p_col.metric(p_title, p_fmt.format(p_own), "fără mediană de comparație", delta_color="off")
                 else:
-                    st.info("Informații despre competitori indisponibile pentru acest simbol.")
+                    p_col.metric(p_title, p_fmt.format(p_own),
+                                 f"{p_diff * 100:+.0f}% față de mediana {p_fmt.format(p_med)} (n={p_n})", delta_color="off")
 
-            st.caption(f"💡 Analiza compară eficiența {real_sym} cu giganții din sectorul {info.get('sector') or 'necunoscut (Yahoo nu a trimis sectorul)'}.")
+            st.write("")
+
+            # --- PASUL 2: tabelul ---
+            if p_region == "BVB":
+                st.info("Pentru BVB comparația se face cu media și mediana pieței din foaia BVB: vezi expanderul "
+                        "„Toți indicatorii din foaia BVB” de sub Indicatori Fundamentali.")
+            elif not peer_list(real_sym, p_sector):
+                st.info("Nu există o listă de comparabili pentru acest simbol: "
+                        + ("Yahoo nu a trimis sectorul." if not p_sector else
+                           f"sectorul „{p_sector}” sau piața simbolului nu are listă definită."))
+            elif not peer_rows:
+                st.warning("Yahoo nu a trimis date pentru niciun comparabil (probabil o limitare temporară).")
+                if st.button("🔄 Reîncearcă citirea comparabililor", key="retry_peers"):
+                    get_peer_rows.clear()
+                    st.rerun()
+            else:
+                st.markdown(f"**🔍 Comparabili: sectorul „{p_sector}”, {'SUA' if p_region == 'US' else 'Europa'}**")
+                median_row = {"Simbol": "Mediana comparabililor", "Capitalizare": None, "Monedă": ""}
+                median_row.update({label: medians[label][0] for _, label, _ in PEER_METRICS})
+                df_peers = pd.DataFrame([own_row, median_row] + sorted(
+                    peer_rows, key=lambda r: -(r["Capitalizare"] or 0)))
+                df_peers["Capitalizare"] = [
+                    "" if cap is None else f"{format_num(cap)} {cur}".strip()
+                    for cap, cur in zip(df_peers["Capitalizare"], df_peers["Monedă"])]
+                df_peers = df_peers.drop(columns=["Monedă"])
+                st.dataframe(df_peers.style.format({
+                    "P/E": "{:.1f}", "P/BV": "{:.2f}", "ROE (%)": "{:.1f}%", "ROA (%)": "{:.1f}%",
+                    "Marjă netă (%)": "{:.1f}%", "Datorii/Capital (%)": "{:.0f}%"
+                }, na_rep="N/A").apply(
+                    lambda row: ["font-weight: bold; background-color: #21262D" if row.name < 2 else "" for _ in row], axis=1),
+                    width='stretch', hide_index=True)
+                p_counts = ", ".join(f"{label.replace(' (%)', '')} n={medians[label][1]}" for _, label, _ in PEER_METRICS)
+                p_note = (f"Mediana e calculată din {len(peer_rows)} comparabili, fără {real_sym}; observații pe indicator: {p_counts}. "
+                          "La P/E și P/BV valorile negative sunt excluse. Eșantionul e mic și ales manual (companii mari): "
+                          "arată unde se situează compania, nu dacă e scumpă sau ieftină.")
+                if p_region == "EU":
+                    p_note += " Capitalizările sunt în moneda fiecărei burse; rapoartele nu depind de monedă."
+                if peer_failed:
+                    p_note += " Fără date de la Yahoo: " + ", ".join(peer_failed) + "."
+                st.caption(p_note)
             st.markdown("---")
             
             # 4. Financiar & Raportări
