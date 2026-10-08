@@ -368,6 +368,16 @@ def install_fakes():
 
     httpx.AsyncClient = _AsyncClient
 
+    # BCE: randamentul titlurilor de stat RO pe 10 ani (rata fără risc pentru RON)
+    import requests
+
+    def fake_requests_get(url, *a, **k):
+        if "data-api.ecb.europa.eu" not in url:
+            raise requests.ConnectionError("fără rețea în testul de fum")
+        return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-07,7.25\nX,2026-08,7.12\n")
+
+    requests.get = fake_requests_get
+
     # Modele grele înlocuite cu substitute (nu testăm aici calitatea predicțiilor)
     prophet = types.ModuleType("prophet")
 

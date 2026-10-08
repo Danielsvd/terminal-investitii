@@ -149,3 +149,29 @@ def test_smart_to_float_numeric_inputs_pass_through():
 def test_smart_to_float_empty_and_errors_give_zero():
     for bad in ("", None, float("nan"), "#DIV/0!", "N/A", "lei", True):
         assert smart_to_float(bad) == 0.0
+
+
+# --- parse_ecb_csv ----------------------------------------------------------
+
+from data.helpers import parse_ecb_csv  # noqa: E402
+
+ECB_CSV = (
+    "KEY,FREQ,REF_AREA,TIME_PERIOD,OBS_VALUE,OBS_STATUS\n"
+    "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-06,7.31,A\n"
+    "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-08,7.12,A\n"
+    "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-07,7.25,A\n"
+)
+
+
+def test_parse_ecb_csv_ia_cea_mai_recenta_luna_indiferent_de_ordine():
+    assert parse_ecb_csv(ECB_CSV) == ("2026-08", 7.12)
+
+
+def test_parse_ecb_csv_sare_peste_valorile_lipsa():
+    text = ECB_CSV + "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-09,,P\n"
+    assert parse_ecb_csv(text) == ("2026-08", 7.12)
+
+
+def test_parse_ecb_csv_raspuns_invalid_da_none():
+    for bad in ("", None, "<html>503</html>", "KEY,TIME_PERIOD\nX,2026-08\n", "TIME_PERIOD,OBS_VALUE\n"):
+        assert parse_ecb_csv(bad) is None

@@ -28,7 +28,7 @@ from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_line
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
-from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float
+from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -723,9 +723,10 @@ def get_risk_free_for_currency(currency):
     """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
 
     USD: randamentul titlurilor SUA pe 10 ani (^TNX, Yahoo). EUR: Bund 10 ani (FRED, lunar).
-    Pentru celelalte valute (inclusiv RON) nu există încă o sursă automată: întoarce None,
-    iar interfața cere o rată de scont manuală. Nu există valoare de rezervă: o rată
-    presupusă ar arăta ca una citită din piață.
+    RON: randamentul titlurilor de stat românești pe 10 ani, seria BCE de convergență
+    (Data Portal, lunar, fără cheie). Pentru celelalte valute nu există sursă automată:
+    întoarce None, iar interfața cere o rată de scont manuală. Nu există valoare de
+    rezervă: o rată presupusă ar arăta ca una citită din piață.
     """
     def _valid(value):
         # ^TNX și seria FRED sunt în procente (4,25 = 4,25%). Orice în afara 0–25% e eroare de date.
@@ -749,6 +750,21 @@ def get_risk_free_for_currency(currency):
         except Exception as e:
             print(f"DEBUG: Bund 10 ani (FRED) indisponibil: {e}")
         return None, "Randamentul Bund pe 10 ani (FRED) nu a putut fi citit."
+    if cur == "RON":
+        try:
+            resp = requests.get(
+                "https://data-api.ecb.europa.eu/service/data/IRS/M.RO.L.L40.CI.0000.RON.N.Z",
+                params={"lastNObservations": 3, "format": "csvdata"}, timeout=10,
+            )
+            if resp.status_code == 200:
+                obs = parse_ecb_csv(resp.text)
+                if obs is not None and _valid(obs[1]):
+                    return obs[1] / 100, f"titluri de stat RO 10 ani (BCE, {obs[0]})"
+            else:
+                print(f"DEBUG: BCE (randament RO 10 ani): HTTP {resp.status_code}")
+        except requests.RequestException as e:
+            print(f"DEBUG: BCE (randament RO 10 ani) indisponibil: {e}")
+        return None, "Randamentul titlurilor de stat românești pe 10 ani (BCE) nu a putut fi citit."
     return None, f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}."
 
 # --- Pune acest bloc sus, lângă celelalte funcții (calculate_alpha, etc.) ---
@@ -2559,7 +2575,7 @@ def main():
 
             growth_val = ctrl1.slider(
                 "Creștere anuală estimată (%)",
-                -5, 40, 15, step=1,
+                -5, 40, 10, step=1,
                 help=growth_help,
                 key="v_final_g"
             )

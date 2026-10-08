@@ -1,5 +1,7 @@
 """Utilitare de citire sigură a datelor. Fără Streamlit, fără rețea."""
 import calendar
+import csv
+import io
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -165,3 +167,32 @@ def smart_to_float(val):
         return float(s)
     except ValueError:
         return 0.0
+
+
+# --- BCE (Data Portal, format csvdata) --------------------------------------
+
+def parse_ecb_csv(text):
+    """Ultima observație dintr-un răspuns CSV al BCE: (perioadă, valoare) sau None.
+
+    Răspunsul are antet și coloanele TIME_PERIOD (ex. "2026-08") și OBS_VALUE.
+    Rândurile fără valoare numerică sunt sărite. Orice altă formă (HTML de eroare,
+    text gol, coloane lipsă) dă None, niciodată o valoare presupusă.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        rows = list(csv.DictReader(io.StringIO(text)))
+    except csv.Error:
+        return None
+    valid = []
+    for row in rows:
+        period = (row.get("TIME_PERIOD") or "").strip()
+        try:
+            value = float(row.get("OBS_VALUE"))
+        except (TypeError, ValueError):
+            continue
+        if period and value == value:
+            valid.append((period, value))
+    if not valid:
+        return None
+    return max(valid, key=lambda item: item[0])
