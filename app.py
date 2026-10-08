@@ -29,6 +29,7 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
+from data.bvb_sheet import parse_bvb_sheet, bvb_symbol
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
 # =============================================================================
@@ -738,6 +739,39 @@ STATEMENT_RATIO_LABELS = {
     "quickRatio": "quick ratio", "totalRevenue": "venituri", "netIncomeToCommon": "profit net",
     "operatingCashflow": "flux din exploatare", "totalDebt": "datorie totală", "totalCash": "numerar",
 }
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_bvb_fundamentals():
+    """Indicatorii din foaia `BVB` a `portofoliu_db`, pe simbol (vezi data/bvb_sheet.py).
+    Dict gol dacă foaia nu poate fi citită. Doar citire: foaia nu e modificată niciodată de aici."""
+    try:
+        ws = connect_to_gsheets("BVB")
+        if not ws:
+            return {}
+        return parse_bvb_sheet(ws.get_all_values())
+    except Exception as e:
+        print(f"DEBUG: foaia BVB nu a putut fi citită: {e}")
+        return {}
+
+
+def apply_bvb_sheet(info, symbol):
+    """Pentru simbolurile .RO prezente în foaia `BVB`, indicatorii din foaie înlocuiesc valorile
+    Yahoo (rare și nesigure la BVB). Ce a fost preluat ajunge în `info['_from_bvb_sheet']`."""
+    info["_from_bvb_sheet"], info["_bvb_period"], info["_bvb_indicators"] = [], None, []
+    sheet_symbol = bvb_symbol(symbol)
+    if not sheet_symbol:
+        return info
+    entry = load_bvb_fundamentals().get(sheet_symbol)
+    if not entry:
+        return info
+    for key, value in entry["info"].items():
+        info[key] = value
+        info["_from_bvb_sheet"].append(key)
+    info["_bvb_period"], info["_bvb_indicators"] = entry["period"], entry["indicators"]
+    if info["_from_bvb_sheet"]:
+        info["_fundamentals_available"] = True
+    return info
 
 
 def enrich_info_from_statements(info, symbol, hist):
@@ -2193,7 +2227,8 @@ def main():
             hist, info, earn_df, real_sym = get_stock_data(sym)
             info = info or {}
             if hist is not None and not hist.empty:
-                info = enrich_info_from_statements(info, real_sym, hist)
+                info = apply_bvb_sheet(info, real_sym)                       # BVB: foaia proprie are prioritate
+                info = enrich_info_from_statements(info, real_sym, hist)     # apoi golurile, din situațiile financiare
             
             # --- VERIFICARE DE SIGURANȚĂ (OBLIGATORIE PENTRU CLOUD) ---
             if hist is not None and not hist.empty:
@@ -2366,6 +2401,15 @@ def main():
             if from_statements:
                 st.caption("Calculat de aplicație din situațiile financiare (Yahoo nu a trimis valoarea): "
                            + ", ".join(from_statements) + ". Rentabilitățile folosesc soldul de la sfârșitul perioadei.")
+            if info.get('_from_bvb_sheet'):
+                st.caption(f"Din foaia BVB (raportare {info.get('_bvb_period') or 'N/A'}), cu prioritate față de Yahoo: "
+                           + ", ".join(STATEMENT_RATIO_LABELS[k] for k in info['_from_bvb_sheet'])
+                           + ". P/E și P/BV sunt la prețul din momentul actualizării foii, nu la prețul de acum.")
+            if info.get('_bvb_indicators'):
+                with st.expander(f"📄 Toți indicatorii din foaia BVB pentru {bvb_symbol(real_sym)}"):
+                    st.dataframe(pd.DataFrame(
+                        [(name.strip(), raw if number is not None else "N/A") for name, raw, number in info['_bvb_indicators']],
+                        columns=["Indicator", "Valoare"]), hide_index=True, width='stretch')
             risk_stats = resolve_beta_alpha(real_sym, info, hist)
             beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
             de_ratio = info.get('debtToEquity')
