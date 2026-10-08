@@ -3016,6 +3016,11 @@ def main():
                         z2_txt = f"{az_detail['z2']:.2f}" if az_detail["z2"] is not None else "N/A"
                         st.caption(f"Bilanț: {az_date} · Z = {z_txt} · Z'' = {z2_txt}. Model statistic din 1968/1995: "
                                    "un semnal de avertizare, nu o predicție.")
+                        if az_detail["retained_is_proxy"]:
+                            st.caption("Aproximare: Yahoo nu are rândul „rezultat reportat” pentru această companie; "
+                                       "X2 folosește capital propriu − capital social − prime de emisiune (rezerve + rezultat reportat).")
+                        if az_detail["missing"] and az_detail["balance_rows"]:
+                            st.caption("Rânduri disponibile în bilanțul trimis de Yahoo: " + ", ".join(az_detail["balance_rows"]))
 
             # --- PIOTROSKI F-SCORE și îndatorare, din situațiile financiare anuale ---
             st.markdown("---")
@@ -3047,7 +3052,9 @@ def main():
                 st.metric("Acoperirea dobânzii", "N/A" if int_cov is None else f"{int_cov:.1f}x",
                           help="EBIT împărțit la cheltuielile cu dobânzile raportate. Sub 1,5x profitul operațional abia acoperă dobânda. "
                                f"EBIT {format_amount(lev['ebit'])}, dobânzi {format_amount(lev['interest_expense'])}. "
-                               "Atenție: la unele companii „dobânzile” raportate includ și alte costuri financiare.")
+                               + ("N/A aici: dobânzile raportate depășesc 25% din datorie, deci rândul include și alte costuri financiare."
+                                  if lev["interest_unreliable"] else
+                                  "Atenție: la unele companii „dobânzile” raportate includ și alte costuri financiare."))
             with pio_right:
                 pio_icons = {True: "✅ trecut", False: "❌ picat", None: "➖ N/A"}
                 st.dataframe(pd.DataFrame(

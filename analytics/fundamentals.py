@@ -574,6 +574,8 @@ def graham_revised(eps, growth_pct, aaa_yield_pct):
 # --- Altman Z ----------------------------------------------------------------
 
 RETAINED_EARNINGS_ROWS = ("Retained Earnings",)
+SHARE_CAPITAL_ROWS = ("Capital Stock", "Common Stock")
+PAID_IN_CAPITAL_ROWS = ("Additional Paid In Capital",)
 TOTAL_LIABILITIES_ROWS = ("Total Liabilities Net Minority Interest", "Total Liabilities")
 EBIT_ROWS = ("EBIT", "Operating Income")
 # Sectoare (denumirile Yahoo) în care domină producția: se aplică Z-ul original.
@@ -613,6 +615,25 @@ def altman_zone(value, variant):
     return "safe" if value > high else "grey"
 
 
+def retained_earnings(balance, col=0):
+    """(rezultat reportat, este_proxy).
+
+    Multe companii care raportează pe IFRS (BVB, UE) nu au în Yahoo rândul „Retained
+    Earnings". Atunci se aproximează ca tot ce nu e capital adus de acționari:
+    capital propriu − capital social − prime de emisiune (rezerve + rezultat reportat).
+    Fără capitalul social nu se poate aproxima: (None, False).
+    """
+    value = stmt_value(balance, RETAINED_EARNINGS_ROWS, col)
+    if value is not None:
+        return value, False
+    equity = stmt_value(balance, EQUITY_ROWS, col)
+    share_capital = stmt_value(balance, SHARE_CAPITAL_ROWS, col)
+    if equity is None or share_capital is None:
+        return None, False
+    paid_in = stmt_value(balance, PAID_IN_CAPITAL_ROWS, col)      # rând absent = companie fără prime de emisiune
+    return equity - share_capital - (paid_in or 0.0), True
+
+
 def altman_z(annual_income, annual_balance, quarterly_income=None, quarterly_balance=None, market_cap=None):
     """Altman Z și Z'' din situațiile financiare. Scorurile nu sunt plafonate sau „corectate".
 
@@ -632,16 +653,19 @@ def altman_z(annual_income, annual_balance, quarterly_income=None, quarterly_bal
     current_liabilities = stmt_value(balance, CURRENT_LIABILITIES_ROWS)
     working_capital = (current_assets - current_liabilities
                        if _is_num(current_assets) and _is_num(current_liabilities) else None)
+    retained, retained_is_proxy = retained_earnings(balance)
     x = {
         "X1": _ratio(working_capital, assets),
-        "X2": _ratio(stmt_value(balance, RETAINED_EARNINGS_ROWS), assets),
+        "X2": _ratio(retained, assets),
         "X3": _ratio(_flow(quarterly_income, annual_income, EBIT_ROWS), assets),
         "X4": _ratio(market_cap, liabilities),
         "X4_book": _ratio(stmt_value(balance, EQUITY_ROWS), liabilities),
         "X5": _ratio(_flow(quarterly_income, annual_income, REVENUE_ROWS), assets),
     }
     out = {"z": None, "z2": None, "components": x, "balance_date": stmt_date(balance),
-           "missing": [k for k, v in x.items() if v is None]}
+           "missing": [k for k, v in x.items() if v is None],
+           "retained_is_proxy": retained_is_proxy and retained is not None,
+           "balance_rows": [] if balance is None else [str(r) for r in balance.index]}
     if all(x[k] is not None for k in ("X1", "X2", "X3", "X4", "X5")):
         out["z"] = 1.2 * x["X1"] + 1.4 * x["X2"] + 3.3 * x["X3"] + 0.6 * x["X4"] + 1.0 * x["X5"]
     if all(x[k] is not None for k in ("X1", "X2", "X3", "X4_book")):
@@ -732,6 +756,9 @@ def piotroski(annual_income, annual_balance, annual_cashflow):
 
 # --- Îndatorare --------------------------------------------------------------
 
+MAX_INTEREST_TO_DEBT = 0.25
+
+
 def leverage_ratios(annual_income, annual_balance, quarterly_income=None, quarterly_balance=None):
     """Datorie netă / EBITDA și acoperirea dobânzii (EBIT / cheltuieli cu dobânzile).
 
@@ -744,8 +771,14 @@ def leverage_ratios(annual_income, annual_balance, quarterly_income=None, quarte
     ebitda = _flow(quarterly_income, annual_income, EBITDA_ROWS)
     ebit = _flow(quarterly_income, annual_income, EBIT_ROWS)
     interest = _flow(quarterly_income, annual_income, INTEREST_ROWS)
+    debt = total_debt(balance)
+    # Dobânzi peste 25% din datorie nu sunt dobânzi: rândul include alte costuri financiare
+    # (actualizarea provizioanelor, diferențe de curs). Acoperirea calculată pe el ar induce în eroare.
+    interest_unreliable = bool(_is_num(interest) and _is_num(debt) and debt > 0
+                               and abs(interest) / debt > MAX_INTEREST_TO_DEBT)
     coverage = None
-    if _is_num(ebit) and _is_num(interest) and interest != 0:
+    if _is_num(ebit) and _is_num(interest) and interest != 0 and not interest_unreliable:
         coverage = ebit / abs(interest)
     return {"net_debt": net, "ebitda": ebitda, "ebit": ebit, "interest_expense": interest,
+            "interest_unreliable": interest_unreliable,
             "net_debt_to_ebitda": _ratio(net, ebitda), "interest_coverage": coverage}

@@ -516,3 +516,25 @@ def test_leverage_ratios_cazuri_limita():
     assert r["net_debt_to_ebitda"] is None                      # EBITDA negativ
     assert r["interest_coverage"] == pytest.approx(-6.0)        # EBIT negativ nu acoperă dobânda
     assert F.leverage_ratios(None, None)["net_debt_to_ebitda"] is None
+
+
+def test_altman_rezultat_reportat_aproximat_cand_randul_lipseste():
+    income, balance = _altman_frames()
+    balance = balance.drop(index="Retained Earnings")
+    balance.loc["Capital Stock"] = 80.0
+    balance.loc["Additional Paid In Capital"] = 20.0
+    # proxy = capital propriu 400 − capital social 80 − prime 20 = 300 -> aceleași scoruri ca în exemplul de bază
+    r = F.altman_z(income, balance, market_cap=1200.0)
+    assert r["z"] == pytest.approx(3.855) and r["z2"] == pytest.approx(3.998)
+    assert r["retained_is_proxy"] is True and "Capital Stock" in r["balance_rows"]
+    assert F.retained_earnings(balance.drop(index="Capital Stock")) == (None, False)
+    assert F.altman_z(*_altman_frames(), market_cap=1200.0)["retained_is_proxy"] is False
+
+
+def test_acoperirea_dobanzii_respinsa_cand_dobanda_e_nerealista():
+    # „dobânzi" 60 la datorie 160 = 37,5% (cazul SNP.RO) -> acoperire N/A, nu 200 / 60
+    income = _frame({"EBITDA": [250.0], "EBIT": [200.0], "Interest Expense": [60.0]}, ["2025-12-31"])
+    balance = _frame({"Total Debt": [160.0], "Cash And Cash Equivalents": [100.0]}, ["2025-12-31"])
+    r = F.leverage_ratios(income, balance)
+    assert r["interest_unreliable"] is True and r["interest_coverage"] is None
+    assert r["net_debt_to_ebitda"] == pytest.approx(0.24)
