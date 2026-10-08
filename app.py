@@ -28,6 +28,7 @@ from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_line
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
+from analytics.risk import beta_benchmark, beta_weekly
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
 # =============================================================================
@@ -716,6 +717,18 @@ def get_financial_statements(symbol):
         if df is None:
             out["errors"].append(attr)
     return out
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_benchmark_close(symbol):
+    """Închiderile ajustate pe 5 ani ale unui benchmark (pentru beta). Series goală la eșec."""
+    try:
+        data = yf.Ticker(symbol).history(period="5y", auto_adjust=True)
+        if data is not None and not data.empty and 'Close' in data:
+            return data['Close'].dropna()
+    except Exception as e:
+        print(f"DEBUG: benchmark {symbol} indisponibil: {e}")
+    return pd.Series(dtype=float)
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -2543,7 +2556,20 @@ def main():
                 dcf_na = (f"Situațiile financiare sunt în {fin_curr}, iar acțiunea se tranzacționează în {t_curr}: "
                           "valoarea pe acțiune cere conversie valutară, care nu e încă implementată.")
             rf_val, rf_label = get_risk_free_for_currency(t_curr)
-            wacc_res = fund.wacc(rf_val, num(info, 'beta'), num(info, 'marketCap'), dcf_in["total_debt"],
+            # Beta: la BVB cel din Yahoo e calculat față de un indice nepotrivit (iese mult prea mic),
+            # deci se calculează aici față de BET. În rest, beta Yahoo; dacă lipsește, calcul propriu.
+            beta_used, beta_label = num(info, 'beta'), "Yahoo"
+            if real_sym.upper().endswith(".RO") or beta_used is None:
+                bench_sym, bench_name = beta_benchmark(real_sym, t_curr)
+                own_beta = beta_weekly(hist['Close'], get_benchmark_close(bench_sym)) if bench_sym else None
+                # Un beta ≤ 0 ar da un cost al capitalului sub rata fără risc: se respinge.
+                if own_beta is not None and own_beta["beta"] > 0:
+                    beta_used = own_beta["beta"]
+                    beta_label = (f"calculat față de {bench_name}, {own_beta['n']} randamente săptămânale, "
+                                  f"{own_beta['start']:%m.%Y}–{own_beta['end']:%m.%Y}")
+                elif beta_used is not None:
+                    beta_label = "Yahoo; calculul propriu nu a dat un rezultat utilizabil"
+            wacc_res = fund.wacc(rf_val, beta_used, num(info, 'marketCap'), dcf_in["total_debt"],
                                  dcf_in["interest_expense"], dcf_in["tax_rate"])
 
             st.write("⚙️ **Ipoteze.** Creșterea se aplică ambelor modele; rata de scont și creșterea terminală, doar DCF-ului.")
@@ -2715,7 +2741,7 @@ def main():
                     )
                     st.write(
                         f"Cost capital propriu (CAPM) = rată fără risc {wacc_res['rf'] * 100:.2f}% [{rf_label}] "
-                        f"+ beta {wacc_res['beta']:.2f} (Yahoo) × primă de risc {wacc_res['erp'] * 100:.1f}% (ipoteză fixă)"
+                        f"+ beta {wacc_res['beta']:.2f} ({beta_label}) × primă de risc {wacc_res['erp'] * 100:.1f}% (ipoteză fixă)"
                     )
                     for wacc_note in wacc_res["notes"]:
                         st.caption(f"Aproximare: {wacc_note}")
@@ -2748,8 +2774,8 @@ def main():
                         "FCF": [format_amount(v) for v in dcf_in["fcf_history"].values],
                     }), hide_index=True, width='stretch')
                 st.caption(
-                    "Limite: modelul proiectează un singur scenariu de creștere; beta este cel publicat de Yahoo "
-                    "(față de un indice ales de Yahoo); prima de risc de 5% este o ipoteză, nu o măsurătoare."
+                    "Limite: modelul proiectează un singur scenariu de creștere; beta depinde de perioada și de "
+                    "benchmarkul folosit (sursa e scrisă mai sus); prima de risc de 5% este o ipoteză, nu o măsurătoare."
                 )
 
             # --- RAPORT FINAL PE CATEGORII ---

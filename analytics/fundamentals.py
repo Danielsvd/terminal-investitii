@@ -31,6 +31,7 @@ MAX_TERMINAL_GROWTH = 0.03      # g terminal ≤ 3%
 MIN_SPREAD_STABLE = 0.02        # sub 2 pp între r și g, valoarea terminală e instabilă
 MAX_TAX_RATE = 0.35             # cotă efectivă de impozit peste 35% = an atipic; se plafonează
 DEBT_SPREAD_PROXY = 0.015       # costul datoriei când dobânda nu e raportată: rf + 1,5 pp (proxy)
+MAX_DEBT_SPREAD = 0.10          # cost al datoriei peste rf + 10 pp = dată nerealistă, se folosește proxy-ul
 DEFAULT_ERP = 0.05              # prima de risc a pieței de acțiuni; ipoteză, afișată în interfață
 
 # Simboluri BVB din sectorul financiar. Yahoo nu trimite `sector` pentru multe simboluri .RO,
@@ -283,7 +284,7 @@ def wacc(risk_free, beta, market_cap, debt, interest_expense=None, tax_rate=None
 
     WACC = E/(D+E) × ke + D/(D+E) × kd × (1 − t)
       ke = rf + β × ERP (CAPM)
-      kd = |cheltuieli cu dobânzile| / datorie; dacă dobânda nu e raportată: rf + 1,5 pp (proxy)
+      kd = |cheltuieli cu dobânzile| / datorie; dacă dobânda lipsește sau raportul e nerealist: rf + 1,5 pp (proxy)
       t  = cota efectivă de impozit; dacă lipsește: 0 (fără scut fiscal, variantă prudentă)
 
     None dacă lipsesc rf, β sau capitalizarea: fără ele nu există cost al capitalului
@@ -300,11 +301,21 @@ def wacc(risk_free, beta, market_cap, debt, interest_expense=None, tax_rate=None
         return {"wacc": ke, "ke": ke, "kd": None, "tax": None, "w_e": 1.0, "w_d": 0.0,
                 "rf": risk_free, "beta": beta, "erp": erp, "notes": notes}
 
+    kd = None
     if _is_num(interest_expense) and interest_expense != 0:
-        kd = abs(interest_expense) / debt
+        implied = abs(interest_expense) / debt
+        # Plauzibil = între jumătate din rata fără risc și rf + 10 pp. În afara intervalului,
+        # „dobânda" raportată include de regulă alte costuri financiare (actualizarea
+        # provizioanelor, leasing, diferențe de curs) sau datoria s-a schimbat mult în an.
+        if 0.5 * risk_free <= implied <= risk_free + MAX_DEBT_SPREAD:
+            kd = implied
+        else:
+            notes.append(f"Dobânda raportată / datorie = {implied * 100:.1f}%, nerealist "
+                         "(include probabil alte costuri financiare): costul datoriei = rf + 1,5 pp (proxy).")
     else:
-        kd = risk_free + DEBT_SPREAD_PROXY
         notes.append("Cheltuiala cu dobânzile nu e raportată: costul datoriei = rf + 1,5 pp (proxy).")
+    if kd is None:
+        kd = risk_free + DEBT_SPREAD_PROXY
     if _is_num(tax_rate):
         tax = min(max(tax_rate, 0.0), MAX_TAX_RATE)
     else:

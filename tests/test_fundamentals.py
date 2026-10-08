@@ -206,6 +206,16 @@ def test_wacc_aproximarile_sunt_declarate():
     assert len(w["notes"]) == 2
 
 
+def test_wacc_cost_al_datoriei_nerealist_trece_pe_proxy():
+    # „Dobândă" 75 la datorie 200 = 37,5% (cazul SNP.RO: costuri financiare, nu doar dobânzi)
+    # -> kd = 4% + 1,5 pp = 5,5%; WACC = 0,8 × 10% + 0,2 × 5,5% × 0,8 = 8,88%
+    w = F.wacc(0.04, 1.2, 800.0, 200.0, interest_expense=75.0, tax_rate=0.20, erp=0.05)
+    assert w["kd"] == pytest.approx(0.055) and w["wacc"] == pytest.approx(0.0888)
+    assert any("37.5%" in n for n in w["notes"])
+    # prea mic: 1 la 200 = 0,5% < jumătate din rf
+    assert F.wacc(0.04, 1.2, 800.0, 200.0, interest_expense=1.0, tax_rate=0.20)["kd"] == pytest.approx(0.055)
+
+
 def test_wacc_fara_rf_beta_sau_capitalizare_este_none():
     assert F.wacc(None, 1.2, 800.0, 200.0) is None
     assert F.wacc(0.04, None, 800.0, 200.0) is None     # beta lipsă NU se presupune 1
