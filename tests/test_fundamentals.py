@@ -313,3 +313,63 @@ def test_dcf_inputs_fara_date_nu_inventeaza_nimic():
     assert d["fcf"] is None and d["fcf_basis"] is None
     assert d["net_debt"] is None and d["shares"] is None and d["tax_rate"] is None
     assert d["fcf_history"].empty and d["fcf_cagr"] is None and d["fcf_average"] is None
+
+
+# --- Indicatori de bază din situații -----------------------------------------
+
+def _ratio_frames():
+    income = _frame({"Total Revenue": [1000.0], "Operating Income": [200.0], "Net Income": [120.0],
+                     "Diluted Average Shares": [60.0]}, ["2025-12-31"])
+    balance = _frame({"Total Assets": [2000.0], "Stockholders Equity": [800.0], "Total Debt": [400.0],
+                      "Current Assets": [600.0], "Current Liabilities": [400.0], "Inventory": [100.0],
+                      "Cash And Cash Equivalents": [150.0], "Ordinary Shares Number": [50.0]}, ["2025-12-31"])
+    return income, balance
+
+
+def test_ratios_exemplu_calculat_de_mana():
+    income, balance = _ratio_frames()
+    r = F.ratios_from_statements(income, balance, price=30.0)
+    assert r["returnOnEquity"] == pytest.approx(0.15)        # 120 / 800
+    assert r["returnOnAssets"] == pytest.approx(0.06)        # 120 / 2000
+    assert r["profitMargins"] == pytest.approx(0.12)         # 120 / 1000
+    assert r["operatingMargins"] == pytest.approx(0.20)      # 200 / 1000
+    assert r["debtToEquity"] == pytest.approx(50.0)          # 400 / 800, în procente ca la Yahoo
+    assert r["currentRatio"] == pytest.approx(1.5)           # 600 / 400
+    assert r["quickRatio"] == pytest.approx(1.25)            # (600 - 100) / 400
+    assert r["trailingEps"] == pytest.approx(2.0)            # 120 / 60 acțiuni diluate
+    assert r["bookValue"] == pytest.approx(16.0)             # 800 / 50 acțiuni la sfârșit de perioadă
+    assert r["trailingPE"] == pytest.approx(15.0)            # 30 / 2
+    assert r["priceToBook"] == pytest.approx(1.875)          # 30 / 16
+    assert r["totalDebt"] == 400.0 and r["totalCash"] == 150.0
+
+
+def test_ratios_prefera_ttm_si_bilantul_trimestrial():
+    income, balance = _ratio_frames()
+    q_income = _frame({"Total Revenue": [300.0, 300.0, 300.0, 300.0], "Net Income": [45.0, 45.0, 45.0, 45.0]}, QUARTERS)
+    q_balance = _frame({"Total Assets": [2400.0], "Stockholders Equity": [900.0]}, ["2026-06-30"])
+    r = F.ratios_from_statements(income, balance, quarterly_income=q_income, quarterly_balance=q_balance)
+    assert r["netIncomeToCommon"] == 180.0 and r["totalRevenue"] == 1200.0
+    assert r["returnOnEquity"] == pytest.approx(0.20)        # 180 / 900
+    assert r["profitMargins"] == pytest.approx(0.15)
+
+
+def test_ratios_fara_moneda_verificata_nu_compara_pretul_cu_contabilitatea():
+    income, balance = _ratio_frames()
+    r = F.ratios_from_statements(income, balance, price=30.0, per_share_ok=False)
+    assert r["trailingPE"] is None and r["priceToBook"] is None
+    assert r["trailingEps"] is None and r["bookValue"] is None
+    assert r["returnOnEquity"] == pytest.approx(0.15)        # rapoartele fără preț rămân valabile
+
+
+def test_ratios_pierdere_capital_negativ_si_lipsuri():
+    income, balance = _ratio_frames()
+    income.loc["Net Income"] = -50.0
+    r = F.ratios_from_statements(income, balance, price=30.0)
+    assert r["trailingPE"] is None and r["trailingEps"] == pytest.approx(-50 / 60)
+    assert r["returnOnEquity"] == pytest.approx(-0.0625)
+    balance.loc["Stockholders Equity"] = -100.0
+    r = F.ratios_from_statements(income, balance, price=30.0)
+    assert r["returnOnEquity"] is None and r["debtToEquity"] is None and r["priceToBook"] is None
+    r = F.ratios_from_statements(income, balance.drop(index="Inventory"), price=30.0)
+    assert r["quickRatio"] is None                            # stoc lipsă NU e stoc zero
+    assert all(v is None for v in F.ratios_from_statements(None, None).values())

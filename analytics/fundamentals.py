@@ -455,3 +455,85 @@ def dcf_inputs(annual_income, annual_balance, annual_cashflow, quarterly_cashflo
         "interest_expense": stmt_value(annual_income, INTEREST_ROWS),
         "tax_rate": effective_tax_rate(annual_income),
     }
+
+
+# --- Indicatori de bază din situațiile financiare ----------------------------
+# Rezervă pentru când Yahoo nu trimite rezumatul companiei (`Ticker.info`). Cheile
+# poartă aceleași nume și aceleași unități ca în `info`, ca restul aplicației să le
+# citească la fel: rentabilitățile și marjele sunt fracții, `debtToEquity` e în procente.
+
+NET_INCOME_ROWS = ("Net Income Common Stockholders", "Net Income")
+REVENUE_ROWS = ("Total Revenue", "Operating Revenue")
+OPERATING_INCOME_ROWS = ("Operating Income", "EBIT")
+EQUITY_ROWS = ("Stockholders Equity", "Common Stock Equity")
+TOTAL_ASSETS_ROWS = ("Total Assets",)
+CURRENT_ASSETS_ROWS = ("Current Assets",)
+CURRENT_LIABILITIES_ROWS = ("Current Liabilities",)
+INVENTORY_ROWS = ("Inventory",)
+
+
+def _ratio(numerator, denominator, positive_denominator=True):
+    if not _is_num(numerator) or not _is_num(denominator) or denominator == 0:
+        return None
+    if positive_denominator and denominator < 0:
+        return None
+    return numerator / denominator
+
+
+def _flow(quarterly, annual, names):
+    """Flux pe ultimele 4 trimestre; dacă nu există 4 trimestre consecutive, ultimul an fiscal."""
+    value = ttm_sum(quarterly, names)
+    return value if value is not None else stmt_value(annual, names)
+
+
+def ratios_from_statements(annual_income, annual_balance, annual_cashflow=None, quarterly_income=None,
+                           quarterly_balance=None, quarterly_cashflow=None, price=None, per_share_ok=True):
+    """Indicatorii fundamentali de bază, calculați din situațiile financiare.
+
+    Fluxurile (venituri, profit, CFO) sunt TTM când există 4 trimestre, altfel ultimul an
+    fiscal; soldurile vin din cel mai recent bilanț. Rentabilitățile folosesc soldul de la
+    sfârșitul perioadei, deci pot diferi ușor de cele din Yahoo (care mediază perioada).
+
+    `per_share_ok=False` când nu se știe dacă situațiile sunt în moneda de tranzacționare
+    (ADR-uri): atunci indicatorii care compară prețul cu valori contabile (P/E, P/BV) și
+    cei pe acțiune rămân None. Orice intrare lipsă dă None pentru indicatorul respectiv.
+    """
+    balance = quarterly_balance if stmt_value(quarterly_balance, TOTAL_ASSETS_ROWS) is not None else annual_balance
+    net_income = _flow(quarterly_income, annual_income, NET_INCOME_ROWS)
+    revenue = _flow(quarterly_income, annual_income, REVENUE_ROWS)
+    operating_income = _flow(quarterly_income, annual_income, OPERATING_INCOME_ROWS)
+    equity = stmt_value(balance, EQUITY_ROWS)
+    assets = stmt_value(balance, TOTAL_ASSETS_ROWS)
+    current_assets = stmt_value(balance, CURRENT_ASSETS_ROWS)
+    current_liabilities = stmt_value(balance, CURRENT_LIABILITIES_ROWS)
+    inventory = stmt_value(balance, INVENTORY_ROWS)
+    debt = total_debt(balance)
+
+    out = {
+        "totalRevenue": revenue,
+        "netIncomeToCommon": net_income,
+        "operatingCashflow": _flow(quarterly_cashflow, annual_cashflow, CFO_ROWS),
+        "totalDebt": debt,
+        "totalCash": stmt_value(balance, CASH_ROWS),
+        "returnOnEquity": _ratio(net_income, equity),          # capital propriu negativ -> N/A
+        "returnOnAssets": _ratio(net_income, assets),
+        "profitMargins": _ratio(net_income, revenue),
+        "operatingMargins": _ratio(operating_income, revenue),
+        "currentRatio": _ratio(current_assets, current_liabilities),
+        "quickRatio": (_ratio(current_assets - inventory, current_liabilities)
+                       if _is_num(current_assets) and _is_num(inventory) else None),
+        "trailingEps": None, "bookValue": None, "trailingPE": None, "priceToBook": None,
+    }
+    leverage = _ratio(debt, equity)
+    out["debtToEquity"] = None if leverage is None else leverage * 100
+
+    if per_share_ok:
+        diluted, _ = diluted_shares(annual_income, balance)
+        period_end_shares = stmt_value(balance, BASIC_SHARES_ROWS) or diluted
+        eps = _ratio(net_income, diluted)
+        book = _ratio(equity, period_end_shares)
+        out["trailingEps"], out["bookValue"] = eps, book
+        if _is_num(price) and price > 0:
+            out["trailingPE"] = price / eps if (eps is not None and eps > 0) else None      # pierdere -> N/A
+            out["priceToBook"] = price / book if (book is not None and book > 0) else None
+    return out

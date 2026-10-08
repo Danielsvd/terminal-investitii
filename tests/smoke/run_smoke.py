@@ -162,7 +162,9 @@ class FakeTicker:
         return pd.DataFrame(data, index=cols).T
 
     _BALANCE = {"Total Debt": (1.1e11, False), "Cash Cash Equivalents And Short Term Investments": (6e10, False),
-                "Ordinary Shares Number": (1.5e10, False)}
+                "Ordinary Shares Number": (1.5e10, False), "Total Assets": (3.6e11, False),
+                "Stockholders Equity": (7e10, False), "Current Assets": (1.4e11, False),
+                "Current Liabilities": (1.3e11, False), "Inventory": (7e9, False)}
 
     def _cash_rows(self):
         capex = -3e11 if self.ticker == "NEWCO" else -1.0e10
@@ -429,6 +431,7 @@ EXPECTED_MESSAGES = (
     # titluri de secțiune afișate cu st.error / st.warning / st.success (nu sunt erori)
     "Vulnerabilități (Potential Risks)", "PUNCTE SLABE", "OPORTUNITĂȚI", "Cea mai slabă lună",
     "Companii Small-Cap", "AMENINȚĂRI",
+    "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )

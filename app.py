@@ -731,6 +731,42 @@ def get_benchmark_close(symbol):
     return pd.Series(dtype=float)
 
 
+STATEMENT_RATIO_LABELS = {
+    "trailingPE": "P/E", "priceToBook": "P/BV", "trailingEps": "EPS", "bookValue": "valoare contabilă/acțiune",
+    "returnOnEquity": "ROE", "returnOnAssets": "ROA", "profitMargins": "marjă netă",
+    "operatingMargins": "marjă operațională", "debtToEquity": "datorii/capital", "currentRatio": "current ratio",
+    "quickRatio": "quick ratio", "totalRevenue": "venituri", "netIncomeToCommon": "profit net",
+    "operatingCashflow": "flux din exploatare", "totalDebt": "datorie totală", "totalCash": "numerar",
+}
+
+
+def enrich_info_from_statements(info, symbol, hist):
+    """Completează în `info` indicatorii pe care Yahoo nu i-a trimis, calculați din situațiile
+    financiare (analytics/fundamentals.py). Valorile primite de la Yahoo nu sunt suprascrise.
+
+    Lista celor completați ajunge în `info['_from_statements']`, ca interfața să spună ce e
+    calculat aici. P/E, P/BV, EPS și valoarea contabilă pe acțiune se calculează doar când
+    moneda situațiilor e cunoscută și egală cu cea de tranzacționare (sau la BVB, unde e RON).
+    """
+    info["_from_statements"] = []
+    if all(num(info, key) is not None for key in STATEMENT_RATIO_LABELS):
+        return info
+    fin = get_financial_statements(symbol)
+    price = num(info, 'currentPrice') or num(info, 'previousClose')
+    if price is None and hist is not None and not hist.empty and pd.notna(hist['Close'].iloc[-1]):
+        price = float(hist['Close'].iloc[-1])
+    fin_curr, trade_curr = info.get('financialCurrency'), info.get('currency')
+    per_share_ok = (fin_curr == trade_curr) if (fin_curr and trade_curr) else str(symbol).upper().endswith(".RO")
+    ratios = fund.ratios_from_statements(fin.get("income"), fin.get("balance"), fin.get("cashflow"),
+                                         fin.get("q_income"), fin.get("q_balance"), fin.get("q_cashflow"),
+                                         price=price, per_share_ok=per_share_ok)
+    for key, value in ratios.items():
+        if value is not None and num(info, key) is None:
+            info[key] = value
+            info["_from_statements"].append(key)
+    return info
+
+
 def resolve_beta_alpha(symbol, info, hist):
     """Beta și alpha ale unei acțiuni, cu sursa fiecăruia. Un singur loc: DCF, audit și scoruri
     folosesc aceleași valori.
@@ -2094,6 +2130,8 @@ def main():
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
             info = info or {}
+            if hist is not None and not hist.empty:
+                info = enrich_info_from_statements(info, real_sym, hist)
             
             # --- VERIFICARE DE SIGURANȚĂ (OBLIGATORIE PENTRU CLOUD) ---
             if hist is not None and not hist.empty:
@@ -2131,9 +2169,15 @@ def main():
             c1.metric("Sector", info.get('sector') or 'N/A')
             c2.metric("Industrie", info.get('industry') or 'N/A')
             c3.metric("Capitalizare", format_num(info.get('marketCap')))             
+            from_statements = [STATEMENT_RATIO_LABELS[k] for k in info.get('_from_statements', [])]
             if not info.get('_fundamentals_available', True):
-                st.warning(f"⚠️ Yahoo nu a trimis datele fundamentale pentru {real_sym} (P/E, ROE, datorii, sector, analiști, acționariat). "
-                           "Indicatorii bazați pe ele apar N/A și nu intră în scoruri. Prețurile, graficele și situațiile financiare anuale sunt disponibile.")
+                if from_statements:
+                    st.warning(f"⚠️ Yahoo nu a trimis rezumatul companiei pentru {real_sym}. Am calculat din situațiile financiare: "
+                               f"{', '.join(from_statements)}. Rămân N/A și nu intră în scoruri: sectorul, estimările analiștilor "
+                               "(Forward P/E, preț țintă), dividendul și acționariatul.")
+                else:
+                    st.warning(f"⚠️ Yahoo nu a trimis datele fundamentale pentru {real_sym} (P/E, ROE, datorii, sector, analiști, acționariat). "
+                               "Indicatorii bazați pe ele apar N/A și nu intră în scoruri. Prețurile, graficele și situațiile financiare anuale sunt disponibile.")
                 st.caption(f"Detaliu tehnic: {info.get('_info_error') or 'Yahoo a răspuns, dar fără indicatorii fundamentali.'} "
                            f"· yfinance {yf.__version__} · citit la {now_ro():%H:%M:%S}")
                 # Un refuz temporar al Yahoo rămâne altfel în cache 15 minute.
@@ -2257,6 +2301,9 @@ def main():
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
+            if from_statements:
+                st.caption("Calculat de aplicație din situațiile financiare (Yahoo nu a trimis valoarea): "
+                           + ", ".join(from_statements) + ". Rentabilitățile folosesc soldul de la sfârșitul perioadei.")
             risk_stats = resolve_beta_alpha(real_sym, info, hist)
             beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
             de_ratio = info.get('debtToEquity')
