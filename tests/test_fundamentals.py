@@ -118,6 +118,23 @@ def test_fcf_cagr():
     assert F.fcf_cagr(hist.iloc[:1]) is None
 
 
+def test_fcf_average():
+    hist = F.fcf_history(annual_cashflow())           # 64, 75, 100
+    assert F.fcf_average(hist) == pytest.approx((64 + 75 + 100) / 3)
+    assert F.fcf_average(hist, years=2) == pytest.approx(87.5)
+    assert F.fcf_average(hist.iloc[:1]) is None
+    assert F.fcf_average(None) is None
+
+
+def test_fcf_distortion_warning():
+    # capex 7,6 din CFO 8,23 = 92% (cazul unui ciclu de investiții)
+    assert "92%" in F.fcf_distortion_warning(8.23, -7.60, 0.63, 5.0)
+    # capex modest, dar FCF curent 40 față de media 100
+    assert "40%" in F.fcf_distortion_warning(100.0, -60.0, 40.0, 100.0)
+    assert F.fcf_distortion_warning(100.0, -20.0, 80.0, 90.0) is None
+    assert F.fcf_distortion_warning(None, None, None, None) is None
+
+
 # --- Datorie netă și acțiuni -------------------------------------------------
 
 def test_net_debt():
@@ -272,6 +289,7 @@ def test_dcf_inputs_prefera_ttm_si_bilantul_cel_mai_recent():
     assert d["shares"] == 10.0 and d["shares_diluted"] is True
     assert d["tax_rate"] == pytest.approx(0.20) and d["interest_expense"] == 15.0
     assert d["fcf_cagr"] == pytest.approx(0.25, abs=1e-3)
+    assert d["fcf_average"] == pytest.approx(239 / 3) and d["fcf_average_years"] == 3
 
 
 def test_dcf_inputs_cade_pe_anual_cand_lipsesc_trimestrele():
@@ -284,4 +302,4 @@ def test_dcf_inputs_fara_date_nu_inventeaza_nimic():
     d = F.dcf_inputs(None, None, None, None, None)
     assert d["fcf"] is None and d["fcf_basis"] is None
     assert d["net_debt"] is None and d["shares"] is None and d["tax_rate"] is None
-    assert d["fcf_history"].empty and d["fcf_cagr"] is None
+    assert d["fcf_history"].empty and d["fcf_cagr"] is None and d["fcf_average"] is None

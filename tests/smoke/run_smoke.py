@@ -416,6 +416,7 @@ EXPECTED_MESSAGES = (
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
     "Marja de siguranță indisponibilă",            # DCF neaplicabil (sector financiar, FCF negativ, fără situații)
     "DCF: Valoarea terminală reprezintă",          # avertisment informativ: pondere mare a valorii terminale
+    "DCF: Capex-ul consumă", "DCF: FCF-ul curent este",   # avertisment informativ: FCF deformat
     "SUPRAEVALUARE CRITICĂ",                       # verdict informativ: DCF sub preț pe datele sintetice
     "Datele despre acționari sunt momentan",       # fără date de acționariat
     "ACTIVITATE INSTITUȚIONALĂ EXTREMĂ",           # avertisment informativ de volum

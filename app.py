@@ -2609,13 +2609,28 @@ def main():
             )
             discount_rate = wacc_res['wacc'] if use_wacc else discount_val / 100
 
+            # Baza de proiecție: FCF-ul curent sau media anilor fiscali (FCF normalizat)
+            fcf_base, fcf_base_label = dcf_in["fcf"], dcf_in["fcf_basis"] or "N/A"
+            fcf_distortion = fund.fcf_distortion_warning(dcf_in["cfo"], dcf_in["capex"], dcf_in["fcf"], dcf_in["fcf_average"])
+            if dcf_in["fcf_average"] is not None:
+                avg_label = f"Media ultimilor {dcf_in['fcf_average_years']} ani fiscali"
+                fcf_choice = st.radio(
+                    "FCF de pornire în DCF", ["FCF curent", avg_label], horizontal=True, key="v_final_fcf_base",
+                    help="FCF curent = ultimele 4 trimestre (sau ultimul an fiscal). Media anilor fiscali netezește "
+                         "un vârf de investiții sau un an atipic. Alegerea rămâne valabilă și când schimbi simbolul."
+                )
+                if fcf_choice == avg_label:
+                    fcf_base, fcf_base_label = dcf_in["fcf_average"], avg_label.lower()
+            if fcf_distortion and not dcf_na:
+                st.warning(f"⚠️ DCF: {fcf_distortion} Compară cu varianta pe media anilor fiscali.")
+
             # --- LOGICĂ REACTIVĂ ---
             # 1. Graham Revizuit: V = EPS * (8.5 + 2 * Growth)
             # Folosim formula adaptată a lui Graham pentru a fi influențată de slider-ul de creștere
             graham_calc = eps_f * (8.5 + 2 * growth_val) if eps_f > 0 else 0
             
             # 2. DCF pe free cash flow (analytics/fundamentals.py). None = modelul nu se aplică.
-            dcf_res = fund.dcf_fcf(dcf_in["fcf"], growth_val / 100, discount_rate, gterm_val / 100,
+            dcf_res = fund.dcf_fcf(fcf_base, growth_val / 100, discount_rate, gterm_val / 100,
                                    dcf_in["net_debt"], dcf_in["shares"])
             if dcf_na:
                 dcf_res = dict(dcf_res, per_share=None, reason=dcf_na, warnings=[])
@@ -2653,7 +2668,7 @@ def main():
                 st.markdown(f"**Sensibilitatea DCF** — valoare pe acțiune ({t_curr}) în funcție de rata de scont și de creșterea terminală")
                 r_grid = [discount_rate + d for d in (-0.02, -0.01, 0.0, 0.01, 0.02)]
                 g_grid = [0.01, 0.015, 0.02, 0.025, 0.03]
-                sens = fund.dcf_sensitivity(dcf_in["fcf"], growth_val / 100, dcf_in["net_debt"], dcf_in["shares"], r_grid, g_grid)
+                sens = fund.dcf_sensitivity(fcf_base, growth_val / 100, dcf_in["net_debt"], dcf_in["shares"], r_grid, g_grid)
                 sens.index = [f"scont {r * 100:.1f}%" for r in r_grid]
                 sens.columns = [f"g {g * 100:.1f}%" for g in g_grid]
 
@@ -2680,6 +2695,7 @@ def main():
                     ("Flux de numerar din exploatare (CFO)", format_amount(dcf_in["cfo"]), dcf_in["fcf_basis"] or "N/A"),
                     ("Cheltuieli de capital (capex)", format_amount(dcf_in["capex"]), dcf_in["fcf_basis"] or "N/A"),
                     ("Free cash flow = CFO − |capex|", format_amount(dcf_in["fcf"]), dcf_in["fcf_basis"] or "N/A"),
+                    ("FCF de pornire folosit în DCF", format_amount(fcf_base), fcf_base_label),
                     ("Datorie totală", format_amount(dcf_in["total_debt"]), f"bilanț {bal_date}"),
                     ("Numerar și plasamente pe termen scurt", format_amount(dcf_in["cash"]), f"bilanț {bal_date}"),
                     ("Datorie netă", format_amount(dcf_in["net_debt"]), "datorie totală − numerar"),

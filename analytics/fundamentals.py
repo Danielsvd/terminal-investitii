@@ -164,6 +164,34 @@ def fcf_cagr(history):
     return (last / first) ** (1 / years) - 1
 
 
+def fcf_average(history, years=3):
+    """Media FCF pe ultimii `years` ani fiscali (FCF normalizat). None sub 2 ani de date.
+
+    Folosit când FCF-ul curent e deformat de un vârf de investiții sau de un an atipic:
+    un singur an slab, proiectat la nesfârșit, subevaluează compania (și invers).
+    """
+    if history is None or len(history) < 2:
+        return None
+    return float(history.iloc[-years:].mean())
+
+
+def fcf_distortion_warning(cfo, capex, fcf, average):
+    """Mesaj când FCF-ul curent nu e o bază bună de proiecție, altfel None.
+
+    Două semnale: capex-ul consumă peste 75% din fluxul din exploatare (ciclu de
+    investiții), sau FCF-ul curent e sub jumătate / peste dublul mediei multianuale.
+    """
+    if _is_num(cfo) and _is_num(capex) and cfo > 0 and abs(capex) / cfo > 0.75:
+        return (f"Capex-ul consumă {abs(capex) / cfo * 100:.0f}% din fluxul de numerar din exploatare: "
+                "compania e într-un ciclu de investiții, iar FCF-ul curent subestimează capacitatea ei normală.")
+    if _is_num(fcf) and _is_num(average) and average > 0 and fcf > 0:
+        ratio = fcf / average
+        if ratio < 0.5 or ratio > 2.0:
+            return (f"FCF-ul curent este {ratio * 100:.0f}% din media ultimilor ani: "
+                    "un an atipic proiectat la nesfârșit deformează valoarea.")
+    return None
+
+
 # --- Datorie netă și acțiuni -------------------------------------------------
 
 def total_debt(balance, col=0):
@@ -407,6 +435,7 @@ def dcf_inputs(annual_income, annual_balance, annual_cashflow, quarterly_cashflo
     return {
         "fcf": fcf, "fcf_basis": fcf_basis, "cfo": cfo, "capex": capex,
         "fcf_history": history, "fcf_cagr": fcf_cagr(history),
+        "fcf_average": fcf_average(history), "fcf_average_years": min(len(history), 3),
         "total_debt": total_debt(balance),
         "cash": stmt_value(balance, CASH_ROWS),
         "net_debt": net_debt(balance),
