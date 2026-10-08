@@ -818,6 +818,41 @@ def resolve_beta_alpha(symbol, info, hist):
     return out
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_aaa_yield():
+    """Randamentul obligațiunilor corporative AAA din SUA (Moody's, FRED `AAA`, lunar), în procente:
+    (valoare, descriere) sau (None, motiv). Fără valoare de rezervă."""
+    try:
+        end = datetime.today()
+        serie = web.DataReader('AAA', 'fred', end - timedelta(days=200), end).iloc[:, 0].dropna()
+        if len(serie) and 0 < float(serie.iloc[-1]) < 25:
+            return float(serie.iloc[-1]), f"obligațiuni corporative AAA SUA (FRED AAA, {serie.index[-1]:%m.%Y})"
+    except Exception as e:
+        print(f"DEBUG: randament AAA (FRED) indisponibil: {e}")
+    return None, "Randamentul obligațiunilor AAA (FRED) nu a putut fi citit."
+
+
+def get_graham_yield(currency):
+    """Y din formula revizuită a lui Graham, în procente, pentru valuta acțiunii.
+
+    USD: randamentul AAA din FRED. Alte valute: nu există o serie AAA locală, deci se
+    aproximează ca rată fără risc a valutei + marja AAA față de titlurile SUA pe 10 ani;
+    eticheta spune că e proxy. (None, motiv) dacă lipsește oricare componentă.
+    """
+    aaa, aaa_label = get_aaa_yield()
+    if aaa is None:
+        return None, aaa_label
+    cur = (currency or "").upper()
+    if cur == "USD":
+        return aaa, aaa_label
+    rf_us, _ = get_risk_free_for_currency("USD")
+    rf_local, rf_label = get_risk_free_for_currency(cur)
+    if rf_us is None or rf_local is None:
+        return None, f"Nu pot aproxima randamentul AAA în {cur or 'valuta necunoscută'} (lipsește o rată fără risc)."
+    spread = max(aaa - rf_us * 100, 0.0)
+    return rf_local * 100 + spread, f"proxy: {rf_label} + marja AAA din SUA ({spread:.2f} pp)"
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def get_risk_free_for_currency(currency):
     """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
@@ -1009,17 +1044,44 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
 
     return audit
 
-def calculate_altman_z(info):
-    """Altman Z-Score: DEZACTIVAT până la Etapa 2.
+ALTMAN_ZONE_TEXT = {
+    "safe": ("ZONĂ SIGURĂ", "#3FB950", "Risc statistic scăzut de dificultate financiară."),
+    "grey": ("ZONĂ GRI", "#D29922", "Semnal neconcludent: nici sigură, nici în dificultate."),
+    "distress": ("ZONĂ DE DIFICULTATE", "#F85149", "Profil asemănător companiilor care au ajuns în dificultate financiară în următorii 2 ani."),
+}
 
-    Varianta veche citea din `info` câmpuri pe care Yahoo nu le trimite (active totale,
-    rezultat reportat, EBIT). Cu date complete scorul ieșea mereu 15 („Safe Zone"), iar
-    fără date ieșea 0 și declanșa o alertă falsă de faliment (ex. Apple: -20 puncte).
-    În Etapa 2 se calculează din bilanț și contul de profit și pierdere.
 
-    Întoarce (None, status, culoare, mesaj); apelanții tratează None ca pilon lipsă.
+def calculate_altman_z(info, symbol, fin):
+    """Altman Z / Z'' din situațiile financiare (analytics/fundamentals.py).
+
+    Întoarce un dict: value, variant ("Z" / "Z''" / None), zone ("safe" / "grey" / "distress" / None),
+    label, color, message, detail (componentele). Sectorul financiar și datele lipsă dau value=None;
+    apelanții tratează None ca pilon lipsă. Capitalizarea intră în Z doar când moneda situațiilor
+    e aceeași cu cea de tranzacționare (sau la BVB); altfel Z-ul original rămâne N/A.
     """
-    return None, "N/A", "#8B949E", "Altman Z se calculează din situațiile financiare (Etapa 2)."
+    variant = fund.altman_variant(info.get('sector'), symbol)
+    out = {"value": None, "variant": variant, "zone": None, "label": "N/A", "color": "#8B949E",
+           "message": "", "detail": None}
+    if variant is None:
+        out["message"] = "Altman Z nu se aplică băncilor, asigurătorilor și fondurilor (bilanțul lor are altă structură)."
+        return out
+    fin_curr, trade_curr = info.get('financialCurrency'), info.get('currency')
+    same_currency = (fin_curr == trade_curr) if (fin_curr and trade_curr) else str(symbol).upper().endswith(".RO")
+    detail = fund.altman_z(fin.get("income"), fin.get("balance"), fin.get("q_income"), fin.get("q_balance"),
+                           market_cap=num(info, 'marketCap') if same_currency else None)
+    out["detail"] = detail
+    value = detail["z"] if variant == "Z" else detail["z2"]
+    if value is None and variant == "Z" and detail["z2"] is not None:
+        # Fără capitalizare în moneda situațiilor, Z-ul original nu se poate calcula: se trece pe Z''.
+        variant, value = "Z''", detail["z2"]
+        out["variant"] = variant
+    if value is None:
+        out["message"] = "Date insuficiente în situațiile financiare (lipsesc: " + ", ".join(detail["missing"]) + ")."
+        return out
+    zone = fund.altman_zone(value, variant)
+    out.update(value=value, zone=zone, label=ALTMAN_ZONE_TEXT[zone][0], color=ALTMAN_ZONE_TEXT[zone][1],
+               message=ALTMAN_ZONE_TEXT[zone][2])
+    return out
 
 def calculate_margin_of_safety(current_price, fair_value):
     """Calculează marja de siguranță între prețul actual și valoarea intrinsecă."""
@@ -2756,9 +2818,19 @@ def main():
                 st.warning(f"⚠️ DCF: {fcf_distortion} Compară cu varianta pe media anilor fiscali.")
 
             # --- LOGICĂ REACTIVĂ ---
-            # 1. Graham Revizuit: V = EPS * (8.5 + 2 * Growth)
-            # Folosim formula adaptată a lui Graham pentru a fi influențată de slider-ul de creștere
-            graham_calc = eps_f * (8.5 + 2 * growth_val) if eps_f > 0 else 0
+            # 1. Graham, formula revizuită: V = EPS × (8,5 + 2g) × 4,4 / Y (analytics/fundamentals.py).
+            #    None = nu se aplică (EPS ≤ 0 sau lipsește randamentul AAA); nu se înlocuiește cu 0.
+            graham_y, graham_y_label = get_graham_yield(t_curr)
+            graham_calc = fund.graham_revised(num(info, 'trailingEps'), growth_val, graham_y)
+            graham_num = fund.graham_number(num(info, 'trailingEps'), num(info, 'bookValue'))
+            if graham_calc is not None:
+                graham_note = (f"Y = {graham_y:.2f}%" + (f" · creștere plafonată la {fund.GRAHAM_MAX_GROWTH:.0f}%"
+                                                         if growth_val > fund.GRAHAM_MAX_GROWTH else ""))
+            elif (num(info, 'trailingEps') or 0) <= 0:
+                graham_note = "EPS lipsă sau negativ"
+            else:
+                graham_note = graham_y_label
+            graham_num_txt = f"Nr. Graham: {graham_num:.2f}" if graham_num is not None else "Nr. Graham: N/A"
             
             # 2. DCF pe free cash flow (analytics/fundamentals.py). None = modelul nu se aplică.
             dcf_res = fund.dcf_fcf(fcf_base, growth_val / 100, discount_rate, gterm_val / 100,
@@ -2776,12 +2848,12 @@ def main():
                     st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Preț Curent</p><h1 style="color:white; margin:10px 0;">{price_f:.2f} <span style="font-size:14px;">{t_curr}</span></h1></div>', unsafe_allow_html=True)
                 
                 with cv2:
-                    if graham_calc > 0:
+                    if graham_calc is not None:
                         diff_g = ((price_f - graham_calc) / graham_calc) * 100
                         g_col = "#3FB950" if price_f < graham_calc else "#F85149"
-                        st.markdown(f'<div style="{css.format(c=g_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Graham (Adaptat)</p><h1 style="color:{g_col}; margin:10px 0;">{graham_calc:.2f}</h1><p style="color:{g_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)</p></div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="{css.format(c=g_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Graham (formula revizuită)</p><h1 style="color:{g_col}; margin:10px 0;">{graham_calc:.2f}</h1><p style="color:{g_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)</p><p style="color:#8B949E; font-size:11px; margin:0;">{html.escape(graham_note)} · {graham_num_txt}</p></div>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E;">Graham N/A</p></div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Graham N/A</p><p style="color:#8B949E; font-size:12px;">{html.escape(graham_note)}</p><p style="color:#8B949E; font-size:11px; margin:0;">{graham_num_txt}</p></div>', unsafe_allow_html=True)
 
                 with cv3:
                     if dcf_calc is not None and dcf_calc > 0:
@@ -2882,6 +2954,45 @@ def main():
                     "Limite: modelul proiectează un singur scenariu de creștere; beta depinde de perioada și de "
                     "benchmarkul folosit (sursa e scrisă mai sus); prima de risc de 5% este o ipoteză, nu o măsurătoare."
                 )
+
+            # --- ALTMAN Z: risc de dificultate financiară, din situațiile financiare ---
+            st.markdown("---")
+            st.subheader("🏦 Risc de dificultate financiară (Altman)")
+            altman_res = calculate_altman_z(info, real_sym, fin)
+            az_left, az_right = st.columns([1, 2])
+            with az_left:
+                az_value = f"{altman_res['value']:.2f}" if altman_res["value"] is not None else "N/A"
+                az_title = f"Altman {altman_res['variant']}" if altman_res["variant"] else "Altman Z"
+                st.markdown(f"""
+                <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {altman_res['color']}; text-align:center;">
+                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">{az_title}</p>
+                    <h1 style="color:{altman_res['color']}; margin:10px 0; font-size:40px;">{az_value}</h1>
+                    <p style="color:{altman_res['color']}; font-weight:bold; font-size:12px; margin:0;">{altman_res['label']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            with az_right:
+                st.write(altman_res["message"])
+                if altman_res["variant"] == "Z":
+                    st.caption("Z original (companii de producție): sub 1,81 dificultate · 1,81–2,99 zonă gri · peste 2,99 sigur.")
+                elif altman_res["variant"] == "Z''":
+                    st.caption("Z'' (servicii, piețe emergente sau sector necunoscut): sub 1,1 dificultate · 1,1–2,6 zonă gri · peste 2,6 sigur.")
+                az_detail = altman_res["detail"]
+                if az_detail is not None:
+                    with st.expander("Componentele scorului"):
+                        az_names = {
+                            "X1": "X1 = capital de lucru / active", "X2": "X2 = rezultat reportat / active",
+                            "X3": "X3 = EBIT / active", "X4": "X4 = capitalizare / datorii totale (în Z)",
+                            "X4_book": "X4' = capital propriu contabil / datorii totale (în Z'')",
+                            "X5": "X5 = venituri / active (în Z)",
+                        }
+                        st.dataframe(pd.DataFrame(
+                            [(az_names[k], "N/A" if v is None else f"{v:.3f}") for k, v in az_detail["components"].items()],
+                            columns=["Componentă", "Valoare"]), hide_index=True, width='stretch')
+                        az_date = f"{az_detail['balance_date']:%d.%m.%Y}" if az_detail["balance_date"] is not None else "N/A"
+                        z_txt = f"{az_detail['z']:.2f}" if az_detail["z"] is not None else "N/A"
+                        z2_txt = f"{az_detail['z2']:.2f}" if az_detail["z2"] is not None else "N/A"
+                        st.caption(f"Bilanț: {az_date} · Z = {z_txt} · Z'' = {z2_txt}. Model statistic din 1968/1995: "
+                                   "un semnal de avertizare, nu o predicție.")
 
             # --- RAPORT FINAL PE CATEGORII ---
             st.markdown("---")
@@ -3081,7 +3192,7 @@ def main():
                 c_news_ai = get_company_news_rss(real_sym)
                 s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
                 mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if (dcf_calc is not None and dcf_calc > 0) else None
-                z_val_swot, _, _, _ = calculate_altman_z(info)
+                z_val_swot = altman_res["zone"]   # zona, nu scorul: pragul depinde de variantă
                 
                 # Generare date SWOT
                 swot_res = generate_ai_swot_analysis(info, h_score, z_val_swot, mos_swot, alpha_val, s_score_val, yield_spread=spread)

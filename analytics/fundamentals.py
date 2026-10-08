@@ -537,3 +537,113 @@ def ratios_from_statements(annual_income, annual_balance, annual_cashflow=None, 
             out["trailingPE"] = price / eps if (eps is not None and eps > 0) else None      # pierdere -> N/A
             out["priceToBook"] = price / book if (book is not None and book > 0) else None
     return out
+
+
+# --- Graham ------------------------------------------------------------------
+
+GRAHAM_MAX_GROWTH = 15.0        # creșterea din formula revizuită se plafonează (procente)
+
+
+def graham_number(eps, book_value_per_share):
+    """Numărul Graham: √(22,5 × EPS × valoare contabilă pe acțiune).
+
+    Prețul maxim pe care Graham îl accepta pentru o acțiune defensivă (P/E ≤ 15 și
+    P/BV ≤ 1,5). Doar pentru EPS și valoare contabilă pozitive; altfel None.
+    """
+    if not _is_num(eps) or not _is_num(book_value_per_share) or eps <= 0 or book_value_per_share <= 0:
+        return None
+    return math.sqrt(22.5 * eps * book_value_per_share)
+
+
+def graham_revised(eps, growth_pct, aaa_yield_pct):
+    """Formula revizuită a lui Graham: V = EPS × (8,5 + 2g) × 4,4 / Y.
+
+    g = creșterea anuală așteptată a profitului, în procente, plafonată la 15;
+    Y = randamentul curent al obligațiunilor corporative AAA, în procente. Factorul
+    4,4 / Y scade valoarea când dobânzile sunt peste nivelul din 1962 (4,4%); fără el
+    formula supraevaluează sistematic. None pentru EPS ≤ 0, Y lipsă sau multiplu ≤ 0.
+    """
+    if not _is_num(eps) or eps <= 0 or not _is_num(growth_pct) or not _is_num(aaa_yield_pct) or aaa_yield_pct <= 0:
+        return None
+    multiple = 8.5 + 2 * min(growth_pct, GRAHAM_MAX_GROWTH)
+    if multiple <= 0:
+        return None
+    return eps * multiple * 4.4 / aaa_yield_pct
+
+
+# --- Altman Z ----------------------------------------------------------------
+
+RETAINED_EARNINGS_ROWS = ("Retained Earnings",)
+TOTAL_LIABILITIES_ROWS = ("Total Liabilities Net Minority Interest", "Total Liabilities")
+EBIT_ROWS = ("EBIT", "Operating Income")
+# Sectoare (denumirile Yahoo) în care domină producția: se aplică Z-ul original.
+MANUFACTURING_SECTORS = frozenset({"industrials", "basic materials", "energy", "consumer defensive", "consumer cyclical"})
+ALTMAN_ZONES = {"Z": (1.81, 2.99), "Z''": (1.1, 2.6)}       # (sub = dificultate, peste = sigur)
+
+
+def is_financial_issuer(sector, symbol=None):
+    """Bancă, asigurător, fond sau alt emitent financiar (inclusiv lista BVB)."""
+    if (sector or "").strip().lower() in ("financial services", "financial", "financials"):
+        return True
+    sym = str(symbol or "").upper()
+    return sym.endswith(".RO") and sym[:-3] in BVB_FINANCIALS
+
+
+def altman_variant(sector, symbol=None):
+    """Varianta de scor care se aplică: "Z", "Z''" sau None (sector financiar).
+
+    Z (1968) e calibrat pe companii de producție listate în SUA. Z'' (fără rotația
+    activelor, cu capital propriu contabil) e varianta pentru servicii și piețe emergente:
+    se folosește pentru celelalte sectoare, pentru BVB și când sectorul nu e cunoscut.
+    """
+    if is_financial_issuer(sector, symbol):
+        return None
+    if str(symbol or "").upper().endswith(".RO"):
+        return "Z''"
+    return "Z" if (sector or "").strip().lower() in MANUFACTURING_SECTORS else "Z''"
+
+
+def altman_zone(value, variant):
+    """"safe", "grey" sau "distress" după pragurile variantei; None dacă lipsește scorul."""
+    if not _is_num(value) or variant not in ALTMAN_ZONES:
+        return None
+    low, high = ALTMAN_ZONES[variant]
+    if value < low:
+        return "distress"
+    return "safe" if value > high else "grey"
+
+
+def altman_z(annual_income, annual_balance, quarterly_income=None, quarterly_balance=None, market_cap=None):
+    """Altman Z și Z'' din situațiile financiare. Scorurile nu sunt plafonate sau „corectate".
+
+    Z   = 1,2·X1 + 1,4·X2 + 3,3·X3 + 0,6·X4 + 1,0·X5
+    Z'' = 6,56·X1 + 3,26·X2 + 6,72·X3 + 1,05·X4'
+      X1 = capital de lucru / active      X2 = rezultat reportat / active
+      X3 = EBIT / active                  X5 = venituri / active
+      X4 = capitalizare bursieră / datorii totale;  X4' = capital propriu contabil / datorii totale
+    EBIT și veniturile sunt TTM când există 4 trimestre; soldurile, din cel mai recent bilanț.
+    Un scor e None dacă îi lipsește orice componentă (`missing` spune care). `market_cap`
+    trebuie să fie în moneda situațiilor financiare; dacă nu e sigur, se transmite None.
+    """
+    balance = quarterly_balance if stmt_value(quarterly_balance, TOTAL_ASSETS_ROWS) is not None else annual_balance
+    assets = stmt_value(balance, TOTAL_ASSETS_ROWS)
+    liabilities = stmt_value(balance, TOTAL_LIABILITIES_ROWS)
+    current_assets = stmt_value(balance, CURRENT_ASSETS_ROWS)
+    current_liabilities = stmt_value(balance, CURRENT_LIABILITIES_ROWS)
+    working_capital = (current_assets - current_liabilities
+                       if _is_num(current_assets) and _is_num(current_liabilities) else None)
+    x = {
+        "X1": _ratio(working_capital, assets),
+        "X2": _ratio(stmt_value(balance, RETAINED_EARNINGS_ROWS), assets),
+        "X3": _ratio(_flow(quarterly_income, annual_income, EBIT_ROWS), assets),
+        "X4": _ratio(market_cap, liabilities),
+        "X4_book": _ratio(stmt_value(balance, EQUITY_ROWS), liabilities),
+        "X5": _ratio(_flow(quarterly_income, annual_income, REVENUE_ROWS), assets),
+    }
+    out = {"z": None, "z2": None, "components": x, "balance_date": stmt_date(balance),
+           "missing": [k for k, v in x.items() if v is None]}
+    if all(x[k] is not None for k in ("X1", "X2", "X3", "X4", "X5")):
+        out["z"] = 1.2 * x["X1"] + 1.4 * x["X2"] + 3.3 * x["X3"] + 0.6 * x["X4"] + 1.0 * x["X5"]
+    if all(x[k] is not None for k in ("X1", "X2", "X3", "X4_book")):
+        out["z2"] = 6.56 * x["X1"] + 3.26 * x["X2"] + 6.72 * x["X3"] + 1.05 * x["X4_book"]
+    return out

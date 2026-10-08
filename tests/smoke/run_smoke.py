@@ -147,9 +147,9 @@ class FakeTicker:
         if self.ticker.endswith(".RO"):
             return pd.DataFrame()
         return pd.DataFrame([[1e9 * (i + 5) for i in range(n)], [1e8 * (i - 1) for i in range(n)],
-                             [1.55e10] * n, [3.5e9] * n, [1.8e10] * n, [1.15e11] * n],
+                             [1.55e10] * n, [3.5e9] * n, [1.8e10] * n, [1.15e11] * n, [3e8 * (i + 5) for i in range(n)]],
                             index=["Total Revenue", "Net Income", "Diluted Average Shares",
-                                   "Interest Expense", "Tax Provision", "Pretax Income"], columns=cols)
+                                   "Interest Expense", "Tax Provision", "Pretax Income", "EBIT"], columns=cols)
 
     def _stmt(self, freq, n, rows):
         """Bilanț / flux de numerar sintetic. .RO: gol (ca la Yahoo). NEWCO: capex peste CFO (FCF negativ)."""
@@ -164,7 +164,8 @@ class FakeTicker:
     _BALANCE = {"Total Debt": (1.1e11, False), "Cash Cash Equivalents And Short Term Investments": (6e10, False),
                 "Ordinary Shares Number": (1.5e10, False), "Total Assets": (3.6e11, False),
                 "Stockholders Equity": (7e10, False), "Current Assets": (1.4e11, False),
-                "Current Liabilities": (1.3e11, False), "Inventory": (7e9, False)}
+                "Current Liabilities": (1.3e11, False), "Inventory": (7e9, False),
+                "Retained Earnings": (2e10, False), "Total Liabilities Net Minority Interest": (2.9e11, False)}
 
     def _cash_rows(self):
         capex = -3e11 if self.ticker == "NEWCO" else -1.0e10
@@ -255,8 +256,8 @@ def fake_fred(code, source, start, end):
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
-            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1}[code]
-    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N") else 0.0
+            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4}[code]
+    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)
 
 

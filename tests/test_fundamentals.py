@@ -373,3 +373,73 @@ def test_ratios_pierdere_capital_negativ_si_lipsuri():
     r = F.ratios_from_statements(income, balance.drop(index="Inventory"), price=30.0)
     assert r["quickRatio"] is None                            # stoc lipsă NU e stoc zero
     assert all(v is None for v in F.ratios_from_statements(None, None).values())
+
+
+# --- Graham ------------------------------------------------------------------
+
+def test_graham_number():
+    # √(22,5 × 2 × 16) = √720 = 26,8328
+    assert F.graham_number(2.0, 16.0) == pytest.approx(26.8328, abs=1e-4)
+    for eps, bv in ((0.0, 16.0), (-1.0, 16.0), (2.0, -3.0), (None, 16.0), (2.0, None)):
+        assert F.graham_number(eps, bv) is None            # EPS ≤ 0 -> N/A, nu 0
+
+
+def test_graham_revised():
+    # 2 × (8,5 + 2 × 5) × 4,4 / 5,5 = 2 × 18,5 × 0,8 = 29,6
+    assert F.graham_revised(2.0, 5.0, 5.5) == pytest.approx(29.6)
+    # la Y = 4,4% factorul de dobândă e 1: 2 × 18,5 = 37
+    assert F.graham_revised(2.0, 5.0, 4.4) == pytest.approx(37.0)
+    # creșterea e plafonată la 15%: 2 × (8,5 + 30) × 0,8 = 61,6
+    assert F.graham_revised(2.0, 40.0, 5.5) == pytest.approx(61.6)
+    assert F.graham_revised(0.0, 5.0, 5.5) is None
+    assert F.graham_revised(-1.0, 5.0, 5.5) is None
+    assert F.graham_revised(2.0, 5.0, None) is None
+    assert F.graham_revised(2.0, -5.0, 5.5) is None        # 8,5 − 10 < 0
+
+
+# --- Altman ------------------------------------------------------------------
+
+def _altman_frames():
+    income = _frame({"Total Revenue": [1500.0], "EBIT": [150.0]}, ["2025-12-31"])
+    balance = _frame({"Total Assets": [1000.0], "Current Assets": [400.0], "Current Liabilities": [200.0],
+                      "Retained Earnings": [300.0], "Total Liabilities Net Minority Interest": [600.0],
+                      "Stockholders Equity": [400.0]}, ["2025-12-31"])
+    return income, balance
+
+
+def test_altman_exemplu_calculat_de_mana():
+    income, balance = _altman_frames()
+    r = F.altman_z(income, balance, market_cap=1200.0)
+    # X1 = 200/1000 = 0,2; X2 = 0,3; X3 = 0,15; X4 = 1200/600 = 2; X5 = 1,5
+    # Z = 0,24 + 0,42 + 0,495 + 1,2 + 1,5 = 3,855
+    assert r["z"] == pytest.approx(3.855)
+    # X4' = 400/600 = 0,6667; Z'' = 1,312 + 0,978 + 1,008 + 0,7 = 3,998
+    assert r["z2"] == pytest.approx(3.998)
+    assert r["missing"] == []
+
+
+def test_altman_lipsa_unei_componente_da_none_nu_scor_partial():
+    income, balance = _altman_frames()
+    r = F.altman_z(income, balance, market_cap=None)
+    assert r["z"] is None and r["z2"] == pytest.approx(3.998) and r["missing"] == ["X4"]
+    r = F.altman_z(income, balance.drop(index="Retained Earnings"), market_cap=1200.0)
+    assert r["z"] is None and r["z2"] is None and "X2" in r["missing"]
+    r = F.altman_z(None, None)
+    assert r["z"] is None and r["z2"] is None
+
+
+def test_altman_nu_plafoneaza_scorul():
+    income, balance = _altman_frames()
+    assert F.altman_z(income, balance, market_cap=600000.0)["z"] == pytest.approx(602.655)   # X4 = 1000
+
+
+def test_altman_varianta_si_zone():
+    assert F.altman_variant("Financial Services", "JPM") is None
+    assert F.altman_variant(None, "TLV.RO") is None
+    assert F.altman_variant("Energy", "XOM") == "Z"
+    assert F.altman_variant("Energy", "SNP.RO") == "Z''"       # piață emergentă
+    assert F.altman_variant("Technology", "MSFT") == "Z''"
+    assert F.altman_variant(None, "XYZ") == "Z''"
+    assert F.altman_zone(3.0, "Z") == "safe" and F.altman_zone(2.5, "Z") == "grey" and F.altman_zone(1.8, "Z") == "distress"
+    assert F.altman_zone(2.7, "Z''") == "safe" and F.altman_zone(1.5, "Z''") == "grey" and F.altman_zone(1.0, "Z''") == "distress"
+    assert F.altman_zone(None, "Z") is None and F.altman_zone(2.0, None) is None
