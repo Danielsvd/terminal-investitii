@@ -28,7 +28,7 @@ from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_line
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
-from analytics.risk import beta_benchmark, beta_weekly
+from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
 # =============================================================================
@@ -729,6 +729,57 @@ def get_benchmark_close(symbol):
     except Exception as e:
         print(f"DEBUG: benchmark {symbol} indisponibil: {e}")
     return pd.Series(dtype=float)
+
+
+def resolve_beta_alpha(symbol, info, hist):
+    """Beta și alpha ale unei acțiuni, cu sursa fiecăruia. Un singur loc: DCF, audit și scoruri
+    folosesc aceleași valori.
+
+    Beta: la BVB cel din Yahoo e calculat față de un indice nepotrivit (iese mult prea mic),
+    deci se calculează față de BET (prin TVBETETF.RO, proxy), pe randamente săptămânale.
+    La celelalte piețe rămâne beta Yahoo; dacă lipsește, se calculează față de indicele pieței.
+    Alpha: când beta e calculat aici, alpha folosește același benchmark și rata fără risc a
+    valutei; când beta e din Yahoo, rămâne calculul existent (față de SPY).
+    Întoarce un dict: beta, beta_label, alpha, alpha_label. Valorile lipsă sunt None.
+    """
+    currency = info.get('currency') or 'USD'
+    yahoo_beta = num(info, 'beta')
+    out = {"beta": yahoo_beta, "beta_label": "Yahoo" if yahoo_beta is not None else "indisponibil",
+           "alpha": None, "alpha_label": "indisponibil"}
+    is_bvb = str(symbol).upper().endswith(".RO")
+
+    if is_bvb or yahoo_beta is None:
+        bench_sym, bench_name = beta_benchmark(symbol, currency)
+        bench_close = get_benchmark_close(bench_sym) if bench_sym else pd.Series(dtype=float)
+        own = beta_weekly(hist['Close'], bench_close) if bench_sym else None
+        # Un beta ≤ 0 ar da un cost al capitalului sub rata fără risc: se respinge.
+        if own is not None and own["beta"] > 0:
+            out["beta"] = own["beta"]
+            out["beta_label"] = (f"calculat față de {bench_name}, {own['n']} randamente săptămânale, "
+                                 f"{own['start']:%m.%Y}–{own['end']:%m.%Y}")
+            rf_val, rf_label = get_risk_free_for_currency(currency)
+            alpha = jensen_alpha(hist['Close'], bench_close, own["beta"], rf_val)
+            if alpha is not None:
+                out["alpha"] = alpha["alpha"]
+                out["alpha_label"] = (f"față de {bench_name}, {alpha['start']:%d.%m.%Y}–{alpha['end']:%d.%m.%Y}; "
+                                      f"rată fără risc {rf_val * 100:.2f}% [{rf_label}]")
+            elif rf_val is None:
+                out["alpha_label"] = f"indisponibil: {rf_label}"
+            else:
+                out["alpha_label"] = "indisponibil: sub un an de ședințe comune cu benchmarkul"
+            return out
+        if is_bvb:
+            # Beta Yahoo pentru BVB e nesigur: fără calcul propriu, mai bine N/A decât o cifră greșită.
+            out["beta"], out["beta_label"] = None, f"indisponibil: date insuficiente pentru calculul față de {bench_name}"
+            out["alpha_label"] = "indisponibil: lipsește beta"
+            return out
+
+    if out["beta"] is not None:
+        out["alpha"] = calculate_alpha(hist, out["beta"])
+        out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
+    else:
+        out["alpha_label"] = "indisponibil: lipsește beta"
+    return out
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -2194,8 +2245,8 @@ def main():
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
-            beta_val = info.get('beta')
-            alpha_val = calculate_alpha(hist, beta_val)
+            risk_stats = resolve_beta_alpha(real_sym, info, hist)
+            beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
             de_ratio = info.get('debtToEquity')
             de_display = f"{de_ratio:.2f}%" if de_ratio is not None else "N/A"
 
@@ -2226,8 +2277,8 @@ def main():
                     st.metric("Quick Ratio", format_num(info.get('quickRatio')))
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
-                    st.metric("Beta", format_num(info.get('beta')))
-                    st.metric("Alpha (1Y)", format_num(alpha_val, True))
+                    st.metric("Beta", format_num(beta_val), help=f"Sursă: {risk_stats['beta_label']}")
+                    st.metric("Alpha (1Y)", format_num(alpha_val, True), help=f"Alpha Jensen. {risk_stats['alpha_label']}")
             
             # ==================================================
             # MODUL NOU: DATE FINANCIARE VIZUALE (STIL XTB)
@@ -2556,19 +2607,8 @@ def main():
                 dcf_na = (f"Situațiile financiare sunt în {fin_curr}, iar acțiunea se tranzacționează în {t_curr}: "
                           "valoarea pe acțiune cere conversie valutară, care nu e încă implementată.")
             rf_val, rf_label = get_risk_free_for_currency(t_curr)
-            # Beta: la BVB cel din Yahoo e calculat față de un indice nepotrivit (iese mult prea mic),
-            # deci se calculează aici față de BET. În rest, beta Yahoo; dacă lipsește, calcul propriu.
-            beta_used, beta_label = num(info, 'beta'), "Yahoo"
-            if real_sym.upper().endswith(".RO") or beta_used is None:
-                bench_sym, bench_name = beta_benchmark(real_sym, t_curr)
-                own_beta = beta_weekly(hist['Close'], get_benchmark_close(bench_sym)) if bench_sym else None
-                # Un beta ≤ 0 ar da un cost al capitalului sub rata fără risc: se respinge.
-                if own_beta is not None and own_beta["beta"] > 0:
-                    beta_used = own_beta["beta"]
-                    beta_label = (f"calculat față de {bench_name}, {own_beta['n']} randamente săptămânale, "
-                                  f"{own_beta['start']:%m.%Y}–{own_beta['end']:%m.%Y}")
-                elif beta_used is not None:
-                    beta_label = "Yahoo; calculul propriu nu a dat un rezultat utilizabil"
+            # Același beta ca în „Indicatori Fundamentali" și în audit (vezi resolve_beta_alpha).
+            beta_used, beta_label = beta_val, risk_stats["beta_label"]
             wacc_res = fund.wacc(rf_val, beta_used, num(info, 'marketCap'), dcf_in["total_debt"],
                                  dcf_in["interest_expense"], dcf_in["tax_rate"])
 
@@ -2963,7 +3003,7 @@ def main():
                 if (num(info, 'debtToEquity') or 0) > 150: st.write("• **Levier ridicat:** Expunere mare la creșterea dobânzilor.")
                 if (num(info, 'payoutRatio') or 0) > 0.80: st.write("• **Dividend la limită:** Spațiu restrâns pentru investiții viitoare.")
                 if num(info, 'forwardPE') is not None and num(info, 'trailingPE') is not None and num(info, 'forwardPE') > num(info, 'trailingPE') > 0: st.write("• **Așteptări în scădere:** Piața anticipează o încetinire a profitului.")
-                if (num(info, 'beta') or 1) > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.")
+                if beta_val is not None and beta_val > 1.5: st.write("• **Volatilitate Mare:** Sensibilitate ridicată la panica din piața generală.")
             
             # --- MODUL: ANALIZĂ STRATEGICĂ IA (SWOT) ---
             st.markdown("---")
@@ -3385,7 +3425,7 @@ def main():
                 pe_ratio = info.get('trailingPE', 0) or 0
                 pb_ratio = info.get('priceToBook', 0) or 0
                 margins = (info.get('profitMargins', 0) or 0) * 100
-                beta = info.get('beta', 1) or 1
+                beta = beta_val or 1
                 
                 # --- BULLET 1: Profitabilitate & Venituri ---
                 if margins > 0:
@@ -3418,7 +3458,7 @@ def main():
 
                 # --- BULLET 3: Volatilitate / Risc (Analiză Beta) ---
                 if beta > 1.3:
-                    text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața din SUA (Beta de {beta:.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
+                    text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața de referință (Beta de {beta:.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_vol})
                 elif beta < 0.8:
                     text_vol = f"Acțiunea prezintă o volatilitate redusă față de piața generală (Beta de {beta:.2f}), comportându-se ca un activ defensiv în perioadele de incertitudine."

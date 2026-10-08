@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.risk import beta_benchmark, beta_weekly
+from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 
 
 def _prices(returns, start="2026-01-02"):
@@ -62,3 +62,36 @@ def test_beta_benchmark_pe_piete():
     assert beta_benchmark("MC.PA", "EUR")[0] == "^STOXX50E"
     assert beta_benchmark("AAPL", "USD")[0] == "^GSPC"
     assert beta_benchmark("VOD.L", "GBp") == (None, None)
+
+
+# --- Alpha Jensen ------------------------------------------------------------
+
+def _line(start_value, end_value, periods=253, end="2026-10-08", tz=None):
+    idx = pd.bdate_range(end=end, periods=periods, tz=tz)
+    return pd.Series(np.linspace(start_value, end_value, periods), index=idx)
+
+
+def test_alpha_exemplu_calculat_de_mana():
+    # activ +20%, benchmark +10%, beta 1,2, rf 6%
+    # alpha = 20% − [6% + 1,2 × (10% − 6%)] = 20% − 10,8% = 9,2%
+    out = jensen_alpha(_line(100, 120), _line(100, 110), beta=1.2, risk_free=0.06)
+    assert out["alpha"] == pytest.approx(0.092, abs=1e-9)
+    assert out["asset_return"] == pytest.approx(0.20) and out["bench_return"] == pytest.approx(0.10)
+
+
+def test_alpha_foloseste_doar_ultimul_an_si_ignora_fusul_orar():
+    # 3 ani de date: doar ultimul an contează (primii doi ani sunt plați la 50, apoi 100 -> 120)
+    asset = pd.concat([_line(50, 50, periods=500, end="2025-10-01"), _line(100, 120)])
+    asset.index = asset.index.tz_localize("Europe/Bucharest")
+    out = jensen_alpha(asset, _line(100, 110, periods=800), beta=1.0, risk_free=0.0)
+    assert out["asset_return"] == pytest.approx(0.20, abs=0.01)
+    assert (out["end"] - out["start"]).days <= 366
+
+
+def test_alpha_fara_beta_rf_sau_istoric_este_none():
+    asset, bench = _line(100, 120), _line(100, 110)
+    assert jensen_alpha(asset, bench, beta=None, risk_free=0.06) is None      # beta lipsă NU se presupune 1
+    assert jensen_alpha(asset, bench, beta=1.0, risk_free=None) is None
+    assert jensen_alpha(asset, None, beta=1.0, risk_free=0.06) is None
+    assert jensen_alpha(_line(100, 120, periods=80), bench, beta=1.0, risk_free=0.06) is None   # ~4 luni
+    assert jensen_alpha(pd.Series(dtype=float), bench, beta=1.0, risk_free=0.06) is None
