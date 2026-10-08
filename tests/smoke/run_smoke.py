@@ -95,6 +95,8 @@ LOSS_INFO = dict(RICH_INFO, longName="Pierderi Corp", sector="Financial Services
 
 
 def _info_for(sym):
+    if sym == "EMPTY":   # ca pe Streamlit Cloud când Yahoo refuză endpoint-ul de fundamentale
+        return {"trailingPegRatio": None}
     if sym.endswith(".RO") or sym.endswith(".DE"):
         return dict(SPARSE_INFO)
     if sym == "LOSS":
@@ -107,6 +109,8 @@ class _FastInfo:
         df = _ohlcv(sym, 5)
         self.last_price = float(df["Close"].iloc[-1]) if df["Close"].notna().any() else None
         self.previous_close = float(df["Close"].iloc[-2]) if df["Close"].notna().any() else None
+        self.currency = "RON" if sym.endswith(".RO") else ("EUR" if sym.endswith(".DE") else "USD")
+        self.market_cap = 1e9
 
 
 class FakeTicker:
@@ -153,7 +157,7 @@ class FakeTicker:
 
     @property
     def options(self):
-        if "." in self.ticker:
+        if "." in self.ticker or self.ticker == "EMPTY":
             return ()
         return tuple((TODAY + pd.Timedelta(days=d)).strftime("%Y-%m-%d") for d in (3, 31, 59))
 
@@ -173,9 +177,12 @@ class FakeTicker:
 
     @property
     def major_holders(self):
-        if self.ticker.endswith(".RO"):
+        if self.ticker.endswith(".RO") or self.ticker == "EMPTY":
             return pd.DataFrame()
-        return pd.DataFrame({"Value": [0.021, 0.61]}, index=["insidersPercentHeld", "institutionsPercentHeld"])
+        # Formatul yfinance 1.x, inclusiv rândurile care NU sunt deținerea totală (număr, free float)
+        return pd.DataFrame({"Value": [0.021, 0.61, 0.63, 3500.0]},
+                            index=["insidersPercentHeld", "institutionsPercentHeld",
+                                   "institutionsFloatPercentHeld", "institutionsCount"])
 
     @property
     def institutional_holders(self):
@@ -371,6 +378,7 @@ EXPECTED_MESSAGES = (
     # titluri de secțiune afișate cu st.error / st.warning / st.success (nu sunt erori)
     "Vulnerabilități (Potential Risks)", "PUNCTE SLABE", "OPORTUNITĂȚI", "Cea mai slabă lună",
     "Companii Small-Cap", "AMENINȚĂRI",
+    "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )
 
@@ -399,7 +407,7 @@ def main():
 
     radio().set_value("2. Analiză Companie").run()
     check(at, "2. Companie AAPL (date complete)")
-    for sym in ("TLV.RO", "SAP.DE", "LOSS", "NEWCO", "INVALID"):
+    for sym in ("TLV.RO", "SAP.DE", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
     at.sidebar.text_input[0].set_value("AAPL").run()

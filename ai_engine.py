@@ -162,22 +162,22 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     sector = info.get('sector') or 'General'
     
     # --- STRENGTHS ---
-    if h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
+    if h_score is not None and h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
     if (num(info, 'profitMargins') or 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
     if s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
-    if z_val < 1.8: swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
+    if z_val is not None and z_val < 1.8: swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
     if alpha and alpha < -0.05: swot["Weaknesses"].append("Subperformanță cronică (Acțiunea pierde momentum).")
     if num(info, 'currentRatio') is not None and num(info, 'currentRatio') < 1.0: swot["Weaknesses"].append("Probleme potențiale de lichiditate pe termen scurt.")
 
     # --- OPPORTUNITIES ---
-    if mos_val > 25: swot["Opportunities"].append(f"Fereastră de achiziție sub-evaluată ({mos_val:.1f}% discount).")
+    if mos_val is not None and mos_val > 25: swot["Opportunities"].append(f"Fereastră de achiziție sub-evaluată ({mos_val:.1f}% discount).")
     if sector == "Technology": swot["Opportunities"].append("Expansiune prin integrare AI și automatizare.")
     if sector == "Energy": swot["Opportunities"].append("Tranziția către surse regenerabile și eficiență carbon.")
 
     # --- THREATS ---
-    if mos_val < -20: swot["Threats"].append("Bula de evaluare (Risc major de corecție a prețului).")
+    if mos_val is not None and mos_val < -20: swot["Threats"].append("Bula de evaluare (Risc major de corecție a prețului).")
     if yield_spread is not None and yield_spread < 0: swot["Threats"].append("Recesiune iminentă (Curba dobânzilor inversată).")
     if sector == "Financial Services": swot["Threats"].append("Risc sistemic de credit și reglementări stricte.")
     
@@ -461,9 +461,15 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     """
     score = 0
     reasons = []
+    # Pilonii fundamentali pentru care nu există date. Un pilon lipsă nu primește puncte
+    # și nu e penalizat; dacă lipsesc prea mulți, verdictul devine „DATE INSUFICIENTE".
+    missing = []
 
     # 1. EVALUARE (DCF Margin of Safety) - MAX 20 puncte
-    if mos_val > 25:
+    if mos_val is None:
+        missing.append("evaluare DCF")
+        reasons.append("ℹ️ **Evaluare:** modelul DCF nu are date suficiente (EPS lipsă sau negativ). Pilon neinclus în scor.")
+    elif mos_val > 25:
         score += 20
         reasons.append("✅ **Subevaluare Masivă:** Discount excelent față de valoarea intrinsecă (Model DCF).")
     elif mos_val > 5:
@@ -477,7 +483,10 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
         reasons.append("⚖️ **Evaluare Neutră:** Fără marjă de siguranță clară împotriva erorilor.")
 
     # 2. SĂNĂTATE FINANCIARĂ & FALIMENT (Max 15 puncte)
-    if h_score >= 8:
+    if h_score is None:
+        missing.append("bilanț")
+        reasons.append("ℹ️ **Bilanț:** lipsesc datoriile, ROE și lichiditatea. Pilon neinclus în scor.")
+    elif h_score >= 8:
         score += 15
         reasons.append(f"✅ **Bilanț Fortăreață:** Scor de sănătate extrem de solid ({h_score}/10).")
     elif h_score >= 5:
@@ -486,12 +495,13 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     else:
         reasons.append(f"🚨 **Risc de Bilanț:** Sănătate financiară precară, grad de îndatorare mare ({h_score}/10).")
         
-    if z_score < 1.8:
+    if z_score is not None and z_score < 1.8:
         score -= 20 # Penalizare fatală
         reasons.append("🚨 **ALERTĂ ALTMAN Z:** Risc statistic sever de faliment sau restructurare în următorii 2 ani!")
 
     # 3. CALITATEA PROFITULUI (Cash-Flow) (Max 10 puncte)
     if q_ratio is None:
+        missing.append("calitatea profitului")
         reasons.append("ℹ️ **Calitatea profitului:** nu se poate evalua (date lipsă sau profit net negativ). Pilon neinclus în scor.")
     elif q_ratio > 1.0:
         score += 10
@@ -504,7 +514,10 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
         reasons.append("⚠️ **Profit pe Hârtie:** Firma raportează profit, dar nu încasează cash. Risc de contabilitate creativă.")
 
     # 4. SMART MONEY & VOLUM (Max 15 puncte)
-    if inst_pct > 60:
+    if inst_pct is None:
+        missing.append("acționariat")
+        reasons.append("ℹ️ **Acționariat:** Yahoo nu a trimis deținerile instituționale. Pilon neinclus în scor.")
+    elif inst_pct > 60:
         score += 10
         reasons.append(f"✅ **Dominare Instituțională:** Balenele dețin {inst_pct:.0f}%, oferind stabilitate prețului.")
     elif inst_pct < 30:
@@ -596,6 +609,12 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     else:
         action, color = "EVITĂ SAU VINDE", "#F85149"
         advice = "Steaguri roșii critice: Risc de faliment, supraevaluare masivă, lipsă cash sau fugă instituțională."
+
+    # Cu cel puțin 3 din cei 4 piloni fundamentali lipsă, scorul descrie doar tehnicul și sentimentul.
+    if len(missing) >= 3:
+        action, color = "DATE INSUFICIENTE", "#8B949E"
+        advice = ("Lipsesc datele fundamentale (" + ", ".join(missing) + "). Scorul acoperă doar pilonii "
+                  "tehnici, de sentiment și macro și nu poate susține o decizie de cumpărare sau vânzare.")
 
     # Sortăm lista ca să punem Steagurile Roșii (🚨) sus de tot
     reasons.sort(key=lambda x: "🚨" not in x)
@@ -716,14 +735,22 @@ def get_detailed_ownership_and_execs(ticker_sym):
         # 2. PROCESARE SIGURĂ ACȚIONARI
         major = t.major_holders
         insider_pct, inst_pct = 0.0, 0.0
+        found_insider, found_inst = False, False
         
         if major is not None and not major.empty:
             major_df = major.reset_index().astype(str)
             for _, row in major_df.iterrows():
                 row_str = " ".join(row.values).lower()
-                # Extragem valoarea numerică curată
-                raw_val = row.iloc[0].replace('%', '').replace(',', '') if isinstance(row.iloc[0], str) else row.iloc[0]
-                val = pd.to_numeric(raw_val, errors='coerce')
+                # Formatul nou yfinance: eticheta e în prima coloană, valoarea în a doua.
+                # Rândurile cu numărul de instituții sau procentul din free float nu sunt deținerea totală.
+                if 'count' in row_str or 'float' in row_str:
+                    continue
+                val = float('nan')
+                for cell in row.values:
+                    candidate = pd.to_numeric(str(cell).replace('%', '').replace(',', ''), errors='coerce')
+                    if not pd.isna(candidate):
+                        val = candidate
+                        break
                 
                 if not pd.isna(val):
                     # --- LOGICĂ DE NORMALIZARE ANTI-1400% ---
@@ -731,13 +758,25 @@ def get_detailed_ownership_and_execs(ticker_sym):
                     # Dacă e peste 1.0 (ex: 51.78), e deja procent și o lăsăm așa
                     val_clean = val * 100 if 0 < val <= 1.0 else val
                     
-                    if 'insider' in row_str: insider_pct = val_clean
-                    if 'instituti' in row_str or 'held by inst' in row_str: inst_pct = val_clean
+                    if 'insider' in row_str:
+                        insider_pct, found_insider = val_clean, True
+                    if 'instituti' in row_str or 'held by inst' in row_str:
+                        inst_pct, found_inst = val_clean, True
         
         # Fallback: Dacă tabelul major_holders e gol, luăm din info direct
-        if inst_pct == 0:
-            val_info = num(info, 'heldPercentInstitutions') or 0
-            inst_pct = val_info * 100 if val_info <= 1.0 else val_info
+        if not found_inst:
+            val_info = num(info, 'heldPercentInstitutions')
+            if val_info is not None:
+                inst_pct, found_inst = (val_info * 100 if val_info <= 1.0 else val_info), True
+        if not found_insider:
+            val_info = num(info, 'heldPercentInsiders')
+            if val_info is not None:
+                insider_pct, found_insider = (val_info * 100 if val_info <= 1.0 else val_info), True
+
+        # Fără nicio sursă: datele lipsesc (None), nu „0% instituții". Altfel scorurile penalizau
+        # orice acțiune pentru care Yahoo nu trimite acționariatul (BVB, ETF-uri, erori de rețea).
+        if not found_inst:
+            return None, None, ceo_name, None
 
         retail_pct = max(0, 100 - (insider_pct + inst_pct))
         df_summary = pd.DataFrame({
@@ -755,8 +794,9 @@ def get_detailed_ownership_and_execs(ticker_sym):
             df_details = pd.DataFrame()
 
         return df_summary, df_details, ceo_name, inst_pct
-    except:
-        return None, None, "N/A", 0.0
+    except Exception as e:
+        print(f"DEBUG: acționariat {ticker_sym} indisponibil: {e}")
+        return None, None, "N/A", None
 
 def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data, df_fred):
     """

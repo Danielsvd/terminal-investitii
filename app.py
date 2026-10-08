@@ -386,8 +386,10 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
     score = 50
     details = []
     
-    # 1. ANALIZA SMART MONEY
-    if inst_pct > 70:
+    # 1. ANALIZA SMART MONEY (None = date lipsă: pilonul nu se punctează)
+    if inst_pct is None:
+        details.append("ℹ️ **Smart Money:** acționariatul nu este disponibil. Pilon neinclus.")
+    elif inst_pct > 70:
         score += 15
         details.append("✅ **Smart Money:** Deținere de elită (>70%). Suport instituțional masiv.")
     elif inst_pct > 50:
@@ -398,7 +400,9 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
         details.append("⚠️ **Smart Money:** Deținere instituțională slabă. Risc de volatilitate retail.")
 
     # 2. ANALIZA EVALUARE
-    if mos_val > 25:
+    if mos_val is None:
+        details.append("ℹ️ **Evaluare:** modelul DCF nu are date suficiente. Pilon neinclus.")
+    elif mos_val > 25:
         score += 15
         details.append(f"✅ **Evaluare:** Marjă de siguranță excelentă ({mos_val:.1f}%). Preț subevaluat.")
     elif mos_val < -10:
@@ -747,6 +751,10 @@ def calculate_health_score_ext(info):
             
     except Exception as e:
         print(f"DEBUG: scor sănătate incomplet: {e}")
+
+    # Fără niciun indicator de bilanț, scorul ar rămâne 5/10 („mediu") fără nicio bază.
+    if all(num(info, k) is None for k in ('debtToEquity', 'returnOnEquity', 'currentRatio')):
+        return None, pros, cons
     
     return max(1, min(10, score)), pros, cons
 
@@ -771,20 +779,24 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
     Audit Instituțional Complet (6 Piloni).
     Include protecție pentru date lipsă (NVS, BVB) și toate interpretările.
     """
-    sector = info.get('sector', 'Unknown')
+    sector = info.get('sector') or 'sector necunoscut'
     limits = get_sector_benchmarks(sector)
     
-    # Extragere sigură date (evităm erorile dacă lipsesc indicatori)
-    pe = info.get('trailingPE') or 0
-    roe = info.get('returnOnEquity') or 0
-    de = info.get('debtToEquity') or 0
-    cr = info.get('currentRatio') or 0
+    # Valorile lipsă rămân None și pilonul respectiv e sărit. Înainte deveneau 0 și apăreau
+    # verdicte false („ROE 0%: eficiență sub-optimă", „0% datorii: structură sănătoasă").
+    pe = num(info, 'trailingPE') or 0
+    roe = num(info, 'returnOnEquity')
+    de = num(info, 'debtToEquity')
+    cr = num(info, 'currentRatio') or 0
     
-    # Protecție anti-crash pentru NVS (Transformăm None în 0 sau 1)
     safe_alpha = alpha if alpha is not None else 0
-    safe_beta = beta if beta is not None else 1.0 # Beta 1.0 înseamnă risc neutru
+    safe_beta = beta
     
     audit = []
+    missing = [name for name, v in (("P/E", num(info, 'trailingPE')), ("ROE", roe), ("datorii", de),
+                                     ("lichiditate", num(info, 'currentRatio')), ("beta", beta)) if v is None]
+    if missing:
+        audit.append(f"ℹ️ **DATE LIPSĂ:** {', '.join(missing)}. Pilonii respectivi nu sunt evaluați.")
 
     # --- 1. EVALUARE VS SECTOR ---
     if pe > 0:
@@ -797,15 +809,15 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
             audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector} (P/E {pe:.1f}).")
 
     # --- 2. PROFITABILITATE & EFICIENȚĂ ---
-    if roe > 0.25:
+    if roe is not None and roe > 0.25:
         audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {roe*100:.1f}%). Management performant.")
-    elif roe < 0.10:
+    elif roe is not None and roe < 0.10:
         audit.append(f"📉 **PROFITABILITATE:** Eficiență sub-optimă ({roe*100:.1f}%). Capitalul nu produce suficient.")
 
     # --- 3. SOLVABILITATE (DATORII) ---
-    if de > limits['de_max']:
+    if de is not None and de > limits['de_max']:
         audit.append(f"🚩 **SOLVABILITATE:** Îndatorare peste limita sectorului ({de:.1f}%). Risc structural ridicat.")
-    else:
+    elif de is not None:
         audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({de:.1f}% debt/equity).")
 
     # --- 4. LICHIDITATE (CASH-FLOW) ---
@@ -822,8 +834,10 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
     elif safe_alpha < -0.02:
         audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({alpha_p:.1f}%). Activul pierde în fața pieței.")
 
-    # --- 6. RISC DE PIAȚĂ (BETA - Reparat pentru NVS) ---
-    if safe_beta > 1.3:
+    # --- 6. RISC DE PIAȚĂ (BETA) ---
+    if safe_beta is None:
+        pass
+    elif safe_beta > 1.3:
         audit.append(f"🎢 **VOLATILITATE (Beta {safe_beta:.2f}):** Risc ridicat. Mișcări mult mai ample decât piața.")
     elif safe_beta < 0.8:
         audit.append(f"🛡️ **VOLATILITATE (Beta {safe_beta:.2f}):** Profil defensiv. Stabilă în perioade de criză.")
@@ -833,29 +847,16 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
     return audit
 
 def calculate_altman_z(info):
-    """Calcul Altman Z-Score recalibrat pentru a preveni erorile de miliarde."""
-    try:
-        total_assets = info.get('totalAssets') or info.get('totalAssetsNetModularEquity') or 1
-        working_cap = (info.get('totalCurrentAssets', 0) or 0) - (info.get('totalCurrentLiabilities', 0) or 0)
-        A = (working_cap / total_assets) * 1.2
-        B = ((info.get('retainedEarnings', 0) or 0) / total_assets) * 1.4
-        ebit = info.get('ebit', 0) or info.get('operatingIncome', 0) or 0
-        C = (ebit / total_assets) * 3.3
-        m_cap = info.get('marketCap', 0) or 0
-        t_liab = info.get('totalLiabilitiesNetModularEquity') or info.get('totalLiabilities') or 1
-        
-        raw_ratio = m_cap / t_liab
-        D = (raw_ratio / 1000 if raw_ratio > 100 else raw_ratio) * 0.6
-        E = ((info.get('totalRevenue', 0) or 0) / total_assets) * 1.0
-        
-        z_score = A + B + C + D + E
-        final_score = min(z_score, 15.0)
+    """Altman Z-Score: DEZACTIVAT până la Etapa 2.
 
-        status, color = ("Safe Zone", "#3FB950") if final_score > 2.99 else \
-                        (("Grey Zone", "#D29922") if final_score >= 1.81 else ("Distress", "#F85149"))
-        return final_score, status, color, "Probabilitate de faliment neglijabilă."
-    except:
-        return 0.0, "Eroare", "#8B949E", "Date incomplete."
+    Varianta veche citea din `info` câmpuri pe care Yahoo nu le trimite (active totale,
+    rezultat reportat, EBIT). Cu date complete scorul ieșea mereu 15 („Safe Zone"), iar
+    fără date ieșea 0 și declanșa o alertă falsă de faliment (ex. Apple: -20 puncte).
+    În Etapa 2 se calculează din bilanț și contul de profit și pierdere.
+
+    Întoarce (None, status, culoare, mesaj); apelanții tratează None ca pilon lipsă.
+    """
+    return None, "N/A", "#8B949E", "Altman Z se calculează din situațiile financiare (Etapa 2)."
 
 def calculate_margin_of_safety(current_price, fair_value):
     """Calculează marja de siguranță între prețul actual și valoarea intrinsecă."""
@@ -927,6 +928,46 @@ cloud_session.headers.update({
 })
 
 # --- FUNCȚIE GET STOCK DATA (FINAL - SMART MODE) ---
+def _safe_info(t):
+    """`Ticker.info` completat cu ce se poate lua din `fast_info`.
+
+    Pe Streamlit Cloud, Yahoo poate refuza endpoint-ul de fundamentale (info, acționariat,
+    opțiuni) în timp ce prețurile și situațiile financiare merg. Atunci `info` vine aproape gol.
+    Moneda, capitalizarea și prețul vin din endpoint-ul de prețuri, care funcționează.
+    Cheia `_fundamentals_available` spune interfeței dacă există date fundamentale.
+    """
+    try:
+        info = dict(t.info or {})
+    except Exception as e:
+        print(f"DEBUG: info indisponibil pentru {getattr(t, 'ticker', '?')}: {e}")
+        info = {}
+    try:
+        fi = t.fast_info
+        for key, attr in (("currency", "currency"), ("marketCap", "market_cap"),
+                          ("previousClose", "previous_close"), ("currentPrice", "last_price")):
+            if info.get(key) is None:
+                try:
+                    value = getattr(fi, attr)
+                    if value is not None:
+                        info[key] = value
+                except Exception as e:
+                    print(f"DEBUG: fast_info.{attr} indisponibil: {e}")
+    except Exception as e:
+        print(f"DEBUG: fast_info indisponibil: {e}")
+    info["_fundamentals_available"] = any(
+        num(info, k) is not None for k in ("trailingPE", "returnOnEquity", "debtToEquity", "profitMargins", "bookValue")
+    )
+    return info
+
+
+def _safe_earnings(t):
+    try:
+        return getattr(t, 'earnings_history', None)
+    except Exception as e:
+        print(f"DEBUG: earnings indisponibil: {e}")
+        return None
+
+
 @st.cache_data(ttl=900)
 def get_stock_data(symbol):
     try:
@@ -942,12 +983,12 @@ def get_stock_data(symbol):
             t_ro = yf.Ticker(sym_ro)
             hist_ro = t_ro.history(period="5y")
             if not hist_ro.empty:
-                return hist_ro, t_ro.info, getattr(t_ro, 'earnings_history', None), sym_ro
+                return hist_ro, _safe_info(t_ro), _safe_earnings(t_ro), sym_ro
 
         if hist.empty:
             return None, None, None, symbol
 
-        return hist, t.info, getattr(t, 'earnings_history', None), symbol
+        return hist, _safe_info(t), _safe_earnings(t), symbol
 
     except Exception as e:
         # Dacă apare o eroare de conexiune, o afișăm în consolă pentru debug, nu blocăm UI-ul
@@ -1943,6 +1984,9 @@ def main():
             c1.metric("Sector", info.get('sector') or 'N/A')
             c2.metric("Industrie", info.get('industry') or 'N/A')
             c3.metric("Capitalizare", format_num(info.get('marketCap')))             
+            if not info.get('_fundamentals_available', True):
+                st.warning(f"⚠️ Yahoo nu a trimis datele fundamentale pentru {real_sym} (P/E, ROE, datorii, sector, analiști, acționariat). "
+                           "Indicatorii bazați pe ele apar N/A și nu intră în scoruri. Prețurile, graficele și situațiile financiare anuale sunt disponibile.")
         
         # --- 1. DEFINIREA PREȚULUI (VITAL PENTRU CALCULE) ---
             # Luăm ultimul preț disponibil din istoricul deja descărcat
@@ -2203,30 +2247,42 @@ def main():
             st.subheader("🏁 Peer Review: Poziționarea față de Liderii de Sector")
             
             # Datele firmei curente
-            my_pe = info.get('trailingPE', 0) or 0
-            my_roe = (info.get('returnOnEquity', 0) or 0) * 100
-            my_roa = (info.get('returnOnAssets', 0) or 0) * 100
-            my_margin = (info.get('profitMargins', 0) or 0) * 100
+            # None = indicator lipsă: cardul arată N/A, nu „0.0 🟢 Atractiv"
+            my_pe = num(info, 'trailingPE')
+            pct_or_none = lambda k: num(info, k) * 100 if num(info, k) is not None else None
+            my_roe, my_roa, my_margin = pct_or_none('returnOnEquity'), pct_or_none('returnOnAssets'), pct_or_none('profitMargins')
             
             # --- PASUL 1: CARDURILE DE STATUS (SUS) ---
             c_p1, c_p2, c_p3, c_p4 = st.columns(4)
             
             with c_p1:
-                st.metric("P/E vs Sector", f"{my_pe:.1f}", 
-                          f"{'🔴 Scump' if my_pe > 25 else '🟢 Atractiv'}")
+                if my_pe is not None and my_pe > 0:
+                    st.metric("P/E vs Sector", f"{my_pe:.1f}", 
+                              f"{'🔴 Scump' if my_pe > 25 else '🟢 Atractiv'}")
+                else:
+                    st.metric("P/E vs Sector", "N/A")
             
             with c_p2:
-                st.metric("ROE vs Sector", f"{my_roe:.1f}%", 
-                          f"{'🟢 Lider' if my_roe > 15 else '🟡 Mediu'}")
+                if my_roe is not None:
+                    st.metric("ROE vs Sector", f"{my_roe:.1f}%", 
+                              f"{'🟢 Lider' if my_roe > 15 else '🟡 Mediu'}")
+                else:
+                    st.metric("ROE vs Sector", "N/A")
 
             with c_p3:
                 # Interpretare profesională pentru ROA (peste 5% e considerat bun)
-                roa_status = "💎 Excelent" if my_roa > 5 else "⚠️ Scăzut"
-                st.metric("ROA vs Sector", f"{my_roa:.1f}%", roa_status)
+                if my_roa is not None:
+                    roa_status = "💎 Excelent" if my_roa > 5 else "⚠️ Scăzut"
+                    st.metric("ROA vs Sector", f"{my_roa:.1f}%", roa_status)
+                else:
+                    st.metric("ROA vs Sector", "N/A")
             
             with c_p4:
-                st.metric("Marjă Netă", f"{my_margin:.1f}%", 
-                          f"{'🚀 Eficient' if my_margin > 15 else '⚖️ Standard'}")    
+                if my_margin is not None:
+                    st.metric("Marjă Netă", f"{my_margin:.1f}%", 
+                              f"{'🚀 Eficient' if my_margin > 15 else '⚖️ Standard'}")
+                else:
+                    st.metric("Marjă Netă", "N/A")
 
             st.write("") # Mic spațiu între carduri și tabel
 
@@ -2248,7 +2304,7 @@ def main():
                 else:
                     st.info("Informații despre competitori indisponibile pentru acest simbol.")
 
-            st.caption(f"💡 Analiza compară eficiența {real_sym} cu giganții din sectorul {info.get('sector')}.")
+            st.caption(f"💡 Analiza compară eficiența {real_sym} cu giganții din sectorul {info.get('sector') or 'necunoscut (Yahoo nu a trimis sectorul)'}.")
             st.markdown("---")
             
             # 4. Financiar & Raportări
@@ -2479,7 +2535,11 @@ def main():
             display_alpha = f"{alpha_val*100:.1f}%" if alpha_val is not None else "N/A"
 
             # 3. STABILIM CULOAREA SCORULUI
-            h_color = "#3FB950" if h_score >= 8 else ("#D29922" if h_score >= 5 else "#F85149")
+            if h_score is None:
+                h_color, h_display = "#8B949E", "N/A"
+            else:
+                h_color = "#3FB950" if h_score >= 8 else ("#D29922" if h_score >= 5 else "#F85149")
+                h_display = str(h_score)
             
             c_left, c_right = st.columns([1, 2])
             
@@ -2487,14 +2547,14 @@ def main():
                 st.markdown(f"""
                 <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {h_color}; text-align:center;">
                     <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sănătate Financiară</p>
-                    <h1 style="color:{h_color}; margin:15px 0; font-size:54px;">{h_score}<span style="font-size:18px;">/10</span></h1>
+                    <h1 style="color:{h_color}; margin:15px 0; font-size:54px;">{h_display}<span style="font-size:18px;">/10</span></h1>
                     <hr style="border-color:#30363D;">
                     <p style="font-size:13px; color:#8B949E;">Beta: {display_beta} | Alpha: {display_alpha}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
             with c_right:
-                st.markdown(f"**Analiză de Specialist în Sectorul:** `{info.get('sector', 'N/A')}`")
+                st.markdown(f"**Analiză de Specialist în Sectorul:** `{info.get('sector') or 'N/A'}`")
                 for line in audit_report:
                     st.info(line)
 
@@ -2506,7 +2566,7 @@ def main():
             current_p = num(info, 'currentPrice') or num(info, 'previousClose') or last_close
                 
             target_val = 0.0
-            mos_val = 0.0
+            mos_val = None  # None = DCF indisponibil; nu intră în scoruri
             mos_verdict = "N/A"
             mos_color = "#8B949E"
 
@@ -2659,7 +2719,7 @@ def main():
                 # Colectare date necesare pentru SWOT
                 c_news_ai = get_company_news_rss(real_sym)
                 s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
-                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if dcf_calc > 0 else 0
+                mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if dcf_calc > 0 else None
                 z_val_swot, _, _, _ = calculate_altman_z(info)
                 
                 # Generare date SWOT
@@ -2775,8 +2835,8 @@ def main():
             except:
                 curr_spread = 0.5
 
-            s_inst = inst_percent if inst_percent is not None else 0
-            s_mos = mos_val if 'mos_val' in dir() or mos_val is not None else 0
+            s_inst = inst_percent  # None = acționariat indisponibil
+            s_mos = mos_val
             s_rvol = rvol if 'rvol' in dir() or rvol is not None else 1.0
             
             # Apelăm funcția PRO folosind noul spread 10Y-3M
@@ -2784,6 +2844,9 @@ def main():
             
             r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
             r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
+            # Fără acționariat, DCF, ROE și datorii, scorul ar fi doar 50 + macro: nu e un verdict.
+            if s_inst is None and s_mos is None and num(info, 'returnOnEquity') is None and num(info, 'debtToEquity') is None:
+                r_color, r_label = "#8B949E", "DATE INSUFICIENTE"
 
             # Afișare UI
             c_res1, c_res2 = st.columns([1, 2])
@@ -2803,9 +2866,11 @@ def main():
 
                 # --- AFISARE SCOR SĂNĂTATE FINANCIARĂ UNIFORMIZAT ---
                 # Stabilim pictograma în funcție de nota de sănătate (h_score)
-                h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
-                
-                st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
+                if h_score is None:
+                    st.write("⚪ **Sănătate Financiară:** indisponibilă (lipsesc datoriile, ROE și lichiditatea).")
+                else:
+                    h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
+                    st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
 
             st.markdown("---")
             
@@ -2829,9 +2894,14 @@ def main():
                         worst_m = df_stats.loc[df_stats['Win Rate (%)'].idxmin()]
                         
                         st.markdown("#### 💡 Analiză Quant")
-                        st.success(f"**🌟 Cea mai bună lună: {best_m['Luna']}**\n\nIstoric, prețul a crescut în **{best_m['Win Rate (%)']:.0f}%** din cazuri, aducând un randament mediu de **+{best_m['Randament Mediu (%)']:.2f}%**.")
+                        # Randamentul mediu poate avea orice semn: se afișează cu semnul real, nu cu „+" sau „scădere" fix.
+                        # Numărul de ani contează: cu 5 observații, 80% înseamnă 4 din 5.
+                        best_n, worst_n = int(best_m['Ani']), int(worst_m['Ani'])
+                        best_wins = round(best_m['Win Rate (%)'] * best_n / 100)
+                        worst_wins = round(worst_m['Win Rate (%)'] * worst_n / 100)
+                        st.success(f"**🌟 Cea mai bună lună: {best_m['Luna']}**\n\nIstoric, prețul a crescut în **{best_wins} din {best_n} ani** ({best_m['Win Rate (%)']:.0f}%), cu un randament mediu de **{best_m['Randament Mediu (%)']:+.2f}%**.")
                         
-                        st.error(f"**🚨 Cea mai slabă lună: {worst_m['Luna']}**\n\nIstoric, a avut o rată de succes de doar **{worst_m['Win Rate (%)']:.0f}%**, cu o scădere medie de **{worst_m['Randament Mediu (%)']:.2f}%**.")
+                        st.error(f"**🚨 Cea mai slabă lună: {worst_m['Luna']}**\n\nIstoric, prețul a crescut în doar **{worst_wins} din {worst_n} ani** ({worst_m['Win Rate (%)']:.0f}%), cu un randament mediu de **{worst_m['Randament Mediu (%)']:+.2f}%**.")
                         
                         st.info("📉 **Cum folosești acest modul:** Elimină ghicitul și emoția. Dacă dorești să cumperi această acțiune, dar te afli într-o lună cu Win Rate sub 40%, șansele matematice sunt împotriva ta. Așteaptă luna verde pentru a deschide o poziție la un preț statistic favorabil.")
                 else:
@@ -2989,14 +3059,14 @@ def main():
             st.subheader("👑 Decizie Master AI")
             
             # --- PROTECȚIE VARIABILE (inițializare explicită — fără locals()) ---
-            s_inst = inst_percent if inst_percent is not None else 0
-            s_mos = mos_val if 'mos_val' in dir() else 0
+            s_inst = inst_percent  # None = acționariat indisponibil
+            s_mos = mos_val
             s_rvol = rvol if 'rvol' in dir() else 1.0
             s_score_final = s_score_val if 's_score_val' in dir() else 0
             opt_final = opt_data if 'opt_data' in dir() else None
             
             # Extragem datele specifice modulelor adiacente
-            z_score_val = z_val_swot if 'z_val_swot' in dir() else 3.0
+            z_score_val = z_val_swot if 'z_val_swot' in dir() else None
             cash_ratio = q_ratio if 'q_ratio' in dir() else 1.0
             ai_regime = regime_msg if 'regime_msg' in dir() else "Neutru"
 
@@ -3457,11 +3527,19 @@ def main():
                         st.plotly_chart(fig_sec, use_container_width=True, key=f"pie_sec_{currency_symbol}")
 
                         # VERDICT DIVERSIFICARE
-                        max_sector = df_sectors.iloc[0]
-                        if max_sector['Pondere %'] > 40:
-                            st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {max_sector['Pondere %']:.1f}% din portofoliu. Riști mult dacă acest sector scade.")
+                        # 'Nedefinit' = Yahoo nu a trimis sectorul (sau ETF): nu e un sector real și nu se evaluează.
+                        known = df_sectors[df_sectors['Sector'] != 'Nedefinit']
+                        undefined_pct = df_sectors.loc[df_sectors['Sector'] == 'Nedefinit', 'Pondere %'].sum()
+                        if known.empty:
+                            st.info("ℹ️ Sectoarele nu sunt disponibile de la Yahoo pentru aceste poziții, deci concentrarea pe sectoare nu se poate evalua.")
                         else:
-                            st.success(f"✅ **Diversificare bună:** Niciun sector nu depășește 40%.")
+                            max_sector = known.iloc[0]
+                            if max_sector['Pondere %'] > 40:
+                                st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {max_sector['Pondere %']:.1f}% din portofoliu. Riști mult dacă acest sector scade.")
+                            else:
+                                st.success(f"✅ **Diversificare bună:** Niciun sector cunoscut nu depășește 40%.")
+                            if undefined_pct > 0:
+                                st.caption(f"ℹ️ {undefined_pct:.1f}% din portofoliu are sector necunoscut și nu intră în această evaluare.")
                     else:
                         st.info("Nu există date sectoriale.")
 
