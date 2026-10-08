@@ -2842,27 +2842,50 @@ def main():
             # --- AFISARE REZULTATE ---
             if price_f > 0:
                 cv1, cv2, cv3 = st.columns(3)
-                css = "border: 2px solid {c}; padding: 20px; border-radius: 12px; text-align: center; background-color: #161B22; height: 180px; display: flex; flex-direction: column; justify-content: center;"
-                
+                def _value_card(title, value, color, verdict="", note="", unit=""):
+                    """Card de evaluare cu patru rânduri fixe (titlu, valoare, verdict, notă), ca
+                    cele trei carduri să rămână aliniate indiferent câte rânduri au conținut.
+                    Marginile sunt puse explicit: stilul implicit Streamlit pentru <p>/<h1> scotea textul din chenar."""
+                    unit_html = f' <span style="font-size:14px; font-weight:400;">{html.escape(unit)}</span>' if unit else ""
+                    return (
+                        f'<div style="border:2px solid {color}; border-radius:12px; background-color:#161B22; '
+                        'box-sizing:border-box; min-height:200px; padding:18px 16px; text-align:center; '
+                        'display:flex; flex-direction:column;">'
+                        f'<div style="color:#8B949E; font-size:13px; line-height:18px; text-transform:uppercase; letter-spacing:0.3px;">{html.escape(title)}</div>'
+                        f'<div style="color:{"white" if color == "#30363D" else color}; font-size:40px; line-height:46px; font-weight:700; flex:1; display:flex; align-items:center; justify-content:center; gap:8px;">{html.escape(value)}{unit_html}</div>'
+                        f'<div style="color:{color if color != "#30363D" else "#8B949E"}; font-size:13px; line-height:18px; font-weight:700; min-height:18px;">{html.escape(verdict)}</div>'
+                        f'<div style="color:#C9D1D9; font-size:12px; line-height:16px; min-height:16px;">{html.escape(note)}</div>'
+                        '</div>'
+                    )
+
                 with cv1:
-                    st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Preț Curent</p><h1 style="color:white; margin:10px 0;">{price_f:.2f} <span style="font-size:14px;">{t_curr}</span></h1></div>', unsafe_allow_html=True)
-                
+                    st.markdown(_value_card("Preț curent", f"{price_f:.2f}", "#30363D", unit=t_curr), unsafe_allow_html=True)
+
                 with cv2:
                     if graham_calc is not None:
                         diff_g = ((price_f - graham_calc) / graham_calc) * 100
                         g_col = "#3FB950" if price_f < graham_calc else "#F85149"
-                        st.markdown(f'<div style="{css.format(c=g_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Graham (formula revizuită)</p><h1 style="color:{g_col}; margin:10px 0;">{graham_calc:.2f}</h1><p style="color:{g_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)</p><p style="color:#8B949E; font-size:11px; margin:0;">{html.escape(graham_note)} · {graham_num_txt}</p></div>', unsafe_allow_html=True)
+                        st.markdown(_value_card(
+                            "Graham (formula revizuită)", f"{graham_calc:.2f}", g_col,
+                            verdict=f'{"SUBEVALUAT" if price_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)',
+                            note=f"{graham_note} · {graham_num_txt}"), unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Graham N/A</p><p style="color:#8B949E; font-size:12px;">{html.escape(graham_note)}</p><p style="color:#8B949E; font-size:11px; margin:0;">{graham_num_txt}</p></div>', unsafe_allow_html=True)
+                        st.markdown(_value_card("Graham (formula revizuită)", "N/A", "#30363D",
+                                                verdict=graham_note, note=graham_num_txt), unsafe_allow_html=True)
 
                 with cv3:
                     if dcf_calc is not None and dcf_calc > 0:
                         diff_d = ((price_f - dcf_calc) / dcf_calc) * 100
                         d_col = "#3FB950" if price_f < dcf_calc else "#F85149"
-                        st.markdown(f'<div style="{css.format(c=d_col)}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">Valoare Justă (DCF pe FCF)</p><h1 style="color:{d_col}; margin:10px 0;">{dcf_calc:.2f}</h1><p style="color:{d_col}; font-weight:bold; font-size:12px;">{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)</p></div>', unsafe_allow_html=True)
+                        st.markdown(_value_card(
+                            "Valoare justă (DCF pe FCF)", f"{dcf_calc:.2f}", d_col,
+                            verdict=f'{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)',
+                            note=f"scont {discount_rate * 100:.1f}% · g terminal {gterm_val:.1f}%"), unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<div style="{css.format(c="#30363D")}"><p style="color:#8B949E; font-size:13px; text-transform:uppercase;">DCF N/A</p><p style="color:#8B949E; font-size:12px;">{html.escape(dcf_res["reason"] or "Date insuficiente.")}</p></div>', unsafe_allow_html=True)
+                        st.markdown(_value_card("Valoare justă (DCF pe FCF)", "N/A", "#30363D",
+                                                note=dcf_res["reason"] or "Date insuficiente."), unsafe_allow_html=True)
 
+            st.write("")  # spațiu între carduri și tabelul de sensibilitate
             for dcf_warning in dcf_res["warnings"]:
                 st.warning(f"⚠️ DCF: {dcf_warning}")
 
