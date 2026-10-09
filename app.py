@@ -2962,7 +2962,7 @@ def main():
                         '</div>'
                     )
 
-                # Verde / galben / roșu; galben = în banda neutră din fund.VALUATION_NEUTRAL_BAND.
+                # Verde / galben / roșu; galben = în banda neutră de ±5% (fund.VALUATION_NEUTRAL_BAND).
                 VERDICT_COLORS = {"under": "#3FB950", "fair": "#D29922", "over": "#F85149"}
                 with cv1:
                     st.markdown(_value_card("Preț curent", f"{price_f:.2f}", "#30363D", unit=t_curr), unsafe_allow_html=True)

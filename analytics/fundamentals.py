@@ -786,7 +786,7 @@ def leverage_ratios(annual_income, annual_balance, quarterly_income=None, quarte
 
 # --- Verdict de evaluare -----------------------------------------------------
 
-VALUATION_NEUTRAL_BAND = 0.10   # ±10% în jurul valorii estimate: diferența e sub precizia modelului
+VALUATION_NEUTRAL_BAND = 0.05   # ±5% în jurul valorii estimate (ales de Daniel, 09.10.2026); sub atât, diferența e zgomot
 
 
 def valuation_verdict(price, value, band=VALUATION_NEUTRAL_BAND):
