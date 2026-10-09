@@ -44,13 +44,25 @@ INFO_MAP = {
     "p/bv ttm": ("priceToBook", 1.0),
     "eps ttm": ("trailingEps", 1.0),
     "rentabilitate active (roa)": ("returnOnAssets", 100.0),
+    "rentabilitate active (roa) ttm": ("returnOnAssets", 100.0),
     "rentabilitate capital (roe)": ("returnOnEquity", 100.0),
+    "rentabilitate capital (roe) ttm": ("returnOnEquity", 100.0),
     "marja neta ttm": ("profitMargins", 100.0),
     "marja operationala": ("operatingMargins", 100.0),
     "lichiditate curenta": ("currentRatio", 1.0),
     "lichiditatea imediata": ("quickRatio", 1.0),
 }
+# Etichetele din foaie se potrivesc exact (după normalizare): o redenumire în foaie scoate
+# indicatorul din mapare fără nicio eroare. `unmapped_info_keys` spune ce lipsește.
 PERIOD_LABEL = "raportare"
+
+
+def unmapped_info_keys(values):
+    """Cheile `info` din INFO_MAP pentru care foaia nu are niciun rând cu eticheta așteptată.
+    Listă goală = toți indicatorii mapați au fost găsiți. Folosită pentru avertizare în aplicație."""
+    labels = {normalize_label(row[1]) for row in (values or [])[1:] if len(row) > 1 and row[1] is not None}
+    found = {info_key for label, (info_key, _) in INFO_MAP.items() if label in labels}
+    return sorted({info_key for info_key, _ in INFO_MAP.values()} - found)
 
 
 def parse_bvb_sheet(values):
