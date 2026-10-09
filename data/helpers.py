@@ -224,3 +224,17 @@ def entry_target_view(price, target):
     dist_pct = (price - target) / target * 100
     color = "#D29922" if dist_pct < 5 else "#8B949E"
     return f"{target:.2f}", f"⏳ +{dist_pct:.1f}% peste țintă", color
+
+
+def scale_number(value):
+    """Număr scalat pentru afișare: „4.97 T", „76.89 B", „57.07 M" sau „1,234.50".
+    Pragul se compară cu modulul, ca valorile negative mari (o pierdere de 11,29 mld.)
+    să fie scalate la fel ca cele pozitive, cu semnul păstrat."""
+    size = abs(value)
+    if size >= 1e12:
+        return f"{value / 1e12:.2f} T"
+    if size >= 1e9:
+        return f"{value / 1e9:.2f} B"
+    if size >= 1e6:
+        return f"{value / 1e6:.2f} M"
+    return f"{value:,.2f}"

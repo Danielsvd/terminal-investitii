@@ -201,3 +201,15 @@ def test_entry_target_view_cu_tinta():
     # la țintă sau sub ea -> zonă de achiziție
     assert entry_target_view(100.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
     assert entry_target_view(95.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
+
+
+from data.helpers import scale_number  # noqa: E402
+
+
+def test_scale_number_pozitive_si_negative():
+    assert scale_number(4.97e12) == "4.97 T" and scale_number(76.89e9) == "76.89 B"
+    assert scale_number(57.07e6) == "57.07 M" and scale_number(1234.5) == "1,234.50"
+    # INTC pe aplicația de test: profit net -11.288.999.936 apărea nescalat
+    assert scale_number(-11_288_999_936.0) == "-11.29 B"
+    assert scale_number(-2.5e6) == "-2.50 M" and scale_number(-950.0) == "-950.00"
+    assert scale_number(0) == "0.00"

@@ -32,7 +32,7 @@ from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view
+from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -291,10 +291,7 @@ def format_num(val, is_pct=False):
     if pd.isna(val): return "N/A"
         
     if is_pct: return f"{val * 100:.2f}%"
-    if val >= 1e12: return f"{val/1e12:.2f} T"
-    if val >= 1e9: return f"{val/1e9:.2f} B"
-    if val >= 1e6: return f"{val/1e6:.2f} M"
-    return f"{val:,.2f}"
+    return scale_number(val)
 
 def format_amount(val):
     """Sumă din situațiile financiare, scalată (mld / mil), cu semn. None sau NaN -> 'N/A'."""
