@@ -175,3 +175,29 @@ def test_parse_ecb_csv_sare_peste_valorile_lipsa():
 def test_parse_ecb_csv_raspuns_invalid_da_none():
     for bad in ("", None, "<html>503</html>", "KEY,TIME_PERIOD\nX,2026-08\n", "TIME_PERIOD,OBS_VALUE\n"):
         assert parse_ecb_csv(bad) is None
+
+
+from data.helpers import entry_target_view, positive_or_none  # noqa: E402
+
+
+def test_positive_or_none_celula_goala_zero_si_erori_dau_none():
+    for raw in ("", None, "0", "0,00", "#DIV/0!", "abc", -3, float("nan")):
+        assert positive_or_none(raw) is None
+    assert positive_or_none("243") == 243.0
+    assert positive_or_none("1,15 lei") == 1.15
+
+
+def test_entry_target_view_fara_tinta_nu_afiseaza_zero():
+    text, status, color = entry_target_view(1.23, None)
+    assert text == "N/A" and "0.0%" not in status and "țintă în watchlist" in status
+    assert color == "#8B949E"
+
+
+def test_entry_target_view_cu_tinta():
+    # AAPL din aplicația de test: 340,65 față de 243 -> (340,65 - 243) / 243 = 40,2%
+    assert entry_target_view(340.65, 243.0) == ("243.00", "⏳ +40.2% peste țintă", "#8B949E")
+    # 102 față de 100 -> 2% peste, sub pragul de 5% -> galben
+    assert entry_target_view(102.0, 100.0) == ("100.00", "⏳ +2.0% peste țintă", "#D29922")
+    # la țintă sau sub ea -> zonă de achiziție
+    assert entry_target_view(100.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
+    assert entry_target_view(95.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")

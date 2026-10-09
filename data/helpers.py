@@ -196,3 +196,31 @@ def parse_ecb_csv(text):
     if not valid:
         return None
     return max(valid, key=lambda item: item[0])
+
+
+def positive_or_none(value):
+    """Prețul țintă dintr-o celulă de foaie: număr strict pozitiv sau None.
+
+    `smart_to_float` dă 0 pentru celula goală, text sau eroare de foaie; un preț țintă
+    de 0 nu există, deci 0, negativul și NaN înseamnă „fără țintă", nu „țintă 0".
+    """
+    number = smart_to_float(value)
+    if number is None or number != number or number <= 0:
+        return None
+    return float(number)
+
+
+def entry_target_view(price, target):
+    """Textele și culoarea cardului „Țintă intrare": (text țintă, status, culoare).
+
+    Fără țintă (None) cardul arată „N/A" și nu calculează nicio distanță: înainte, ținta
+    lipsă apărea ca „0.00" cu „+0.0% peste țintă". Cu țintă: verde dacă prețul e la sau sub
+    ea, galben dacă e la mai puțin de 5% peste, gri altfel.
+    """
+    if target is None or target != target or target <= 0:
+        return "N/A", "Fără preț țintă în watchlist", "#8B949E"
+    if price <= target:
+        return f"{target:.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
+    dist_pct = (price - target) / target * 100
+    color = "#D29922" if dist_pct < 5 else "#8B949E"
+    return f"{target:.2f}", f"⏳ +{dist_pct:.1f}% peste țintă", color

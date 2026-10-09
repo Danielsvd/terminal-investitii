@@ -31,7 +31,7 @@ from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
+from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -470,9 +470,9 @@ def get_watchlist_target(symbol):
         if not df_wl.empty and 'Symbol' in df_wl.columns:
             match = df_wl[df_wl['Symbol'] == symbol]
             if not match.empty:
-                return smart_to_float(match.iloc[0]['TargetPrice'])
-    except:
-        pass
+                return positive_or_none(match.iloc[0]['TargetPrice'])
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        print(f"DEBUG: preț țintă din watchlist pentru {symbol}: {exc}")
     return None
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -2295,21 +2295,19 @@ def main():
 
             # --- 3. AFIȘARE CARD DINAMIC CONSOLIDAT (ȚINTĂ | LIVE | STOP) ---
             if curr_price > 0:
-                dist_pct = ((curr_price - target_p) / target_p) * 100 if target_p else 0
                 dist_sl = ((curr_price - sl_price) / curr_price) * 100 if sl_price else 0
                 sl_display = f"{sl_price:.2f}" if sl_price else "N/A"
                 sl_risk_display = f"Risc: -{dist_sl:.1f}%{sl_hit_note}" if sl_price else "Istoric insuficient pentru ATR"
                 
                 # Culori pentru statusul țintei
-                t_color = "#3FB950" if curr_price <= (target_p or 0) else ("#D29922" if dist_pct < 5 else "#8B949E")
-                t_status = "🚀 ZONĂ ACHIZIȚIE" if curr_price <= (target_p or 0) else f"⏳ +{dist_pct:.1f}% peste țintă"
+                target_text, t_status, t_color = entry_target_view(curr_price, target_p)
 
                 st.markdown(f"""
                     <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid #30363D; margin-bottom:20px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                             <div style="flex: 1; min-width: 100px;">
                                 <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Țintă Intrare</p>
-                                <h2 style="color:white; margin:5px 0; font-size:22px;">{target_p or 0:.2f} <span style="font-size:12px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
+                                <h2 style="color:white; margin:5px 0; font-size:22px;">{target_text} <span style="font-size:12px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: center; border-left: 1px solid #30363D; border-right: 1px solid #30363D;">
                                 <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
