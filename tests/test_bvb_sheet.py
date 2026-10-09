@@ -111,3 +111,26 @@ def test_reprice_nu_inventeaza():
     assert reprice({"trailingEps": 0.04, "trailingPE": 30.85, "priceToBook": 2.11}, None) == {}   # fără preț
     assert reprice({"trailingEps": 0.04, "priceToBook": 2.11}, 1.23) == {"trailingPE": pytest.approx(30.75)}
     assert reprice({}, 1.23) == {}
+
+
+from data.bvb_sheet import unmapped_info_keys  # noqa: E402
+
+
+def test_etichetele_roe_roa_cu_ttm_se_mapeaza():
+    # Din 09.10.2026 foaia are „Rentabilitate active (ROA) TTM" și „Rentabilitate capital (ROE) TTM".
+    sheet = [["Multipli", "Multilpi de preț", "SNP"],
+             ["11,44%", "Rentabilitate active (ROA) TTM", "4,66%"],
+             ["19,79%", "Rentabilitate capital (ROE) TTM", "7,67%"]]
+    info = parse_bvb_sheet(sheet)["SNP"]["info"]
+    assert info["returnOnAssets"] == pytest.approx(0.0466)
+    assert info["returnOnEquity"] == pytest.approx(0.0767)
+
+
+def test_unmapped_info_keys_semnaleaza_randurile_redenumite():
+    assert unmapped_info_keys(SHEET) == []                      # foaia de test are toate rândurile mapate
+    renamed = [row[:] for row in SHEET]
+    for row in renamed:
+        if len(row) > 1 and row[1] == "Rentabilitate capital (ROE)":
+            row[1] = "ROE anual"
+    assert unmapped_info_keys(renamed) == ["returnOnEquity"]
+    assert "trailingPE" in unmapped_info_keys([])               # foaie goală: nimic găsit

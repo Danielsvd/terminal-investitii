@@ -30,7 +30,7 @@ from analytics.portfolio import value_positions, portfolio_curve as build_portfo
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
-from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb
+from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv
 
 # =============================================================================
@@ -732,12 +732,17 @@ STATEMENT_RATIO_LABELS = {
 @st.cache_data(ttl=900, show_spinner=False)
 def load_bvb_fundamentals():
     """Indicatorii din foaia `BVB` a `portofoliu_db`, pe simbol (vezi data/bvb_sheet.py).
-    Dict gol dacă foaia nu poate fi citită. Doar citire: foaia nu e modificată niciodată de aici."""
+    Dict gol dacă foaia nu poate fi citită. Doar citire: foaia nu e modificată niciodată de aici.
+    Cheia `_unmapped` (nu e simbol) ține indicatorii mapați care nu au fost găsiți în foaie,
+    de regulă după o redenumire de rând."""
     try:
         ws = connect_to_gsheets("BVB")
         if not ws:
             return {}
-        return parse_bvb_sheet(ws.get_all_values())
+        values = ws.get_all_values()
+        parsed = parse_bvb_sheet(values)
+        parsed["_unmapped"] = unmapped_info_keys(values)
+        return parsed
     except Exception as e:
         print(f"DEBUG: foaia BVB nu a putut fi citită: {e}")
         return {}
@@ -2409,6 +2414,11 @@ def main():
                 else:
                     bvb_note += "P/E și P/BV nu au putut fi recalculate la prețul curent (EPS lipsă sau negativ): sunt cele din foaie."
                 st.caption(bvb_note)
+                bvb_unmapped = load_bvb_fundamentals().get("_unmapped") or []
+                if bvb_unmapped:
+                    st.warning("⚠️ Foaia BVB nu mai are rândurile așteptate pentru: "
+                               + ", ".join(STATEMENT_RATIO_LABELS.get(k, k) for k in bvb_unmapped)
+                               + ". Probabil rândul a fost redenumit; acești indicatori vin acum din Yahoo sau din situațiile financiare.")
             if info.get('_bvb_indicators'):
                 with st.expander(f"📄 Toți indicatorii din foaia BVB pentru {bvb_symbol(real_sym)}, față de piață"):
                     st.dataframe(pd.DataFrame(

@@ -418,6 +418,7 @@ def install_fakes():
 # --------------------------------------------------------------------------
 EXPECTED_MESSAGES = (
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
+    "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
     "Marja de siguranță indisponibilă",            # DCF neaplicabil (sector financiar, FCF negativ, fără situații)
     "DCF: Valoarea terminală reprezintă",          # avertisment informativ: pondere mare a valorii terminale
