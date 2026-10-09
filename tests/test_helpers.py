@@ -149,3 +149,67 @@ def test_smart_to_float_numeric_inputs_pass_through():
 def test_smart_to_float_empty_and_errors_give_zero():
     for bad in ("", None, float("nan"), "#DIV/0!", "N/A", "lei", True):
         assert smart_to_float(bad) == 0.0
+
+
+# --- parse_ecb_csv ----------------------------------------------------------
+
+from data.helpers import parse_ecb_csv  # noqa: E402
+
+ECB_CSV = (
+    "KEY,FREQ,REF_AREA,TIME_PERIOD,OBS_VALUE,OBS_STATUS\n"
+    "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-06,7.31,A\n"
+    "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-08,7.12,A\n"
+    "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-07,7.25,A\n"
+)
+
+
+def test_parse_ecb_csv_ia_cea_mai_recenta_luna_indiferent_de_ordine():
+    assert parse_ecb_csv(ECB_CSV) == ("2026-08", 7.12)
+
+
+def test_parse_ecb_csv_sare_peste_valorile_lipsa():
+    text = ECB_CSV + "IRS.M.RO.L.L40.CI.0000.RON.N.Z,M,RO,2026-09,,P\n"
+    assert parse_ecb_csv(text) == ("2026-08", 7.12)
+
+
+def test_parse_ecb_csv_raspuns_invalid_da_none():
+    for bad in ("", None, "<html>503</html>", "KEY,TIME_PERIOD\nX,2026-08\n", "TIME_PERIOD,OBS_VALUE\n"):
+        assert parse_ecb_csv(bad) is None
+
+
+from data.helpers import entry_target_view, positive_or_none  # noqa: E402
+
+
+def test_positive_or_none_celula_goala_zero_si_erori_dau_none():
+    for raw in ("", None, "0", "0,00", "#DIV/0!", "abc", -3, float("nan")):
+        assert positive_or_none(raw) is None
+    assert positive_or_none("243") == 243.0
+    assert positive_or_none("1,15 lei") == 1.15
+
+
+def test_entry_target_view_fara_tinta_nu_afiseaza_zero():
+    text, status, color = entry_target_view(1.23, None)
+    assert text == "N/A" and "0.0%" not in status and "țintă în watchlist" in status
+    assert color == "#8B949E"
+
+
+def test_entry_target_view_cu_tinta():
+    # AAPL din aplicația de test: 340,65 față de 243 -> (340,65 - 243) / 243 = 40,2%
+    assert entry_target_view(340.65, 243.0) == ("243.00", "⏳ +40.2% peste țintă", "#8B949E")
+    # 102 față de 100 -> 2% peste, sub pragul de 5% -> galben
+    assert entry_target_view(102.0, 100.0) == ("100.00", "⏳ +2.0% peste țintă", "#D29922")
+    # la țintă sau sub ea -> zonă de achiziție
+    assert entry_target_view(100.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
+    assert entry_target_view(95.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
+
+
+from data.helpers import scale_number  # noqa: E402
+
+
+def test_scale_number_pozitive_si_negative():
+    assert scale_number(4.97e12) == "4.97 T" and scale_number(76.89e9) == "76.89 B"
+    assert scale_number(57.07e6) == "57.07 M" and scale_number(1234.5) == "1,234.50"
+    # INTC pe aplicația de test: profit net -11.288.999.936 apărea nescalat
+    assert scale_number(-11_288_999_936.0) == "-11.29 B"
+    assert scale_number(-2.5e6) == "-2.50 M" and scale_number(-950.0) == "-950.00"
+    assert scale_number(0) == "0.00"

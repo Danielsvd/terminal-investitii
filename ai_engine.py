@@ -154,6 +154,17 @@ def render_ai_chart(forecast, hist):
     
     st.plotly_chart(fig, width='stretch')
 
+def _altman_distress(z):
+    """True dacă Altman indică zona de dificultate.
+
+    Acceptă zona calculată de aplicație ("safe" / "grey" / "distress"), pentru că pragul
+    depinde de variantă (Z: 1,81; Z'': 1,1), sau un scor Z numeric (prag 1,81). None = lipsă.
+    """
+    if isinstance(z, str):
+        return z == "distress"
+    return z is not None and z < 1.81
+
+
 def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yield_spread=None):
     """
     Sintetizează datele fundamentale cu contextul de business.
@@ -167,7 +178,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     if s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
-    if z_val is not None and z_val < 1.8: swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
+    if _altman_distress(z_val): swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
     if alpha and alpha < -0.05: swot["Weaknesses"].append("Subperformanță cronică (Acțiunea pierde momentum).")
     if num(info, 'currentRatio') is not None and num(info, 'currentRatio') < 1.0: swot["Weaknesses"].append("Probleme potențiale de lichiditate pe termen scurt.")
 
@@ -468,7 +479,7 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     # 1. EVALUARE (DCF Margin of Safety) - MAX 20 puncte
     if mos_val is None:
         missing.append("evaluare DCF")
-        reasons.append("ℹ️ **Evaluare:** modelul DCF nu are date suficiente (EPS lipsă sau negativ). Pilon neinclus în scor.")
+        reasons.append("ℹ️ **Evaluare:** DCF indisponibil sau neaplicabil acestui emitent (vezi motivul în calculatorul de valoare intrinsecă). Pilon neinclus în scor.")
     elif mos_val > 25:
         score += 20
         reasons.append("✅ **Subevaluare Masivă:** Discount excelent față de valoarea intrinsecă (Model DCF).")
@@ -495,7 +506,7 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     else:
         reasons.append(f"🚨 **Risc de Bilanț:** Sănătate financiară precară, grad de îndatorare mare ({h_score}/10).")
         
-    if z_score is not None and z_score < 1.8:
+    if _altman_distress(z_score):
         score -= 20 # Penalizare fatală
         reasons.append("🚨 **ALERTĂ ALTMAN Z:** Risc statistic sever de faliment sau restructurare în următorii 2 ani!")
 

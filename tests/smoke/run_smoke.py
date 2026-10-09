@@ -121,6 +121,8 @@ class FakeTicker:
         if self.ticker in NO_DATA or self.ticker == "INVALID":
             return pd.DataFrame()
         df = _ohlcv(self.ticker, _n_rows(period), tz="America/New_York").dropna(how="all")
+        if self.ticker == "^TNX":      # randament în procente, ca la Yahoo (4,2 = 4,2%)
+            df = df.assign(Close=4.2)
         df.index.name = "Date"
         return df
 
@@ -144,8 +146,48 @@ class FakeTicker:
         cols = pd.date_range(end=TODAY, periods=n, freq=freq)[::-1]
         if self.ticker.endswith(".RO"):
             return pd.DataFrame()
-        return pd.DataFrame([[1e9 * (i + 5) for i in range(n)], [1e8 * (i - 1) for i in range(n)]],
-                            index=["Total Revenue", "Net Income"], columns=cols)
+        return pd.DataFrame([[1e9 * (i + 5) for i in range(n)], [1e8 * (i - 1) for i in range(n)],
+                             [1.55e10] * n, [3.5e9] * n, [1.8e10] * n, [1.15e11] * n, [3e8 * (i + 5) for i in range(n)],
+                             [4e8 * (i + 5) for i in range(n)], [3.6e8 * (i + 5) for i in range(n)]],
+                            index=["Total Revenue", "Net Income", "Diluted Average Shares",
+                                   "Interest Expense", "Tax Provision", "Pretax Income", "EBIT", "Gross Profit", "EBITDA"], columns=cols)
+
+    def _stmt(self, freq, n, rows):
+        """Bilanț / flux de numerar sintetic. .RO: gol (ca la Yahoo). NEWCO: capex peste CFO (FCF negativ)."""
+        if self.ticker.endswith(".RO"):
+            return pd.DataFrame()
+        cols = pd.date_range(end=TODAY, periods=n, freq=freq)[::-1]
+        scale = 0.25 if n == 5 else 1.0     # trimestrele sunt un sfert din an
+        data = {name: [value * (scale if flow else 1.0) * (1 - 0.05 * i) for i in range(n)]
+                for name, (value, flow) in rows.items()}
+        return pd.DataFrame(data, index=cols).T
+
+    _BALANCE = {"Total Debt": (1.1e11, False), "Cash Cash Equivalents And Short Term Investments": (6e10, False),
+                "Ordinary Shares Number": (1.5e10, False), "Total Assets": (3.6e11, False),
+                "Stockholders Equity": (7e10, False), "Current Assets": (1.4e11, False),
+                "Current Liabilities": (1.3e11, False), "Inventory": (7e9, False),
+                "Retained Earnings": (2e10, False), "Total Liabilities Net Minority Interest": (2.9e11, False),
+                "Long Term Debt": (9e10, False)}
+
+    def _cash_rows(self):
+        capex = -3e11 if self.ticker == "NEWCO" else -1.0e10
+        return {"Operating Cash Flow": (1.1e11, True), "Capital Expenditure": (capex, True)}
+
+    @property
+    def balance_sheet(self):
+        return self._stmt(pd.offsets.YearEnd(), 4, self._BALANCE)
+
+    @property
+    def quarterly_balance_sheet(self):
+        return self._stmt(pd.offsets.QuarterEnd(), 5, self._BALANCE)
+
+    @property
+    def cashflow(self):
+        return self._stmt(pd.offsets.YearEnd(), 4, self._cash_rows())
+
+    @property
+    def quarterly_cashflow(self):
+        return self._stmt(pd.offsets.QuarterEnd(), 5, self._cash_rows())
 
     @property
     def financials(self):
@@ -216,8 +258,8 @@ def fake_fred(code, source, start, end):
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
-            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0}[code]
-    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS") else 0.0
+            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4}[code]
+    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)
 
 
@@ -331,6 +373,16 @@ def install_fakes():
 
     httpx.AsyncClient = _AsyncClient
 
+    # BCE: randamentul titlurilor de stat RO pe 10 ani (rata fără risc pentru RON)
+    import requests
+
+    def fake_requests_get(url, *a, **k):
+        if "data-api.ecb.europa.eu" not in url:
+            raise requests.ConnectionError("fără rețea în testul de fum")
+        return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-07,7.25\nX,2026-08,7.12\n")
+
+    requests.get = fake_requests_get
+
     # Modele grele înlocuite cu substitute (nu testăm aici calitatea predicțiilor)
     prophet = types.ModuleType("prophet")
 
@@ -366,8 +418,13 @@ def install_fakes():
 # --------------------------------------------------------------------------
 EXPECTED_MESSAGES = (
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
+    "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
-    "Date insuficiente (sau EPS negativ)",         # companii fără EPS
+    "Marja de siguranță indisponibilă",            # DCF neaplicabil (sector financiar, FCF negativ, fără situații)
+    "DCF: Valoarea terminală reprezintă",          # avertisment informativ: pondere mare a valorii terminale
+    "DCF: Capex-ul consumă", "DCF: FCF-ul curent este",   # avertisment informativ: FCF deformat
+    "DCF: Diferența dintre rata de scont",         # avertisment informativ: beta mic pe datele sintetice
+    "SUPRAEVALUARE CRITICĂ",                       # verdict informativ: DCF sub preț pe datele sintetice
     "Datele despre acționari sunt momentan",       # fără date de acționariat
     "ACTIVITATE INSTITUȚIONALĂ EXTREMĂ",           # avertisment informativ de volum
     "STRATEGIE SHORT VOL", "ALERTA IV",            # avertismente informative de opțiuni
@@ -378,6 +435,7 @@ EXPECTED_MESSAGES = (
     # titluri de secțiune afișate cu st.error / st.warning / st.success (nu sunt erori)
     "Vulnerabilități (Potential Risks)", "PUNCTE SLABE", "OPORTUNITĂȚI", "Cea mai slabă lună",
     "Companii Small-Cap", "AMENINȚĂRI",
+    "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )

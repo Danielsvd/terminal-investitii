@@ -1,5 +1,7 @@
 """Utilitare de citire sigură a datelor. Fără Streamlit, fără rețea."""
 import calendar
+import csv
+import io
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -165,3 +167,74 @@ def smart_to_float(val):
         return float(s)
     except ValueError:
         return 0.0
+
+
+# --- BCE (Data Portal, format csvdata) --------------------------------------
+
+def parse_ecb_csv(text):
+    """Ultima observație dintr-un răspuns CSV al BCE: (perioadă, valoare) sau None.
+
+    Răspunsul are antet și coloanele TIME_PERIOD (ex. "2026-08") și OBS_VALUE.
+    Rândurile fără valoare numerică sunt sărite. Orice altă formă (HTML de eroare,
+    text gol, coloane lipsă) dă None, niciodată o valoare presupusă.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        rows = list(csv.DictReader(io.StringIO(text)))
+    except csv.Error:
+        return None
+    valid = []
+    for row in rows:
+        period = (row.get("TIME_PERIOD") or "").strip()
+        try:
+            value = float(row.get("OBS_VALUE"))
+        except (TypeError, ValueError):
+            continue
+        if period and value == value:
+            valid.append((period, value))
+    if not valid:
+        return None
+    return max(valid, key=lambda item: item[0])
+
+
+def positive_or_none(value):
+    """Prețul țintă dintr-o celulă de foaie: număr strict pozitiv sau None.
+
+    `smart_to_float` dă 0 pentru celula goală, text sau eroare de foaie; un preț țintă
+    de 0 nu există, deci 0, negativul și NaN înseamnă „fără țintă", nu „țintă 0".
+    """
+    number = smart_to_float(value)
+    if number is None or number != number or number <= 0:
+        return None
+    return float(number)
+
+
+def entry_target_view(price, target):
+    """Textele și culoarea cardului „Țintă intrare": (text țintă, status, culoare).
+
+    Fără țintă (None) cardul arată „N/A" și nu calculează nicio distanță: înainte, ținta
+    lipsă apărea ca „0.00" cu „+0.0% peste țintă". Cu țintă: verde dacă prețul e la sau sub
+    ea, galben dacă e la mai puțin de 5% peste, gri altfel.
+    """
+    if target is None or target != target or target <= 0:
+        return "N/A", "Fără preț țintă în watchlist", "#8B949E"
+    if price <= target:
+        return f"{target:.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
+    dist_pct = (price - target) / target * 100
+    color = "#D29922" if dist_pct < 5 else "#8B949E"
+    return f"{target:.2f}", f"⏳ +{dist_pct:.1f}% peste țintă", color
+
+
+def scale_number(value):
+    """Număr scalat pentru afișare: „4.97 T", „76.89 B", „57.07 M" sau „1,234.50".
+    Pragul se compară cu modulul, ca valorile negative mari (o pierdere de 11,29 mld.)
+    să fie scalate la fel ca cele pozitive, cu semnul păstrat."""
+    size = abs(value)
+    if size >= 1e12:
+        return f"{value / 1e12:.2f} T"
+    if size >= 1e9:
+        return f"{value / 1e9:.2f} B"
+    if size >= 1e6:
+        return f"{value / 1e6:.2f} M"
+    return f"{value:,.2f}"

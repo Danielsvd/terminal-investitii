@@ -59,6 +59,9 @@ def test_two_missing_pillars_still_give_a_verdict():
 def test_altman_none_never_triggers_the_bankruptcy_penalty():
     with_none = _score(z_score=None)[0]
     distress = _score(z_score=1.0)[0]
+    assert _score(z_score="distress")[0] == distress          # zona calculată de aplicație
+    assert _score(z_score="grey")[0] == with_none and _score(z_score="safe")[0] == with_none
+    assert _score(z_score=1.5)[0] == distress                  # scor Z numeric sub 1,81
     assert with_none - distress == 20
 
 
