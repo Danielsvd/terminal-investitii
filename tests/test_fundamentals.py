@@ -560,13 +560,13 @@ def test_valuation_verdict_banda_neutra():
     # TLV.RO: 35,28 față de Graham 64,53 -> (35,28 − 64,53) / 64,53 = −45,3%
     assert F.valuation_verdict(35.28, 64.53)[:2] == ("SUBEVALUAT (45.3%)", "under")
     assert F.valuation_verdict(130.0, 100.0)[:2] == ("SUPRAEVALUAT (30.0%)", "over")
-    # marginile benzii: exact ±5% e încă neutru, imediat dincolo nu mai e
-    assert F.VALUATION_NEUTRAL_BAND == 0.05
-    assert F.valuation_verdict(105.0, 100.0)[1] == "fair" and F.valuation_verdict(95.0, 100.0)[1] == "fair"
-    assert F.valuation_verdict(105.2, 100.0)[1] == "over" and F.valuation_verdict(94.8, 100.0)[1] == "under"
-    # SAP.DE, Graham: 191,50 față de 210,52 -> −9,0%, în afara benzii de 5%
-    assert F.valuation_verdict(191.50, 210.52)[:2] == ("SUBEVALUAT (9.0%)", "under")
-    assert F.valuation_verdict(191.50, 210.52, band=0.10)[1] == "fair"
+    # marginile benzii: exact ±10% e încă neutru, imediat dincolo nu mai e
+    assert F.VALUATION_NEUTRAL_BAND == 0.10
+    assert F.valuation_verdict(110.0, 100.0)[1] == "fair" and F.valuation_verdict(90.0, 100.0)[1] == "fair"
+    assert F.valuation_verdict(110.2, 100.0)[1] == "over" and F.valuation_verdict(89.8, 100.0)[1] == "under"
+    # SAP.DE, Graham: 191,62 față de 207,06 -> −7,5%, în bandă la 10%, în afara ei la 5%
+    assert F.valuation_verdict(191.62, 207.06)[:2] == ("ÎN ZONA VALORII ESTIMATE (-7.5%)", "fair")
+    assert F.valuation_verdict(191.62, 207.06, band=0.05)[:2] == ("SUBEVALUAT (7.5%)", "under")
     assert F.valuation_verdict(100.0, 100.0, band=0.0)[1] == "fair"
     for bad in ((None, 100.0), (100.0, None), (100.0, 0.0), (100.0, -5.0), (float("nan"), 100.0)):
         assert F.valuation_verdict(*bad) == (None, None, None)
