@@ -570,3 +570,20 @@ def test_valuation_verdict_banda_neutra():
     assert F.valuation_verdict(100.0, 100.0, band=0.0)[1] == "fair"
     for bad in ((None, 100.0), (100.0, None), (100.0, 0.0), (100.0, -5.0), (float("nan"), 100.0)):
         assert F.valuation_verdict(*bad) == (None, None, None)
+
+
+def test_dcf_verdict_fara_verdict_pe_fcf_deformat():
+    # SNP.RO, 09.10.2026: preț 1,23, DCF pe FCF curent 0,21 -> (1,23 - 0,21) / 0,21 = 485,7%
+    text, zone, diff = F.dcf_verdict(1.23, 0.21, fcf_distorted=True, on_average_basis=False)
+    assert (text, zone) == (F.DCF_NO_VERDICT, "none")
+    assert diff == pytest.approx(485.714, abs=0.001)
+    # aceeași companie, pe media anilor fiscali: verdictul se dă normal
+    assert F.dcf_verdict(1.23, 1.00, True, True)[:2] == ("SUPRAEVALUAT (23.0%)", "over")
+    # fără avertisment: identic cu valuation_verdict, pe ambele baze
+    for on_avg in (False, True):
+        assert F.dcf_verdict(35.28, 64.53, False, on_avg) == F.valuation_verdict(35.28, 64.53)
+    # banda neutră nu contează când baza e deformată: tot fără verdict
+    assert F.dcf_verdict(100.0, 100.0, True, False)[1] == "none"
+    # date lipsă: nici verdict, nici "fără verdict" (cardul arată N/A)
+    for bad in ((None, 100.0), (100.0, None), (100.0, -5.0)):
+        assert F.dcf_verdict(*bad, fcf_distorted=True, on_average_basis=False) == (None, None, None)
