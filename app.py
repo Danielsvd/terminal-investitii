@@ -30,6 +30,7 @@ from analytics.portfolio import value_positions, portfolio_curve as build_portfo
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
+from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view
 
@@ -484,7 +485,7 @@ def get_peer_rows(region, sector):
     recitit la fiecare interacțiune cu pagina. Valorile lipsă rămân None (afișate N/A).
     """
     rows, failed = [], []
-    for p_sym in PEERS.get(region, {}).get(sector or "", []):
+    for p_sym in peer_symbols(region, sector):
         _yf_limiter.wait_if_needed()
         try:
             inf = yf.Ticker(p_sym).info or {}
@@ -2265,7 +2266,7 @@ def main():
             # 1. Informații Generaley
             st.markdown(f"## {info.get('longName') or real_sym}")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Sector", info.get('sector') or 'N/A')
+            c1.metric("Sector", info.get('sector') or bvb_sector(real_sym) or 'N/A')
             c2.metric("Industrie", info.get('industry') or 'N/A')
             c3.metric("Capitalizare", format_num(info.get('marketCap')))             
             from_statements = [STATEMENT_RATIO_LABELS[k] for k in info.get('_from_statements', [])]
@@ -2569,14 +2570,33 @@ def main():
             
             # Compania față de mediana comparabililor din același sector și aceeași regiune.
             p_region = peer_region(real_sym)
-            p_sector = info.get('sector')
+            p_is_bvb = p_region == "BVB"
+            # La BVB sectorul vine din harta proprie (Yahoo nu îl trimite), iar comparabilii sunt
+            # companiile BVB din același sector (din foaie) plus, unde există, cei regionali (Yahoo).
+            p_sector = bvb_sector(real_sym) if p_is_bvb else info.get('sector')
             own_row = {"Simbol": real_sym, "Capitalizare": num(info, 'marketCap'), "Monedă": info.get('currency') or ""}
             for p_key, p_label, p_mult in PEER_METRICS:
                 p_val = num(info, p_key)
                 own_row[p_label] = None if p_val is None else p_val * p_mult
 
             peer_rows, peer_failed = [], []
-            if peer_list(real_sym, p_sector):
+            p_has_list = bool(bvb_sector_peers(real_sym) or bvb_regional_peers(real_sym)) if p_is_bvb else bool(peer_list(real_sym, p_sector))
+            if p_is_bvb:
+                own_row["Sursă"] = ""
+                bvb_sheet_data = load_bvb_fundamentals()
+                for b_sym in bvb_sector_peers(real_sym):
+                    b_entry = bvb_sheet_data.get(b_sym)
+                    b_row = sheet_peer_row(b_sym, b_entry.get("info") if isinstance(b_entry, dict) else None)
+                    if b_row is None:
+                        peer_failed.append(f"{b_sym}.RO (fără indicatori în foaia BVB)")
+                    else:
+                        peer_rows.append(dict(b_row, **{"Sursă": "foaia BVB"}))
+                if bvb_regional_peers(real_sym):
+                    with st.spinner("Se citesc comparabilii regionali (o singură dată la 6 ore pe sector)..."):
+                        reg_rows, reg_failed = get_peer_rows(BVB_REGION, p_sector)
+                    peer_rows += [dict(r, **{"Sursă": "Yahoo"}) for r in reg_rows]
+                    peer_failed += reg_failed
+            elif peer_list(real_sym, p_sector):
                 with st.spinner("Se citesc comparabilii (o singură dată la 6 ore pe sector)..."):
                     all_rows, peer_failed = get_peer_rows(p_region, p_sector)
                 peer_rows = [r for r in all_rows if r["Simbol"].upper() != real_sym.upper()]
@@ -2601,21 +2621,29 @@ def main():
             st.write("")
 
             # --- PASUL 2: tabelul ---
-            if p_region == "BVB":
-                st.info("Pentru BVB comparația se face cu media și mediana pieței din foaia BVB: vezi expanderul "
-                        "„Toți indicatorii din foaia BVB” de sub Indicatori Fundamentali.")
-            elif not peer_list(real_sym, p_sector):
+            if p_is_bvb and not p_has_list:
+                st.info(("Simbolul nu este în harta de sectoare BVB (analytics/peers.py). " if not p_sector else
+                         f"În sectorul „{p_sector}” nu există altă companie în foaia BVB și nici listă regională. ")
+                        + "Reperul rămâne media și mediana pieței: vezi expanderul „Toți indicatorii din foaia BVB” "
+                          "de sub Indicatori Fundamentali.")
+            elif not p_has_list:
                 st.info("Nu există o listă de comparabili pentru acest simbol: "
                         + ("Yahoo nu a trimis sectorul." if not p_sector else
                            f"sectorul „{p_sector}” sau piața simbolului nu are listă definită."))
             elif not peer_rows:
-                st.warning("Yahoo nu a trimis date pentru niciun comparabil (probabil o limitare temporară).")
+                st.warning("Nu există date pentru niciun comparabil"
+                           + (": " + ", ".join(peer_failed) + "." if p_is_bvb and peer_failed else
+                              " (probabil o limitare temporară a Yahoo)."))
                 if st.button("🔄 Reîncearcă citirea comparabililor", key="retry_peers"):
                     get_peer_rows.clear()
                     st.rerun()
             else:
-                st.markdown(f"**🔍 Comparabili: sectorul „{p_sector}”, {'SUA' if p_region == 'US' else 'Europa'}**")
+                p_where = ("BVB (din foaie) și Europa Centrală și de Est (Yahoo)" if p_is_bvb and bvb_regional_peers(real_sym)
+                           else "BVB (din foaie)" if p_is_bvb else "SUA" if p_region == 'US' else "Europa")
+                st.markdown(f"**🔍 Comparabili: sectorul „{p_sector}”, {p_where}**")
                 median_row = {"Simbol": "Mediana comparabililor", "Capitalizare": None, "Monedă": ""}
+                if p_is_bvb:
+                    median_row["Sursă"] = ""
                 median_row.update({label: medians[label][0] for _, label, _ in PEER_METRICS})
                 df_peers = pd.DataFrame([own_row, median_row] + sorted(
                     peer_rows, key=lambda r: -(r["Capitalizare"] or 0)))
@@ -2633,10 +2661,15 @@ def main():
                 p_note = (f"Mediana e calculată din {len(peer_rows)} comparabili, fără {real_sym}; observații pe indicator: {p_counts}. "
                           "La P/E și P/BV valorile negative sunt excluse. Eșantionul e mic și ales manual (companii mari): "
                           "arată unde se situează compania, nu dacă e scumpă sau ieftină.")
-                if p_region == "EU":
+                if p_region == "EU" or p_is_bvb:
                     p_note += " Capitalizările sunt în moneda fiecărei burse; rapoartele nu depind de monedă."
+                if p_is_bvb:
+                    p_note += (" ROE, ROA și marja netă se compară direct între țări. P/E și P/BV nu: rata fără risc diferă între monede "
+                               "(în RON e mult peste cea în EUR), deci un multiplu mai mic la București nu înseamnă, singur, subevaluare. "
+                               "Companiile BVB au cifrele din foaie (P/E și P/BV la prețul actualizării ei); „Datorii/Capital” nu există "
+                               "în foaie. Mediana întregii piețe BVB e în expanderul de sub Indicatori Fundamentali.")
                 if peer_failed:
-                    p_note += " Fără date de la Yahoo: " + ", ".join(peer_failed) + "."
+                    p_note += (" Fără date: " if p_is_bvb else " Fără date de la Yahoo: ") + ", ".join(peer_failed) + "."
                 st.caption(p_note)
             st.markdown("---")
             
