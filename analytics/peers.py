@@ -128,8 +128,10 @@ BVB_REGIONAL_PEERS = {
     "Utilities": ["CEZ.PR", "VER.VI", "EVN.VI", "PGE.WA", "TPE.WA", "ENA.WA"],
     "Financial Services": ["EBS.VI", "RBI.VI", "OTP.BD", "PKO.WA", "PEO.WA", "KOMB.PR"],
 }
-# Bursa și brokerul de asigurări nu au modelul de afaceri al unei bănci: fără comparabili regionali.
-BVB_NO_REGIONAL = frozenset({"BVB", "TBK"})
+# Bursa și brokerul de asigurări nu au modelul de afaceri al unei bănci: nu primesc comparabili
+# (nici regionali, nici din BVB) și nu intră în grupul de comparabili al băncilor.
+BVB_STANDALONE = frozenset({"BVB", "TBK"})
+BVB_NO_REGIONAL = BVB_STANDALONE            # nume vechi, păstrat pentru compatibilitate
 
 
 def _bvb_code(symbol):
@@ -144,12 +146,14 @@ def bvb_sector(symbol):
 
 
 def bvb_sector_peers(symbol):
-    """Simbolurile BVB (ca în foaie, fără '.RO') din același sector, fără simbolul însuși."""
+    """Simbolurile BVB (ca în foaie, fără '.RO') din același sector, fără simbolul însuși.
+    Simbolurile din BVB_STANDALONE nu au comparabili și nu sunt comparabilii nimănui."""
     own = _bvb_code(symbol)
     sector = BVB_SECTORS.get(own)
-    if sector is None:
+    if sector is None or own in BVB_STANDALONE:
         return []
-    return [sym for sym, sec in BVB_SECTORS.items() if sec == sector and sym != own]
+    return [sym for sym, sec in BVB_SECTORS.items()
+            if sec == sector and sym != own and sym not in BVB_STANDALONE]
 
 
 def bvb_regional_peers(symbol):
@@ -179,3 +183,14 @@ def sheet_peer_row(sheet_symbol, sheet_info):
     if all(row[label] is None for _, label, _ in METRICS):
         return None
     return row
+
+
+PEER_FORMATS = {"P/E": "{:.1f}", "P/BV": "{:.2f}", "ROE (%)": "{:.1f}%", "ROA (%)": "{:.1f}%",
+                "Marjă netă (%)": "{:.1f}%", "Datorii/Capital (%)": "{:.0f}%"}
+
+
+def format_peer_value(label, value):
+    """Textul unei celule din tabelul de comparabili; valoarea lipsă (None, NaN) devine „N/A".
+    Formatarea se face aici pentru că `st.dataframe` afișează „None" la celulele goale."""
+    value = _clean(value)
+    return "N/A" if value is None else PEER_FORMATS[label].format(value)

@@ -102,3 +102,21 @@ def test_sheet_peer_row():
     assert row["ROE (%)"] == pytest.approx(9.62) and row["Marjă netă (%)"] == pytest.approx(44.43)
     assert row["Datorii/Capital (%)"] is None                     # nu există în foaie: N/A, nu 0
     assert sheet_peer_row("TLV", {}) is None and sheet_peer_row("TLV", None) is None
+
+
+from analytics.peers import BVB_STANDALONE, format_peer_value  # noqa: E402
+
+
+def test_bursa_si_brokerul_nu_intra_in_grupul_bancilor():
+    assert BVB_STANDALONE == {"BVB", "TBK"}
+    assert bvb_sector_peers("TLV.RO") == ["BRD"]                  # doar bănci
+    assert bvb_sector_peers("BRD.RO") == ["TLV"]
+    assert bvb_sector_peers("BVB.RO") == [] and bvb_sector_peers("TBK.RO") == []
+    assert bvb_sector("BVB.RO") == "Financial Services"           # sectorul afișat rămâne
+
+
+def test_format_peer_value_lipsa_devine_na():
+    assert format_peer_value("P/E", 27.78) == "27.8" and format_peer_value("P/BV", 2.1325) == "2.13"
+    assert format_peer_value("ROE (%)", 7.67) == "7.7%" and format_peer_value("Datorii/Capital (%)", 26.6) == "27%"
+    for missing in (None, float("nan"), "text"):
+        assert format_peer_value("P/E", missing) == "N/A"         # nu „None", nu 0

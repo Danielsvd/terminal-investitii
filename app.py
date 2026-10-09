@@ -30,7 +30,7 @@ from analytics.portfolio import value_positions, portfolio_curve as build_portfo
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
-from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row
+from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view
 
@@ -2647,14 +2647,17 @@ def main():
                 median_row.update({label: medians[label][0] for _, label, _ in PEER_METRICS})
                 df_peers = pd.DataFrame([own_row, median_row] + sorted(
                     peer_rows, key=lambda r: -(r["Capitalizare"] or 0)))
+                # Mediana nu are capitalizare (celulă goală); un comparabil fără capitalizare arată N/A.
                 df_peers["Capitalizare"] = [
-                    "" if cap is None else f"{format_num(cap)} {cur}".strip()
-                    for cap, cur in zip(df_peers["Capitalizare"], df_peers["Monedă"])]
+                    "" if sym == "Mediana comparabililor" else "N/A" if pd.isna(cap) else f"{format_num(cap)} {cur}".strip()
+                    for sym, cap, cur in zip(df_peers["Simbol"], df_peers["Capitalizare"], df_peers["Monedă"])]
                 df_peers = df_peers.drop(columns=["Monedă"])
-                st.dataframe(df_peers.style.format({
-                    "P/E": "{:.1f}", "P/BV": "{:.2f}", "ROE (%)": "{:.1f}%", "ROA (%)": "{:.1f}%",
-                    "Marjă netă (%)": "{:.1f}%", "Datorii/Capital (%)": "{:.0f}%"
-                }, na_rep="N/A").apply(
+                for _, p_label, _ in PEER_METRICS:
+                    if medians[p_label][1] == 0:
+                        df_peers = df_peers.drop(columns=[p_label])     # niciun comparabil nu are indicatorul
+                    else:
+                        df_peers[p_label] = [format_peer_value(p_label, v) for v in df_peers[p_label]]
+                st.dataframe(df_peers.style.apply(
                     lambda row: ["font-weight: bold; background-color: #21262D" if row.name < 2 else "" for _ in row], axis=1),
                     width='stretch', hide_index=True)
                 p_counts = ", ".join(f"{label.replace(' (%)', '')} n={medians[label][1]}" for _, label, _ in PEER_METRICS)
