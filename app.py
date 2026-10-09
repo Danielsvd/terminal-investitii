@@ -3129,7 +3129,8 @@ def main():
             # --- PIOTROSKI F-SCORE și îndatorare, din situațiile financiare anuale ---
             st.markdown("---")
             st.subheader("📋 Calitate financiară (Piotroski F-Score)")
-            pio = fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow"))
+            pio_financial = fund.is_financial_issuer(info.get('sector'), real_sym)
+            pio = fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow"), financial=pio_financial)
             lev = fund.leverage_ratios(fin.get("income"), fin.get("balance"), fin.get("q_income"), fin.get("q_balance"))
             pio_left, pio_right = st.columns([1, 2])
             with pio_left:
@@ -3141,6 +3142,10 @@ def main():
                     pio_value = f"{pio['passed']}/{pio['evaluable']}"
                     pio_label = ("toate cele 9 criterii evaluate" if pio["evaluable"] == 9
                                  else f"{9 - pio['evaluable']} criterii fără date (N/A)")
+                    if pio_financial:
+                        # Scorul e calibrat pe companii nefinanciare: la bănci rămân puține criterii, deci fără verdict colorat.
+                        pio_color = "#8B949E"
+                        pio_label = f"emitent financiar: {9 - pio['evaluable']} criterii nu se aplică, fără verdict"
                 st.markdown(f"""
                 <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {pio_color}; text-align:center;">
                     <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Criterii trecute</p>
@@ -3168,7 +3173,8 @@ def main():
                 if pio["year"] is not None and pio["prior_year"] is not None:
                     st.caption(f"An fiscal încheiat la {pio['year']:%d.%m.%Y} față de {pio['prior_year']:%d.%m.%Y}. "
                                "Scorul măsoară direcția (îmbunătățire sau deteriorare), nu nivelul: 7–9 solid, 0–3 slab. "
-                               "La bănci, criteriile de lichiditate și marjă brută nu au date.")
+                               "La bănci, asigurători și fonduri, criteriile bazate pe fluxul din exploatare (2 și 4) nu se aplică, "
+                               "iar cele de lichiditate și marjă brută nu au date: scorul rămâne orientativ, fără verdict.")
                 else:
                     st.caption("Piotroski are nevoie de doi ani fiscali de situații financiare.")
 
