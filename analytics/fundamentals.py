@@ -689,8 +689,15 @@ EBITDA_ROWS = ("EBITDA", "Normalized EBITDA")
 SHARES_COUNT_ROWS = ("Ordinary Shares Number", "Share Issued")
 
 
-def piotroski(annual_income, annual_balance, annual_cashflow):
+PIOTROSKI_FINANCIAL_NOTE = "nu se aplică la emitenți financiari"
+
+
+def piotroski(annual_income, annual_balance, annual_cashflow, financial=False):
     """Piotroski F-Score: 9 criterii, ultimul an fiscal față de cel precedent.
+
+    `financial=True` (bancă, asigurător, fond): criteriile 2 și 4, bazate pe fluxul de numerar
+    din exploatare, devin N/A. La o bancă acest flux reflectă mișcarea depozitelor și a
+    creditelor, nu calitatea profitului, deci un flux negativ nu e un semnal de slăbiciune.
 
     Întoarce {"passed", "evaluable", "criteria", "year", "prior_year"}; `criteria` e o listă de
     dict-uri {"name", "passed" (True / False / None), "detail"}. Un criteriu fără date e None,
@@ -733,11 +740,17 @@ def piotroski(annual_income, annual_balance, annual_cashflow):
         criteria.append({"name": name, "passed": result[0], "detail": result[1]})
 
     add("1. Rentabilitatea activelor (ROA) pozitivă", (None if roa[0] is None else roa[0] > 0, pct(roa[0])))
-    add("2. Flux de numerar din exploatare pozitiv", (None if cfo is None else cfo > 0, "pozitiv" if (cfo or 0) > 0 else ("N/A" if cfo is None else "negativ")))
+    if financial:
+        add("2. Flux de numerar din exploatare pozitiv", (None, PIOTROSKI_FINANCIAL_NOTE))
+    else:
+        add("2. Flux de numerar din exploatare pozitiv", (None if cfo is None else cfo > 0, "pozitiv" if (cfo or 0) > 0 else ("N/A" if cfo is None else "negativ")))
     add("3. ROA în creștere", compare(roa[0], roa[1], lambda a, b: a > b, pct))
-    add("4. Flux din exploatare peste profitul net",
-        (None if cfo is None or ni[0] is None else cfo > ni[0],
-         "N/A" if cfo is None or ni[0] is None else f"CFO {_short(cfo)} față de profit net {_short(ni[0])}"))
+    if financial:
+        add("4. Flux din exploatare peste profitul net", (None, PIOTROSKI_FINANCIAL_NOTE))
+    else:
+        add("4. Flux din exploatare peste profitul net",
+            (None if cfo is None or ni[0] is None else cfo > ni[0],
+             "N/A" if cfo is None or ni[0] is None else f"CFO {_short(cfo)} față de profit net {_short(ni[0])}"))
     add("5. Datorie pe termen lung / active în scădere",
         compare(leverage[0], leverage[1], lambda a, b: a < b or (a == 0 and b == 0), pct))
     add("6. Lichiditate curentă în creștere", compare(liquidity[0], liquidity[1], lambda a, b: a > b, num2))
@@ -750,7 +763,7 @@ def piotroski(annual_income, annual_balance, annual_cashflow):
 
     return {"passed": sum(1 for c in criteria if c["passed"] is True),
             "evaluable": sum(1 for c in criteria if c["passed"] is not None),
-            "criteria": criteria,
+            "criteria": criteria, "financial": bool(financial),
             "year": stmt_date(annual_balance, 0), "prior_year": stmt_date(annual_balance, 1)}
 
 

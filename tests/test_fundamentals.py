@@ -538,3 +538,16 @@ def test_acoperirea_dobanzii_respinsa_cand_dobanda_e_nerealista():
     r = F.leverage_ratios(income, balance)
     assert r["interest_unreliable"] is True and r["interest_coverage"] is None
     assert r["net_debt_to_ebitda"] == pytest.approx(0.24)
+
+
+def test_piotroski_emitent_financiar_fara_criteriile_de_flux():
+    # Ca la JPM pe aplicația de test: CFO puternic negativ, profit pozitiv. La o bancă asta nu e slăbiciune.
+    income, balance, cashflow = _piotroski_frames()
+    cashflow.loc["Operating Cash Flow", pd.Timestamp("2025-12-31")] = -500.0
+    normal = F.piotroski(income, balance, cashflow)
+    assert normal["criteria"][1]["passed"] is False and normal["criteria"][3]["passed"] is False
+    assert normal["passed"] == 7 and normal["evaluable"] == 9 and normal["financial"] is False
+    bank = F.piotroski(income, balance, cashflow, financial=True)
+    assert bank["criteria"][1]["passed"] is None and bank["criteria"][3]["passed"] is None
+    assert bank["criteria"][1]["detail"] == F.PIOTROSKI_FINANCIAL_NOTE
+    assert bank["passed"] == 7 and bank["evaluable"] == 7 and bank["financial"] is True
