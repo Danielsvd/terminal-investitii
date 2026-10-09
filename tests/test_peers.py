@@ -57,3 +57,48 @@ def test_versus_median():
     assert versus_median(15.0, 20.0) == pytest.approx(-0.25)
     assert versus_median(5.0, -10.0) == pytest.approx(1.5)
     assert versus_median(None, 20.0) is None and versus_median(5.0, None) is None and versus_median(5.0, 0) is None
+
+
+from analytics.peers import (BVB_NO_REGIONAL, BVB_REGION, BVB_REGIONAL_PEERS, BVB_SECTORS,  # noqa: E402
+                             bvb_regional_peers, bvb_sector, bvb_sector_peers, peer_symbols, sheet_peer_row)
+
+
+def test_harta_bvb_are_cele_33_de_simboluri_si_sectoare_yahoo():
+    assert len(BVB_SECTORS) == 33
+    assert set(BVB_SECTORS.values()) <= set(PEERS["US"])          # aceleași denumiri ca la SUA/UE
+    assert bvb_sector("SNP.RO") == "Energy" and bvb_sector("snp") == "Energy"
+    assert bvb_sector("BONA.RO") == "Consumer Defensive"          # lângă CFH, cum a cerut Daniel
+    assert bvb_sector("XYZ.RO") is None and bvb_sector(None) is None
+
+
+def test_bvb_sector_peers_fara_simbolul_insusi():
+    assert bvb_sector_peers("SNP.RO") == ["SNG", "COTE"]
+    assert bvb_sector_peers("SFG.RO") == []                       # singur în sector
+    assert bvb_sector_peers("XYZ.RO") == []
+
+
+def test_bvb_regional_peers():
+    assert bvb_regional_peers("SNP.RO") == ["OMV.VI", "MOL.BD", "PKN.WA"]
+    assert "EBS.VI" in bvb_regional_peers("TLV.RO")
+    for sym in BVB_NO_REGIONAL:                                   # bursa și brokerul: fără bănci
+        assert bvb_regional_peers(f"{sym}.RO") == []
+    assert bvb_regional_peers("AROBS.RO") == []                   # sector fără listă regională
+    for names in BVB_REGIONAL_PEERS.values():                     # simboluri europene recunoscute, fără duplicate
+        assert len(names) == len(set(names)) and all(peer_region(n) == "EU" for n in names)
+
+
+def test_peer_symbols():
+    assert peer_symbols(BVB_REGION, "Energy") == ["OMV.VI", "MOL.BD", "PKN.WA"]
+    assert peer_symbols("US", "Energy") == PEERS["US"]["Energy"]
+    assert peer_symbols(BVB_REGION, "Technology") == [] and peer_symbols(None, None) == []
+
+
+def test_sheet_peer_row():
+    # SNG din foaie (09.10.2026): P/E 17,44; P/BV 3,00; ROE 9,62% -> fracție 0,0962 în `info`
+    row = sheet_peer_row("SNG", {"trailingPE": 17.44, "priceToBook": 3.0, "returnOnEquity": 0.0962,
+                                 "returnOnAssets": 0.0639, "profitMargins": 0.4443})
+    assert row["Simbol"] == "SNG.RO" and row["Monedă"] == "RON" and row["Capitalizare"] is None
+    assert row["P/E"] == 17.44 and row["P/BV"] == 3.0
+    assert row["ROE (%)"] == pytest.approx(9.62) and row["Marjă netă (%)"] == pytest.approx(44.43)
+    assert row["Datorii/Capital (%)"] is None                     # nu există în foaie: N/A, nu 0
+    assert sheet_peer_row("TLV", {}) is None and sheet_peer_row("TLV", None) is None
