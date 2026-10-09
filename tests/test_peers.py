@@ -63,8 +63,8 @@ from analytics.peers import (BVB_NO_REGIONAL, BVB_REGION, BVB_REGIONAL_PEERS, BV
                              bvb_regional_peers, bvb_sector, bvb_sector_peers, peer_symbols, sheet_peer_row)
 
 
-def test_harta_bvb_are_cele_33_de_simboluri_si_sectoare_yahoo():
-    assert len(BVB_SECTORS) == 33
+def test_harta_bvb_are_cele_33_de_simboluri_din_foaie_plus_patria_bank():
+    assert len(BVB_SECTORS) == 34 and BVB_SECTORS["PBK"] == "Financial Services"
     assert set(BVB_SECTORS.values()) <= set(PEERS["US"])          # aceleași denumiri ca la SUA/UE
     assert bvb_sector("SNP.RO") == "Energy" and bvb_sector("snp") == "Energy"
     assert bvb_sector("BONA.RO") == "Consumer Defensive"          # lângă CFH, cum a cerut Daniel
@@ -109,8 +109,8 @@ from analytics.peers import BVB_STANDALONE, format_peer_value  # noqa: E402
 
 def test_bursa_si_brokerul_nu_intra_in_grupul_bancilor():
     assert BVB_STANDALONE == {"BVB", "TBK"}
-    assert bvb_sector_peers("TLV.RO") == ["BRD"]                  # doar bănci
-    assert bvb_sector_peers("BRD.RO") == ["TLV"]
+    assert bvb_sector_peers("TLV.RO") == ["BRD", "PBK"]           # doar bănci
+    assert bvb_sector_peers("BRD.RO") == ["TLV", "PBK"] and bvb_sector_peers("PBK.RO") == ["TLV", "BRD"]
     assert bvb_sector_peers("BVB.RO") == [] and bvb_sector_peers("TBK.RO") == []
     assert bvb_sector("BVB.RO") == "Financial Services"           # sectorul afișat rămâne
 

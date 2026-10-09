@@ -106,10 +106,13 @@ def versus_median(value, median):
 # Yahoo nu trimite sectorul pentru simbolurile .RO, iar foaia `BVB` nu are sector: harta
 # de mai jos e ținută de mână, cu denumirile de sector Yahoo (aceleași ca la SUA și UE).
 # Confirmată de Daniel pe 09.10.2026. Un simbol nou din foaie apare „fără sector" până e adăugat.
+# Un simbol din hartă care nu are indicatori în foaie (BRD, PBK) se citește din Yahoo, cu sursa afișată.
+# Erste Group (compania-mamă a BCR) e în lista regională ca EBS.VI, listarea ei principală.
 BVB_SECTORS = {
     "SNP": "Energy", "SNG": "Energy", "COTE": "Energy",
     "H2O": "Utilities", "SNN": "Utilities", "EL": "Utilities", "TEL": "Utilities", "TGN": "Utilities", "PE": "Utilities",
-    "TLV": "Financial Services", "BRD": "Financial Services", "BVB": "Financial Services", "TBK": "Financial Services",
+    "TLV": "Financial Services", "BRD": "Financial Services", "PBK": "Financial Services",   # PBK (Patria Bank) nu e în foaie
+    "BVB": "Financial Services", "TBK": "Financial Services",
     "ATB": "Healthcare", "BIO": "Healthcare", "M": "Healthcare",
     "AROBS": "Technology", "BENTO": "Technology", "SAFE": "Technology", "ALW": "Technology",
     "ONE": "Real Estate", "IMP": "Real Estate",
