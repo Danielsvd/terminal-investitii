@@ -782,3 +782,25 @@ def leverage_ratios(annual_income, annual_balance, quarterly_income=None, quarte
     return {"net_debt": net, "ebitda": ebitda, "ebit": ebit, "interest_expense": interest,
             "interest_unreliable": interest_unreliable,
             "net_debt_to_ebitda": _ratio(net, ebitda), "interest_coverage": coverage}
+
+
+# --- Verdict de evaluare -----------------------------------------------------
+
+VALUATION_NEUTRAL_BAND = 0.10   # ±10% în jurul valorii estimate: diferența e sub precizia modelului
+
+
+def valuation_verdict(price, value, band=VALUATION_NEUTRAL_BAND):
+    """Eticheta prețului față de o valoare estimată (DCF, Graham): (text, zonă, diferență %).
+
+    Diferența e (preț − valoare) / valoare. În banda de ±`band` verdictul e neutru: un DCF în
+    care valoarea terminală cântărește 80% nu poate distinge un preț cu 0,7% peste valoare de
+    unul la valoare. Zona e "under", "fair" sau "over"; None dacă lipsesc datele.
+    """
+    if not _is_num(price) or not _is_num(value) or value <= 0 or price <= 0:
+        return None, None, None
+    diff = (price - value) / value
+    if abs(diff) <= band:
+        return f"ÎN ZONA VALORII ESTIMATE ({diff * 100:+.1f}%)", "fair", diff * 100
+    if diff < 0:
+        return f"SUBEVALUAT ({abs(diff) * 100:.1f}%)", "under", diff * 100
+    return f"SUPRAEVALUAT ({abs(diff) * 100:.1f}%)", "over", diff * 100

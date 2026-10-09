@@ -538,3 +538,18 @@ def test_acoperirea_dobanzii_respinsa_cand_dobanda_e_nerealista():
     r = F.leverage_ratios(income, balance)
     assert r["interest_unreliable"] is True and r["interest_coverage"] is None
     assert r["net_debt_to_ebitda"] == pytest.approx(0.24)
+
+
+def test_valuation_verdict_banda_neutra():
+    # SAP.DE pe aplicația de test: preț 191,50 față de DCF 190,22 -> +0,7%, în bandă
+    text, zone, diff = F.valuation_verdict(191.50, 190.22)
+    assert zone == "fair" and text == "ÎN ZONA VALORII ESTIMATE (+0.7%)" and diff == pytest.approx(0.673, abs=0.01)
+    # TLV.RO: 35,28 față de Graham 64,53 -> (35,28 − 64,53) / 64,53 = −45,3%
+    assert F.valuation_verdict(35.28, 64.53)[:2] == ("SUBEVALUAT (45.3%)", "under")
+    assert F.valuation_verdict(130.0, 100.0)[:2] == ("SUPRAEVALUAT (30.0%)", "over")
+    # marginile benzii: exact ±10% e încă neutru, imediat dincolo nu mai e
+    assert F.valuation_verdict(110.0, 100.0)[1] == "fair" and F.valuation_verdict(90.0, 100.0)[1] == "fair"
+    assert F.valuation_verdict(110.2, 100.0)[1] == "over" and F.valuation_verdict(89.8, 100.0)[1] == "under"
+    assert F.valuation_verdict(100.0, 100.0, band=0.0)[1] == "fair"
+    for bad in ((None, 100.0), (100.0, None), (100.0, 0.0), (100.0, -5.0), (float("nan"), 100.0)):
+        assert F.valuation_verdict(*bad) == (None, None, None)

@@ -2962,28 +2962,30 @@ def main():
                         '</div>'
                     )
 
+                # Verde / galben / roșu; galben = în banda neutră din fund.VALUATION_NEUTRAL_BAND.
+                VERDICT_COLORS = {"under": "#3FB950", "fair": "#D29922", "over": "#F85149"}
                 with cv1:
                     st.markdown(_value_card("Preț curent", f"{price_f:.2f}", "#30363D", unit=t_curr), unsafe_allow_html=True)
 
                 with cv2:
-                    if graham_calc is not None:
-                        diff_g = ((price_f - graham_calc) / graham_calc) * 100
-                        g_col = "#3FB950" if price_f < graham_calc else "#F85149"
+                    g_verdict, g_zone, _ = fund.valuation_verdict(price_f, graham_calc)
+                    if graham_calc is not None and g_verdict is not None:
+                        g_col = VERDICT_COLORS[g_zone]
                         st.markdown(_value_card(
                             "Graham (formula revizuită)", f"{graham_calc:.2f}", g_col,
-                            verdict=f'{"SUBEVALUAT" if price_f < graham_calc else "SUPRAEVALUAT"} ({abs(diff_g):.1f}%)',
+                            verdict=g_verdict,
                             note=f"{graham_note} · {graham_num_txt}"), unsafe_allow_html=True)
                     else:
                         st.markdown(_value_card("Graham (formula revizuită)", "N/A", "#30363D",
                                                 verdict=graham_note, note=graham_num_txt), unsafe_allow_html=True)
 
                 with cv3:
-                    if dcf_calc is not None and dcf_calc > 0:
-                        diff_d = ((price_f - dcf_calc) / dcf_calc) * 100
-                        d_col = "#3FB950" if price_f < dcf_calc else "#F85149"
+                    d_verdict, d_zone, _ = fund.valuation_verdict(price_f, dcf_calc)
+                    if dcf_calc is not None and d_verdict is not None:
+                        d_col = VERDICT_COLORS[d_zone]
                         st.markdown(_value_card(
                             "Valoare justă (DCF pe FCF)", f"{dcf_calc:.2f}", d_col,
-                            verdict=f'{"SUBEVALUAT" if price_f < dcf_calc else "SUPRAEVALUAT"} ({abs(diff_d):.1f}%)',
+                            verdict=d_verdict,
                             note=f"scont {discount_rate * 100:.1f}% · g terminal {gterm_val:.1f}%"), unsafe_allow_html=True)
                     else:
                         st.markdown(_value_card("Valoare justă (DCF pe FCF)", "N/A", "#30363D",
