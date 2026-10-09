@@ -480,16 +480,11 @@ def get_bvb_peer_prices(sheet_symbols):
     prices = get_fast_live_prices([f"{sym}.RO" for sym in sheet_symbols])
     return {sym: prices.get(f"{sym}.RO") for sym in sheet_symbols}
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def get_peer_rows(region, sector):
-    """Indicatorii comparabililor dintr-o regiune și un sector (listele din analytics/peers.py).
-
-    Întoarce (rânduri, simboluri fără date). În cache 6 ore, pe (regiune, sector): fiecare
-    comparabil costă o cerere la endpoint-ul Yahoo cel mai limitat, iar înainte tabelul era
-    recitit la fiecare interacțiune cu pagina. Valorile lipsă rămân None (afișate N/A).
-    """
+def _read_peer_rows(symbols):
+    """Citește din Yahoo indicatorii unor comparabili: (rânduri, simboluri fără date).
+    Valorile lipsă rămân None (afișate N/A)."""
     rows, failed = [], []
-    for p_sym in peer_symbols(region, sector):
+    for p_sym in symbols:
         _yf_limiter.wait_if_needed()
         try:
             inf = yf.Ticker(p_sym).info or {}
@@ -507,6 +502,22 @@ def get_peer_rows(region, sector):
             continue
         rows.append(row)
     return rows, failed
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_peer_rows(region, sector):
+    """Indicatorii comparabililor dintr-o regiune și un sector (listele din analytics/peers.py).
+
+    Întoarce (rânduri, simboluri fără date). În cache 6 ore, pe (regiune, sector): fiecare
+    comparabil costă o cerere la endpoint-ul Yahoo cel mai limitat, iar înainte tabelul era
+    recitit la fiecare interacțiune cu pagina.
+    """
+    return _read_peer_rows(peer_symbols(region, sector))
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_bvb_yahoo_peer_rows(yahoo_symbols):
+    """Comparabilii BVB care nu au indicatori în foaia BVB (tuplu de simboluri Yahoo, ex. „BRD.RO"),
+    citiți din Yahoo. Datele Yahoo pentru BVB sunt mai rare decât cele din foaie; sursa se afișează."""
+    return _read_peer_rows(list(yahoo_symbols))
 
 def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
     """
@@ -2589,6 +2600,7 @@ def main():
             if p_is_bvb:
                 own_row["Sursă"] = ""
                 bvb_sheet_data = load_bvb_fundamentals()
+                bvb_not_in_sheet = []
                 bvb_peer_prices = get_bvb_peer_prices(tuple(bvb_sector_peers(real_sym))) if bvb_sector_peers(real_sym) else {}
                 for b_sym in bvb_sector_peers(real_sym):
                     b_entry = bvb_sheet_data.get(b_sym)
@@ -2598,10 +2610,15 @@ def main():
                     b_info.update(b_repriced)
                     b_row = sheet_peer_row(b_sym, b_info)
                     if b_row is None:
-                        peer_failed.append(f"{b_sym}.RO (fără indicatori în foaia BVB)")
+                        bvb_not_in_sheet.append(f"{b_sym}.RO")
                     else:
-                        b_source = "foaia BVB, preț curent" if "trailingPE" in b_repriced else "foaia BVB, preț din foaie"
+                        b_source = "foaie, preț curent" if "trailingPE" in b_repriced else "foaie, preț vechi"
                         peer_rows.append(dict(b_row, **{"Sursă": b_source}))
+                if bvb_not_in_sheet:
+                    # Fără indicatori în foaie (ex. BRD, Patria Bank): se citesc din Yahoo, cu sursa afișată.
+                    y_rows, y_failed = get_bvb_yahoo_peer_rows(tuple(bvb_not_in_sheet))
+                    peer_rows += [dict(r, **{"Sursă": "Yahoo (nu e în foaie)"}) for r in y_rows]
+                    peer_failed += [f"{sym} (nici în foaia BVB, nici în Yahoo)" for sym in y_failed]
                 if bvb_regional_peers(real_sym):
                     with st.spinner("Se citesc comparabilii regionali (o singură dată la 6 ore pe sector)..."):
                         reg_rows, reg_failed = get_peer_rows(BVB_REGION, p_sector)
@@ -2682,8 +2699,8 @@ def main():
                 if p_is_bvb:
                     p_note += (" ROE, ROA și marja netă se compară direct între țări. P/E și P/BV nu: rata fără risc diferă între monede "
                                "(în RON e mult peste cea în EUR), deci un multiplu mai mic la București nu înseamnă, singur, subevaluare. "
-                               "Companiile BVB au cifrele din foaie; P/E și P/BV sunt recalculate la prețul curent când acesta e disponibil "
-                               "(vezi coloana Sursă). „Datorii/Capital” nu există în foaie. Mediana întregii piețe BVB e în expanderul de sub Indicatori Fundamentali.")
+                               "Companiile BVB au cifrele din foaie, cu P/E și P/BV recalculate la prețul curent când acesta e disponibil; "
+                               "cele care nu sunt în foaie vin din Yahoo (vezi coloana Sursă). „Datorii/Capital” nu există în foaie. Mediana întregii piețe BVB e în expanderul de sub Indicatori Fundamentali.")
                 if p_group:
                     p_note += (f" Grup: {p_group}, după industria din Yahoo; excluse din mediană: "
                                + (", ".join(p_excluded) if p_excluded else "niciunul") + ".")
