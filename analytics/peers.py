@@ -12,7 +12,7 @@ PEERS = {
     "US": {
         "Technology": ["MSFT", "AAPL", "NVDA", "AVGO", "ORCL", "CRM", "ADBE", "AMD", "INTC", "QCOM", "TXN", "CSCO", "IBM", "MU"],
         "Communication Services": ["GOOGL", "META", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS"],
-        "Financial Services": ["JPM", "BAC", "WFC", "C", "GS", "MS", "AXP", "SCHW", "BLK", "V", "MA"],
+        "Financial Services": ["JPM", "BAC", "WFC", "C", "USB", "PNC", "TFC", "GS", "MS", "AXP", "SCHW", "BLK", "V", "MA"],
         "Energy": ["XOM", "CVX", "COP", "OXY", "EOG", "SLB", "DVN", "LNG", "MPC", "PSX"],
         "Healthcare": ["LLY", "JNJ", "MRK", "PFE", "ABBV", "UNH", "TMO", "ABT", "AMGN", "BMY"],
         "Industrials": ["CAT", "GE", "RTX", "LMT", "BA", "HON", "UNP", "DE", "MMM", "GD", "NOC", "UPS"],
@@ -194,3 +194,28 @@ def format_peer_value(label, value):
     Formatarea se face aici pentru că `st.dataframe` afișează „None" la celulele goale."""
     value = _clean(value)
     return "N/A" if value is None else PEER_FORMATS[label].format(value)
+
+
+FINANCIAL_SECTOR = "Financial Services"
+
+
+def is_bank_industry(industry):
+    """True dacă industria Yahoo e bancară („Banks - Diversified", „Banks - Regional")."""
+    return "bank" in str(industry or "").lower()
+
+
+def split_financial_peers(rows, sector, own_industry):
+    """În sectorul financiar, păstrează doar comparabilii cu același tip de afacere ca al companiei:
+    bănci cu bănci, restul (plăți, brokeri, administratori de active, asigurători) între ei.
+    Visa sau Mastercard au ROE și marje de alt ordin de mărime decât o bancă și mută mediana.
+
+    Întoarce (rânduri păstrate, simboluri excluse, eticheta grupului sau None dacă nu s-a filtrat).
+    Nu filtrează când sectorul nu e financiar, când industria companiei lipsește sau când niciun
+    rând nu are industrie (date citite înainte ca industria să fie salvată).
+    """
+    if sector != FINANCIAL_SECTOR or not own_industry or not any(row.get("Industrie") for row in rows):
+        return list(rows), [], None
+    own_bank = is_bank_industry(own_industry)
+    kept = [row for row in rows if row.get("Industrie") and is_bank_industry(row["Industrie"]) == own_bank]
+    excluded = [row["Simbol"] for row in rows if row not in kept]
+    return kept, excluded, "bănci" if own_bank else "financiar nebancar"

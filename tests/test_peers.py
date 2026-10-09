@@ -120,3 +120,32 @@ def test_format_peer_value_lipsa_devine_na():
     assert format_peer_value("ROE (%)", 7.67) == "7.7%" and format_peer_value("Datorii/Capital (%)", 26.6) == "27%"
     for missing in (None, float("nan"), "text"):
         assert format_peer_value("P/E", missing) == "N/A"         # nu „None", nu 0
+
+
+from analytics.peers import is_bank_industry, split_financial_peers  # noqa: E402
+
+
+def _fin_rows():
+    return [{"Simbol": "BAC", "Industrie": "Banks - Diversified"}, {"Simbol": "USB", "Industrie": "Banks - Regional"},
+            {"Simbol": "V", "Industrie": "Credit Services"}, {"Simbol": "GS", "Industrie": "Capital Markets"},
+            {"Simbol": "XX", "Industrie": None}]
+
+
+def test_is_bank_industry():
+    assert is_bank_industry("Banks - Diversified") and is_bank_industry("banks - regional")
+    assert not is_bank_industry("Credit Services") and not is_bank_industry(None)
+
+
+def test_split_financial_peers_banci_cu_banci():
+    kept, excluded, group = split_financial_peers(_fin_rows(), "Financial Services", "Banks - Diversified")   # JPM
+    assert [r["Simbol"] for r in kept] == ["BAC", "USB"] and excluded == ["V", "GS", "XX"] and group == "bănci"
+    kept, excluded, group = split_financial_peers(_fin_rows(), "Financial Services", "Credit Services")       # MA
+    assert [r["Simbol"] for r in kept] == ["V", "GS"] and excluded == ["BAC", "USB", "XX"] and group == "financiar nebancar"
+
+
+def test_split_financial_peers_nu_filtreaza_fara_date_sau_in_alt_sector():
+    rows = _fin_rows()
+    assert split_financial_peers(rows, "Technology", "Banks - Diversified") == (rows, [], None)
+    assert split_financial_peers(rows, "Financial Services", None) == (rows, [], None)
+    no_industry = [{"Simbol": "BAC"}, {"Simbol": "V", "Industrie": None}]
+    assert split_financial_peers(no_industry, "Financial Services", "Banks - Diversified") == (no_industry, [], None)

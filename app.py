@@ -30,7 +30,7 @@ from analytics.portfolio import value_positions, portfolio_curve as build_portfo
 from analytics import fundamentals as fund
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
-from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value
+from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number
 
@@ -473,6 +473,13 @@ def get_watchlist_target(symbol):
         print(f"DEBUG: preț țintă din watchlist pentru {symbol}: {exc}")
     return None
 
+@st.cache_data(ttl=900, show_spinner=False)
+def get_bvb_peer_prices(sheet_symbols):
+    """Prețul curent al comparabililor BVB (simboluri din foaie, ca tuplu): {simbol: preț sau None}.
+    Foaia BVB se actualizează manual, deci multiplii ei pot fi la un preț vechi. În cache 15 minute."""
+    prices = get_fast_live_prices([f"{sym}.RO" for sym in sheet_symbols])
+    return {sym: prices.get(f"{sym}.RO") for sym in sheet_symbols}
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def get_peer_rows(region, sector):
     """Indicatorii comparabililor dintr-o regiune și un sector (listele din analytics/peers.py).
@@ -490,7 +497,8 @@ def get_peer_rows(region, sector):
             print(f"DEBUG: comparabil {p_sym} indisponibil: {e}")
             failed.append(p_sym)
             continue
-        row = {"Simbol": p_sym, "Capitalizare": num(inf, 'marketCap'), "Monedă": inf.get('currency') or ""}
+        row = {"Simbol": p_sym, "Capitalizare": num(inf, 'marketCap'), "Monedă": inf.get('currency') or "",
+               "Industrie": inf.get('industry') or None}
         for key, label, mult in PEER_METRICS:
             value = num(inf, key)
             row[label] = None if value is None else value * mult
@@ -2576,18 +2584,24 @@ def main():
                 p_val = num(info, p_key)
                 own_row[p_label] = None if p_val is None else p_val * p_mult
 
-            peer_rows, peer_failed = [], []
+            peer_rows, peer_failed, p_excluded, p_group = [], [], [], None
             p_has_list = bool(bvb_sector_peers(real_sym) or bvb_regional_peers(real_sym)) if p_is_bvb else bool(peer_list(real_sym, p_sector))
             if p_is_bvb:
                 own_row["Sursă"] = ""
                 bvb_sheet_data = load_bvb_fundamentals()
+                bvb_peer_prices = get_bvb_peer_prices(tuple(bvb_sector_peers(real_sym))) if bvb_sector_peers(real_sym) else {}
                 for b_sym in bvb_sector_peers(real_sym):
                     b_entry = bvb_sheet_data.get(b_sym)
-                    b_row = sheet_peer_row(b_sym, b_entry.get("info") if isinstance(b_entry, dict) else None)
+                    b_info = dict(b_entry.get("info") or {}) if isinstance(b_entry, dict) else {}
+                    # P/E și P/BV la prețul curent, ca la compania analizată; fără preț rămân cele din foaie.
+                    b_repriced = reprice_bvb(b_info, bvb_peer_prices.get(b_sym))
+                    b_info.update(b_repriced)
+                    b_row = sheet_peer_row(b_sym, b_info)
                     if b_row is None:
                         peer_failed.append(f"{b_sym}.RO (fără indicatori în foaia BVB)")
                     else:
-                        peer_rows.append(dict(b_row, **{"Sursă": "foaia BVB"}))
+                        b_source = "foaia BVB, preț curent" if "trailingPE" in b_repriced else "foaia BVB, preț din foaie"
+                        peer_rows.append(dict(b_row, **{"Sursă": b_source}))
                 if bvb_regional_peers(real_sym):
                     with st.spinner("Se citesc comparabilii regionali (o singură dată la 6 ore pe sector)..."):
                         reg_rows, reg_failed = get_peer_rows(BVB_REGION, p_sector)
@@ -2597,6 +2611,8 @@ def main():
                 with st.spinner("Se citesc comparabilii (o singură dată la 6 ore pe sector)..."):
                     all_rows, peer_failed = get_peer_rows(p_region, p_sector)
                 peer_rows = [r for r in all_rows if r["Simbol"].upper() != real_sym.upper()]
+                # Sector financiar: bănci cu bănci, restul între ei (după industria din Yahoo).
+                peer_rows, p_excluded, p_group = split_financial_peers(peer_rows, p_sector, info.get('industry'))
             medians = peer_medians(peer_rows)
 
             # --- PASUL 1: compania față de mediană (fără verdict: eșantionul e mic) ---
@@ -2648,7 +2664,7 @@ def main():
                 df_peers["Capitalizare"] = [
                     "" if sym == "Mediana comparabililor" else "N/A" if pd.isna(cap) else f"{format_num(cap)} {cur}".strip()
                     for sym, cap, cur in zip(df_peers["Simbol"], df_peers["Capitalizare"], df_peers["Monedă"])]
-                df_peers = df_peers.drop(columns=["Monedă"])
+                df_peers = df_peers.drop(columns=["Monedă", "Industrie"], errors="ignore")
                 for _, p_label, _ in PEER_METRICS:
                     if medians[p_label][1] == 0:
                         df_peers = df_peers.drop(columns=[p_label])     # niciun comparabil nu are indicatorul
@@ -2666,8 +2682,11 @@ def main():
                 if p_is_bvb:
                     p_note += (" ROE, ROA și marja netă se compară direct între țări. P/E și P/BV nu: rata fără risc diferă între monede "
                                "(în RON e mult peste cea în EUR), deci un multiplu mai mic la București nu înseamnă, singur, subevaluare. "
-                               "Companiile BVB au cifrele din foaie (P/E și P/BV la prețul actualizării ei); „Datorii/Capital” nu există "
-                               "în foaie. Mediana întregii piețe BVB e în expanderul de sub Indicatori Fundamentali.")
+                               "Companiile BVB au cifrele din foaie; P/E și P/BV sunt recalculate la prețul curent când acesta e disponibil "
+                               "(vezi coloana Sursă). „Datorii/Capital” nu există în foaie. Mediana întregii piețe BVB e în expanderul de sub Indicatori Fundamentali.")
+                if p_group:
+                    p_note += (f" Grup: {p_group}, după industria din Yahoo; excluse din mediană: "
+                               + (", ".join(p_excluded) if p_excluded else "niciunul") + ".")
                 if peer_failed:
                     p_note += (" Fără date: " if p_is_bvb else " Fără date de la Yahoo: ") + ", ".join(peer_failed) + "."
                 st.caption(p_note)
