@@ -28,6 +28,7 @@ from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_line
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
+from analytics import ledger as ledger_calc
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
@@ -1741,6 +1742,152 @@ def calculate_portfolio_performance(df, history_range="1A"):
     portfolio_curve = slice_window(portfolio_curve, history_range)
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct, notes
+
+# --- REGISTRUL DE TRANZACȚII (foaia `Tranzactii`) ---
+LEDGER_FX_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X"}
+LEDGER_CLASS_ORDER = ["Actiuni RO", "Actiuni SUA", "Actiuni UE", "ETF", "Obligatiuni", "Altele"]
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_ledger_values():
+    """Conținutul brut al foii `Tranzactii` (antet + rânduri); None dacă foaia lipsește sau nu poate fi citită."""
+    ws = connect_to_gsheets("Tranzactii")
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values()
+    except gspread.exceptions.GSpreadException as e:
+        print(f"DEBUG: foaia Tranzactii nu a putut fi citită: {e}")
+        return None
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_last_closes(symbols):
+    """Ultima închidere pentru fiecare simbol (dict); simbolurile fără date lipsesc din rezultat."""
+    symbols = list(symbols)
+    if not symbols:
+        return {}
+    _yf_limiter.wait_if_needed()
+    try:
+        data = yf.download(symbols, period="5d", group_by='ticker', progress=False, auto_adjust=False)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: ultimele închideri indisponibile: {e}")
+        return {}
+    closes = close_frame(data, symbols)
+    out = {}
+    for sym in symbols:
+        series = closes[sym].dropna() if sym in closes.columns else pd.Series(dtype="float64")
+        if not series.empty:
+            out[sym] = float(series.iloc[-1])
+    return out
+
+def _ledger_num(value, decimals=2, suffix=""):
+    """Număr pentru tabel; valoarea lipsă se afișează „N/A”, nu 0."""
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:,.{decimals}f}{suffix}"
+
+def render_ledger_results():
+    """Rezultatele din tranzacțiile reale: pe clase (în moneda fiecăreia) și valoarea totală de azi în RON.
+
+    Calculele sunt în analytics/ledger.py (testate în tests/test_ledger.py). Aici doar se citesc
+    foaia și prețurile și se afișează.
+    """
+    st.subheader("📒 Rezultate din registrul de tranzacții")
+    values = load_ledger_values()
+    if values is None:
+        st.info("Foaia `Tranzactii` nu a putut fi citită din `portofoliu_db`.")
+        return
+    ledger_df, problems = ledger_calc.parse_ledger(values)
+    if ledger_df.empty:
+        st.info("Foaia `Tranzactii` nu conține tranzacții. " + " ".join(problems))
+        return
+    positions, position_problems = ledger_calc.build_positions(ledger_df)
+    problems = problems + position_problems
+
+    held = positions[positions["Quantity"] > ledger_calc.QTY_EPS]
+    live_symbols = held.loc[~held["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"].tolist()
+    with st.spinner("Citim prețurile pentru pozițiile din registru..."):
+        prices = get_fast_live_prices(live_symbols + list(LEDGER_FX_SYMBOLS.values()))
+        # Prețul live poate lipsi (Yahoo refuză des cererile de pe server): completăm cu ultima închidere.
+        no_live = tuple(sorted(s for s in live_symbols + list(LEDGER_FX_SYMBOLS.values()) if not prices.get(s)))
+        closes_last = get_last_closes(no_live)
+    valued = ledger_calc.value_open_positions(positions, prices, closes_last)
+    asof = now_ro().replace(tzinfo=None)
+    results = ledger_calc.class_results(ledger_df, positions, valued, asof)
+    cash = ledger_calc.cash_balances(ledger_df)
+    fx_rates = {cur: prices.get(sym) or closes_last.get(sym) for cur, sym in LEDGER_FX_SYMBOLS.items()}
+    fx_from_close = [cur for cur, sym in LEDGER_FX_SYMBOLS.items() if not prices.get(sym) and closes_last.get(sym)]
+    by_currency, total_ron, missing_fx = ledger_calc.consolidate(results, cash, fx_rates)
+
+    positions_ron = (by_currency["Positions"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
+    cash_ron = (by_currency["Cash"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Valoare totală azi (RON)", _ledger_num(total_ron))
+    k2.metric("Poziții (RON)", _ledger_num(positions_ron))
+    k3.metric("Numerar la brokeri (RON)", _ledger_num(cash_ron))
+    st.caption(
+        f"Din {len(ledger_df)} tranzacții, {ledger_df['Date'].min():%d.%m.%Y} – {ledger_df['Date'].max():%d.%m.%Y}. "
+        "Totalul în RON e la cursul de azi. Registrul se actualizează când încarci un export nou de la broker."
+    )
+    from_close = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_CLOSE, "Symbol"])
+    if from_close or fx_from_close:
+        st.caption("ℹ️ Preț live indisponibil, s-a folosit ultima închidere pentru: "
+                   + ", ".join(from_close + [f"curs {cur}/RON" for cur in fx_from_close]) + ".")
+    if missing_fx:
+        st.warning(f"⚠️ Curs valutar indisponibil pentru: **{', '.join(missing_fx)}**. Totalul în RON nu poate fi calculat.")
+    missing_prices = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_MISSING, "Symbol"])
+    if missing_prices:
+        st.warning(f"⚠️ Fără preț disponibil pentru: **{', '.join(missing_prices)}**. Clasele lor nu au valoare, total și XIRR.")
+
+    order = {name: i for i, name in enumerate(LEDGER_CLASS_ORDER)}
+    results = results.assign(_o=results["Class"].map(order).fillna(len(order))).sort_values(["_o", "Currency"])
+    st.markdown("**Rezultat pe clase de active** (fiecare în moneda ei)")
+    st.dataframe(pd.DataFrame({
+        "Clasă": results["Class"] + np.where(results["Proxy"], " *", ""),
+        "Monedă": results["Currency"],
+        "Poziții": results["OpenPositions"].astype(int),
+        "Cost deschis": results["CostBasis"].map(_ledger_num),
+        "Valoare azi": results["MarketValue"].map(_ledger_num),
+        "Nerealizat": results["Unrealized"].map(_ledger_num),
+        "Realizat": results["Realized"].map(_ledger_num),
+        "Dividende / cupoane": results["Income"].map(_ledger_num),
+        "Impozite": results["Taxes"].map(_ledger_num),
+        "Comisioane": results["Fees"].map(_ledger_num),
+        "Rezultat total": results["Total"].map(_ledger_num),
+        "XIRR (% pe an)": results["XIRR"].map(lambda v: _ledger_num(v, 1, "%")),
+        "Fluxuri": results["Flows"].astype(int),
+    }), hide_index=True, width='stretch')
+    st.caption(
+        "Rezultat total = realizat + nerealizat + dividende/cupoane + impozite + comisioane. "
+        "XIRR = randament anualizat ponderat cu banii, în moneda clasei; cu puține fluxuri (sub ~20) e orientativ. "
+        "Costul e mediu ponderat; acțiunile gratuite au cost 0. "
+        "* Obligațiunile și titlurile de stat sunt evaluate la nominal (proxy): nu există preț de piață în sursele aplicației."
+    )
+
+    with st.expander("Poziții deschise din registru"):
+        st.dataframe(pd.DataFrame({
+            "Simbol": valued["Symbol"], "Clasă": valued["Class"], "Monedă": valued["Currency"],
+            "Cantitate": valued["Quantity"].map(lambda v: _ledger_num(v, 4)),
+            "Cost mediu": valued["AvgCost"].map(lambda v: _ledger_num(v, 4)),
+            "Preț": valued["Price"].map(lambda v: _ledger_num(v, 4)),
+            "Sursă preț": valued["PriceSource"],
+            "Valoare": valued["MarketValue"].map(_ledger_num),
+            "Nerealizat": valued["Unrealized"].map(_ledger_num),
+            "Nerealizat %": valued["UnrealizedPct"].map(lambda v: _ledger_num(v, 1, "%")),
+        }), hide_index=True, width='stretch')
+    with st.expander("Numerar și curs valutar"):
+        st.dataframe(pd.DataFrame({
+            "Monedă": by_currency["Currency"],
+            "Poziții": by_currency["Positions"].map(_ledger_num),
+            "Numerar": by_currency["Cash"].map(_ledger_num),
+            "Curs RON": by_currency["Rate"].map(lambda v: _ledger_num(v, 4)),
+            "Valoare în RON": by_currency["ValueBase"].map(_ledger_num),
+        }), hide_index=True, width='stretch')
+        st.dataframe(cash.assign(Cash=cash["Cash"].map(_ledger_num)).rename(columns={"Currency": "Monedă", "Cash": "Numerar"}),
+                     hide_index=True, width='stretch')
+    if problems:
+        with st.expander(f"⚠️ {len(problems)} probleme în registru"):
+            for problem in problems[:50]:
+                st.write(f"- {problem}")
 
 from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
 
@@ -3978,6 +4125,9 @@ def main():
                     add_trade(s, q, p, d_acq, curr)
                     st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
+
+        render_ledger_results()
+        st.markdown("---")
 
         # Încărcăm datele din Google Sheets
         df_pf = load_portfolio()
