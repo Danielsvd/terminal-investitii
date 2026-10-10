@@ -2945,6 +2945,7 @@ def main():
             # Baza de proiecție: FCF-ul curent sau media anilor fiscali (FCF normalizat)
             fcf_base, fcf_base_label = dcf_in["fcf"], dcf_in["fcf_basis"] or "N/A"
             fcf_distortion = fund.fcf_distortion_warning(dcf_in["cfo"], dcf_in["capex"], dcf_in["fcf"], dcf_in["fcf_average"])
+            avg_label, fcf_on_average = None, False
             if dcf_in["fcf_average"] is not None:
                 avg_label = f"Media ultimilor {dcf_in['fcf_average_years']} ani fiscali"
                 fcf_choice = st.radio(
@@ -2954,6 +2955,7 @@ def main():
                 )
                 if fcf_choice == avg_label:
                     fcf_base, fcf_base_label = dcf_in["fcf_average"], avg_label.lower()
+                    fcf_on_average = True
             if fcf_distortion and not dcf_na:
                 st.warning(f"⚠️ DCF: {fcf_distortion} Compară cu varianta pe media anilor fiscali.")
 
@@ -3016,8 +3018,15 @@ def main():
                                                 verdict=graham_note, note=graham_num_txt), unsafe_allow_html=True)
 
                 with cv3:
-                    d_verdict, d_zone, _ = fund.valuation_verdict(price_f, dcf_calc)
-                    if dcf_calc is not None and d_verdict is not None:
+                    d_verdict, d_zone, _ = fund.dcf_verdict(price_f, dcf_calc, bool(fcf_distortion), fcf_on_average)
+                    if dcf_calc is not None and d_zone == "none":
+                        # FCF curent deformat: valoarea rămâne afișată, dar cardul e gri și fără etichetă.
+                        st.markdown(_value_card(
+                            "Valoare justă (DCF pe FCF)", f"{dcf_calc:.2f}", "#30363D",
+                            verdict=d_verdict,
+                            note=(f"Vezi varianta „{avg_label}”." if avg_label
+                                  else "Media anilor fiscali lipsește: fără bază de comparație.")), unsafe_allow_html=True)
+                    elif dcf_calc is not None and d_verdict is not None:
                         d_col = VERDICT_COLORS[d_zone]
                         st.markdown(_value_card(
                             "Valoare justă (DCF pe FCF)", f"{dcf_calc:.2f}", d_col,

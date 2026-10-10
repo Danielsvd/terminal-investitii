@@ -817,3 +817,23 @@ def valuation_verdict(price, value, band=VALUATION_NEUTRAL_BAND):
     if diff < 0:
         return f"SUBEVALUAT ({abs(diff) * 100:.1f}%)", "under", diff * 100
     return f"SUPRAEVALUAT ({abs(diff) * 100:.1f}%)", "over", diff * 100
+
+
+DCF_NO_VERDICT = "FĂRĂ VERDICT: FCF CURENT DEFORMAT"
+
+
+def dcf_verdict(price, value, fcf_distorted, on_average_basis, band=VALUATION_NEUTRAL_BAND):
+    """Verdictul cardului DCF: ca `valuation_verdict`, dar fără verdict când baza e deformată.
+
+    Dacă `fcf_distortion_warning` e activ și DCF-ul pornește de la FCF-ul curent, valoarea
+    rezultată extrapolează la nesfârșit un an atipic (de ex. un vârf de investiții), deci
+    comparația cu prețul nu susține o etichetă: zona devine "none" și textul `DCF_NO_VERDICT`.
+    Diferența procentuală se întoarce în continuare, ca informație. Pe media anilor fiscali
+    (`on_average_basis`) verdictul se dă normal. (None, None, None) dacă lipsesc datele.
+    """
+    text, zone, diff = valuation_verdict(price, value, band)
+    if zone is None:
+        return None, None, None
+    if fcf_distorted and not on_average_basis:
+        return DCF_NO_VERDICT, "none", diff
+    return text, zone, diff
