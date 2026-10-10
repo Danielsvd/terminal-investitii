@@ -253,3 +253,115 @@ def xirr(flows, lo=-0.9999, hi=100.0, tol=1e-9, max_iter=200):
         else:
             lo, f_lo = mid, f_mid
     return (lo + hi) / 2.0
+
+
+# --- Evaluare la prețuri curente ---------------------------------------------
+
+NOMINAL_CLASSES = ("Obligatiuni",)      # fără preț de piață în sursele aplicației: evaluate la nominal
+BOND_NOMINAL = 100.0                    # titlurile de stat și obligațiunile din registru au nominal 100
+PRICE_LIVE, PRICE_CLOSE, PRICE_NOMINAL, PRICE_MISSING = "live", "ultima închidere", "nominal (proxy)", "lipsă"
+
+
+def _usable_price(mapping, symbol):
+    price = (mapping or {}).get(symbol)
+    return None if (price is None or pd.isna(price) or price <= 0) else float(price)
+
+
+def value_open_positions(positions, prices, close_prices=None, nominal_classes=NOMINAL_CLASSES, nominal=BOND_NOMINAL):
+    """Evaluează pozițiile deschise: valoare de piață și profit nerealizat.
+
+    prices: dict simbol -> preț curent sau None. close_prices: dict simbol -> ultima închidere,
+    folosită doar când prețul curent lipsește (sursa apare în `PriceSource`). Clasele din
+    `nominal_classes` nu au preț de piață disponibil și se evaluează la nominal; e un proxy
+    și e marcat ca atare. Fără niciun preț, valoarea rămâne NaN (nu 0: ar apărea ca pierdere de 100%).
+    Întoarce doar pozițiile cu cantitate > 0, cu coloanele în plus
+    Price, PriceSource, MarketValue, Unrealized, UnrealizedPct.
+    """
+    cols = list(positions.columns) + ["Price", "PriceSource", "MarketValue", "Unrealized", "UnrealizedPct"]
+    held = positions[positions["Quantity"] > QTY_EPS].copy()
+    if held.empty:
+        return pd.DataFrame(columns=cols)
+    price_list, source_list = [], []
+    for rec in held.itertuples(index=False):
+        if rec.Class in nominal_classes:
+            price_list.append(float(nominal)); source_list.append(PRICE_NOMINAL)
+            continue
+        live, close = _usable_price(prices, rec.Symbol), _usable_price(close_prices, rec.Symbol)
+        if live is not None:
+            price_list.append(live); source_list.append(PRICE_LIVE)
+        elif close is not None:
+            price_list.append(close); source_list.append(PRICE_CLOSE)
+        else:
+            price_list.append(np.nan); source_list.append(PRICE_MISSING)
+    held["Price"], held["PriceSource"] = price_list, source_list
+    held["MarketValue"] = held["Quantity"] * held["Price"]
+    held["Unrealized"] = held["MarketValue"] - held["CostBasis"]
+    held["UnrealizedPct"] = np.where(held["CostBasis"] > 0, held["Unrealized"] / held["CostBasis"].where(held["CostBasis"] > 0) * 100, np.nan)
+    return held[cols].reset_index(drop=True)
+
+
+def class_results(ledger, positions, valued, asof):
+    """Rezultatul pe (clasă, monedă): realizat, nerealizat, venit, impozite, total și XIRR.
+
+    - `Total` = realizat + nerealizat + venit + impozite + comisioane.
+    - `XIRR` folosește fluxurile clasei plus valoarea de piață a pozițiilor rămase, ca încasare
+      la `asof`. Dacă vreunei poziții deschise îi lipsește prețul, MarketValue, Unrealized,
+      Total și XIRR rămân lipsă pentru clasa respectivă: un total parțial ar induce în eroare.
+    - `Flows` e numărul de fluxuri folosite; sub ~20 randamentul e orientativ.
+    Clasele fără dețineri și fără rezultat (de ex. „Drepturi”) nu apar.
+    """
+    out_cols = ["Class", "Currency", "OpenPositions", "CostBasis", "MarketValue", "Unrealized", "Realized", "Income",
+                "Taxes", "Fees", "Total", "XIRR", "Flows", "MissingPrices", "Proxy"]
+    summary = class_summary(positions)
+    rows = []
+    for rec in summary.itertuples(index=False):
+        part = valued[(valued["Class"] == rec.Class) & (valued["Currency"] == rec.Currency)]
+        missing = sorted(part.loc[part["MarketValue"].isna(), "Symbol"])
+        if missing:
+            market = unrealized = np.nan
+        else:
+            market = float(part["MarketValue"].sum()) if not part.empty else 0.0
+            unrealized = float(part["Unrealized"].sum()) if not part.empty else 0.0
+        flows = class_cashflows(ledger, rec.Class, rec.Currency)
+        rate = None
+        if not missing:
+            rate = xirr(flows + ([(pd.Timestamp(asof), market)] if market > 0 else []))
+        total = np.nan if missing else rec.Realized + unrealized + rec.Income + rec.Taxes + rec.Fees
+        if rec.OpenPositions == 0 and not flows:
+            continue
+        rows.append({"Class": rec.Class, "Currency": rec.Currency, "OpenPositions": rec.OpenPositions,
+                     "CostBasis": rec.CostBasis, "MarketValue": market, "Unrealized": unrealized,
+                     "Realized": rec.Realized, "Income": rec.Income, "Taxes": rec.Taxes, "Fees": rec.Fees,
+                     "Total": total, "XIRR": np.nan if rate is None else rate * 100, "Flows": len(flows),
+                     "MissingPrices": ", ".join(missing),
+                     "Proxy": bool((part["PriceSource"] == PRICE_NOMINAL).any()) if not part.empty else False})
+    return pd.DataFrame(rows, columns=out_cols)
+
+
+def consolidate(results, cash, fx_rates, base="RON"):
+    """Valoarea de azi a portofoliului în moneda de bază: poziții + numerar, la cursul curent.
+
+    fx_rates: dict monedă -> câte unități din `base` face o unitate (ex. {"EUR": 5.1, "USD": 4.4});
+    `base` are implicit cursul 1. Întoarce (tabel pe monedă, total, listă de monede fără curs).
+    Dacă lipsește un curs sau o valoare de piață, totalul e None: nu se afișează un total parțial.
+    """
+    rates = dict(fx_rates or {})
+    rates[base] = 1.0
+    currencies = sorted(set(results["Currency"]) | set(cash["Currency"]))
+    rows, missing, incomplete = [], [], False
+    for cur in currencies:
+        res = results[results["Currency"] == cur]
+        positions_value = res["MarketValue"].sum(min_count=1) if not res.empty else 0.0
+        if not res.empty and res["MarketValue"].isna().any():
+            positions_value = np.nan
+        cash_value = float(cash.loc[cash["Currency"] == cur, "Cash"].sum())
+        rate = rates.get(cur)
+        if rate is None or pd.isna(rate) or rate <= 0:
+            rate = np.nan
+            missing.append(cur)
+        value_base = (positions_value + cash_value) * rate
+        incomplete = incomplete or pd.isna(value_base)
+        rows.append({"Currency": cur, "Positions": positions_value, "Cash": cash_value, "Rate": rate, "ValueBase": value_base})
+    table = pd.DataFrame(rows, columns=["Currency", "Positions", "Cash", "Rate", "ValueBase"])
+    total = None if (incomplete or table.empty) else float(table["ValueBase"].sum())
+    return table, total, missing

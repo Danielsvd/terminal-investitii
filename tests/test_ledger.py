@@ -177,3 +177,95 @@ def test_xirr_fara_solutie():
     assert L.xirr([("2023-01-01", -1000), ("2024-01-01", -50)]) is None      # doar ieșiri
     assert L.xirr([("2023-01-01", -1000), ("2023-01-01", 1100)]) is None     # aceeași zi
     assert L.xirr([("2023-01-01", -1000), ("2024-01-01", float("nan"))]) is None
+
+
+# --- Evaluare la prețuri curente ---------------------------------------------
+
+VALUED_SHEET = sheet(
+    ["2024-01-01 10:00:00", "AAA.RO", "Actiuni RO", "BUY", "100", "10", "RON", "0", "-1000", "TV", "a1", ""],
+    ["2024-01-01 10:00:00", "CCC.RO", "Actiuni RO", "BUY", "10", "20", "RON", "0", "-200", "TV", "c1", ""],
+    ["2024-01-01 10:00:00", "R9901AE", "Obligatiuni", "BUY", "5", "98", "EUR", "0", "-495", "TV", "r1", ""],
+    ["2024-07-01 10:00:00", "R9901AE", "Obligatiuni", "COUPON", "", "", "EUR", "0", "25", "TV", "r2", ""],
+    ["2024-01-01 10:00:00", "BBB", "Actiuni SUA", "BUY", "2", "50", "USD", "0", "-100", "XTB", "x1", ""],
+    ["2024-06-01 10:00:00", "BBB", "Actiuni SUA", "SELL", "2", "60", "USD", "0", "120", "XTB", "x2", ""],
+    ["2024-01-01 09:00:00", "", "Numerar", "DEPOSIT", "", "", "RON", "0", "1500", "TV", "d1", ""],
+    ["2024-01-01 09:00:00", "", "Numerar", "DEPOSIT", "", "", "EUR", "0", "500", "TV", "d2", ""],
+)
+
+
+def _valued(prices):
+    df, _ = L.parse_ledger(VALUED_SHEET)
+    pos, _ = L.build_positions(df)
+    return df, pos, L.value_open_positions(pos, prices)
+
+
+def test_value_open_positions_pret_live_nominal_si_lipsa():
+    _, _, valued = _valued({"AAA.RO": 12.0, "CCC.RO": None, "BBB": 70.0})
+    v = valued.set_index("Symbol")
+    assert list(v.index) == ["AAA.RO", "CCC.RO", "R9901AE"]          # BBB e închisă, nu apare
+    # AAA: 100 × 12 = 1200 ; cost 1000 ; nerealizat 200 (20%)
+    assert v.loc["AAA.RO", "MarketValue"] == pytest.approx(1200.0)
+    assert v.loc["AAA.RO", "Unrealized"] == pytest.approx(200.0)
+    assert v.loc["AAA.RO", "UnrealizedPct"] == pytest.approx(20.0)
+    assert v.loc["AAA.RO", "PriceSource"] == L.PRICE_LIVE
+    # CCC: fără preț -> lipsă, nu 0
+    assert np.isnan(v.loc["CCC.RO", "MarketValue"]) and v.loc["CCC.RO", "PriceSource"] == L.PRICE_MISSING
+    # obligațiune: 5 × 100 nominal = 500 ; cost 495 ; nerealizat 5
+    assert v.loc["R9901AE", "MarketValue"] == pytest.approx(500.0)
+    assert v.loc["R9901AE", "Unrealized"] == pytest.approx(5.0)
+    assert v.loc["R9901AE", "PriceSource"] == L.PRICE_NOMINAL
+
+
+def test_value_open_positions_foloseste_ultima_inchidere_cand_lipseste_pretul_live():
+    _, _, valued = _valued({"AAA.RO": None, "CCC.RO": None})
+    assert set(valued.set_index("Symbol").loc[["AAA.RO", "CCC.RO"], "PriceSource"]) == {L.PRICE_MISSING}
+    df, pos, _ = _valued({})
+    v = L.value_open_positions(pos, {"AAA.RO": None, "CCC.RO": 21.0}, {"AAA.RO": 11.0, "CCC.RO": 99.0}).set_index("Symbol")
+    assert v.loc["AAA.RO", "Price"] == 11.0 and v.loc["AAA.RO", "PriceSource"] == L.PRICE_CLOSE
+    assert v.loc["CCC.RO", "Price"] == 21.0 and v.loc["CCC.RO", "PriceSource"] == L.PRICE_LIVE    # live are prioritate
+
+
+def test_class_results_total_si_xirr():
+    df, pos, valued = _valued({"AAA.RO": 12.0, "CCC.RO": 22.0})
+    res = L.class_results(df, pos, valued, "2025-01-01 10:00:00").set_index(["Class", "Currency"])
+    ro = res.loc[("Actiuni RO", "RON")]
+    # valoare 1200 + 220 = 1420 ; cost 1200 ; nerealizat 220 ; total 220
+    assert ro["MarketValue"] == pytest.approx(1420.0) and ro["Total"] == pytest.approx(220.0)
+    # fluxuri: -1200 la 2024-01-01, +1420 la 2025-01-01 (366 de zile, an bisect):
+    # (1420/1200)^(365/366) - 1 = 18,2796%
+    assert ro["XIRR"] == pytest.approx(((1420 / 1200) ** (365 / 366) - 1) * 100, abs=1e-4)
+    assert ro["Flows"] == 2 and ro["MissingPrices"] == "" and not ro["Proxy"]
+    us = res.loc[("Actiuni SUA", "USD")]
+    # poziție închisă: realizat 20, fără valoare de piață ; -100 -> +120 în 152 de zile
+    assert us["OpenPositions"] == 0 and us["MarketValue"] == 0.0 and us["Total"] == pytest.approx(20.0)
+    assert us["XIRR"] == pytest.approx((1.2 ** (365 / 152) - 1) * 100, abs=1e-4)
+    bond = res.loc[("Obligatiuni", "EUR")]
+    # nerealizat 5 + cupon 25 = 30 ; marcat ca proxy
+    assert bond["Total"] == pytest.approx(30.0) and bond["Proxy"]
+
+
+def test_class_results_fara_total_cand_lipseste_un_pret():
+    df, pos, valued = _valued({"AAA.RO": 12.0, "CCC.RO": None})
+    ro = L.class_results(df, pos, valued, "2025-01-01").set_index(["Class", "Currency"]).loc[("Actiuni RO", "RON")]
+    assert ro["MissingPrices"] == "CCC.RO"
+    assert np.isnan(ro["MarketValue"]) and np.isnan(ro["Total"]) and np.isnan(ro["XIRR"])
+    assert ro["Realized"] == 0.0                                      # ce nu depinde de preț rămâne calculat
+
+
+def test_consolidate_in_ron():
+    df, pos, valued = _valued({"AAA.RO": 12.0, "CCC.RO": 22.0})
+    res = L.class_results(df, pos, valued, "2025-01-01")
+    cash = L.cash_balances(df)
+    table, total, missing = L.consolidate(res, cash, {"EUR": 5.0, "USD": 4.5})
+    t = table.set_index("Currency")
+    # RON: poziții 1420 + numerar 1500 - 1000 - 200 = 300 -> 1720
+    assert t.loc["RON", "ValueBase"] == pytest.approx(1720.0)
+    # EUR: poziții 500 + numerar 500 - 495 + 25 = 30 -> 530 × 5 = 2650
+    assert t.loc["EUR", "ValueBase"] == pytest.approx(2650.0)
+    # USD: fără poziții, numerar -100 + 120 = 20 -> 20 × 4,5 = 90
+    assert t.loc["USD", "ValueBase"] == pytest.approx(90.0)
+    assert total == pytest.approx(1720.0 + 2650.0 + 90.0) and missing == []
+
+    # fără curs USD: totalul nu se afișează parțial
+    _, total2, missing2 = L.consolidate(res, cash, {"EUR": 5.0, "USD": None})
+    assert total2 is None and missing2 == ["USD"]
