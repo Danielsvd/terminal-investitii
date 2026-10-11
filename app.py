@@ -4509,7 +4509,7 @@ def main():
                     c_mc3.metric("Probabilitatea de profit", f"{mc['prob_profit']:.1f}%",
                                 help="**Cum se calculează:** câte scenarii din 1000 au terminat peste valoarea de azi.\n\n"
                                      "**Ce înseamnă:** depinde direct de randamentul mediu al perioadei alese. Comparați cu varianta „fără tendință” de mai jos: "
-                                     "acolo e aproape de 50% prin construcție.")
+                                     "acolo iese puțin sub 50%, pentru că volatilitatea singură trage valoarea mediană în jos.")
                     st.caption(
                         f"Din {mc['simulations']} scenarii pe {mc['days']} de zile, construite prin reeșantionarea randamentelor zilnice din perioada aleasă mai sus "
                         f"({len(hist_curve) - 1} zile). Simularea presupune că randamentul mediu din această perioadă continuă. "
