@@ -29,6 +29,7 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
+from analytics import simulation
 from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
@@ -4468,51 +4469,54 @@ def main():
                 st.markdown("---")
                 st.subheader("🔮 Proiecție Probabilistă Monte Carlo (1 An)")
 
-                with st.spinner("Se simulează 1000 de scenarii de piață..."):
-                    paths, last_val = run_monte_carlo_sim(hist_curve)
+                # Bootstrap pe randamentele zilnice din fereastra aleasă (analytics/simulation.py); seed fix, deci stabil la rerun.
+                paths = simulation.bootstrap_paths(hist_curve)
+                if paths is None:
+                    st.info("Simularea are nevoie de cel puțin 60 de zile de istoric: alege o perioadă de analiză mai lungă (minimum 6L).")
+                else:
+                    mc = simulation.summarize_paths(paths)
+                    mc_flat = simulation.summarize_paths(simulation.bootstrap_paths(hist_curve, demean=True))
+                    last_val, bands = mc["start"], mc["bands"]
+                    x_range = list(range(len(bands)))
 
-                if paths is not None:
-                    # Calculăm percentilele de risc
-                    # Ce se întâmplă în cel mai rău caz (5%) și cel mai bun (95%)
-                    p5 = np.percentile(paths[-1, :], 5)
-                    p50 = np.percentile(paths[-1, :], 50)
-                    p95 = np.percentile(paths[-1, :], 95)
-                    
                     fig_mc = go.Figure()
-                    
-                    # Afișăm primele 100 de traiectorii (pentru a nu supraîncărca browser-ul)
-                    x_range = list(range(252))
-                    for i in range(100):
-                        fig_mc.add_trace(go.Scatter(x=x_range, y=paths[:, i], mode='lines', 
-                                                line=dict(width=0.5, color='rgba(3, 247, 6, 0.45)'),
-                                                showlegend=False))
-                    
-                    # Adăugăm liniile critice
-                    fig_mc.add_trace(go.Scatter(x=x_range, y=[p50]*252, line=dict(color='white', dash='dash'), name='Așteptare Medie'))
-                    fig_mc.add_trace(go.Scatter(x=x_range, y=[p5]*252, line=dict(color='#F85149', width=2), name='Worst Case (5%)'))
-                    
-                    fig_mc.update_layout(height=400, template="plotly_dark", 
-                                        hovermode="x", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                                        yaxis_title=f"Valoare Portofoliu ({currency_symbol})")
-                    
+                    # Primele 100 de traiectorii, ca fundal (toate ar supraîncărca browserul)
+                    for i in range(min(100, paths.shape[1])):
+                        fig_mc.add_trace(go.Scatter(x=x_range, y=paths[:, i], mode='lines', hoverinfo='skip',
+                                                line=dict(width=0.5, color='rgba(139, 148, 158, 0.25)'), showlegend=False))
+                    # Percentilele pe tot orizontul, nu doar la final
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=bands["p95"], line=dict(color='#199E70', width=2), name='Optimist (95%)',
+                                                hovertemplate="%{y:,.0f}<extra>Optimist</extra>"))
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=bands["p50"], line=dict(color='#3987E5', width=2), name='Median (50%)',
+                                                hovertemplate="%{y:,.0f}<extra>Median</extra>"))
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=bands["p5"], line=dict(color='#D95926', width=2), name='Pesimist (5%)',
+                                                hovertemplate="%{y:,.0f}<extra>Pesimist</extra>"))
+                    fig_mc.update_layout(height=400, template="plotly_dark",
+                                        hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                        xaxis_title="Zile de tranzacționare de azi înainte",
+                                        yaxis_title=f"Valoare Portofoliu ({currency_symbol})",
+                                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                     st.plotly_chart(fig_mc, width='stretch')
-                    
-                    # Dashboard de Risc sub grafic
+
                     c_mc1, c_mc2, c_mc3 = st.columns(3)
-                    
-                    # Calculăm Value at Risk Proiectat
-                    expected_loss = ((last_val - p5) / last_val) * 100
-                    
-                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{p5:,.2f} {currency_symbol}",
-                                help="Value at Risk (VaR): Reprezintă pragul sub care există doar 5% șanse ca portofoliul tău să scadă în următorul an, conform celor 1000 de scenarii simulate.")
-
-                    c_mc2.metric("Pierderea maximă așteptată", f"-{expected_loss:.2f}%", delta_color="inverse",
-                                help="Procentul maxim de scădere din valoarea curentă în scenariul pesimist (cel de la linia roșie din grafic).")
-
-                    c_mc3.metric("Probabilitatea de profit", f"{(np.sum(paths[-1, :] > last_val) / 1000 * 100):.1f}%",
-                                help="Câte scenarii din cele 1000 simulate au terminat pe profit (peste valoarea actuală). O valoare peste 50% indică un avantaj statistic pe termen lung.")
-                    
-                    st.info(f"💡 **Analiza Quant:** Există o probabilitate de 95% ca peste un an, portofoliul tău să nu scadă sub valoarea de **{p5:,.2f} {currency_symbol}**. Acest model ia în calcul volatilitatea ta istorică.")
+                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{mc['p5']:,.2f} {currency_symbol}",
+                                help="**Cum se calculează:** percentila 5 a valorii finale din cele 1000 de scenarii, fiecare construit din randamente zilnice "
+                                     "trase la întâmplare din istoricul portofoliului.\n\n**Ce înseamnă:** în 95% din scenarii portofoliul a terminat anul peste această valoare.")
+                    c_mc2.metric("Variația în scenariul pesimist", f"{mc['change_p5_pct']:+.2f}%",
+                                help="**Cum se calculează:** (valoarea din scenariul pesimist ÷ valoarea de azi − 1) × 100.\n\n"
+                                     "**Ce înseamnă:** cât ai pierde (minus) sau câștiga (plus) într-un an slab, de felul celor care apar o dată la 20. "
+                                     "Poate fi pozitivă dacă perioada aleasă a fost foarte bună.")
+                    c_mc3.metric("Probabilitatea de profit", f"{mc['prob_profit']:.1f}%",
+                                help="**Cum se calculează:** câte scenarii din 1000 au terminat peste valoarea de azi.\n\n"
+                                     "**Ce înseamnă:** depinde direct de randamentul mediu al perioadei alese. Comparați cu varianta „fără tendință” de mai jos: "
+                                     "acolo e aproape de 50% prin construcție.")
+                    st.caption(
+                        f"Din {mc['simulations']} scenarii pe {mc['days']} de zile, construite prin reeșantionarea randamentelor zilnice din perioada aleasă mai sus "
+                        f"({len(hist_curve) - 1} zile). Simularea presupune că randamentul mediu din această perioadă continuă. "
+                        f"Fără această presupunere (doar volatilitatea, tendință zero): scenariu pesimist {mc_flat['change_p5_pct']:+.1f}%, "
+                        f"median {mc_flat['change_p50_pct']:+.1f}%, probabilitate de profit {mc_flat['prob_profit']:.0f}%. "
+                        "Curba folosită aplică deținerile de azi pe trecut; nu e o prognoză."
+                    )
                 
                 if not hist_curve.empty:
                     fig_hist = go.Figure()
@@ -4699,22 +4703,25 @@ def main():
                 # MODUL NOU: OPTIMIZARE PORTOFOLIU AI (MARKOWITZ)
                 # =======================================================
                 st.markdown("---")
-                st.subheader("🧠 Optimizator Portofoliu AI (Markowitz)")
-                st.markdown("Inteligența artificială analizează corelațiile și volatilitatea istorică pentru a găsi alocarea matematic perfectă (risc minim, profit maxim).")
+                st.subheader("🧠 Optimizator Portofoliu (Markowitz)")
+                st.markdown("Două alocări calculate din istoricul pozițiilor tale: Sharpe maxim și varianță minimă, cu plafon pe poziție. "
+                            "Sunt scenarii construite din trecut, nu recomandări: verifică mai jos cum s-ar fi comportat pe date pe care modelul nu le-a văzut.")
 
                 if len(current_tickers) >= 2:
                     with st.spinner("Motorul Quant calculează Frontiera Eficientă..."):
                         # 1. Descărcăm prețurile de închidere curate pentru acțiunile tale
                         # close_frame elimină simbolurile fără nicio cotație (altfel optimizarea eșua cu un mesaj criptic)
-                        hist_opt = close_frame(yf.download(current_tickers, period="1y", progress=False), current_tickers)
+                        # 5 ani: pe un singur an, Sharpe maxim alege doar câștigătorii recenți
+                        hist_opt = close_frame(yf.download(current_tickers, period="5y", progress=False, auto_adjust=True), current_tickers)
                         skipped_opt = [t for t in current_tickers if t not in hist_opt.columns]
                         if skipped_opt:
                             st.caption(f"ℹ️ Fără istoric de preț, excluse din optimizare: {', '.join(skipped_opt)}.")
                         
-                        # 2. Trimitem datele la creierul AI
-                        from ai_engine import optimize_portfolio_ai
+                        # 2. Optimizare cu plafon pe poziție și covarianță Ledoit-Wolf (analytics/simulation.py)
+                        opt_currency = {"$": "USD", "€": "EUR"}.get(currency_symbol, currency_symbol)
+                        rf_opt, rf_opt_label = get_risk_free_for_currency(opt_currency)
                         if hist_opt.shape[1] >= 2:
-                            opt_res, opt_msg = optimize_portfolio_ai(hist_opt)
+                            opt_res, opt_msg = simulation.optimize_portfolio(hist_opt, rf_annual=rf_opt or 0.0, max_weight=0.25)
                         else:
                             opt_res, opt_msg = None, "Sunt necesare cel puțin 2 active cu istoric de preț pentru optimizare."
 
@@ -4729,7 +4736,8 @@ def main():
                                 comp_data.append({
                                     "Simbol": sym,
                                     "Pondere Actuală (%)": current_w.get(sym, 0),
-                                    "Pondere Optimă AI (%)": opt_res['allocation'].get(sym, 0)
+                                    "Pondere Optimă AI (%)": opt_res['allocation'].get(sym, 0),
+                                    "Pondere Varianță Minimă (%)": opt_res['min_variance'].get(sym, 0)
                                 })
                             df_comp = pd.DataFrame(comp_data)
 
@@ -4751,11 +4759,22 @@ def main():
                             fig_opt.add_trace(go.Bar(
                                 x=df_comp['Simbol'], 
                                 y=df_comp['Pondere Optimă AI (%)'], 
-                                name='Sugestia AI', 
-                                marker_color='#3FB950',
+                                name='Sharpe maxim', 
+                                marker_color='#3987E5',
                                 texttemplate='%{y:.1f}%',      # Scrie procentul pe bară
                                 textposition='auto',
-                                hovertemplate="<b>%{x}</b> (Optim AI): %{y:.2f}%<extra></extra>" # Formatare hover
+                                hovertemplate="<b>%{x}</b> (Sharpe maxim): %{y:.2f}%<extra></extra>" # Formatare hover
+                            ))
+
+                            # Bara pentru portofoliul de varianță minimă
+                            fig_opt.add_trace(go.Bar(
+                                x=df_comp['Simbol'],
+                                y=df_comp['Pondere Varianță Minimă (%)'],
+                                name='Varianță minimă',
+                                marker_color='#C98500',
+                                texttemplate='%{y:.1f}%',
+                                textposition='auto',
+                                hovertemplate="<b>%{x}</b> (Varianță minimă): %{y:.2f}%<extra></extra>"
                             ))
                             
                             fig_opt.update_layout(
@@ -4769,20 +4788,42 @@ def main():
                             )
                             st.plotly_chart(fig_opt, width='stretch', key=f"opt_bar_{currency_symbol}")
 
-                            # 4. Afișăm Metricele Portofoliului Ideal cu explicații
-                            st.markdown("##### 🏆 Cum ar arăta Portofoliul Ideal (Conform AI):")
+                            # 4. Indicatorii alocării de Sharpe maxim, pe tot istoricul (în eșantion)
+                            st.markdown("##### Alocarea de Sharpe maxim, pe tot istoricul")
                             c_op1, c_opt2, c_opt3 = st.columns(3)
                             
-                            c_op1.metric("Randament Anual Așteptat", f"{opt_res['expected_return']:.2f}%",
-                                        help="Randamentul anual pe care modelul matematic îl estimează pentru această alocare, bazat pe performanța istorică a activelor tale.")
+                            c_op1.metric("Randament Anual Istoric", f"{opt_res['expected_return']:.2f}%",
+                                        help="**Cum se calculează:** media randamentelor zilnice ale alocării × 252, pe tot istoricul comun.\n\n"
+                                             "**Ce înseamnă:** cât ar fi adus această alocare în trecut. E calculat pe aceleași date pe care a fost aleasă, "
+                                             "deci e optimist prin construcție; nu e o estimare pentru viitor.")
                             
                             c_opt2.metric("Volatilitate (Risc)", f"{opt_res['expected_volatility']:.2f}%",
-                                        help="Măsură a fluctuațiilor prețului. AI-ul încearcă să găsească ponderile care oferă cel mai mic 'stres' (swing-uri de preț) pentru randamentul țintit.")
+                                        help="**Cum se calculează:** deviația standard a randamentelor zilnice ale alocării × √252.\n\n"
+                                             "**Ce înseamnă:** cât de mult ar fi fluctuat alocarea într-un an obișnuit.")
                             
-                            c_opt3.metric("Sharpe Ratio Optim", f"{opt_res['sharpe_ratio']:.2f}",
-                                        help="Indicatorul de aur al eficienței: Profitul raportat la Risc. O valoare peste 1.0 este considerată bună, iar peste 2.0 este excelentă, indicând un profit mare cu riscuri bine controlate.")
+                            c_opt3.metric("Sharpe Ratio", "N/A" if opt_res['sharpe_ratio'] is None else f"{opt_res['sharpe_ratio']:.2f}",
+                                        help="**Cum se calculează:** (randament anual − rata fără risc) ÷ volatilitate.\n\n"
+                                             "**Ce înseamnă:** randamentul peste titlurile de stat pentru fiecare unitate de risc. E valoarea maximă posibilă pe aceste date, "
+                                             "cu plafonul pe poziție; în practică iese mai mic.")
 
-                            st.info("💡 **Strategie Quant:** Barele verzi îți arată unde ar trebui să muți banii. Algoritmul îți sugerează să crești expunerea pe activele cu randament stabil și să o reduci pe cele care aduc doar 'zgomot' (volatilitate inutilă).")
+                            oos = opt_res.get("out_of_sample") or []
+                            if oos:
+                                st.markdown(f"##### Verificare pe date nevăzute ({opt_res['test_days']} zile, din {opt_res['test_start']:%d.%m.%Y})")
+                                st.dataframe(pd.DataFrame({
+                                    "Alocare": [r["label"] for r in oos],
+                                    "Randament anualizat": [f"{r['return']:.1f}%" for r in oos],
+                                    "Volatilitate": [f"{r['volatility']:.1f}%" for r in oos],
+                                    "Sharpe": ["N/A" if r["sharpe"] is None else f"{r['sharpe']:.2f}" for r in oos],
+                                }), hide_index=True, width='stretch')
+                            st.caption(
+                                f"Din {opt_res['n_days']} zile comune de tranzacționare, {opt_res['start']:%d.%m.%Y} – {opt_res['end']:%d.%m.%Y}. "
+                                f"Plafon pe poziție: {opt_res['cap']:.0f}%. Covarianță Ledoit-Wolf (shrinkage {opt_res['shrinkage']:.2f}). "
+                                + (f"Excluse pentru istoric prea scurt: {', '.join(opt_res['excluded'])}. " if opt_res.get('excluded') else "")
+                                + (f"Rata fără risc: {rf_opt * 100:.2f}% ({rf_opt_label}). " if rf_opt is not None else "Rata fără risc indisponibilă: Sharpe calculat cu 0%. ")
+                                + ("Tabelul de verificare: ponderile au fost calculate pe primele 70% din zile și evaluate pe ultimele 30%. "
+                                   "Dacă acolo nu bat ponderile egale, „optimul” e în mare parte potrivire pe trecut. " if oos else "")
+                                + "Varianța minimă nu depinde de estimarea randamentelor, deci e mai stabilă decât Sharpe maxim."
+                            )
                         else:
                             st.warning(opt_msg)
                 else:

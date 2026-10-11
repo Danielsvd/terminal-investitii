@@ -457,6 +457,7 @@ EXPECTED_MESSAGES = (
     "Companii Small-Cap", "AMENINȚĂRI",
     "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
+    "zile comune de tranzacționare; sunt necesare",  # tabul EUR din datele de test: o poziție listată de 60 de zile
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )
 
