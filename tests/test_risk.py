@@ -133,3 +133,23 @@ def test_performance_risk_rf_si_esantion_mic():
     # pierdere din prima zi: drawdown măsurat față de punctul de plecare
     loss = performance_risk(pd.Series([-0.10, 0.01, 0.01, 0.01, 0.01], index=idx), 0.0, min_obs=5)
     assert loss["max_drawdown"] == pytest.approx(-0.10)
+
+
+def test_common_day_correlation_nu_inventeaza_randamente_zero():
+    import numpy as np
+    import pytest
+    from analytics.risk import common_day_correlation
+    idx = pd.bdate_range("2024-01-01", periods=8)
+    a = pd.Series([10, 11, 12.1, 13.31, 14.641, 16.105, 17.716, 19.487], index=idx, dtype="float64")   # +10% pe zi
+    b = a * 2                                                                                      # identic ca randamente
+    b.iloc[3] = np.nan                                                                             # o zi fără ședință pe piața lui b
+    closes = pd.DataFrame({"A": a, "B": b})
+    corr, n = common_day_correlation(closes, min_obs=3)
+    # ziua 3 (fără preț) și ziua 4 (fără preț anterior) cad: rămân 5 din 7 randamente
+    assert n == 5
+    assert corr.loc["A", "B"] == pytest.approx(1.0)
+    # cu prețul completat din ziua dinainte, b ar avea un randament 0 și unul de 21%: corelația nu ar mai fi 1
+    padded = closes.ffill().pct_change().dropna()
+    assert padded.corr().loc["A", "B"] < 0.999 or padded["B"].std() > 0
+    assert common_day_correlation(closes, min_obs=6) [0].empty and common_day_correlation(closes, min_obs=6)[1] == 5
+    assert common_day_correlation(closes[["A"]])[0].empty

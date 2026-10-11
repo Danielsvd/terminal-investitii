@@ -141,3 +141,21 @@ def performance_risk(daily_returns, rf_annual=None, min_obs=60):
         "var95_param": mean - Z_95 * std,
     }
     return out
+
+
+def common_day_correlation(closes, min_obs=60):
+    """Corelația randamentelor zilnice, doar pe zilele în care toate seriile au randament.
+
+    Piețele au calendare diferite (BVB, Xetra, NYSE, cripto în weekend). Completarea prețului
+    lipsă cu cel din ziua dinainte inventează randamente de 0 și trage corelațiile spre zero,
+    așa că prețurile lipsă rămân lipsă, iar zilele incomplete se elimină. Întoarce
+    (matrice, număr de zile folosite); matricea e goală sub `min_obs` zile comune sau sub
+    două serii.
+    """
+    frame = pd.DataFrame(closes)
+    if frame.shape[1] < 2:
+        return pd.DataFrame(), 0
+    returns = frame.pct_change(fill_method=None).dropna(how="any")
+    if len(returns) < max(min_obs, 2):
+        return pd.DataFrame(), int(len(returns))
+    return returns.corr(), int(len(returns))

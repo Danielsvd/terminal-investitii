@@ -238,3 +238,17 @@ def scale_number(value):
     if size >= 1e6:
         return f"{value / 1e6:.2f} M"
     return f"{value:,.2f}"
+
+
+def watchlist_status(price, target):
+    """Rândul din tabelul Watchlist: (preț, țintă, distanță %, e în zona de cumpărare).
+
+    Prețul sau ținta lipsă (None, NaN, ≤ 0) rămân None și nu produc nici distanță, nici semnal:
+    un preț 0 ar arăta ca o scădere de 100% până sub orice țintă. Distanța e față de țintă,
+    (preț − țintă) / țintă × 100, la fel ca în cardul „Țintă intrare”.
+    """
+    price = positive_or_none(price)
+    target = positive_or_none(target)
+    if price is None or target is None:
+        return price, target, None, False
+    return price, target, (price - target) / target * 100, price <= target
