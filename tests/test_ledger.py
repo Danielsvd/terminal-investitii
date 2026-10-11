@@ -409,3 +409,53 @@ def test_flows_on_index_muta_weekendul_pe_ziua_urmatoare():
                         "AmountBase": [100.0, 50.0, 25.0, 999.0]})
     out = L.flows_on_index(ext, idx)
     assert list(out) == [100.0, 75.0, 0.0]                                 # sâmbăta trece pe luni; februarie e în afara indexului
+
+
+# --- Vârfuri de date (split datat diferit, cotație greșită) ---------------------
+
+def test_despike_scoate_varful_care_revine_si_lasa_schimbarea_reala():
+    idx = pd.bdate_range("2022-08-15", periods=7)
+    # consolidare 1:10 datată cu o zi mai devreme în sursa de prețuri: o zi cu valoare ×10
+    spike = pd.Series([2400.0, 2410.0, 24200.0, 2430.0, 2440.0, 2450.0, 2460.0], index=idx)
+    clean, fixed = L.despike(spike)
+    assert list(clean) == [2400.0, 2410.0, 2410.0, 2430.0, 2440.0, 2450.0, 2460.0]
+    assert fixed == [idx[2]]
+    # vârf de două zile, în jos
+    dip = pd.Series([1000.0, 100.0, 105.0, 1010.0, 1000.0, 990.0, 1000.0], index=idx)
+    clean, fixed = L.despike(dip)
+    assert list(clean)[:4] == [1000.0, 1000.0, 1000.0, 1010.0] and len(fixed) == 2
+    # o cumpărare care dublează poziția nu revine: rămâne
+    step = pd.Series([1000.0, 1000.0, 2100.0, 2120.0, 2090.0, 2110.0, 2100.0], index=idx)
+    clean, fixed = L.despike(step)
+    assert clean.equals(step) and fixed == []
+    # mișcare normală (sub prag) și zerouri (poziție închisă): neatinse
+    calm = pd.Series([100.0, 120.0, 95.0, 0.0, 0.0, 100.0, 101.0], index=idx)
+    assert L.despike(calm)[0].equals(calm)
+
+
+def test_despike_nu_atinge_o_vanzare_urmata_de_recumparare():
+    idx = pd.bdate_range("2024-03-04", periods=5)
+    series = pd.Series([1000.0, 400.0, 410.0, 1000.0, 1010.0], index=idx)      # vândut 60%, recumpărat după două zile
+    assert L.despike(series, blocked_days={idx[1]})[0].equals(series)
+    assert L.despike(series, blocked_days={idx[3]})[0].equals(series)          # și ziua revenirii contează
+    assert not L.despike(series)[0].equals(series)                             # fără informația asta ar fi netezit
+
+
+def test_curba_nu_sare_la_o_consolidare_datata_diferit():
+    values = sheet(
+        ["2022-08-01 09:00:00", "", "Numerar", "DEPOSIT", "", "", "RON", "0", "3000", "TV", "d1", ""],
+        ["2022-08-01 10:00:00", "TTT.RO", "Actiuni RO", "BUY", "1000", "2,4", "RON", "0", "-2400", "TV", "b1", ""],
+        ["2022-08-18 09:00:00", "TTT.RO", "Actiuni RO", "SPLIT", "-1000", "", "RON", "0", "0", "TV", "s1", "1/10"],
+        ["2022-08-18 09:01:00", "TTT.RO", "Actiuni RO", "SPLIT", "100", "", "RON", "0", "0", "TV", "s2", "1/10"],
+    )
+    df, _ = L.parse_ledger(values)
+    idx = pd.bdate_range("2022-08-15", "2022-08-22")                          # 15,16,17,18,19,22
+    qty, cash = L.daily_quantities(df, idx), L.daily_cash(df, idx)
+    # sursa de prețuri datează consolidarea pe 17, brokerul pe 18: pe 17 sunt încă 1000 de acțiuni la prețul nou
+    prices = pd.DataFrame({"TTT.RO": [2.4, 2.4, 24.0, 24.0, 24.5, 24.5]}, index=idx)
+    fixes = []
+    curve, _ = L.portfolio_curve_base(qty, prices, cash, {"TTT.RO": "RON"}, None,
+                                      trade_days=L.cash_trade_days(df), corrections=fixes)
+    # fără corecție, 17 august ar fi 1000 × 24 + 600 = 24.600
+    assert list(curve) == pytest.approx([3000.0, 3000.0, 3000.0, 3000.0, 3050.0, 3050.0])
+    assert fixes == [("TTT.RO", idx[2])]

@@ -515,12 +515,58 @@ def build_price_table(index, symbol_classes, market_closes, trade_prices, nomina
     return prices, sources
 
 
-def portfolio_curve_base(quantities, prices, cash, symbol_currency, fx_history, base="RON"):
+def despike(series, jump=1.5, tolerance=0.25, max_days=5, blocked_days=None):
+    """Scoate vârfurile izolate dintr-o serie pozitivă: un salt care revine în câteva zile.
+
+    Un punct e vârf dacă sare față de ziua dinainte cu mai mult de `jump` (în sus sau în jos)
+    și, în cel mult `max_days` zile, seria revine la ±`tolerance` față de nivelul dinaintea
+    saltului. Zilele vârfului primesc valoarea dinaintea lui. O schimbare care nu revine
+    (o cumpărare, o scădere reală) rămâne neatinsă. `blocked_days`: zile în care saltul are
+    o cauză reală cunoscută (o tranzacție pe numerar); un vârf care le atinge nu se corectează.
+    Întoarce (serie curățată, lista zilelor corectate).
+    """
+    values = series.to_numpy(dtype="float64", copy=True)
+    blocked = {pd.Timestamp(d).normalize() for d in (blocked_days or ())}
+    index, fixed, n, t = series.index, [], len(values), 1
+    while t < n:
+        prev, cur = values[t - 1], values[t]
+        if prev > 0 and cur > 0 and (cur / prev > jump or cur / prev < 1.0 / jump):
+            for k in range(1, max_days + 1):
+                if t + k >= n:
+                    break
+                back = values[t + k]
+                if back > 0 and abs(back / prev - 1.0) <= tolerance:
+                    window = [pd.Timestamp(d).normalize() for d in index[t:t + k + 1]]
+                    if not blocked.intersection(window):
+                        values[t:t + k] = prev
+                        fixed.extend(index[t:t + k])
+                    t += k
+                    break
+        t += 1
+    return pd.Series(values, index=index, name=series.name), fixed
+
+
+def cash_trade_days(ledger):
+    """Zilele în care fiecare simbol a avut o cumpărare sau o vânzare: dict simbol -> set de date."""
+    part = ledger[ledger["Type"].isin({"BUY", "SELL"}) & ledger["Symbol"].ne("")]
+    out = {}
+    for sym, day in zip(part["Symbol"], part["Date"].dt.normalize()):
+        out.setdefault(sym, set()).add(day)
+    return out
+
+
+def portfolio_curve_base(quantities, prices, cash, symbol_currency, fx_history, base="RON", trade_days=None, corrections=None):
     """Valoarea zilnică a portofoliului în moneda de bază: poziții + numerar.
 
     O zi în care o poziție deținută nu are preț, sau lipsește cursul unei monede folosite,
     rămâne fără valoare (NaN): nu se afișează o valoare parțială. Întoarce (serie, simboluri
     care au lăsat zile fără valoare).
+
+    Valoarea fiecărei poziții trece prin `despike`: sursa de prețuri și brokerul pot data
+    diferit un split sau o consolidare (cu o zi-două), iar în acele zile cantitatea veche se
+    înmulțește cu prețul nou. `trade_days` (din `cash_trade_days`) împiedică netezirea unei
+    vânzări urmate de recumpărare. Dacă primește o listă în `corrections`, adaugă în ea
+    perechile (simbol, zi) corectate.
     """
     index = quantities.index
     def fx_series(cur):
@@ -541,6 +587,10 @@ def portfolio_curve_base(quantities, prices, cash, symbol_currency, fx_history, 
         value = (qty * price * fx_series(symbol_currency.get(sym, base))).where(held, 0.0)
         if value[held].isna().any():
             blockers.append(sym)
+        else:
+            value, fixed = despike(value, blocked_days=(trade_days or {}).get(sym))
+            if corrections is not None:
+                corrections.extend((sym, day) for day in fixed)
         total = total + value
     for cur in cash.columns:
         value = cash[cur] * fx_series(cur)
