@@ -106,14 +106,14 @@ def test_build_positions_sold_de_deschidere_si_consolidare():
 
 def test_sold_de_deschidere_in_numerar_fara_cantitate():
     values = sheet(
-        ["2020-01-01 00:00:00", "", "Numerar", "OPEN", "", "", "RON", "0", "836,86", "TV", "o0", ""],
+        ["2020-01-01 00:00:00", "", "Numerar", "OPEN", "", "", "RON", "0", "1000,00", "TV", "o0", ""],
         ["2020-01-03 10:00:00", "AAA.RO", "Actiuni RO", "BUY", "10", "5", "RON", "1", "-51", "TV", "a", ""],
     )
     df, problems = L.parse_ledger(values)
     assert problems == [] and len(df) == 2                           # rândul de numerar nu e respins
     pos, _ = L.build_positions(df)
     assert list(pos["Symbol"]) == ["AAA.RO"]                         # și nu devine o deținere
-    assert L.cash_balances(df)["Cash"].iloc[0] == pytest.approx(836.86 - 51)
+    assert L.cash_balances(df)["Cash"].iloc[0] == pytest.approx(1000.00 - 51)
 
 
 def test_build_positions_vanzare_fara_istoric_e_semnalata():
