@@ -33,7 +33,7 @@ from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number
+from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -1779,6 +1779,126 @@ def get_last_closes(symbols):
             out[sym] = float(series.iloc[-1])
     return out
 
+def _naive_index(frame):
+    """Index de date fără fus orar (Yahoo întoarce uneori index cu fus)."""
+    if getattr(frame.index, "tz", None) is not None:
+        frame = frame.copy()
+        frame.index = frame.index.tz_localize(None)
+    return frame
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_ledger_fx_history(start):
+    """Cursul zilnic EUR/RON și USD/RON de la `start`: DataFrame cu coloanele EUR și USD (gol dacă Yahoo refuză)."""
+    symbols = list(LEDGER_FX_SYMBOLS.values())
+    _yf_limiter.wait_if_needed()
+    try:
+        data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: istoric curs valutar indisponibil: {e}")
+        return pd.DataFrame()
+    closes = _naive_index(close_frame(data, symbols))
+    return closes.rename(columns={sym: cur for cur, sym in LEDGER_FX_SYMBOLS.items()})
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_ledger_market_history(symbols, start):
+    """Închiderile zilnice, dezajustate la splituri, pentru simbolurile din registru (o coloană per simbol)."""
+    symbols = list(symbols)
+    if not symbols:
+        return pd.DataFrame()
+    _yf_limiter.wait_if_needed()
+    try:
+        data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False, actions=True)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: istoric de preț indisponibil pentru registru: {e}")
+        return pd.DataFrame()
+    closes = _naive_index(close_frame(data, symbols))
+    splits = field_frame(data, "Stock Splits", symbols)
+    splits = _naive_index(splits) if not splits.empty else splits
+    out = {}
+    for sym in closes.columns:
+        series = closes[sym].dropna()
+        # Yahoo ajustează închiderile la splituri; registrul are cantitățile reale din acea zi.
+        out[sym] = ledger_calc.unadjust_splits(series, splits[sym]) if sym in splits.columns else series
+    return pd.DataFrame(out)
+
+def render_ledger_total(ledger_df, positions, total_ron, asof):
+    """Rezultatul întregului portofoliu în RON: depuneri nete, profit, XIRR, apoi (la cerere) curba reală și TWR."""
+    st.markdown("**Întregul portofoliu, în RON**")
+    start = (ledger_df["Date"].min() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    fx_history = get_ledger_fx_history(start)
+    ext, flow_problems = ledger_calc.external_flows(ledger_df, fx_history)
+    result = ledger_calc.money_weighted_result(ext, total_ron, asof)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Bani depuși, net (RON)", _ledger_num(result["net_invested"]))
+    profit_pct = (result["profit"] / result["net_invested"] * 100) if result["profit"] is not None and result["net_invested"] else None
+    m2.metric("Profit total (RON)", _ledger_num(result["profit"]), None if profit_pct is None else f"{profit_pct:.1f}% din banii depuși")
+    m3.metric("XIRR total (% pe an)", "N/A" if result["xirr"] is None else f"{result['xirr'] * 100:.1f}%")
+    st.caption(
+        f"Din {len(ext)} depuneri, retrageri și solduri de deschidere, fiecare convertită în RON la cursul din ziua ei. "
+        "Profit total = valoarea de azi − banii depuși net; include și efectul cursului valutar. "
+        "XIRR ține cont de momentul fiecărei depuneri."
+    )
+    if flow_problems:
+        st.warning(f"⚠️ Curs valutar istoric indisponibil pentru {len(flow_problems)} fluxuri (de ex. {flow_problems[0]}) "
+                   "Depunerile nete, profitul și XIRR-ul total nu pot fi calculate.")
+
+    traded = positions[~positions["Class"].isin(ledger_calc.NOMINAL_CLASSES)]["Symbol"].tolist()
+    if not st.toggle(f"Arată curba reală a portofoliului și TWR (descarcă istoricul pentru {len(traded)} simboluri)", key="ledger_curve"):
+        return
+    index = pd.bdate_range(ledger_df["Date"].min().normalize(), pd.Timestamp(asof).normalize())
+    with st.spinner("Descărcăm istoricul de preț pentru simbolurile din registru..."):
+        market = get_ledger_market_history(tuple(sorted(traded)), start)
+    quantities = ledger_calc.daily_quantities(ledger_df, index)
+    cash_daily = ledger_calc.daily_cash(ledger_df, index)
+    trade_prices = ledger_calc.ledger_trade_prices(ledger_df, index)
+    symbol_class = dict(zip(positions["Symbol"], positions["Class"]))
+    symbol_currency = dict(zip(positions["Symbol"], positions["Currency"]))
+    price_table, sources = ledger_calc.build_price_table(index, {s: symbol_class.get(s, "") for s in quantities.columns}, market, trade_prices)
+    curve, blockers = ledger_calc.portfolio_curve_base(quantities, price_table, cash_daily, symbol_currency, fx_history)
+    flows_daily = ledger_calc.flows_on_index(ext, index)
+    cumulative, twr_total = ledger_calc.twr(curve, flows_daily)
+
+    valid_curve = curve.dropna()
+    if valid_curve.empty or twr_total is None:
+        st.info("Curba nu poate fi calculată: lipsesc cursurile valutare istorice sau prețurile pentru toate zilele.")
+        return
+    years = (cumulative.index[-1] - cumulative.index[0]).days / 365.25
+    twr_annual = ((1 + twr_total) ** (1 / years) - 1) if (years >= 1 and twr_total > -1) else None
+    t1, t2, t3 = st.columns(3)
+    t1.metric("TWR total", f"{twr_total * 100:.1f}%")
+    t2.metric("TWR anualizat", "N/A" if twr_annual is None else f"{twr_annual * 100:.1f}%")
+    t3.metric("Perioada măsurată", f"{cumulative.index[0]:%d.%m.%Y} – {cumulative.index[-1]:%d.%m.%Y}")
+
+    deposits = flows_daily.cumsum().reindex(valid_curve.index)
+    fig_ledger = go.Figure()
+    fig_ledger.add_trace(go.Scatter(x=valid_curve.index, y=valid_curve.values, mode="lines", name="Valoarea portofoliului",
+                                    line=dict(color="#3987E5", width=2), hovertemplate="%{y:,.0f} RON<extra>Valoare</extra>"))
+    fig_ledger.add_trace(go.Scatter(x=deposits.index, y=deposits.values, mode="lines", name="Bani depuși, net",
+                                    line=dict(color="#C98500", width=2, shape="hv"), hovertemplate="%{y:,.0f} RON<extra>Depus net</extra>"))
+    fig_ledger.update_layout(
+        height=420, template="plotly_dark", hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        title="Valoarea portofoliului și banii depuși (RON)", yaxis_title="RON", margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
+        xaxis=dict(showgrid=False), yaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickformat=",.0f"),
+    )
+    st.plotly_chart(fig_ledger, width='stretch')
+    st.caption(
+        "Distanța dintre cele două linii e profitul. TWR măsoară randamentul investițiilor fără efectul momentului depunerilor "
+        "(comparabil cu un indice); XIRR îl include. Valorile în valută sunt convertite la cursul din fiecare zi."
+    )
+    proxy_syms = sorted(s for s, src in sources.items() if src in ("proxy", "mixed") and (quantities[s].abs() > 1e-6).any())
+    notes = []
+    if proxy_syms:
+        notes.append(f"Fără istoric complet de piață, evaluate în acele zile la prețul ultimei tranzacții (proxy): {', '.join(proxy_syms)}.")
+    if blockers:
+        notes.append(f"Zile fără valoare (nici preț de piață, nici tranzacție anterioară) din cauza: {', '.join(blockers)}. "
+                     "TWR e calculat doar după ultima astfel de zi.")
+    if (quantities.columns.map(lambda s: symbol_class.get(s) in ledger_calc.NOMINAL_CLASSES)).any():
+        notes.append("Obligațiunile și titlurile de stat sunt la nominal în toată perioada (proxy).")
+    for note in notes:
+        st.caption("ℹ️ " + note)
+
 def _ledger_num(value, decimals=2, suffix=""):
     """Număr pentru tabel; valoarea lipsă se afișează „N/A”, nu 0."""
     if value is None or pd.isna(value):
@@ -1860,8 +1980,12 @@ def render_ledger_results():
         "Rezultat total = realizat + nerealizat + dividende/cupoane + impozite + comisioane. "
         "XIRR = randament anualizat ponderat cu banii, în moneda clasei; cu puține fluxuri (sub ~20) e orientativ. "
         "Costul e mediu ponderat; acțiunile gratuite au cost 0. "
-        "* Obligațiunile și titlurile de stat sunt evaluate la nominal (proxy): nu există preț de piață în sursele aplicației."
+        "* Obligațiunile și titlurile de stat sunt evaluate la nominal (proxy): nu există preț de piață în sursele aplicației. "
+        f"XIRR nu se afișează când fluxurile acoperă sub {ledger_calc.MIN_XIRR_DAYS} de zile. "
+        "Impozite 0 la Tradeville nu înseamnă fără impozit: brokerul raportează dividendele nete, cu impozitul deja reținut."
     )
+
+    render_ledger_total(ledger_df, positions, total_ron, asof)
 
     with st.expander("Poziții deschise din registru"):
         st.dataframe(pd.DataFrame({

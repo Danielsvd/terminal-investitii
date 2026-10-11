@@ -269,3 +269,143 @@ def test_consolidate_in_ron():
     # fără curs USD: totalul nu se afișează parțial
     _, total2, missing2 = L.consolidate(res, cash, {"EUR": 5.0, "USD": None})
     assert total2 is None and missing2 == ["USD"]
+
+
+# --- Portofoliul întreg: depuneri, XIRR, curbă zilnică, TWR --------------------
+
+def test_xirr_pe_clasa_nu_se_afiseaza_sub_90_de_zile():
+    values = sheet(
+        ["2024-01-01 10:00:00", "QQQ.L", "ETF", "BUY", "1", "50", "USD", "0", "-50", "XTB", "q1", ""],
+        ["2024-01-07 10:00:00", "QQQ.L", "ETF", "SELL", "1", "49", "USD", "0", "49", "XTB", "q2", ""],
+    )
+    df, _ = L.parse_ledger(values)
+    pos, _ = L.build_positions(df)
+    res = L.class_results(df, pos, L.value_open_positions(pos, {}), "2025-01-01").iloc[0]
+    assert res["Total"] == pytest.approx(-1.0) and np.isnan(res["XIRR"])      # 6 zile: fără randament anualizat
+    assert L.flows_span_days([("2024-01-01", -1), ("2024-04-10", 2)]) == pytest.approx(100.0)
+    assert L.flows_span_days([("2024-01-01", -1)]) == 0.0
+
+
+FX = pd.DataFrame({"EUR": [5.0, 5.0, 5.1, 5.2], "USD": [4.5, 4.5, 4.6, 4.4]},
+                  index=pd.to_datetime(["2024-01-01", "2024-01-02", "2024-06-03", "2025-01-01"]))
+
+
+def test_fx_on_ia_ultima_cotatie_de_pana_la_data():
+    assert L.fx_on(FX, "RON", "2024-03-01") == 1.0
+    assert L.fx_on(FX, "EUR", "2024-01-02 15:30:00") == 5.0
+    assert L.fx_on(FX, "EUR", "2024-03-01") == 5.0                       # sâmbătă/gol: ultima cotație dinainte
+    assert L.fx_on(FX, "EUR", "2024-06-03 09:00:00") == 5.1
+    assert L.fx_on(FX, "EUR", "2023-12-31") is None                      # nu se ia un curs din viitor
+    assert L.fx_on(FX, "GBP", "2024-03-01") is None
+
+
+FLOW_SHEET = sheet(
+    ["2024-01-01 00:00:00", "", "Numerar", "OPEN", "", "", "RON", "0", "100", "TV", "o0", ""],
+    ["2024-01-01 00:00:00", "AAA.RO", "Actiuni RO", "OPEN", "10", "20", "RON", "0", "0", "TV", "o1", ""],
+    ["2024-01-02 10:00:00", "", "Numerar", "DEPOSIT", "", "", "EUR", "0", "100", "XTB", "d1", ""],
+    ["2024-01-02 11:00:00", "", "Numerar", "FX", "", "", "EUR", "0", "-50", "XTB", "f1", ""],
+    ["2024-01-02 11:00:00", "", "Numerar", "FX", "", "", "USD", "0", "55", "XTB", "f2", ""],
+    ["2024-06-03 10:00:00", "", "Numerar", "WITHDRAW", "", "", "EUR", "0", "-10", "XTB", "w1", ""],
+)
+
+
+def test_external_flows_la_cursul_din_ziua_lor():
+    df, _ = L.parse_ledger(FLOW_SHEET)
+    ext, problems = L.external_flows(df, FX)
+    assert problems == []
+    # OPEN numerar 100 RON ; OPEN poziție 10 × 20 = 200 RON ; depunere 100 EUR × 5,0 = 500 ; retragere -10 EUR × 5,1 = -51
+    assert list(ext["AmountBase"]) == pytest.approx([100.0, 200.0, 500.0, -51.0])
+    assert len(ext) == 4                                                  # schimbul valutar nu e flux extern
+
+    res = L.money_weighted_result(ext, 900.0, "2025-01-01")
+    assert res["net_invested"] == pytest.approx(749.0)
+    assert res["profit"] == pytest.approx(151.0)
+    # verificare: NPV la rata găsită e zero
+    r = res["xirr"]
+    days = [0, 0, 1 + 10 / 24, 154 + 10 / 24, 366]                        # depunerea și retragerea sunt la ora 10:00
+    npv = sum(a / (1 + r) ** (d / 365) for a, d in zip([-100, -200, -500, 51, 900], days))
+    assert npv == pytest.approx(0.0, abs=1e-4) and 0.15 < r < 0.25
+
+
+def test_external_flows_fara_curs_nu_da_rezultat():
+    df, _ = L.parse_ledger(FLOW_SHEET)
+    ext, problems = L.external_flows(df, FX[["USD"]])
+    assert len(problems) == 2 and "EUR/RON" in problems[0]
+    assert L.money_weighted_result(ext, 900.0, "2025-01-01") == {"net_invested": None, "profit": None, "xirr": None}
+    assert L.money_weighted_result(L.external_flows(df, FX)[0], None, "2025-01-01")["profit"] is None
+
+
+def test_unadjust_splits_consolidare():
+    idx = pd.to_datetime(["2022-08-16", "2022-08-17", "2022-08-18", "2022-08-19"])
+    close = pd.Series([23.0, 23.5, 24.0, 24.5], index=idx)               # ajustat: ca și cum consolidarea ar fi existat mereu
+    splits = pd.Series([0.0, 0.0, 0.1, 0.0], index=idx)                  # consolidare 1:10 pe 18 august
+    raw = L.unadjust_splits(close, splits)
+    # înainte de consolidare o acțiune costa de 10 ori mai puțin
+    assert list(raw) == pytest.approx([2.3, 2.35, 24.0, 24.5])
+    assert L.unadjust_splits(close, pd.Series(dtype="float64")).equals(close)
+
+
+CURVE_SHEET = sheet(
+    ["2024-01-01 09:00:00", "", "Numerar", "DEPOSIT", "", "", "RON", "0", "1000", "TV", "d1", ""],
+    ["2024-01-02 10:00:00", "AAA.RO", "Actiuni RO", "BUY", "100", "5", "RON", "0", "-500", "TV", "a1", ""],
+    ["2024-01-03 09:00:00", "", "Numerar", "DEPOSIT", "", "", "EUR", "0", "100", "XTB", "d2", ""],
+    ["2024-01-03 10:00:00", "EEE.DE", "ETF", "BUY", "2", "40", "EUR", "0", "-80", "XTB", "e1", ""],
+    ["2024-01-04 10:00:00", "R9901AE", "Obligatiuni", "BUY", "1", "99", "EUR", "0", "-20", "XTB", "r1", ""],
+)
+CURVE_IDX = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"])
+CURVE_FX = pd.DataFrame({"EUR": [5.0, 5.0, 5.0, 5.0, 5.0]}, index=CURVE_IDX)
+
+
+def test_curba_zilnica_si_twr():
+    df, _ = L.parse_ledger(CURVE_SHEET)
+    qty = L.daily_quantities(df, CURVE_IDX)
+    assert list(qty["AAA.RO"]) == [0, 100, 100, 100, 100] and list(qty["EEE.DE"]) == [0, 0, 2, 2, 2]
+    cash = L.daily_cash(df, CURVE_IDX)
+    assert list(cash["RON"]) == [1000, 500, 500, 500, 500] and list(cash["EUR"]) == [0, 0, 20, 0, 0]
+
+    market = pd.DataFrame({"AAA.RO": [np.nan, 5.0, 5.5, np.nan, 6.0]}, index=CURVE_IDX)   # 4 ian. fără ședință
+    trade = L.ledger_trade_prices(df, CURVE_IDX)
+    classes = {"AAA.RO": "Actiuni RO", "EEE.DE": "ETF", "R9901AE": "Obligatiuni"}
+    prices, sources = L.build_price_table(CURVE_IDX, classes, market, trade)
+    assert sources == {"AAA.RO": "market", "EEE.DE": "proxy", "R9901AE": "nominal"}
+    assert list(prices["AAA.RO"].iloc[1:]) == [5.0, 5.5, 5.5, 6.0]          # dus înainte, nu înapoi
+    assert np.isnan(prices["AAA.RO"].iloc[0])
+    assert list(prices["EEE.DE"].iloc[2:]) == [40.0, 40.0, 40.0]            # fără piață: prețul din tranzacție
+
+    curve, blockers = L.portfolio_curve_base(qty, prices, cash, {"AAA.RO": "RON", "EEE.DE": "EUR", "R9901AE": "EUR"}, CURVE_FX)
+    assert blockers == []
+    # 1 ian: 1000 numerar
+    # 2 ian: 100×5 + 500 = 1000
+    # 3 ian: 100×5,5 + 500 + (2×40 + 20)×5 = 550 + 500 + 500 = 1550
+    # 4 ian: 550 + 500 + (80 + 1×100 + 0)×5 = 1950   (obligațiunea la nominal 100, plătită 20: +80 EUR × 5 = +400)
+    # 5 ian: 100×6 + 500 + 900 = 2000
+    assert list(curve) == pytest.approx([1000.0, 1000.0, 1550.0, 1950.0, 2000.0])
+
+    ext, _ = L.external_flows(df, CURVE_FX)
+    flows = ext.groupby(ext["Date"].dt.normalize())["AmountBase"].sum()
+    cumulative, total = L.twr(curve, flows)
+    # r: 0 ; 1000/1000-1 = 0 ; 1550/(1000+500)-1 = 3,333% ; 1950/1550-1 = 25,806% ; 2000/1950-1 = 2,564%
+    assert total == pytest.approx((1550 / 1500) * (1950 / 1550) * (2000 / 1950) - 1)
+    assert total == pytest.approx(2000 / 1500 - 1)
+    assert cumulative.iloc[2] == pytest.approx(1550 / 1500 - 1)
+
+
+def test_curba_fara_pret_ramane_lipsa_si_twr_porneste_dupa_gol():
+    df, _ = L.parse_ledger(CURVE_SHEET)
+    qty, cash = L.daily_quantities(df, CURVE_IDX), L.daily_cash(df, CURVE_IDX)
+    prices = pd.DataFrame({"AAA.RO": [np.nan, np.nan, 5.5, 5.5, 6.0], "EEE.DE": 40.0, "R9901AE": 100.0}, index=CURVE_IDX)
+    curve, blockers = L.portfolio_curve_base(qty, prices, cash, {"AAA.RO": "RON", "EEE.DE": "EUR", "R9901AE": "EUR"}, CURVE_FX)
+    assert blockers == ["AAA.RO"]
+    assert np.isnan(curve.iloc[1]) and curve.iloc[0] == 1000.0 and curve.iloc[2] == pytest.approx(1550.0)
+    cumulative, total = L.twr(curve, pd.Series(dtype="float64"))
+    assert cumulative.index[0] == CURVE_IDX[2]                              # lanțul începe după ultima zi fără valoare
+    assert total == pytest.approx(2000 / 1550 - 1)
+    assert L.twr(pd.Series([np.nan, 5.0]), pd.Series(dtype="float64"))[1] is None    # o singură zi cu valoare
+
+
+def test_flows_on_index_muta_weekendul_pe_ziua_urmatoare():
+    idx = pd.to_datetime(["2024-01-05", "2024-01-08", "2024-01-09"])        # vineri, luni, marți
+    ext = pd.DataFrame({"Date": pd.to_datetime(["2024-01-05 10:00", "2024-01-06 12:00", "2024-01-08 09:00", "2024-02-01 00:00"]),
+                        "AmountBase": [100.0, 50.0, 25.0, 999.0]})
+    out = L.flows_on_index(ext, idx)
+    assert list(out) == [100.0, 75.0, 0.0]                                 # sâmbăta trece pe luni; februarie e în afara indexului

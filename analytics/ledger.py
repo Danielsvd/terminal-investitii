@@ -219,6 +219,17 @@ def class_cashflows(ledger, asset_class, currency):
     return flows
 
 
+MIN_XIRR_DAYS = 90      # sub atât, randamentul anualizat nu se afișează
+
+
+def flows_span_days(flows):
+    """Câte zile acoperă fluxurile (de la primul la ultimul); 0 pentru mai puțin de două."""
+    dates = [pd.Timestamp(d) for d, a in flows if a is not None and not pd.isna(a) and a != 0]
+    if len(dates) < 2:
+        return 0.0
+    return (max(dates) - min(dates)).total_seconds() / 86400
+
+
 def xirr(flows, lo=-0.9999, hi=100.0, tol=1e-9, max_iter=200):
     """Rata internă de rentabilitate anualizată pentru fluxuri la date neregulate.
 
@@ -307,7 +318,8 @@ def class_results(ledger, positions, valued, asof):
     - `XIRR` folosește fluxurile clasei plus valoarea de piață a pozițiilor rămase, ca încasare
       la `asof`. Dacă vreunei poziții deschise îi lipsește prețul, MarketValue, Unrealized,
       Total și XIRR rămân lipsă pentru clasa respectivă: un total parțial ar induce în eroare.
-    - `Flows` e numărul de fluxuri folosite; sub ~20 randamentul e orientativ.
+    - `Flows` e numărul de fluxuri folosite; sub ~20 randamentul e orientativ. Dacă fluxurile
+      acoperă mai puțin de `MIN_XIRR_DAYS` zile, XIRR rămâne lipsă.
     Clasele fără dețineri și fără rezultat (de ex. „Drepturi”) nu apar.
     """
     out_cols = ["Class", "Currency", "OpenPositions", "CostBasis", "MarketValue", "Unrealized", "Realized", "Income",
@@ -325,7 +337,10 @@ def class_results(ledger, positions, valued, asof):
         flows = class_cashflows(ledger, rec.Class, rec.Currency)
         rate = None
         if not missing:
-            rate = xirr(flows + ([(pd.Timestamp(asof), market)] if market > 0 else []))
+            all_flows = flows + ([(pd.Timestamp(asof), market)] if market > 0 else [])
+            # o tranzacție de câteva zile, anualizată, dă procente fără sens: sub MIN_XIRR_DAYS nu se afișează
+            if flows_span_days(all_flows) >= MIN_XIRR_DAYS:
+                rate = xirr(all_flows)
         total = np.nan if missing else rec.Realized + unrealized + rec.Income + rec.Taxes + rec.Fees
         if rec.OpenPositions == 0 and not flows:
             continue
@@ -365,3 +380,213 @@ def consolidate(results, cash, fx_rates, base="RON"):
     table = pd.DataFrame(rows, columns=["Currency", "Positions", "Cash", "Rate", "ValueBase"])
     total = None if (incomplete or table.empty) else float(table["ValueBase"].sum())
     return table, total, missing
+
+
+# --- Portofoliul întreg în moneda de bază: depuneri, XIRR, curbă zilnică, TWR ----
+
+def fx_on(fx_history, currency, date, base="RON"):
+    """Cursul `currency`/`base` valabil la `date`: ultima cotație din acea zi sau dinainte.
+
+    fx_history: DataFrame cu index de date și o coloană per monedă (unități de `base` pentru
+    o unitate de monedă). Întoarce None dacă nu există nicio cotație până la acea dată
+    (nu se ia un curs din viitor).
+    """
+    if currency == base:
+        return 1.0
+    if fx_history is None or currency not in getattr(fx_history, "columns", []):
+        return None
+    series = fx_history[currency].dropna()
+    series = series.loc[:pd.Timestamp(date).normalize() + pd.Timedelta(hours=23, minutes=59, seconds=59)]
+    return None if series.empty else float(series.iloc[-1])
+
+
+def external_flows(ledger, fx_history, base="RON"):
+    """Banii intrați în portofoliu sau ieșiți din el, convertiți la cursul din ziua lor.
+
+    Sunt externe: DEPOSIT și WITHDRAW (cu semnul din Amount) și soldurile de deschidere OPEN
+    (numerarul, respectiv cantitate × preț pentru poziții). Schimburile valutare și
+    transferurile între conturi sunt interne și nu intră aici.
+    Întoarce (DataFrame cu Date, Currency, Amount, Rate, AmountBase; listă de probleme).
+    Un flux fără curs disponibil rămâne cu AmountBase lipsă și e raportat.
+    """
+    rows, problems = [], []
+    for rec in ledger.itertuples(index=False):
+        if rec.Type in EXTERNAL_FLOW_TYPES:
+            amount = rec.Amount
+        elif rec.Type == "OPEN":
+            amount = rec.Amount if not rec.Symbol else rec.Quantity * rec.Price
+        else:
+            continue
+        if pd.isna(amount) or amount == 0:
+            continue
+        rate = fx_on(fx_history, rec.Currency, rec.Date, base)
+        if rate is None:
+            problems.append(f"{rec.Date:%Y-%m-%d}: fără curs {rec.Currency}/{base} pentru {rec.Type} de {amount:,.2f} {rec.Currency}.")
+        rows.append({"Date": rec.Date, "Currency": rec.Currency, "Amount": float(amount),
+                     "Rate": np.nan if rate is None else rate,
+                     "AmountBase": np.nan if rate is None else float(amount) * rate})
+    return pd.DataFrame(rows, columns=["Date", "Currency", "Amount", "Rate", "AmountBase"]), problems
+
+
+def money_weighted_result(ext_flows, total_value_base, asof):
+    """Rezultatul întregului portofoliu în moneda de bază.
+
+    net_invested = depuneri − retrageri (la cursul din ziua lor); profit = valoarea de azi −
+    net_invested; xirr = randament anualizat ponderat cu banii (fracție, nu procent).
+    Dacă lipsește valoarea de azi sau cursul vreunui flux, toate trei sunt None.
+    """
+    empty = {"net_invested": None, "profit": None, "xirr": None}
+    if total_value_base is None or pd.isna(total_value_base) or ext_flows.empty or ext_flows["AmountBase"].isna().any():
+        return empty
+    net = float(ext_flows["AmountBase"].sum())
+    flows = [(d, -a) for d, a in zip(ext_flows["Date"], ext_flows["AmountBase"])] + [(pd.Timestamp(asof), float(total_value_base))]
+    rate = xirr(flows) if flows_span_days(flows) >= MIN_XIRR_DAYS else None
+    return {"net_invested": net, "profit": float(total_value_base) - net, "xirr": rate}
+
+
+def daily_quantities(ledger, index):
+    """Cantitatea deținută din fiecare simbol la sfârșitul fiecărei zile din `index`."""
+    part = ledger[ledger["Type"].isin(TRADE_TYPES) & ledger["Symbol"].ne("") & ledger["Quantity"].notna()]
+    if part.empty:
+        return pd.DataFrame(index=index)
+    signed = part["Quantity"].where(part["Type"] != "SELL", -part["Quantity"])
+    delta = signed.groupby([part["Date"].dt.normalize(), part["Symbol"]]).sum().unstack(fill_value=0.0)
+    full = delta.reindex(delta.index.union(index)).fillna(0.0).cumsum()
+    out = full.reindex(index)
+    return out.where(out.abs() > 1e-6, 0.0)
+
+
+def daily_cash(ledger, index):
+    """Numerarul pe monedă la sfârșitul fiecărei zile din `index` (suma cumulată a `Amount`)."""
+    part = ledger[ledger["Amount"].notna()]
+    if part.empty:
+        return pd.DataFrame(index=index)
+    delta = part.groupby([part["Date"].dt.normalize(), part["Currency"]])["Amount"].sum().unstack(fill_value=0.0)
+    return delta.reindex(delta.index.union(index)).fillna(0.0).cumsum().reindex(index)
+
+
+def unadjust_splits(close, splits):
+    """Prețul efectiv istoric dintr-o serie ajustată la splituri.
+
+    Yahoo dă închiderile ajustate la toate spliturile ulterioare; registrul ține cantitățile
+    reale din acea zi. Fără dezajustare, o consolidare 1:10 ar umfla de 10 ori valoarea
+    dinaintea ei. preț_real[t] = close[t] × produsul rapoartelor de split de după t.
+    `splits`: serie cu raportul în ziua splitului (0 sau NaN în rest).
+    """
+    if splits is None or len(splits) == 0:
+        return close
+    ratios = splits.reindex(close.index).fillna(0.0)
+    ratios = ratios.where(ratios > 0, 1.0)
+    # factorul pentru ziua t = produsul rapoartelor din zilele strict ulterioare
+    after = ratios.iloc[::-1].cumprod().iloc[::-1].shift(-1).fillna(1.0)
+    return close * after
+
+
+def ledger_trade_prices(ledger, index):
+    """Prețurile din tranzacții (OPEN/BUY/SELL), pe zi și simbol, duse înainte până la următoarea.
+
+    Proxy pentru simbolurile fără istoric de piață: ultimul preț la care s-a tranzacționat.
+    """
+    part = ledger[ledger["Type"].isin({"OPEN", "BUY", "SELL"}) & ledger["Symbol"].ne("") & ledger["Price"].notna()]
+    if part.empty:
+        return pd.DataFrame(index=index)
+    last = part.groupby([part["Date"].dt.normalize(), part["Symbol"]])["Price"].last().unstack()
+    return last.reindex(last.index.union(index)).ffill().reindex(index)
+
+
+def build_price_table(index, symbol_classes, market_closes, trade_prices, nominal_classes=NOMINAL_CLASSES, nominal=BOND_NOMINAL):
+    """Preț zilnic per simbol, cu sursa lui.
+
+    Ordinea: clasele evaluate la nominal primesc `nominal`; restul primesc închiderea de piață
+    (dusă înainte peste zilele fără ședință, niciodată înapoi); unde piața nu are date, prețul
+    din ultima tranzacție (proxy). Întoarce (prețuri, dict simbol -> "market" | "proxy" | "nominal" | "mixed").
+    """
+    prices, sources = pd.DataFrame(index=index), {}
+    for sym, cls in symbol_classes.items():
+        if cls in nominal_classes:
+            prices[sym] = float(nominal); sources[sym] = "nominal"
+            continue
+        market = market_closes[sym].reindex(market_closes.index.union(index)).ffill().reindex(index) if (
+            market_closes is not None and sym in market_closes.columns) else pd.Series(np.nan, index=index)
+        proxy = trade_prices[sym] if sym in trade_prices.columns else pd.Series(np.nan, index=index)
+        prices[sym] = market.combine_first(proxy)
+        has_m, has_p = market.notna().any(), (market.isna() & proxy.notna()).any()
+        sources[sym] = "mixed" if (has_m and has_p) else ("market" if has_m else ("proxy" if has_p else "missing"))
+    return prices, sources
+
+
+def portfolio_curve_base(quantities, prices, cash, symbol_currency, fx_history, base="RON"):
+    """Valoarea zilnică a portofoliului în moneda de bază: poziții + numerar.
+
+    O zi în care o poziție deținută nu are preț, sau lipsește cursul unei monede folosite,
+    rămâne fără valoare (NaN): nu se afișează o valoare parțială. Întoarce (serie, simboluri
+    care au lăsat zile fără valoare).
+    """
+    index = quantities.index
+    def fx_series(cur):
+        if cur == base:
+            return pd.Series(1.0, index=index)
+        if fx_history is None or cur not in fx_history.columns:
+            return pd.Series(np.nan, index=index)
+        s = fx_history[cur].dropna()
+        return s.reindex(s.index.union(index)).ffill().reindex(index)
+    total = pd.Series(0.0, index=index)
+    blockers = []
+    for sym in quantities.columns:
+        qty = quantities[sym]
+        held = qty.abs() > 1e-6
+        if not held.any():
+            continue
+        price = prices[sym] if sym in prices.columns else pd.Series(np.nan, index=index)
+        value = (qty * price * fx_series(symbol_currency.get(sym, base))).where(held, 0.0)
+        if value[held].isna().any():
+            blockers.append(sym)
+        total = total + value
+    for cur in cash.columns:
+        value = cash[cur] * fx_series(cur)
+        total = total + value.where(cash[cur].abs() > 1e-9, 0.0)
+    return total, sorted(blockers)
+
+
+def twr(values, flows):
+    """Randament ponderat cu timpul din valorile zilnice și fluxurile externe.
+
+    values: serie zilnică a valorii portofoliului; flows: serie cu banii intrați (+) sau ieșiți (−)
+    în fiecare zi, în aceeași monedă. Fluxul e considerat făcut la începutul zilei:
+    r_t = V_t / (V_{t−1} + F_t) − 1. Zilele fără valoare întrerup lanțul: se calculează doar pe
+    ultimul șir continuu de valori. Întoarce (serie cumulată a randamentului, randament total)
+    sau (serie goală, None) dacă nu există cel puțin două zile.
+    """
+    values = values.astype(float)
+    valid = values.notna()
+    if valid.sum() < 2:
+        return pd.Series(dtype="float64"), None
+    last_gap = np.flatnonzero(~valid.to_numpy())
+    start = (last_gap[-1] + 1) if len(last_gap) else 0
+    v = values.iloc[start:]
+    if len(v) < 2:
+        return pd.Series(dtype="float64"), None
+    f = flows.reindex(v.index).fillna(0.0)
+    base_value = v.shift(1) + f
+    r = (v / base_value - 1.0).where(base_value > 0)
+    r.iloc[0] = 0.0
+    r = r.fillna(0.0)
+    cumulative = (1.0 + r).cumprod() - 1.0
+    return cumulative, float(cumulative.iloc[-1])
+
+
+def flows_on_index(ext_flows, index):
+    """Fluxurile externe (în moneda de bază) așezate pe zilele din `index`.
+
+    Un flux dintr-o zi care nu e în index (weekend, sărbătoare) trece în prima zi următoare
+    din index; cele de după ultima zi se ignoră. Întoarce o serie pe `index`, 0 unde nu e flux.
+    """
+    out = pd.Series(0.0, index=index)
+    if ext_flows.empty or len(index) == 0:
+        return out
+    days = ext_flows["Date"].dt.normalize()
+    pos = index.searchsorted(days.to_numpy(), side="left")
+    for i, amount in zip(pos, ext_flows["AmountBase"]):
+        if i < len(index) and not pd.isna(amount):
+            out.iloc[i] += float(amount)
+    return out
