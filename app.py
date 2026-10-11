@@ -29,7 +29,7 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
-from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
+from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
@@ -1911,6 +1911,35 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
                      + (f" și încă {len(spike_fixes) - 8}." if len(spike_fixes) > 8 else "."))
     for note in notes:
         st.caption("ℹ️ " + note)
+
+    # --- Risc, pe randamentele zilnice din TWR (fără efectul depunerilor) ---
+    daily_returns = (1.0 + cumulative).pct_change(fill_method=None).dropna()
+    rf_ron, rf_label = get_risk_free_for_currency("RON")
+    risk = performance_risk(daily_returns, rf_ron)
+    st.markdown("**Risc, pe curba reală**")
+    if risk is None:
+        st.info(f"Prea puține zile cu valoare ({len(daily_returns)}) pentru indicatori de risc; sunt necesare cel puțin 60.")
+        return
+    pct = lambda v, d=1: "N/A" if v is None else f"{v * 100:.{d}f}%"
+    ratio = lambda v: "N/A" if v is None else f"{v:.2f}"
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Volatilitate anualizată", pct(risk["vol_ann"]))
+    r2.metric("Sharpe", ratio(risk["sharpe"]))
+    r3.metric("Sortino", ratio(risk["sortino"]))
+    r4.metric("Scădere maximă de la vârf", pct(risk["max_drawdown"]))
+    in_ron = (lambda v: "") if total_ron is None else (lambda v: f"{v * total_ron:,.0f} RON la valoarea de azi")
+    v1, v2, v3 = st.columns(3)
+    v1.metric("VaR 95% istoric (1 zi)", pct(risk["var95_hist"], 2), in_ron(risk["var95_hist"]), delta_color="off")
+    v2.metric("CVaR 95% (1 zi)", pct(risk["cvar95"], 2), in_ron(risk["cvar95"]), delta_color="off")
+    v3.metric("VaR 95% parametric (1 zi)", pct(risk["var95_param"], 2), in_ron(risk["var95_param"]), delta_color="off")
+    st.caption(
+        f"Din {risk['n']} randamente zilnice, {risk['start']:%d.%m.%Y} – {risk['end']:%d.%m.%Y}, în RON. "
+        + (f"Rata fără risc: {rf_ron * 100:.2f}% ({rf_label}); e pe 10 ani, deci proxy pentru o rată pe termen scurt. "
+           if rf_ron is not None else f"Sharpe și Sortino lipsesc: {rf_label} ")
+        + "VaR istoric = pierderea de o zi depășită în 5% din zile; CVaR = pierderea medie din acele zile; "
+          "VaR parametric presupune distribuție normală și subestimează cozile. "
+          "Volatilitatea e subestimată de pozițiile fără preț zilnic de piață (obligațiuni la nominal, simboluri la prețul ultimei tranzacții) și de numerar."
+    )
 
 def _ledger_num(value, decimals=2, suffix=""):
     """Număr pentru tabel; valoarea lipsă se afișează „N/A”, nu 0."""
