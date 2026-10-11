@@ -95,3 +95,61 @@ def test_alpha_fara_beta_rf_sau_istoric_este_none():
     assert jensen_alpha(asset, None, beta=1.0, risk_free=0.06) is None
     assert jensen_alpha(_line(100, 120, periods=80), bench, beta=1.0, risk_free=0.06) is None   # ~4 luni
     assert jensen_alpha(pd.Series(dtype=float), bench, beta=1.0, risk_free=0.06) is None
+
+
+# --- Risc pe randamentele portofoliului ----------------------------------------
+
+def test_performance_risk_valori_calculate_de_mana():
+    import numpy as np
+    import pytest
+    from analytics.risk import performance_risk
+    idx = pd.bdate_range("2024-01-01", periods=5)
+    r = pd.Series([0.01, -0.02, 0.03, -0.01, 0.02], index=idx)
+    out = performance_risk(r, rf_annual=0.0, min_obs=5)
+    # media 0,006 ; abateri pătrate: 1,6e-5 + 6,76e-4 + 5,76e-4 + 2,56e-4 + 1,96e-4 = 1,72e-3 ; /4 -> std 0,0207364
+    assert out["vol_ann"] == pytest.approx(0.0207364 * np.sqrt(252), rel=1e-5)
+    assert out["sharpe"] == pytest.approx(0.006 / 0.0207364 * np.sqrt(252), rel=1e-5)
+    # deviația în jos: (0,02² + 0,01²) / 5 = 1e-4 -> 0,01
+    assert out["sortino"] == pytest.approx(0.006 / 0.01 * np.sqrt(252), rel=1e-9)
+    # curba: 1,01 ; 0,9898 ; ... -> cea mai mare scădere de la vârf e 0,9898 / 1,01 - 1 = -2%
+    assert out["max_drawdown"] == pytest.approx(-0.02)
+    # percentila 5 din [-0,02 ; -0,01 ; 0,01 ; 0,02 ; 0,03]: -0,02 + 0,2 × 0,01 = -0,018 ; sub ea doar -0,02
+    assert out["var95_hist"] == pytest.approx(-0.018)
+    assert out["cvar95"] == pytest.approx(-0.02)
+    assert out["var95_param"] == pytest.approx(0.006 - 1.6448536 * 0.0207364, rel=1e-5)
+    assert out["n"] == 5 and out["start"] == idx[0] and out["end"] == idx[-1]
+
+
+def test_performance_risk_rf_si_esantion_mic():
+    import pytest
+    from analytics.risk import performance_risk
+    idx = pd.bdate_range("2024-01-01", periods=5)
+    r = pd.Series([0.01, -0.02, 0.03, -0.01, 0.02], index=idx)
+    assert performance_risk(r, 0.0) is None                                   # sub 60 de observații: fără indicatori
+    no_rf = performance_risk(r, None, min_obs=5)
+    assert no_rf["sharpe"] is None and no_rf["sortino"] is None and no_rf["vol_ann"] > 0
+    with_rf = performance_risk(r, 0.0756, min_obs=5)                          # rf zilnic 0,0003
+    assert with_rf["sharpe"] == pytest.approx((0.006 - 0.0003) / 0.0207364 * 252 ** 0.5, rel=1e-5)
+    # pierdere din prima zi: drawdown măsurat față de punctul de plecare
+    loss = performance_risk(pd.Series([-0.10, 0.01, 0.01, 0.01, 0.01], index=idx), 0.0, min_obs=5)
+    assert loss["max_drawdown"] == pytest.approx(-0.10)
+
+
+def test_common_day_correlation_nu_inventeaza_randamente_zero():
+    import numpy as np
+    import pytest
+    from analytics.risk import common_day_correlation
+    idx = pd.bdate_range("2024-01-01", periods=8)
+    a = pd.Series([10, 11, 12.1, 13.31, 14.641, 16.105, 17.716, 19.487], index=idx, dtype="float64")   # +10% pe zi
+    b = a * 2                                                                                      # identic ca randamente
+    b.iloc[3] = np.nan                                                                             # o zi fără ședință pe piața lui b
+    closes = pd.DataFrame({"A": a, "B": b})
+    corr, n = common_day_correlation(closes, min_obs=3)
+    # ziua 3 (fără preț) și ziua 4 (fără preț anterior) cad: rămân 5 din 7 randamente
+    assert n == 5
+    assert corr.loc["A", "B"] == pytest.approx(1.0)
+    # cu prețul completat din ziua dinainte, b ar avea un randament 0 și unul de 21%: corelația nu ar mai fi 1
+    padded = closes.ffill().pct_change().dropna()
+    assert padded.corr().loc["A", "B"] < 0.999 or padded["B"].std() > 0
+    assert common_day_correlation(closes, min_obs=6) [0].empty and common_day_correlation(closes, min_obs=6)[1] == 5
+    assert common_day_correlation(closes[["A"]])[0].empty

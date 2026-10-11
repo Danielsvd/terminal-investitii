@@ -292,6 +292,23 @@ SHEETS = {
     "BVB": [["Multipli", "Indicator", "TLV", "SNP"], ["", "Multipli de preț", "", ""],
             ["", "P/E TTM ", "8,5", "6,1"], ["", "Rentabilitate capital (ROE)", "22,10%", "#DIV/0!"],
             ["", "EPS TTM", "1,8417 lei", "0,05 lei"]],
+    "Tranzactii": [
+        ["Date", "Symbol", "Class", "Type", "Quantity", "Price", "Currency", "Fees", "Amount", "Broker", "ID", "Notes"],
+        ["2024-01-02 10:00:00", "", "Numerar", "DEPOSIT", "", "", "RON", "0", "5000", "BrokerA", "d1", ""],
+        ["2024-01-03 10:00:00", "TLV.RO", "Actiuni RO", "BUY", "100", "20", "RON", "5", "-2005", "BrokerA", "t1", ""],
+        ["2024-06-03 10:00:00", "TLV.RO", "Actiuni RO", "BONUS", "10", "", "RON", "0", "0", "BrokerA", "t2", ""],
+        ["2024-07-01 10:00:00", "TLV.RO", "Actiuni RO", "DIV", "", "", "RON", "1", "99,5", "BrokerA", "t3", ""],
+        ["2024-09-02 10:00:00", "TLV.RO", "Actiuni RO", "SELL", "30", "25", "RON", "3", "747", "BrokerA", "t4", ""],
+        ["2024-02-01 10:00:00", "", "Numerar", "DEPOSIT", "", "", "EUR", "0", "1000", "BrokerB", "d2", ""],
+        ["2024-02-02 10:00:00", "SAP.DE", "Actiuni UE", "BUY", "2", "150,5", "EUR", "0", "-301", "BrokerB", "e1", ""],
+        ["2024-02-05 10:00:00", "R9901AE", "Obligatiuni", "BUY", "3", "99", "EUR", "0", "-297", "BrokerA", "o1", ""],
+        ["2024-08-05 10:00:00", "R9901AE", "Obligatiuni", "COUPON", "", "", "EUR", "0", "15", "BrokerA", "o2", ""],
+        ["2024-03-01 10:00:00", "", "Numerar", "FX", "", "", "USD", "0", "200", "BrokerB", "f1", ""],
+        ["2024-03-04 10:00:00", "AAPL", "Actiuni SUA", "BUY", "0,5", "180", "USD", "0", "-90", "BrokerB", "u1", ""],
+        ["2024-05-16 10:00:00", "AAPL", "Actiuni SUA", "DIV", "", "", "USD", "0", "0,12", "BrokerB", "u2", ""],
+        ["2024-05-16 10:00:00", "AAPL", "Actiuni SUA", "TAX", "", "", "USD", "0", "-0,01", "BrokerB", "u3", ""],
+        ["data greșită", "AAPL", "Actiuni SUA", "BUY", "1", "1", "USD", "0", "-1", "BrokerB", "u4", ""],
+    ],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
                ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
 }
@@ -311,6 +328,9 @@ class FakeWorksheet:
         return [list(r) for r in data]
 
     def append_row(self, row, *a, **k):
+        pass
+
+    def append_rows(self, rows, *a, **k):
         pass
 
     def find(self, *a, **k):
@@ -437,6 +457,7 @@ EXPECTED_MESSAGES = (
     "Companii Small-Cap", "AMENINȚĂRI",
     "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
+    "zile comune de tranzacționare; sunt necesare",  # tabul EUR din datele de test: o poziție listată de 60 de zile
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )
 
@@ -481,6 +502,8 @@ def main():
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
+            at.toggle(key="ledger_curve").set_value(True).run()
+            check(at, "3. Portofoliu cu curba reală din registru")
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")

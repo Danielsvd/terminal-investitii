@@ -28,11 +28,15 @@ from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_line
 from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
-from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha
+from analytics import ledger as ledger_calc
+from analytics import simulation
+from data import broker_import
+import zipfile
+from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number
+from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number, watchlist_status
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -1295,9 +1299,14 @@ def plot_correlation_matrix(tickers):
     if len(tickers) < 2: return None
     try:
         # 1. Descărcare și calcul
-        data = yf.download(tickers, period="1y", progress=False)['Close']
-        returns = data.pct_change().dropna()
-        corr_matrix = returns.corr()
+        data = close_frame(yf.download(tickers, period="1y", progress=False, auto_adjust=True), tickers)
+        # Doar zilele în care toate simbolurile au randament: fără randamente de 0 inventate pentru zilele fără ședință.
+        corr_matrix, corr_days = common_day_correlation(data, min_obs=60)
+        if corr_matrix.empty:
+            st.info(f"Corelațiile nu pot fi calculate: doar {corr_days} zile comune de tranzacționare (minimum 60) "
+                    "sau mai puțin de două simboluri cu istoric.")
+            return None
+        st.caption(f"Corelații pe {corr_days} zile comune de tranzacționare din ultimul an.")
         
         # 2. Text Heatmap
         text_matrix = []
@@ -1742,6 +1751,433 @@ def calculate_portfolio_performance(df, history_range="1A"):
     
     return df_result, portfolio_curve, total_daily_pl_abs, total_daily_pl_pct, notes
 
+# --- REGISTRUL DE TRANZACȚII (foaia `Tranzactii`) ---
+LEDGER_FX_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X"}
+LEDGER_CLASS_ORDER = ["Actiuni RO", "Actiuni SUA", "Actiuni UE", "ETF", "Obligatiuni", "Altele"]
+
+# Explicațiile din semnul întrebării de lângă fiecare indicator: cum se calculează și ce înseamnă.
+LEDGER_HELP = {
+    "total": "**Cum se calculează:** valoarea de piață a tuturor pozițiilor deschise plus numerarul de la brokeri, "
+             "fiecare monedă convertită în RON la cursul de azi.\n\n**Ce înseamnă:** cât ai primi, aproximativ, dacă ai vinde tot azi "
+             "(înainte de comisioane și impozite).",
+    "positions": "**Cum se calculează:** cantitate × preț curent pentru fiecare poziție, convertit în RON la cursul de azi. "
+                 "Obligațiunile și titlurile de stat sunt la nominal (100).\n\n**Ce înseamnă:** partea din portofoliu care e investită.",
+    "cash": "**Cum se calculează:** suma tuturor intrărilor și ieșirilor de numerar din registru, pe fiecare cont, convertită în RON la cursul de azi.\n\n"
+            "**Ce înseamnă:** banii neinvestiți care stau la brokeri. Trebuie să coincidă cu soldul din aplicațiile brokerilor la data ultimului export.",
+    "net_invested": "**Cum se calculează:** depuneri − retrageri + soldurile de deschidere din 2020, fiecare convertită în RON la cursul din ziua ei. "
+                    "Schimburile valutare și transferurile între conturi nu se numără.\n\n**Ce înseamnă:** câți bani din buzunar ai băgat în total în portofoliu.",
+    "profit": "**Cum se calculează:** valoarea totală de azi − banii depuși net.\n\n**Ce înseamnă:** câștigul total în RON, din toate sursele: "
+              "creșterea prețurilor, dividende, cupoane, dobânzi și cursul valutar, minus comisioane și impozite. "
+              "Procentul de dedesubt îl raportează la banii depuși, fără să țină cont de cât timp au stat investiți.",
+    "xirr": "**Cum se calculează:** rata anuală care, aplicată fiecărei depuneri de la data ei până azi, dă exact valoarea de azi a portofoliului "
+            "(rata internă de rentabilitate pe fluxuri datate).\n\n**Ce înseamnă:** randamentul tău anual real, ținând cont de momentul în care ai depus fiecare sumă. "
+            "Se compară cu dobânda unui depozit sau a unui titlu de stat. Banii depuși recent cântăresc puțin, cei vechi mult.",
+    "twr": "**Cum se calculează:** randamentele zilnice ale portofoliului, înlănțuite, cu fiecare depunere scoasă din calcul în ziua ei: "
+           "randament zilnic = valoare azi ÷ (valoare ieri + depunerea de azi) − 1.\n\n**Ce înseamnă:** cât a crescut un leu investit la început, "
+           "indiferent de când și cât ai mai depus. Măsoară calitatea alegerilor de investiții și e direct comparabil cu un indice (BET, S&P 500).",
+    "twr_annual": "**Cum se calculează:** (1 + TWR total) ridicat la puterea 1 ÷ numărul de ani, minus 1.\n\n**Ce înseamnă:** TWR-ul exprimat ca medie pe an. "
+                  "Dacă e sub XIRR, ai depus mai mult înaintea perioadelor bune; dacă e peste, înaintea celor slabe.",
+    "period": "Prima și ultima zi pentru care există valoare calculată. TWR și indicatorii de risc sunt măsurați pe acest interval.",
+    "vol": "**Cum se calculează:** deviația standard a randamentelor zilnice × √252 (zile de tranzacționare pe an).\n\n"
+           "**Ce înseamnă:** cât de mult fluctuează portofoliul într-un an obișnuit. La 10%, două treimi din ani ar trebui să se încheie la ±10% față de medie. "
+           "Aici e subestimată, pentru că obligațiunile și numerarul nu au variație zilnică.",
+    "sharpe": "**Cum se calculează:** (randamentul mediu zilnic − rata fără risc zilnică) ÷ deviația standard zilnică × √252.\n\n"
+              "**Ce înseamnă:** cât randament peste titlurile de stat primești pentru fiecare unitate de risc. Sub 0: mai slab decât titlurile de stat. "
+              "0–0,5: slab. 0,5–1: acceptabil. Peste 1: bun.",
+    "sortino": "**Cum se calculează:** ca Sharpe, dar la numitor intră doar variația zilelor sub rata fără risc (deviația în jos).\n\n"
+               "**Ce înseamnă:** randamentul raportat doar la riscul care doare, scăderile. Creșterile bruște nu sunt penalizate. Se citește ca Sharpe, dar valorile sunt de regulă mai mari.",
+    "max_dd": "**Cum se calculează:** cea mai mare scădere procentuală de la un vârf la minimul de după el, pe curba randamentelor (fără efectul depunerilor).\n\n"
+              "**Ce înseamnă:** cea mai rea perioadă prin care a trecut portofoliul. E pierderea pe care trebuie să fii pregătit să o vezi din nou.",
+    "var_hist": "**Cum se calculează:** percentila 5 a randamentelor zilnice din istoric.\n\n**Ce înseamnă:** într-o zi din 20, pierderea a fost mai mare decât atât. "
+                "Suma în RON aplică procentul la valoarea de azi a portofoliului.",
+    "cvar": "**Cum se calculează:** media randamentelor din cele mai rele 5% din zile.\n\n**Ce înseamnă:** cât pierzi, în medie, într-o zi proastă "
+            "(una dintre cele mai rele 20). E mai relevant decât VaR, pentru că arată cât de adâncă e coada, nu doar unde începe.",
+    "var_param": "**Cum se calculează:** media zilnică − 1,645 × deviația standard, adică percentila 5 dacă randamentele ar fi distribuite normal.\n\n"
+                 "**Ce înseamnă:** estimarea teoretică a aceleiași pierderi. Piețele au zile extreme mai dese decât distribuția normală, "
+                 "deci compară-l cu cel istoric: diferența dintre ele arată cât de neobișnuite sunt cozile.",
+}
+LEDGER_COLUMN_HELP = {
+    "Clasă": "Clasa de active din coloana Class a foii Tranzactii. Steluța marchează clasele evaluate la nominal (proxy).",
+    "Monedă": "Moneda în care sunt exprimate toate sumele de pe rând. Rândurile nu se adună între ele decât după conversie.",
+    "Poziții": "Câte simboluri din clasă au cantitate deținută mai mare ca zero.",
+    "Cost deschis": "Cât ai plătit, cu tot cu comisioane, pentru ce deții acum. Cost mediu ponderat: la o vânzare parțială costul scade proporțional. Acțiunile gratuite au cost 0.",
+    "Valoare azi": "Cantitate × preț curent pentru pozițiile deschise. N/A dacă lipsește prețul vreunei poziții.",
+    "Nerealizat": "Valoare azi − cost deschis. Profitul sau pierderea pe hârtie la ce deții încă.",
+    "Realizat": "Suma, pe toate vânzările, a încasării nete minus costul mediu al acțiunilor vândute. Profitul deja încasat.",
+    "Dividende / cupoane": "Dividendele și cupoanele încasate. La Tradeville sunt nete (impozitul e deja reținut); la XTB sunt brute, iar impozitul apare separat.",
+    "Impozite": "Impozitele raportate separat de broker (reținere la sursă pe dividende, taxa RO la vânzare). Valoare negativă.",
+    "Comisioane": "Comisioanele raportate separat de broker (de ex. taxa SEC). Comisioanele de tranzacționare sunt deja incluse în cost și în realizat.",
+    "Rezultat total": "Realizat + nerealizat + dividende/cupoane + impozite + comisioane. Câștigul total al clasei, în moneda ei.",
+    "XIRR (% pe an)": "Randamentul anual ponderat cu banii, în moneda clasei: rata care egalează cumpărările cu vânzările, dividendele și valoarea de azi. N/A sub 90 de zile.",
+    "Fluxuri": "Câte mișcări de bani au intrat în calculul XIRR. Cu puține fluxuri (sub ~20), randamentul e orientativ.",
+}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_ledger_values():
+    """Conținutul brut al foii `Tranzactii` (antet + rânduri); None dacă foaia lipsește sau nu poate fi citită."""
+    ws = connect_to_gsheets("Tranzactii")
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values()
+    except gspread.exceptions.GSpreadException as e:
+        print(f"DEBUG: foaia Tranzactii nu a putut fi citită: {e}")
+        return None
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_last_closes(symbols):
+    """Ultima închidere pentru fiecare simbol (dict); simbolurile fără date lipsesc din rezultat."""
+    symbols = list(symbols)
+    if not symbols:
+        return {}
+    _yf_limiter.wait_if_needed()
+    try:
+        data = yf.download(symbols, period="5d", group_by='ticker', progress=False, auto_adjust=False)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: ultimele închideri indisponibile: {e}")
+        return {}
+    closes = close_frame(data, symbols)
+    out = {}
+    for sym in symbols:
+        series = closes[sym].dropna() if sym in closes.columns else pd.Series(dtype="float64")
+        if not series.empty:
+            out[sym] = float(series.iloc[-1])
+    return out
+
+def _naive_index(frame):
+    """Index de date fără fus orar (Yahoo întoarce uneori index cu fus)."""
+    if getattr(frame.index, "tz", None) is not None:
+        frame = frame.copy()
+        frame.index = frame.index.tz_localize(None)
+    return frame
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_ledger_fx_history(start):
+    """Cursul zilnic EUR/RON și USD/RON de la `start`: DataFrame cu coloanele EUR și USD (gol dacă Yahoo refuză)."""
+    symbols = list(LEDGER_FX_SYMBOLS.values())
+    _yf_limiter.wait_if_needed()
+    try:
+        data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: istoric curs valutar indisponibil: {e}")
+        return pd.DataFrame()
+    closes = _naive_index(close_frame(data, symbols))
+    closes = closes.rename(columns={sym: cur for cur, sym in LEDGER_FX_SYMBOLS.items()})
+    # Yahoo are uneori cotații valutare greșite pentru o zi; un curs care sare peste 10% și revine e eroare de date.
+    for cur in closes.columns:
+        cleaned, fixed = ledger_calc.despike(closes[cur].dropna(), jump=1.10, tolerance=0.03, max_days=3)
+        if fixed:
+            print(f"DEBUG: curs {cur}/RON corectat în {len(fixed)} zile cu cotație aberantă: {[f'{d:%Y-%m-%d}' for d in fixed]}")
+        closes[cur] = cleaned.reindex(closes.index)
+    return closes
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_ledger_market_history(symbols, start):
+    """Închiderile zilnice, dezajustate la splituri, pentru simbolurile din registru (o coloană per simbol)."""
+    symbols = list(symbols)
+    if not symbols:
+        return pd.DataFrame()
+    _yf_limiter.wait_if_needed()
+    try:
+        data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False, actions=True)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: istoric de preț indisponibil pentru registru: {e}")
+        return pd.DataFrame()
+    closes = _naive_index(close_frame(data, symbols))
+    splits = field_frame(data, "Stock Splits", symbols)
+    splits = _naive_index(splits) if not splits.empty else splits
+    out = {}
+    for sym in closes.columns:
+        series = closes[sym].dropna()
+        # Yahoo ajustează închiderile la splituri; registrul are cantitățile reale din acea zi.
+        out[sym] = ledger_calc.unadjust_splits(series, splits[sym]) if sym in splits.columns else series
+    return pd.DataFrame(out)
+
+def render_ledger_total(ledger_df, positions, total_ron, asof):
+    """Rezultatul întregului portofoliu în RON: depuneri nete, profit, XIRR, apoi (la cerere) curba reală și TWR."""
+    st.markdown("**Întregul portofoliu, în RON**")
+    start = (ledger_df["Date"].min() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    fx_history = get_ledger_fx_history(start)
+    ext, flow_problems = ledger_calc.external_flows(ledger_df, fx_history)
+    result = ledger_calc.money_weighted_result(ext, total_ron, asof)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Bani depuși, net (RON)", _ledger_num(result["net_invested"]), help=LEDGER_HELP["net_invested"])
+    profit_pct = (result["profit"] / result["net_invested"] * 100) if result["profit"] is not None and result["net_invested"] else None
+    m2.metric("Profit total (RON)", _ledger_num(result["profit"]), None if profit_pct is None else f"{profit_pct:.1f}% din banii depuși",
+              help=LEDGER_HELP["profit"])
+    m3.metric("XIRR total (% pe an)", "N/A" if result["xirr"] is None else f"{result['xirr'] * 100:.1f}%", help=LEDGER_HELP["xirr"])
+    st.caption(
+        f"Din {len(ext)} depuneri, retrageri și solduri de deschidere, fiecare convertită în RON la cursul din ziua ei. "
+        "Profit total = valoarea de azi − banii depuși net; include și efectul cursului valutar. "
+        "XIRR ține cont de momentul fiecărei depuneri."
+    )
+    if flow_problems:
+        st.warning(f"⚠️ Curs valutar istoric indisponibil pentru {len(flow_problems)} fluxuri (de ex. {flow_problems[0]}) "
+                   "Depunerile nete, profitul și XIRR-ul total nu pot fi calculate.")
+
+    traded = positions[~positions["Class"].isin(ledger_calc.NOMINAL_CLASSES)]["Symbol"].tolist()
+    if not st.toggle(f"Arată curba reală a portofoliului și TWR (descarcă istoricul pentru {len(traded)} simboluri)", key="ledger_curve"):
+        return
+    index = pd.bdate_range(ledger_df["Date"].min().normalize(), pd.Timestamp(asof).normalize())
+    with st.spinner("Descărcăm istoricul de preț pentru simbolurile din registru..."):
+        market = get_ledger_market_history(tuple(sorted(traded)), start)
+    quantities = ledger_calc.daily_quantities(ledger_df, index)
+    cash_daily = ledger_calc.daily_cash(ledger_df, index)
+    trade_prices = ledger_calc.ledger_trade_prices(ledger_df, index)
+    symbol_class = dict(zip(positions["Symbol"], positions["Class"]))
+    symbol_currency = dict(zip(positions["Symbol"], positions["Currency"]))
+    price_table, sources = ledger_calc.build_price_table(index, {s: symbol_class.get(s, "") for s in quantities.columns}, market, trade_prices)
+    spike_fixes = []
+    curve, blockers = ledger_calc.portfolio_curve_base(quantities, price_table, cash_daily, symbol_currency, fx_history,
+                                                       trade_days=ledger_calc.cash_trade_days(ledger_df), corrections=spike_fixes)
+    flows_daily = ledger_calc.flows_on_index(ext, index)
+    cumulative, twr_total = ledger_calc.twr(curve, flows_daily)
+
+    valid_curve = curve.dropna()
+    if valid_curve.empty or twr_total is None:
+        st.info("Curba nu poate fi calculată: lipsesc cursurile valutare istorice sau prețurile pentru toate zilele.")
+        return
+    years = (cumulative.index[-1] - cumulative.index[0]).days / 365.25
+    twr_annual = ((1 + twr_total) ** (1 / years) - 1) if (years >= 1 and twr_total > -1) else None
+    t1, t2, t3 = st.columns(3)
+    t1.metric("TWR total", f"{twr_total * 100:.1f}%", help=LEDGER_HELP["twr"])
+    t2.metric("TWR anualizat", "N/A" if twr_annual is None else f"{twr_annual * 100:.1f}%", help=LEDGER_HELP["twr_annual"])
+    t3.metric("Perioada măsurată", f"{cumulative.index[0]:%d.%m.%Y} – {cumulative.index[-1]:%d.%m.%Y}", help=LEDGER_HELP["period"])
+
+    deposits = flows_daily.cumsum().reindex(valid_curve.index)
+    fig_ledger = go.Figure()
+    fig_ledger.add_trace(go.Scatter(x=valid_curve.index, y=valid_curve.values, mode="lines", name="Valoarea portofoliului",
+                                    line=dict(color="#3987E5", width=2), hovertemplate="%{y:,.0f} RON<extra>Valoare</extra>"))
+    fig_ledger.add_trace(go.Scatter(x=deposits.index, y=deposits.values, mode="lines", name="Bani depuși, net",
+                                    line=dict(color="#C98500", width=2, shape="hv"), hovertemplate="%{y:,.0f} RON<extra>Depus net</extra>"))
+    fig_ledger.update_layout(
+        height=420, template="plotly_dark", hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        title="Valoarea portofoliului și banii depuși (RON)", yaxis_title="RON", margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
+        xaxis=dict(showgrid=False), yaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickformat=",.0f"),
+    )
+    st.plotly_chart(fig_ledger, width='stretch')
+    st.caption(
+        "Distanța dintre cele două linii e profitul. TWR măsoară randamentul investițiilor fără efectul momentului depunerilor "
+        "(comparabil cu un indice); XIRR îl include. Valorile în valută sunt convertite la cursul din fiecare zi."
+    )
+    proxy_syms = sorted(s for s, src in sources.items() if src in ("proxy", "mixed") and (quantities[s].abs() > 1e-6).any())
+    notes = []
+    if proxy_syms:
+        notes.append(f"Fără istoric complet de piață, evaluate în acele zile la prețul ultimei tranzacții (proxy): {', '.join(proxy_syms)}.")
+    if blockers:
+        notes.append(f"Zile fără valoare (nici preț de piață, nici tranzacție anterioară) din cauza: {', '.join(blockers)}. "
+                     "TWR e calculat doar după ultima astfel de zi.")
+    if (quantities.columns.map(lambda s: symbol_class.get(s) in ledger_calc.NOMINAL_CLASSES)).any():
+        notes.append("Obligațiunile și titlurile de stat sunt la nominal în toată perioada (proxy).")
+    if spike_fixes:
+        shown = ", ".join(f"{sym} ({day:%d.%m.%Y})" for sym, day in spike_fixes[:8])
+        notes.append(f"Vârfuri de o zi-două scoase din curbă (split sau consolidare datată diferit de sursa de prețuri, ori cotație greșită): {shown}"
+                     + (f" și încă {len(spike_fixes) - 8}." if len(spike_fixes) > 8 else "."))
+    for note in notes:
+        st.caption("ℹ️ " + note)
+
+    # --- Risc, pe randamentele zilnice din TWR (fără efectul depunerilor) ---
+    daily_returns = (1.0 + cumulative).pct_change(fill_method=None).dropna()
+    rf_ron, rf_label = get_risk_free_for_currency("RON")
+    risk = performance_risk(daily_returns, rf_ron)
+    st.markdown("**Risc, pe curba reală**")
+    if risk is None:
+        st.info(f"Prea puține zile cu valoare ({len(daily_returns)}) pentru indicatori de risc; sunt necesare cel puțin 60.")
+        return
+    pct = lambda v, d=1: "N/A" if v is None else f"{v * 100:.{d}f}%"
+    ratio = lambda v: "N/A" if v is None else f"{v:.2f}"
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Volatilitate anualizată", pct(risk["vol_ann"]), help=LEDGER_HELP["vol"])
+    r2.metric("Sharpe", ratio(risk["sharpe"]), help=LEDGER_HELP["sharpe"])
+    r3.metric("Sortino", ratio(risk["sortino"]), help=LEDGER_HELP["sortino"])
+    r4.metric("Scădere maximă de la vârf", pct(risk["max_drawdown"]), help=LEDGER_HELP["max_dd"])
+    in_ron = (lambda v: "") if total_ron is None else (lambda v: f"{v * total_ron:,.0f} RON la valoarea de azi")
+    v1, v2, v3 = st.columns(3)
+    v1.metric("VaR 95% istoric (1 zi)", pct(risk["var95_hist"], 2), in_ron(risk["var95_hist"]), delta_color="off", help=LEDGER_HELP["var_hist"])
+    v2.metric("CVaR 95% (1 zi)", pct(risk["cvar95"], 2), in_ron(risk["cvar95"]), delta_color="off", help=LEDGER_HELP["cvar"])
+    v3.metric("VaR 95% parametric (1 zi)", pct(risk["var95_param"], 2), in_ron(risk["var95_param"]), delta_color="off", help=LEDGER_HELP["var_param"])
+    st.caption(
+        f"Din {risk['n']} randamente zilnice, {risk['start']:%d.%m.%Y} – {risk['end']:%d.%m.%Y}, în RON. "
+        + (f"Rata fără risc: {rf_ron * 100:.2f}% ({rf_label}); e pe 10 ani, deci proxy pentru o rată pe termen scurt. "
+           if rf_ron is not None else f"Sharpe și Sortino lipsesc: {rf_label} ")
+        + "VaR istoric = pierderea de o zi depășită în 5% din zile; CVaR = pierderea medie din acele zile; "
+          "VaR parametric presupune distribuție normală și subestimează cozile. "
+          "Volatilitatea e subestimată de pozițiile fără preț zilnic de piață (obligațiuni la nominal, simboluri la prețul ultimei tranzacții) și de numerar."
+    )
+
+def _ledger_num(value, decimals=2, suffix=""):
+    """Număr pentru tabel; valoarea lipsă se afișează „N/A”, nu 0."""
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:,.{decimals}f}{suffix}"
+
+def render_ledger_import(values):
+    """Importul unui export de la broker în foaia `Tranzactii`: previzualizare, apoi scriere doar a rândurilor noi."""
+    with st.expander("📥 Importă un export de la broker (Tradeville, XTB)"):
+        st.caption(
+            "Încarcă raportul de activitate Tradeville sau exportul XTB (.xlsx), exact cum l-ai descărcat. "
+            "Rândurile deja existente în foaie sunt recunoscute după ID și sărite, deci poți încărca oricând exportul complet. "
+            "Nimic nu se scrie până nu apeși butonul de adăugare."
+        )
+        files = st.file_uploader("Fișiere .xlsx", type=["xlsx"], accept_multiple_files=True, key="ledger_import_files")
+        if not files:
+            return
+        if not values or "ID" not in values[0]:
+            st.error("Foaia `Tranzactii` nu are antetul așteptat (coloana ID); importul e oprit.")
+            return
+        id_col = values[0].index("ID")
+        known = {row[id_col] for row in values[1:] if len(row) > id_col and row[id_col]}
+        fresh_all = []
+        for uploaded in files:
+            try:
+                sheets = broker_import.read_workbook(uploaded)
+            except (zipfile.BadZipFile, KeyError, ValueError, OSError) as e:
+                st.error(f"**{uploaded.name}**: fișierul nu a putut fi citit ({e}).")
+                continue
+            broker, records, import_problems, control = broker_import.parse_export(sheets)
+            if broker is None:
+                st.error(f"**{uploaded.name}**: {import_problems[0]}")
+                continue
+            fresh = broker_import.new_records(records, known | {r["ID"] for r in fresh_all})
+            st.markdown(f"**{uploaded.name}** — {broker}: {len(records)} operațiuni citite, **{len(fresh)} noi**, "
+                        f"{len(records) - len(fresh)} deja în foaie.")
+            if control and control.get("reported") is not None and abs(control["reported"] - control["parsed"]) > 0.01:
+                st.warning(f"⚠️ Numerarul citit ({control['parsed']:,.2f}) diferă de totalul din raport ({control['reported']:,.2f}): "
+                           "importul e incomplet. Vezi operațiunile nerecunoscute de mai jos.")
+            for problem in import_problems[:20]:
+                st.write(f"- ⚠️ {problem}")
+            fresh_all.extend(fresh)
+        if not fresh_all:
+            st.info("Nimic nou de adăugat: toate operațiunile din fișiere sunt deja în foaie.")
+            return
+        fresh_all = sorted(fresh_all, key=lambda r: (r["Date"], r["ID"]))
+        st.dataframe(pd.DataFrame(fresh_all)[ledger_calc.COLUMNS], hide_index=True, width='stretch', height=300)
+        if st.button(f"Adaugă {len(fresh_all)} rânduri în foaia Tranzactii", key="ledger_import_write"):
+            ws = connect_to_gsheets("Tranzactii")
+            if ws is None:
+                st.error("Foaia `Tranzactii` nu a putut fi deschisă; nu s-a scris nimic.")
+                return
+            try:
+                ws.append_rows(broker_import.to_sheet_rows(fresh_all), value_input_option="USER_ENTERED")
+            except gspread.exceptions.GSpreadException as e:
+                st.error(f"Scrierea în foaie a eșuat: {e}")
+                return
+            load_ledger_values.clear()
+            st.success(f"Adăugate {len(fresh_all)} rânduri. Verifică mai jos numerarul pe broker față de soldul din aplicația brokerului.")
+            st.rerun()
+
+def render_ledger_results():
+    """Rezultatele din tranzacțiile reale: pe clase (în moneda fiecăreia) și valoarea totală de azi în RON.
+
+    Calculele sunt în analytics/ledger.py (testate în tests/test_ledger.py). Aici doar se citesc
+    foaia și prețurile și se afișează.
+    """
+    st.subheader("📒 Rezultate din registrul de tranzacții")
+    values = load_ledger_values()
+    if values is None:
+        st.info("Foaia `Tranzactii` nu a putut fi citită din `portofoliu_db`.")
+        return
+    render_ledger_import(values)
+    ledger_df, problems = ledger_calc.parse_ledger(values)
+    if ledger_df.empty:
+        st.info("Foaia `Tranzactii` nu conține tranzacții. " + " ".join(problems))
+        return
+    positions, position_problems = ledger_calc.build_positions(ledger_df)
+    problems = problems + position_problems
+
+    held = positions[positions["Quantity"] > ledger_calc.QTY_EPS]
+    live_symbols = held.loc[~held["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"].tolist()
+    with st.spinner("Citim prețurile pentru pozițiile din registru..."):
+        prices = get_fast_live_prices(live_symbols + list(LEDGER_FX_SYMBOLS.values()))
+        # Prețul live poate lipsi (Yahoo refuză des cererile de pe server): completăm cu ultima închidere.
+        no_live = tuple(sorted(s for s in live_symbols + list(LEDGER_FX_SYMBOLS.values()) if not prices.get(s)))
+        closes_last = get_last_closes(no_live)
+    valued = ledger_calc.value_open_positions(positions, prices, closes_last)
+    asof = now_ro().replace(tzinfo=None)
+    results = ledger_calc.class_results(ledger_df, positions, valued, asof)
+    cash = ledger_calc.cash_balances(ledger_df)
+    fx_rates = {cur: prices.get(sym) or closes_last.get(sym) for cur, sym in LEDGER_FX_SYMBOLS.items()}
+    fx_from_close = [cur for cur, sym in LEDGER_FX_SYMBOLS.items() if not prices.get(sym) and closes_last.get(sym)]
+    by_currency, total_ron, missing_fx = ledger_calc.consolidate(results, cash, fx_rates)
+
+    positions_ron = (by_currency["Positions"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
+    cash_ron = (by_currency["Cash"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Valoare totală azi (RON)", _ledger_num(total_ron), help=LEDGER_HELP["total"])
+    k2.metric("Poziții (RON)", _ledger_num(positions_ron), help=LEDGER_HELP["positions"])
+    k3.metric("Numerar la brokeri (RON)", _ledger_num(cash_ron), help=LEDGER_HELP["cash"])
+    st.caption(
+        f"Din {len(ledger_df)} tranzacții, {ledger_df['Date'].min():%d.%m.%Y} – {ledger_df['Date'].max():%d.%m.%Y}. "
+        "Totalul în RON e la cursul de azi. Registrul se actualizează când încarci un export nou de la broker."
+    )
+    from_close = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_CLOSE, "Symbol"])
+    if from_close or fx_from_close:
+        st.caption("ℹ️ Preț live indisponibil, s-a folosit ultima închidere pentru: "
+                   + ", ".join(from_close + [f"curs {cur}/RON" for cur in fx_from_close]) + ".")
+    if missing_fx:
+        st.warning(f"⚠️ Curs valutar indisponibil pentru: **{', '.join(missing_fx)}**. Totalul în RON nu poate fi calculat.")
+    missing_prices = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_MISSING, "Symbol"])
+    if missing_prices:
+        st.warning(f"⚠️ Fără preț disponibil pentru: **{', '.join(missing_prices)}**. Clasele lor nu au valoare, total și XIRR.")
+
+    order = {name: i for i, name in enumerate(LEDGER_CLASS_ORDER)}
+    results = results.assign(_o=results["Class"].map(order).fillna(len(order))).sort_values(["_o", "Currency"])
+    st.markdown("**Rezultat pe clase de active** (fiecare în moneda ei)")
+    st.dataframe(pd.DataFrame({
+        "Clasă": results["Class"] + np.where(results["Proxy"], " *", ""),
+        "Monedă": results["Currency"],
+        "Poziții": results["OpenPositions"].astype(int),
+        "Cost deschis": results["CostBasis"].map(_ledger_num),
+        "Valoare azi": results["MarketValue"].map(_ledger_num),
+        "Nerealizat": results["Unrealized"].map(_ledger_num),
+        "Realizat": results["Realized"].map(_ledger_num),
+        "Dividende / cupoane": results["Income"].map(_ledger_num),
+        "Impozite": results["Taxes"].map(_ledger_num),
+        "Comisioane": results["Fees"].map(_ledger_num),
+        "Rezultat total": results["Total"].map(_ledger_num),
+        "XIRR (% pe an)": results["XIRR"].map(lambda v: _ledger_num(v, 1, "%")),
+        "Fluxuri": results["Flows"].astype(int),
+    }), hide_index=True, width='stretch',
+        column_config={name: st.column_config.Column(help=text) for name, text in LEDGER_COLUMN_HELP.items()})
+    st.caption(
+        "Rezultat total = realizat + nerealizat + dividende/cupoane + impozite + comisioane. "
+        "XIRR = randament anualizat ponderat cu banii, în moneda clasei; cu puține fluxuri (sub ~20) e orientativ. "
+        "Costul e mediu ponderat; acțiunile gratuite au cost 0. "
+        "* Obligațiunile și titlurile de stat sunt evaluate la nominal (proxy): nu există preț de piață în sursele aplicației. "
+        f"XIRR nu se afișează când fluxurile acoperă sub {ledger_calc.MIN_XIRR_DAYS} de zile. "
+        "Impozite 0 la Tradeville nu înseamnă fără impozit: brokerul raportează dividendele nete, cu impozitul deja reținut."
+    )
+
+    render_ledger_total(ledger_df, positions, total_ron, asof)
+
+    with st.expander("Poziții deschise din registru"):
+        st.dataframe(pd.DataFrame({
+            "Simbol": valued["Symbol"], "Clasă": valued["Class"], "Monedă": valued["Currency"],
+            "Cantitate": valued["Quantity"].map(lambda v: _ledger_num(v, 4)),
+            "Cost mediu": valued["AvgCost"].map(lambda v: _ledger_num(v, 4)),
+            "Preț": valued["Price"].map(lambda v: _ledger_num(v, 4)),
+            "Sursă preț": valued["PriceSource"],
+            "Valoare": valued["MarketValue"].map(_ledger_num),
+            "Nerealizat": valued["Unrealized"].map(_ledger_num),
+            "Nerealizat %": valued["UnrealizedPct"].map(lambda v: _ledger_num(v, 1, "%")),
+        }), hide_index=True, width='stretch')
+    with st.expander("Numerar și curs valutar"):
+        st.dataframe(pd.DataFrame({
+            "Monedă": by_currency["Currency"],
+            "Poziții": by_currency["Positions"].map(_ledger_num),
+            "Numerar": by_currency["Cash"].map(_ledger_num),
+            "Curs RON": by_currency["Rate"].map(lambda v: _ledger_num(v, 4)),
+            "Valoare în RON": by_currency["ValueBase"].map(_ledger_num),
+        }), hide_index=True, width='stretch')
+        st.dataframe(cash.assign(Cash=cash["Cash"].map(_ledger_num)).rename(columns={"Currency": "Monedă", "Cash": "Numerar"}),
+                     hide_index=True, width='stretch')
+    if problems:
+        with st.expander(f"⚠️ {len(problems)} probleme în registru"):
+            for problem in problems[:50]:
+                st.write(f"- {problem}")
+
 from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
 
 def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
@@ -1946,9 +2382,8 @@ def get_cross_asset_correlation():
         rename_map = {v: k for k, v in tickers.items()}
         data = data.rename(columns=rename_map)
         
-        # Calculăm randamentele și matricea de corelație (Pearson)
-        returns = data.pct_change().dropna()
-        corr_matrix = returns.corr()
+        # Randamente doar pe zilele comune (cripto se tranzacționează și în weekend): fără zerouri inventate.
+        corr_matrix, _ = common_day_correlation(data, min_obs=30)
         return corr_matrix
     except Exception as e:
         print(f"Eroare Cross-Asset: {e}")
@@ -3979,6 +4414,9 @@ def main():
                     st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
 
+        render_ledger_results()
+        st.markdown("---")
+
         # Încărcăm datele din Google Sheets
         df_pf = load_portfolio()
 
@@ -4031,51 +4469,54 @@ def main():
                 st.markdown("---")
                 st.subheader("🔮 Proiecție Probabilistă Monte Carlo (1 An)")
 
-                with st.spinner("Se simulează 1000 de scenarii de piață..."):
-                    paths, last_val = run_monte_carlo_sim(hist_curve)
+                # Bootstrap pe randamentele zilnice din fereastra aleasă (analytics/simulation.py); seed fix, deci stabil la rerun.
+                paths = simulation.bootstrap_paths(hist_curve)
+                if paths is None:
+                    st.info("Simularea are nevoie de cel puțin 60 de zile de istoric: alege o perioadă de analiză mai lungă (minimum 6L).")
+                else:
+                    mc = simulation.summarize_paths(paths)
+                    mc_flat = simulation.summarize_paths(simulation.bootstrap_paths(hist_curve, demean=True))
+                    last_val, bands = mc["start"], mc["bands"]
+                    x_range = list(range(len(bands)))
 
-                if paths is not None:
-                    # Calculăm percentilele de risc
-                    # Ce se întâmplă în cel mai rău caz (5%) și cel mai bun (95%)
-                    p5 = np.percentile(paths[-1, :], 5)
-                    p50 = np.percentile(paths[-1, :], 50)
-                    p95 = np.percentile(paths[-1, :], 95)
-                    
                     fig_mc = go.Figure()
-                    
-                    # Afișăm primele 100 de traiectorii (pentru a nu supraîncărca browser-ul)
-                    x_range = list(range(252))
-                    for i in range(100):
-                        fig_mc.add_trace(go.Scatter(x=x_range, y=paths[:, i], mode='lines', 
-                                                line=dict(width=0.5, color='rgba(3, 247, 6, 0.45)'),
-                                                showlegend=False))
-                    
-                    # Adăugăm liniile critice
-                    fig_mc.add_trace(go.Scatter(x=x_range, y=[p50]*252, line=dict(color='white', dash='dash'), name='Așteptare Medie'))
-                    fig_mc.add_trace(go.Scatter(x=x_range, y=[p5]*252, line=dict(color='#F85149', width=2), name='Worst Case (5%)'))
-                    
-                    fig_mc.update_layout(height=400, template="plotly_dark", 
-                                        hovermode="x", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                                        yaxis_title=f"Valoare Portofoliu ({currency_symbol})")
-                    
+                    # Primele 100 de traiectorii, ca fundal (toate ar supraîncărca browserul)
+                    for i in range(min(100, paths.shape[1])):
+                        fig_mc.add_trace(go.Scatter(x=x_range, y=paths[:, i], mode='lines', hoverinfo='skip',
+                                                line=dict(width=0.5, color='rgba(139, 148, 158, 0.25)'), showlegend=False))
+                    # Percentilele pe tot orizontul, nu doar la final
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=bands["p95"], line=dict(color='#199E70', width=2), name='Optimist (95%)',
+                                                hovertemplate="%{y:,.0f}<extra>Optimist</extra>"))
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=bands["p50"], line=dict(color='#3987E5', width=2), name='Median (50%)',
+                                                hovertemplate="%{y:,.0f}<extra>Median</extra>"))
+                    fig_mc.add_trace(go.Scatter(x=x_range, y=bands["p5"], line=dict(color='#D95926', width=2), name='Pesimist (5%)',
+                                                hovertemplate="%{y:,.0f}<extra>Pesimist</extra>"))
+                    fig_mc.update_layout(height=400, template="plotly_dark",
+                                        hovermode="x unified", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                        xaxis_title="Zile de tranzacționare de azi înainte",
+                                        yaxis_title=f"Valoare Portofoliu ({currency_symbol})",
+                                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                     st.plotly_chart(fig_mc, width='stretch')
-                    
-                    # Dashboard de Risc sub grafic
+
                     c_mc1, c_mc2, c_mc3 = st.columns(3)
-                    
-                    # Calculăm Value at Risk Proiectat
-                    expected_loss = ((last_val - p5) / last_val) * 100
-                    
-                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{p5:,.2f} {currency_symbol}",
-                                help="Value at Risk (VaR): Reprezintă pragul sub care există doar 5% șanse ca portofoliul tău să scadă în următorul an, conform celor 1000 de scenarii simulate.")
-
-                    c_mc2.metric("Pierderea maximă așteptată", f"-{expected_loss:.2f}%", delta_color="inverse",
-                                help="Procentul maxim de scădere din valoarea curentă în scenariul pesimist (cel de la linia roșie din grafic).")
-
-                    c_mc3.metric("Probabilitatea de profit", f"{(np.sum(paths[-1, :] > last_val) / 1000 * 100):.1f}%",
-                                help="Câte scenarii din cele 1000 simulate au terminat pe profit (peste valoarea actuală). O valoare peste 50% indică un avantaj statistic pe termen lung.")
-                    
-                    st.info(f"💡 **Analiza Quant:** Există o probabilitate de 95% ca peste un an, portofoliul tău să nu scadă sub valoarea de **{p5:,.2f} {currency_symbol}**. Acest model ia în calcul volatilitatea ta istorică.")
+                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{mc['p5']:,.2f} {currency_symbol}",
+                                help="**Cum se calculează:** percentila 5 a valorii finale din cele 1000 de scenarii, fiecare construit din randamente zilnice "
+                                     "trase la întâmplare din istoricul portofoliului.\n\n**Ce înseamnă:** în 95% din scenarii portofoliul a terminat anul peste această valoare.")
+                    c_mc2.metric("Variația în scenariul pesimist", f"{mc['change_p5_pct']:+.2f}%",
+                                help="**Cum se calculează:** (valoarea din scenariul pesimist ÷ valoarea de azi − 1) × 100.\n\n"
+                                     "**Ce înseamnă:** cât ai pierde (minus) sau câștiga (plus) într-un an slab, de felul celor care apar o dată la 20. "
+                                     "Poate fi pozitivă dacă perioada aleasă a fost foarte bună.")
+                    c_mc3.metric("Probabilitatea de profit", f"{mc['prob_profit']:.1f}%",
+                                help="**Cum se calculează:** câte scenarii din 1000 au terminat peste valoarea de azi.\n\n"
+                                     "**Ce înseamnă:** depinde direct de randamentul mediu al perioadei alese. Comparați cu varianta „fără tendință” de mai jos: "
+                                     "acolo iese puțin sub 50%, pentru că volatilitatea singură trage valoarea mediană în jos.")
+                    st.caption(
+                        f"Din {mc['simulations']} scenarii pe {mc['days']} de zile, construite prin reeșantionarea randamentelor zilnice din perioada aleasă mai sus "
+                        f"({len(hist_curve) - 1} zile). Simularea presupune că randamentul mediu din această perioadă continuă. "
+                        f"Fără această presupunere (doar volatilitatea, tendință zero): scenariu pesimist {mc_flat['change_p5_pct']:+.1f}%, "
+                        f"median {mc_flat['change_p50_pct']:+.1f}%, probabilitate de profit {mc_flat['prob_profit']:.0f}%. "
+                        "Curba folosită aplică deținerile de azi pe trecut; nu e o prognoză."
+                    )
                 
                 if not hist_curve.empty:
                     fig_hist = go.Figure()
@@ -4262,22 +4703,25 @@ def main():
                 # MODUL NOU: OPTIMIZARE PORTOFOLIU AI (MARKOWITZ)
                 # =======================================================
                 st.markdown("---")
-                st.subheader("🧠 Optimizator Portofoliu AI (Markowitz)")
-                st.markdown("Inteligența artificială analizează corelațiile și volatilitatea istorică pentru a găsi alocarea matematic perfectă (risc minim, profit maxim).")
+                st.subheader("🧠 Optimizator Portofoliu (Markowitz)")
+                st.markdown("Două alocări calculate din istoricul pozițiilor tale: Sharpe maxim și varianță minimă, cu plafon pe poziție. "
+                            "Sunt scenarii construite din trecut, nu recomandări: verifică mai jos cum s-ar fi comportat pe date pe care modelul nu le-a văzut.")
 
                 if len(current_tickers) >= 2:
                     with st.spinner("Motorul Quant calculează Frontiera Eficientă..."):
                         # 1. Descărcăm prețurile de închidere curate pentru acțiunile tale
                         # close_frame elimină simbolurile fără nicio cotație (altfel optimizarea eșua cu un mesaj criptic)
-                        hist_opt = close_frame(yf.download(current_tickers, period="1y", progress=False), current_tickers)
+                        # 5 ani: pe un singur an, Sharpe maxim alege doar câștigătorii recenți
+                        hist_opt = close_frame(yf.download(current_tickers, period="5y", progress=False, auto_adjust=True), current_tickers)
                         skipped_opt = [t for t in current_tickers if t not in hist_opt.columns]
                         if skipped_opt:
                             st.caption(f"ℹ️ Fără istoric de preț, excluse din optimizare: {', '.join(skipped_opt)}.")
                         
-                        # 2. Trimitem datele la creierul AI
-                        from ai_engine import optimize_portfolio_ai
+                        # 2. Optimizare cu plafon pe poziție și covarianță Ledoit-Wolf (analytics/simulation.py)
+                        opt_currency = {"$": "USD", "€": "EUR"}.get(currency_symbol, currency_symbol)
+                        rf_opt, rf_opt_label = get_risk_free_for_currency(opt_currency)
                         if hist_opt.shape[1] >= 2:
-                            opt_res, opt_msg = optimize_portfolio_ai(hist_opt)
+                            opt_res, opt_msg = simulation.optimize_portfolio(hist_opt, rf_annual=rf_opt or 0.0, max_weight=0.25)
                         else:
                             opt_res, opt_msg = None, "Sunt necesare cel puțin 2 active cu istoric de preț pentru optimizare."
 
@@ -4292,7 +4736,8 @@ def main():
                                 comp_data.append({
                                     "Simbol": sym,
                                     "Pondere Actuală (%)": current_w.get(sym, 0),
-                                    "Pondere Optimă AI (%)": opt_res['allocation'].get(sym, 0)
+                                    "Pondere Optimă AI (%)": opt_res['allocation'].get(sym, 0),
+                                    "Pondere Varianță Minimă (%)": opt_res['min_variance'].get(sym, 0)
                                 })
                             df_comp = pd.DataFrame(comp_data)
 
@@ -4314,11 +4759,22 @@ def main():
                             fig_opt.add_trace(go.Bar(
                                 x=df_comp['Simbol'], 
                                 y=df_comp['Pondere Optimă AI (%)'], 
-                                name='Sugestia AI', 
-                                marker_color='#3FB950',
+                                name='Sharpe maxim', 
+                                marker_color='#3987E5',
                                 texttemplate='%{y:.1f}%',      # Scrie procentul pe bară
                                 textposition='auto',
-                                hovertemplate="<b>%{x}</b> (Optim AI): %{y:.2f}%<extra></extra>" # Formatare hover
+                                hovertemplate="<b>%{x}</b> (Sharpe maxim): %{y:.2f}%<extra></extra>" # Formatare hover
+                            ))
+
+                            # Bara pentru portofoliul de varianță minimă
+                            fig_opt.add_trace(go.Bar(
+                                x=df_comp['Simbol'],
+                                y=df_comp['Pondere Varianță Minimă (%)'],
+                                name='Varianță minimă',
+                                marker_color='#C98500',
+                                texttemplate='%{y:.1f}%',
+                                textposition='auto',
+                                hovertemplate="<b>%{x}</b> (Varianță minimă): %{y:.2f}%<extra></extra>"
                             ))
                             
                             fig_opt.update_layout(
@@ -4332,20 +4788,42 @@ def main():
                             )
                             st.plotly_chart(fig_opt, width='stretch', key=f"opt_bar_{currency_symbol}")
 
-                            # 4. Afișăm Metricele Portofoliului Ideal cu explicații
-                            st.markdown("##### 🏆 Cum ar arăta Portofoliul Ideal (Conform AI):")
+                            # 4. Indicatorii alocării de Sharpe maxim, pe tot istoricul (în eșantion)
+                            st.markdown("##### Alocarea de Sharpe maxim, pe tot istoricul")
                             c_op1, c_opt2, c_opt3 = st.columns(3)
                             
-                            c_op1.metric("Randament Anual Așteptat", f"{opt_res['expected_return']:.2f}%",
-                                        help="Randamentul anual pe care modelul matematic îl estimează pentru această alocare, bazat pe performanța istorică a activelor tale.")
+                            c_op1.metric("Randament Anual Istoric", f"{opt_res['expected_return']:.2f}%",
+                                        help="**Cum se calculează:** media randamentelor zilnice ale alocării × 252, pe tot istoricul comun.\n\n"
+                                             "**Ce înseamnă:** cât ar fi adus această alocare în trecut. E calculat pe aceleași date pe care a fost aleasă, "
+                                             "deci e optimist prin construcție; nu e o estimare pentru viitor.")
                             
                             c_opt2.metric("Volatilitate (Risc)", f"{opt_res['expected_volatility']:.2f}%",
-                                        help="Măsură a fluctuațiilor prețului. AI-ul încearcă să găsească ponderile care oferă cel mai mic 'stres' (swing-uri de preț) pentru randamentul țintit.")
+                                        help="**Cum se calculează:** deviația standard a randamentelor zilnice ale alocării × √252.\n\n"
+                                             "**Ce înseamnă:** cât de mult ar fi fluctuat alocarea într-un an obișnuit.")
                             
-                            c_opt3.metric("Sharpe Ratio Optim", f"{opt_res['sharpe_ratio']:.2f}",
-                                        help="Indicatorul de aur al eficienței: Profitul raportat la Risc. O valoare peste 1.0 este considerată bună, iar peste 2.0 este excelentă, indicând un profit mare cu riscuri bine controlate.")
+                            c_opt3.metric("Sharpe Ratio", "N/A" if opt_res['sharpe_ratio'] is None else f"{opt_res['sharpe_ratio']:.2f}",
+                                        help="**Cum se calculează:** (randament anual − rata fără risc) ÷ volatilitate.\n\n"
+                                             "**Ce înseamnă:** randamentul peste titlurile de stat pentru fiecare unitate de risc. E valoarea maximă posibilă pe aceste date, "
+                                             "cu plafonul pe poziție; în practică iese mai mic.")
 
-                            st.info("💡 **Strategie Quant:** Barele verzi îți arată unde ar trebui să muți banii. Algoritmul îți sugerează să crești expunerea pe activele cu randament stabil și să o reduci pe cele care aduc doar 'zgomot' (volatilitate inutilă).")
+                            oos = opt_res.get("out_of_sample") or []
+                            if oos:
+                                st.markdown(f"##### Verificare pe date nevăzute ({opt_res['test_days']} zile, din {opt_res['test_start']:%d.%m.%Y})")
+                                st.dataframe(pd.DataFrame({
+                                    "Alocare": [r["label"] for r in oos],
+                                    "Randament anualizat": [f"{r['return']:.1f}%" for r in oos],
+                                    "Volatilitate": [f"{r['volatility']:.1f}%" for r in oos],
+                                    "Sharpe": ["N/A" if r["sharpe"] is None else f"{r['sharpe']:.2f}" for r in oos],
+                                }), hide_index=True, width='stretch')
+                            st.caption(
+                                f"Din {opt_res['n_days']} zile comune de tranzacționare, {opt_res['start']:%d.%m.%Y} – {opt_res['end']:%d.%m.%Y}. "
+                                f"Plafon pe poziție: {opt_res['cap']:.0f}%. Covarianță Ledoit-Wolf (shrinkage {opt_res['shrinkage']:.2f}). "
+                                + (f"Excluse pentru istoric prea scurt: {', '.join(opt_res['excluded'])}. " if opt_res.get('excluded') else "")
+                                + (f"Rata fără risc: {rf_opt * 100:.2f}% ({rf_opt_label}). " if rf_opt is not None else "Rata fără risc indisponibilă: Sharpe calculat cu 0%. ")
+                                + ("Tabelul de verificare: ponderile au fost calculate pe primele 70% din zile și evaluate pe ultimele 30%. "
+                                   "Dacă acolo nu bat ponderile egale, „optimul” e în mare parte potrivire pe trecut. " if oos else "")
+                                + "Varianța minimă nu depinde de estimarea randamentelor, deci e mai stabilă decât Sharpe maxim."
+                            )
                         else:
                             st.warning(opt_msg)
                 else:
@@ -6146,8 +6624,7 @@ def main():
                             if not valid_values.empty:
                                 # Luăm ultima valoare existentă (chiar dacă e de ieri)
                                 current_prices[col] = valid_values.iloc[-1]
-                            else:
-                                current_prices[col] = 0.0
+                            # fără date: simbolul lipsește din serie și apare „N/A”, nu preț 0
                         
                         # Convertim înapoi în Series pentru restul codului
                         live_data = pd.Series(current_prices)
@@ -6164,26 +6641,21 @@ def main():
                 target = smart_to_float(row['TargetPrice'])  # acceptă și formatul românesc ("25,5")
                 note = row['Notes']
                 
-                # Extragem prețul curent din seria curățată
-                try:
-                    curr = float(live_data.get(sym, 0))
-                except:
-                    curr = 0
-
-                # Calculăm distanța până la țintă
-                if curr > 0:
-                    dist_pct = ((curr - target) / curr) * 100
-                    is_buy = curr <= target # E sub prețul țintă?
+                # Preț sau țintă lipsă rămân lipsă („N/A”), nu 0; distanța e față de țintă, ca în cardul din analiză.
+                curr, target, dist_pct, is_buy = watchlist_status(live_data.get(sym), target)
+                if curr is None:
+                    status = "Fără preț"
+                elif target is None:
+                    status = "Fără țintă"
                 else:
-                    dist_pct = 0
-                    is_buy = False
+                    status = "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă"
                 
                 display_rows.append({
                     "Simbol": sym,
                     "Preț Curent": curr,
                     "Preț Țintă 🎯": target,
                     "Distanță (%)": dist_pct,
-                    "Recomandare": "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă",
+                    "Recomandare": status,
                     "Notă": note,
                     "_is_buy": is_buy 
                 })
@@ -6199,7 +6671,7 @@ def main():
 
             st.dataframe(
                 df_res.style.apply(highlight_buy, axis=1)
-                .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
+                .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:+.2f}%"}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={
