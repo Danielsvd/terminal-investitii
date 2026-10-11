@@ -330,6 +330,9 @@ class FakeWorksheet:
     def append_row(self, row, *a, **k):
         pass
 
+    def append_rows(self, rows, *a, **k):
+        pass
+
     def find(self, *a, **k):
         return None
 

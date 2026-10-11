@@ -29,6 +29,8 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
+from data import broker_import
+import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
@@ -2010,6 +2012,61 @@ def _ledger_num(value, decimals=2, suffix=""):
         return "N/A"
     return f"{value:,.{decimals}f}{suffix}"
 
+def render_ledger_import(values):
+    """Importul unui export de la broker în foaia `Tranzactii`: previzualizare, apoi scriere doar a rândurilor noi."""
+    with st.expander("📥 Importă un export de la broker (Tradeville, XTB)"):
+        st.caption(
+            "Încarcă raportul de activitate Tradeville sau exportul XTB (.xlsx), exact cum l-ai descărcat. "
+            "Rândurile deja existente în foaie sunt recunoscute după ID și sărite, deci poți încărca oricând exportul complet. "
+            "Nimic nu se scrie până nu apeși butonul de adăugare."
+        )
+        files = st.file_uploader("Fișiere .xlsx", type=["xlsx"], accept_multiple_files=True, key="ledger_import_files")
+        if not files:
+            return
+        if not values or "ID" not in values[0]:
+            st.error("Foaia `Tranzactii` nu are antetul așteptat (coloana ID); importul e oprit.")
+            return
+        id_col = values[0].index("ID")
+        known = {row[id_col] for row in values[1:] if len(row) > id_col and row[id_col]}
+        fresh_all = []
+        for uploaded in files:
+            try:
+                sheets = broker_import.read_workbook(uploaded)
+            except (zipfile.BadZipFile, KeyError, ValueError, OSError) as e:
+                st.error(f"**{uploaded.name}**: fișierul nu a putut fi citit ({e}).")
+                continue
+            broker, records, import_problems, control = broker_import.parse_export(sheets)
+            if broker is None:
+                st.error(f"**{uploaded.name}**: {import_problems[0]}")
+                continue
+            fresh = broker_import.new_records(records, known | {r["ID"] for r in fresh_all})
+            st.markdown(f"**{uploaded.name}** — {broker}: {len(records)} operațiuni citite, **{len(fresh)} noi**, "
+                        f"{len(records) - len(fresh)} deja în foaie.")
+            if control and control.get("reported") is not None and abs(control["reported"] - control["parsed"]) > 0.01:
+                st.warning(f"⚠️ Numerarul citit ({control['parsed']:,.2f}) diferă de totalul din raport ({control['reported']:,.2f}): "
+                           "importul e incomplet. Vezi operațiunile nerecunoscute de mai jos.")
+            for problem in import_problems[:20]:
+                st.write(f"- ⚠️ {problem}")
+            fresh_all.extend(fresh)
+        if not fresh_all:
+            st.info("Nimic nou de adăugat: toate operațiunile din fișiere sunt deja în foaie.")
+            return
+        fresh_all = sorted(fresh_all, key=lambda r: (r["Date"], r["ID"]))
+        st.dataframe(pd.DataFrame(fresh_all)[ledger_calc.COLUMNS], hide_index=True, width='stretch', height=300)
+        if st.button(f"Adaugă {len(fresh_all)} rânduri în foaia Tranzactii", key="ledger_import_write"):
+            ws = connect_to_gsheets("Tranzactii")
+            if ws is None:
+                st.error("Foaia `Tranzactii` nu a putut fi deschisă; nu s-a scris nimic.")
+                return
+            try:
+                ws.append_rows(broker_import.to_sheet_rows(fresh_all), value_input_option="USER_ENTERED")
+            except gspread.exceptions.GSpreadException as e:
+                st.error(f"Scrierea în foaie a eșuat: {e}")
+                return
+            load_ledger_values.clear()
+            st.success(f"Adăugate {len(fresh_all)} rânduri. Verifică mai jos numerarul pe broker față de soldul din aplicația brokerului.")
+            st.rerun()
+
 def render_ledger_results():
     """Rezultatele din tranzacțiile reale: pe clase (în moneda fiecăreia) și valoarea totală de azi în RON.
 
@@ -2021,6 +2078,7 @@ def render_ledger_results():
     if values is None:
         st.info("Foaia `Tranzactii` nu a putut fi citită din `portofoliu_db`.")
         return
+    render_ledger_import(values)
     ledger_df, problems = ledger_calc.parse_ledger(values)
     if ledger_df.empty:
         st.info("Foaia `Tranzactii` nu conține tranzacții. " + " ".join(problems))
