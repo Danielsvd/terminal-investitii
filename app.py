@@ -1752,6 +1752,63 @@ def calculate_portfolio_performance(df, history_range="1A"):
 LEDGER_FX_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X"}
 LEDGER_CLASS_ORDER = ["Actiuni RO", "Actiuni SUA", "Actiuni UE", "ETF", "Obligatiuni", "Altele"]
 
+# Explicațiile din semnul întrebării de lângă fiecare indicator: cum se calculează și ce înseamnă.
+LEDGER_HELP = {
+    "total": "**Cum se calculează:** valoarea de piață a tuturor pozițiilor deschise plus numerarul de la brokeri, "
+             "fiecare monedă convertită în RON la cursul de azi.\n\n**Ce înseamnă:** cât ai primi, aproximativ, dacă ai vinde tot azi "
+             "(înainte de comisioane și impozite).",
+    "positions": "**Cum se calculează:** cantitate × preț curent pentru fiecare poziție, convertit în RON la cursul de azi. "
+                 "Obligațiunile și titlurile de stat sunt la nominal (100).\n\n**Ce înseamnă:** partea din portofoliu care e investită.",
+    "cash": "**Cum se calculează:** suma tuturor intrărilor și ieșirilor de numerar din registru, pe fiecare cont, convertită în RON la cursul de azi.\n\n"
+            "**Ce înseamnă:** banii neinvestiți care stau la brokeri. Trebuie să coincidă cu soldul din aplicațiile brokerilor la data ultimului export.",
+    "net_invested": "**Cum se calculează:** depuneri − retrageri + soldurile de deschidere din 2020, fiecare convertită în RON la cursul din ziua ei. "
+                    "Schimburile valutare și transferurile între conturi nu se numără.\n\n**Ce înseamnă:** câți bani din buzunar ai băgat în total în portofoliu.",
+    "profit": "**Cum se calculează:** valoarea totală de azi − banii depuși net.\n\n**Ce înseamnă:** câștigul total în RON, din toate sursele: "
+              "creșterea prețurilor, dividende, cupoane, dobânzi și cursul valutar, minus comisioane și impozite. "
+              "Procentul de dedesubt îl raportează la banii depuși, fără să țină cont de cât timp au stat investiți.",
+    "xirr": "**Cum se calculează:** rata anuală care, aplicată fiecărei depuneri de la data ei până azi, dă exact valoarea de azi a portofoliului "
+            "(rata internă de rentabilitate pe fluxuri datate).\n\n**Ce înseamnă:** randamentul tău anual real, ținând cont de momentul în care ai depus fiecare sumă. "
+            "Se compară cu dobânda unui depozit sau a unui titlu de stat. Banii depuși recent cântăresc puțin, cei vechi mult.",
+    "twr": "**Cum se calculează:** randamentele zilnice ale portofoliului, înlănțuite, cu fiecare depunere scoasă din calcul în ziua ei: "
+           "randament zilnic = valoare azi ÷ (valoare ieri + depunerea de azi) − 1.\n\n**Ce înseamnă:** cât a crescut un leu investit la început, "
+           "indiferent de când și cât ai mai depus. Măsoară calitatea alegerilor de investiții și e direct comparabil cu un indice (BET, S&P 500).",
+    "twr_annual": "**Cum se calculează:** (1 + TWR total) ridicat la puterea 1 ÷ numărul de ani, minus 1.\n\n**Ce înseamnă:** TWR-ul exprimat ca medie pe an. "
+                  "Dacă e sub XIRR, ai depus mai mult înaintea perioadelor bune; dacă e peste, înaintea celor slabe.",
+    "period": "Prima și ultima zi pentru care există valoare calculată. TWR și indicatorii de risc sunt măsurați pe acest interval.",
+    "vol": "**Cum se calculează:** deviația standard a randamentelor zilnice × √252 (zile de tranzacționare pe an).\n\n"
+           "**Ce înseamnă:** cât de mult fluctuează portofoliul într-un an obișnuit. La 10%, două treimi din ani ar trebui să se încheie la ±10% față de medie. "
+           "Aici e subestimată, pentru că obligațiunile și numerarul nu au variație zilnică.",
+    "sharpe": "**Cum se calculează:** (randamentul mediu zilnic − rata fără risc zilnică) ÷ deviația standard zilnică × √252.\n\n"
+              "**Ce înseamnă:** cât randament peste titlurile de stat primești pentru fiecare unitate de risc. Sub 0: mai slab decât titlurile de stat. "
+              "0–0,5: slab. 0,5–1: acceptabil. Peste 1: bun.",
+    "sortino": "**Cum se calculează:** ca Sharpe, dar la numitor intră doar variația zilelor sub rata fără risc (deviația în jos).\n\n"
+               "**Ce înseamnă:** randamentul raportat doar la riscul care doare, scăderile. Creșterile bruște nu sunt penalizate. Se citește ca Sharpe, dar valorile sunt de regulă mai mari.",
+    "max_dd": "**Cum se calculează:** cea mai mare scădere procentuală de la un vârf la minimul de după el, pe curba randamentelor (fără efectul depunerilor).\n\n"
+              "**Ce înseamnă:** cea mai rea perioadă prin care a trecut portofoliul. E pierderea pe care trebuie să fii pregătit să o vezi din nou.",
+    "var_hist": "**Cum se calculează:** percentila 5 a randamentelor zilnice din istoric.\n\n**Ce înseamnă:** într-o zi din 20, pierderea a fost mai mare decât atât. "
+                "Suma în RON aplică procentul la valoarea de azi a portofoliului.",
+    "cvar": "**Cum se calculează:** media randamentelor din cele mai rele 5% din zile.\n\n**Ce înseamnă:** cât pierzi, în medie, într-o zi proastă "
+            "(una dintre cele mai rele 20). E mai relevant decât VaR, pentru că arată cât de adâncă e coada, nu doar unde începe.",
+    "var_param": "**Cum se calculează:** media zilnică − 1,645 × deviația standard, adică percentila 5 dacă randamentele ar fi distribuite normal.\n\n"
+                 "**Ce înseamnă:** estimarea teoretică a aceleiași pierderi. Piețele au zile extreme mai dese decât distribuția normală, "
+                 "deci compară-l cu cel istoric: diferența dintre ele arată cât de neobișnuite sunt cozile.",
+}
+LEDGER_COLUMN_HELP = {
+    "Clasă": "Clasa de active din coloana Class a foii Tranzactii. Steluța marchează clasele evaluate la nominal (proxy).",
+    "Monedă": "Moneda în care sunt exprimate toate sumele de pe rând. Rândurile nu se adună între ele decât după conversie.",
+    "Poziții": "Câte simboluri din clasă au cantitate deținută mai mare ca zero.",
+    "Cost deschis": "Cât ai plătit, cu tot cu comisioane, pentru ce deții acum. Cost mediu ponderat: la o vânzare parțială costul scade proporțional. Acțiunile gratuite au cost 0.",
+    "Valoare azi": "Cantitate × preț curent pentru pozițiile deschise. N/A dacă lipsește prețul vreunei poziții.",
+    "Nerealizat": "Valoare azi − cost deschis. Profitul sau pierderea pe hârtie la ce deții încă.",
+    "Realizat": "Suma, pe toate vânzările, a încasării nete minus costul mediu al acțiunilor vândute. Profitul deja încasat.",
+    "Dividende / cupoane": "Dividendele și cupoanele încasate. La Tradeville sunt nete (impozitul e deja reținut); la XTB sunt brute, iar impozitul apare separat.",
+    "Impozite": "Impozitele raportate separat de broker (reținere la sursă pe dividende, taxa RO la vânzare). Valoare negativă.",
+    "Comisioane": "Comisioanele raportate separat de broker (de ex. taxa SEC). Comisioanele de tranzacționare sunt deja incluse în cost și în realizat.",
+    "Rezultat total": "Realizat + nerealizat + dividende/cupoane + impozite + comisioane. Câștigul total al clasei, în moneda ei.",
+    "XIRR (% pe an)": "Randamentul anual ponderat cu banii, în moneda clasei: rata care egalează cumpărările cu vânzările, dividendele și valoarea de azi. N/A sub 90 de zile.",
+    "Fluxuri": "Câte mișcări de bani au intrat în calculul XIRR. Cu puține fluxuri (sub ~20), randamentul e orientativ.",
+}
+
 @st.cache_data(ttl=300, show_spinner=False)
 def load_ledger_values():
     """Conținutul brut al foii `Tranzactii` (antet + rânduri); None dacă foaia lipsește sau nu poate fi citită."""
@@ -1842,10 +1899,11 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     result = ledger_calc.money_weighted_result(ext, total_ron, asof)
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Bani depuși, net (RON)", _ledger_num(result["net_invested"]))
+    m1.metric("Bani depuși, net (RON)", _ledger_num(result["net_invested"]), help=LEDGER_HELP["net_invested"])
     profit_pct = (result["profit"] / result["net_invested"] * 100) if result["profit"] is not None and result["net_invested"] else None
-    m2.metric("Profit total (RON)", _ledger_num(result["profit"]), None if profit_pct is None else f"{profit_pct:.1f}% din banii depuși")
-    m3.metric("XIRR total (% pe an)", "N/A" if result["xirr"] is None else f"{result['xirr'] * 100:.1f}%")
+    m2.metric("Profit total (RON)", _ledger_num(result["profit"]), None if profit_pct is None else f"{profit_pct:.1f}% din banii depuși",
+              help=LEDGER_HELP["profit"])
+    m3.metric("XIRR total (% pe an)", "N/A" if result["xirr"] is None else f"{result['xirr'] * 100:.1f}%", help=LEDGER_HELP["xirr"])
     st.caption(
         f"Din {len(ext)} depuneri, retrageri și solduri de deschidere, fiecare convertită în RON la cursul din ziua ei. "
         "Profit total = valoarea de azi − banii depuși net; include și efectul cursului valutar. "
@@ -1880,9 +1938,9 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     years = (cumulative.index[-1] - cumulative.index[0]).days / 365.25
     twr_annual = ((1 + twr_total) ** (1 / years) - 1) if (years >= 1 and twr_total > -1) else None
     t1, t2, t3 = st.columns(3)
-    t1.metric("TWR total", f"{twr_total * 100:.1f}%")
-    t2.metric("TWR anualizat", "N/A" if twr_annual is None else f"{twr_annual * 100:.1f}%")
-    t3.metric("Perioada măsurată", f"{cumulative.index[0]:%d.%m.%Y} – {cumulative.index[-1]:%d.%m.%Y}")
+    t1.metric("TWR total", f"{twr_total * 100:.1f}%", help=LEDGER_HELP["twr"])
+    t2.metric("TWR anualizat", "N/A" if twr_annual is None else f"{twr_annual * 100:.1f}%", help=LEDGER_HELP["twr_annual"])
+    t3.metric("Perioada măsurată", f"{cumulative.index[0]:%d.%m.%Y} – {cumulative.index[-1]:%d.%m.%Y}", help=LEDGER_HELP["period"])
 
     deposits = flows_daily.cumsum().reindex(valid_curve.index)
     fig_ledger = go.Figure()
@@ -1928,15 +1986,15 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     pct = lambda v, d=1: "N/A" if v is None else f"{v * 100:.{d}f}%"
     ratio = lambda v: "N/A" if v is None else f"{v:.2f}"
     r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Volatilitate anualizată", pct(risk["vol_ann"]))
-    r2.metric("Sharpe", ratio(risk["sharpe"]))
-    r3.metric("Sortino", ratio(risk["sortino"]))
-    r4.metric("Scădere maximă de la vârf", pct(risk["max_drawdown"]))
+    r1.metric("Volatilitate anualizată", pct(risk["vol_ann"]), help=LEDGER_HELP["vol"])
+    r2.metric("Sharpe", ratio(risk["sharpe"]), help=LEDGER_HELP["sharpe"])
+    r3.metric("Sortino", ratio(risk["sortino"]), help=LEDGER_HELP["sortino"])
+    r4.metric("Scădere maximă de la vârf", pct(risk["max_drawdown"]), help=LEDGER_HELP["max_dd"])
     in_ron = (lambda v: "") if total_ron is None else (lambda v: f"{v * total_ron:,.0f} RON la valoarea de azi")
     v1, v2, v3 = st.columns(3)
-    v1.metric("VaR 95% istoric (1 zi)", pct(risk["var95_hist"], 2), in_ron(risk["var95_hist"]), delta_color="off")
-    v2.metric("CVaR 95% (1 zi)", pct(risk["cvar95"], 2), in_ron(risk["cvar95"]), delta_color="off")
-    v3.metric("VaR 95% parametric (1 zi)", pct(risk["var95_param"], 2), in_ron(risk["var95_param"]), delta_color="off")
+    v1.metric("VaR 95% istoric (1 zi)", pct(risk["var95_hist"], 2), in_ron(risk["var95_hist"]), delta_color="off", help=LEDGER_HELP["var_hist"])
+    v2.metric("CVaR 95% (1 zi)", pct(risk["cvar95"], 2), in_ron(risk["cvar95"]), delta_color="off", help=LEDGER_HELP["cvar"])
+    v3.metric("VaR 95% parametric (1 zi)", pct(risk["var95_param"], 2), in_ron(risk["var95_param"]), delta_color="off", help=LEDGER_HELP["var_param"])
     st.caption(
         f"Din {risk['n']} randamente zilnice, {risk['start']:%d.%m.%Y} – {risk['end']:%d.%m.%Y}, în RON. "
         + (f"Rata fără risc: {rf_ron * 100:.2f}% ({rf_label}); e pe 10 ani, deci proxy pentru o rată pe termen scurt. "
@@ -1988,9 +2046,9 @@ def render_ledger_results():
     positions_ron = (by_currency["Positions"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
     cash_ron = (by_currency["Cash"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
     k1, k2, k3 = st.columns(3)
-    k1.metric("Valoare totală azi (RON)", _ledger_num(total_ron))
-    k2.metric("Poziții (RON)", _ledger_num(positions_ron))
-    k3.metric("Numerar la brokeri (RON)", _ledger_num(cash_ron))
+    k1.metric("Valoare totală azi (RON)", _ledger_num(total_ron), help=LEDGER_HELP["total"])
+    k2.metric("Poziții (RON)", _ledger_num(positions_ron), help=LEDGER_HELP["positions"])
+    k3.metric("Numerar la brokeri (RON)", _ledger_num(cash_ron), help=LEDGER_HELP["cash"])
     st.caption(
         f"Din {len(ledger_df)} tranzacții, {ledger_df['Date'].min():%d.%m.%Y} – {ledger_df['Date'].max():%d.%m.%Y}. "
         "Totalul în RON e la cursul de azi. Registrul se actualizează când încarci un export nou de la broker."
@@ -2022,7 +2080,8 @@ def render_ledger_results():
         "Rezultat total": results["Total"].map(_ledger_num),
         "XIRR (% pe an)": results["XIRR"].map(lambda v: _ledger_num(v, 1, "%")),
         "Fluxuri": results["Flows"].astype(int),
-    }), hide_index=True, width='stretch')
+    }), hide_index=True, width='stretch',
+        column_config={name: st.column_config.Column(help=text) for name, text in LEDGER_COLUMN_HELP.items()})
     st.caption(
         "Rezultat total = realizat + nerealizat + dividende/cupoane + impozite + comisioane. "
         "XIRR = randament anualizat ponderat cu banii, în moneda clasei; cu puține fluxuri (sub ~20) e orientativ. "
