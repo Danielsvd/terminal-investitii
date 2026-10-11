@@ -1797,7 +1797,14 @@ def get_ledger_fx_history(start):
         print(f"DEBUG: istoric curs valutar indisponibil: {e}")
         return pd.DataFrame()
     closes = _naive_index(close_frame(data, symbols))
-    return closes.rename(columns={sym: cur for cur, sym in LEDGER_FX_SYMBOLS.items()})
+    closes = closes.rename(columns={sym: cur for cur, sym in LEDGER_FX_SYMBOLS.items()})
+    # Yahoo are uneori cotații valutare greșite pentru o zi; un curs care sare peste 10% și revine e eroare de date.
+    for cur in closes.columns:
+        cleaned, fixed = ledger_calc.despike(closes[cur].dropna(), jump=1.10, tolerance=0.03, max_days=3)
+        if fixed:
+            print(f"DEBUG: curs {cur}/RON corectat în {len(fixed)} zile cu cotație aberantă: {[f'{d:%Y-%m-%d}' for d in fixed]}")
+        closes[cur] = cleaned.reindex(closes.index)
+    return closes
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def get_ledger_market_history(symbols, start):
@@ -1855,7 +1862,9 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     symbol_class = dict(zip(positions["Symbol"], positions["Class"]))
     symbol_currency = dict(zip(positions["Symbol"], positions["Currency"]))
     price_table, sources = ledger_calc.build_price_table(index, {s: symbol_class.get(s, "") for s in quantities.columns}, market, trade_prices)
-    curve, blockers = ledger_calc.portfolio_curve_base(quantities, price_table, cash_daily, symbol_currency, fx_history)
+    spike_fixes = []
+    curve, blockers = ledger_calc.portfolio_curve_base(quantities, price_table, cash_daily, symbol_currency, fx_history,
+                                                       trade_days=ledger_calc.cash_trade_days(ledger_df), corrections=spike_fixes)
     flows_daily = ledger_calc.flows_on_index(ext, index)
     cumulative, twr_total = ledger_calc.twr(curve, flows_daily)
 
@@ -1896,6 +1905,10 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
                      "TWR e calculat doar după ultima astfel de zi.")
     if (quantities.columns.map(lambda s: symbol_class.get(s) in ledger_calc.NOMINAL_CLASSES)).any():
         notes.append("Obligațiunile și titlurile de stat sunt la nominal în toată perioada (proxy).")
+    if spike_fixes:
+        shown = ", ".join(f"{sym} ({day:%d.%m.%Y})" for sym, day in spike_fixes[:8])
+        notes.append(f"Vârfuri de o zi-două scoase din curbă (split sau consolidare datată diferit de sursa de prețuri, ori cotație greșită): {shown}"
+                     + (f" și încă {len(spike_fixes) - 8}." if len(spike_fixes) > 8 else "."))
     for note in notes:
         st.caption("ℹ️ " + note)
 
