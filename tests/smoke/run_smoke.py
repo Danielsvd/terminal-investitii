@@ -309,6 +309,9 @@ SHEETS = {
         ["2024-05-16 10:00:00", "AAPL", "Actiuni SUA", "TAX", "", "", "USD", "0", "-0,01", "BrokerB", "u3", ""],
         ["data greșită", "AAPL", "Actiuni SUA", "BUY", "1", "1", "USD", "0", "-1", "BrokerB", "u4", ""],
     ],
+    # preț manual pentru obligațiunea din registrul fals; data de azi, ca să nu apară avertismentul de preț vechi
+    "Preturi_manuale": [["Symbol", "Price", "Date"], ["R9901AE", "101,25", __import__("datetime").date.today().isoformat()],
+                        ["R9902AE", "", ""]],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
                ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
 }

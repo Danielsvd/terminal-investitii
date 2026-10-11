@@ -1761,7 +1761,7 @@ LEDGER_HELP = {
              "fiecare monedă convertită în RON la cursul de azi.\n\n**Ce înseamnă:** cât ai primi, aproximativ, dacă ai vinde tot azi "
              "(înainte de comisioane și impozite).",
     "positions": "**Cum se calculează:** cantitate × preț curent pentru fiecare poziție, convertit în RON la cursul de azi. "
-                 "Obligațiunile și titlurile de stat sunt la nominal (100).\n\n**Ce înseamnă:** partea din portofoliu care e investită.",
+                 "Obligațiunile și titlurile de stat sunt la prețul din foaia Preturi_manuale, iar fără el la nominal (100).\n\n**Ce înseamnă:** partea din portofoliu care e investită.",
     "cash": "**Cum se calculează:** suma tuturor intrărilor și ieșirilor de numerar din registru, pe fiecare cont, convertită în RON la cursul de azi.\n\n"
             "**Ce înseamnă:** banii neinvestiți care stau la brokeri. Trebuie să coincidă cu soldul din aplicațiile brokerilor la data ultimului export.",
     "net_invested": "**Cum se calculează:** depuneri − retrageri + soldurile de deschidere din 2020, fiecare convertită în RON la cursul din ziua ei. "
@@ -1797,7 +1797,7 @@ LEDGER_HELP = {
                  "deci compară-l cu cel istoric: diferența dintre ele arată cât de neobișnuite sunt cozile.",
 }
 LEDGER_COLUMN_HELP = {
-    "Clasă": "Clasa de active din coloana Class a foii Tranzactii. Steluța marchează clasele evaluate la nominal (proxy).",
+    "Clasă": "Clasa de active din coloana Class a foii Tranzactii. Steluța marchează clasele în care cel puțin o poziție e evaluată la nominal (proxy), fără preț manual.",
     "Monedă": "Moneda în care sunt exprimate toate sumele de pe rând. Rândurile nu se adună între ele decât după conversie.",
     "Poziții": "Câte simboluri din clasă au cantitate deținută mai mare ca zero.",
     "Cost deschis": "Cât ai plătit, cu tot cu comisioane, pentru ce deții acum. Cost mediu ponderat: la o vânzare parțială costul scade proporțional. Acțiunile gratuite au cost 0.",
@@ -1822,6 +1822,20 @@ def load_ledger_values():
         return ws.get_all_values()
     except gspread.exceptions.GSpreadException as e:
         print(f"DEBUG: foaia Tranzactii nu a putut fi citită: {e}")
+        return None
+
+MANUAL_PRICE_STALE_DAYS = 30  # peste atât, prețul manual e semnalat ca vechi
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_manual_price_values():
+    """Conținutul brut al foii `Preturi_manuale` (antet + rânduri); None dacă foaia lipsește sau nu poate fi citită."""
+    ws = connect_to_gsheets("Preturi_manuale")
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values()
+    except gspread.exceptions.GSpreadException as e:
+        print(f"DEBUG: foaia Preturi_manuale nu a putut fi citită: {e}")
         return None
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -1970,7 +1984,8 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
         notes.append(f"Zile fără valoare (nici preț de piață, nici tranzacție anterioară) din cauza: {', '.join(blockers)}. "
                      "TWR e calculat doar după ultima astfel de zi.")
     if (quantities.columns.map(lambda s: symbol_class.get(s) in ledger_calc.NOMINAL_CLASSES)).any():
-        notes.append("Obligațiunile și titlurile de stat sunt la nominal în toată perioada (proxy).")
+        notes.append("Obligațiunile și titlurile de stat sunt la nominal în toată perioada (proxy); "
+                     "prețul din `Preturi_manuale` intră doar în valoarea de azi, nu și în curbă și TWR.")
     if spike_fixes:
         shown = ", ".join(f"{sym} ({day:%d.%m.%Y})" for sym, day in spike_fixes[:8])
         notes.append(f"Vârfuri de o zi-două scoase din curbă (split sau consolidare datată diferit de sursa de prețuri, ori cotație greșită): {shown}"
@@ -2094,7 +2109,9 @@ def render_ledger_results():
         # Prețul live poate lipsi (Yahoo refuză des cererile de pe server): completăm cu ultima închidere.
         no_live = tuple(sorted(s for s in live_symbols + list(LEDGER_FX_SYMBOLS.values()) if not prices.get(s)))
         closes_last = get_last_closes(no_live)
-    valued = ledger_calc.value_open_positions(positions, prices, closes_last)
+    manual_prices, manual_problems = ledger_calc.parse_manual_prices(load_manual_price_values())
+    problems = problems + manual_problems
+    valued = ledger_calc.value_open_positions(positions, prices, closes_last, manual_prices=manual_prices)
     asof = now_ro().replace(tzinfo=None)
     results = ledger_calc.class_results(ledger_df, positions, valued, asof)
     cash = ledger_calc.cash_balances(ledger_df)
@@ -2118,6 +2135,16 @@ def render_ledger_results():
                    + ", ".join(from_close + [f"curs {cur}/RON" for cur in fx_from_close]) + ".")
     if missing_fx:
         st.warning(f"⚠️ Curs valutar indisponibil pentru: **{', '.join(missing_fx)}**. Totalul în RON nu poate fi calculat.")
+    manual_rows = valued[valued["PriceSource"] == ledger_calc.PRICE_MANUAL]
+    if not manual_rows.empty:
+        st.caption("ℹ️ Preț trecut de mână (foaia `Preturi_manuale`): " + "; ".join(
+            f"{r.Symbol} {_ledger_num(r.Price, 4)}" + (" (fără dată)" if pd.isna(r.PriceDate) else f" din {r.PriceDate:%d.%m.%Y}")
+            for r in manual_rows.itertuples(index=False)) + ".")
+        age_days = (pd.Timestamp(asof).normalize() - manual_rows["PriceDate"]).dt.days
+        stale = sorted(manual_rows.loc[manual_rows["PriceDate"].isna() | (age_days > MANUAL_PRICE_STALE_DAYS), "Symbol"])
+        if stale:
+            st.warning(f"⚠️ Preț manual fără dată sau mai vechi de {MANUAL_PRICE_STALE_DAYS} de zile pentru: **{', '.join(stale)}**. "
+                       "Actualizează foaia `Preturi_manuale`; valoarea de mai jos folosește prețul vechi.")
     missing_prices = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_MISSING, "Symbol"])
     if missing_prices:
         st.warning(f"⚠️ Fără preț disponibil pentru: **{', '.join(missing_prices)}**. Clasele lor nu au valoare, total și XIRR.")
@@ -2145,7 +2172,8 @@ def render_ledger_results():
         "Rezultat total = realizat + nerealizat + dividende/cupoane + impozite + comisioane. "
         "XIRR = randament anualizat ponderat cu banii, în moneda clasei; cu puține fluxuri (sub ~20) e orientativ. "
         "Costul e mediu ponderat; acțiunile gratuite au cost 0. "
-        "* Obligațiunile și titlurile de stat sunt evaluate la nominal (proxy): nu există preț de piață în sursele aplicației. "
+        "* Obligațiunile și titlurile de stat fără preț în foaia `Preturi_manuale` sunt evaluate la nominal (proxy): "
+        "nu există preț de piață în sursele aplicației. Prețul manual e cel cotat, fără dobânda acumulată. "
         f"XIRR nu se afișează când fluxurile acoperă sub {ledger_calc.MIN_XIRR_DAYS} de zile. "
         "Impozite 0 la Tradeville nu înseamnă fără impozit: brokerul raportează dividendele nete, cu impozitul deja reținut."
     )
@@ -2158,7 +2186,8 @@ def render_ledger_results():
             "Cantitate": valued["Quantity"].map(lambda v: _ledger_num(v, 4)),
             "Cost mediu": valued["AvgCost"].map(lambda v: _ledger_num(v, 4)),
             "Preț": valued["Price"].map(lambda v: _ledger_num(v, 4)),
-            "Sursă preț": valued["PriceSource"],
+            "Sursă preț": [src if pd.isna(day) else f"{src} ({day:%d.%m.%Y})"
+                           for src, day in zip(valued["PriceSource"], valued["PriceDate"])],
             "Valoare": valued["MarketValue"].map(_ledger_num),
             "Nerealizat": valued["Unrealized"].map(_ledger_num),
             "Nerealizat %": valued["UnrealizedPct"].map(lambda v: _ledger_num(v, 1, "%")),
