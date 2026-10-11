@@ -213,3 +213,19 @@ def test_scale_number_pozitive_si_negative():
     assert scale_number(-11_288_999_936.0) == "-11.29 B"
     assert scale_number(-2.5e6) == "-2.50 M" and scale_number(-950.0) == "-950.00"
     assert scale_number(0) == "0.00"
+
+
+def test_watchlist_status_fara_zero_inventat():
+    import pytest
+    from data.helpers import watchlist_status
+    # sub țintă: 95 față de 100 -> -5%, zonă de cumpărare
+    assert watchlist_status(95.0, 100.0) == (95.0, 100.0, pytest.approx(-5.0), True)
+    # peste țintă: 110 față de 100 -> +10% (raportat la țintă, nu la preț)
+    price, target, dist, buy = watchlist_status(110.0, 100.0)
+    assert dist == pytest.approx(10.0) and buy is False
+    # preț indisponibil: fără distanță și fără semnal (înainte: preț 0 și „cumpără” imposibil de exclus)
+    assert watchlist_status(None, 100.0) == (None, 100.0, None, False)
+    assert watchlist_status(0.0, 100.0) == (None, 100.0, None, False)
+    # țintă goală în foaie (smart_to_float dă 0): fără distanță, fără semnal
+    assert watchlist_status(50.0, 0.0) == (50.0, None, None, False)
+    assert watchlist_status(float("nan"), float("nan")) == (None, None, None, False)

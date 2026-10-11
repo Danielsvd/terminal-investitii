@@ -29,11 +29,11 @@ from analytics.macro import yoy_pct, real_rate
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
-from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk
+from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number
+from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number, watchlist_status
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -1296,9 +1296,14 @@ def plot_correlation_matrix(tickers):
     if len(tickers) < 2: return None
     try:
         # 1. Descărcare și calcul
-        data = yf.download(tickers, period="1y", progress=False)['Close']
-        returns = data.pct_change().dropna()
-        corr_matrix = returns.corr()
+        data = close_frame(yf.download(tickers, period="1y", progress=False, auto_adjust=True), tickers)
+        # Doar zilele în care toate simbolurile au randament: fără randamente de 0 inventate pentru zilele fără ședință.
+        corr_matrix, corr_days = common_day_correlation(data, min_obs=60)
+        if corr_matrix.empty:
+            st.info(f"Corelațiile nu pot fi calculate: doar {corr_days} zile comune de tranzacționare (minimum 60) "
+                    "sau mai puțin de două simboluri cu istoric.")
+            return None
+        st.caption(f"Corelații pe {corr_days} zile comune de tranzacționare din ultimul an.")
         
         # 2. Text Heatmap
         text_matrix = []
@@ -2259,9 +2264,8 @@ def get_cross_asset_correlation():
         rename_map = {v: k for k, v in tickers.items()}
         data = data.rename(columns=rename_map)
         
-        # Calculăm randamentele și matricea de corelație (Pearson)
-        returns = data.pct_change().dropna()
-        corr_matrix = returns.corr()
+        # Randamente doar pe zilele comune (cripto se tranzacționează și în weekend): fără zerouri inventate.
+        corr_matrix, _ = common_day_correlation(data, min_obs=30)
         return corr_matrix
     except Exception as e:
         print(f"Eroare Cross-Asset: {e}")
@@ -6462,8 +6466,7 @@ def main():
                             if not valid_values.empty:
                                 # Luăm ultima valoare existentă (chiar dacă e de ieri)
                                 current_prices[col] = valid_values.iloc[-1]
-                            else:
-                                current_prices[col] = 0.0
+                            # fără date: simbolul lipsește din serie și apare „N/A”, nu preț 0
                         
                         # Convertim înapoi în Series pentru restul codului
                         live_data = pd.Series(current_prices)
@@ -6480,26 +6483,21 @@ def main():
                 target = smart_to_float(row['TargetPrice'])  # acceptă și formatul românesc ("25,5")
                 note = row['Notes']
                 
-                # Extragem prețul curent din seria curățată
-                try:
-                    curr = float(live_data.get(sym, 0))
-                except:
-                    curr = 0
-
-                # Calculăm distanța până la țintă
-                if curr > 0:
-                    dist_pct = ((curr - target) / curr) * 100
-                    is_buy = curr <= target # E sub prețul țintă?
+                # Preț sau țintă lipsă rămân lipsă („N/A”), nu 0; distanța e față de țintă, ca în cardul din analiză.
+                curr, target, dist_pct, is_buy = watchlist_status(live_data.get(sym), target)
+                if curr is None:
+                    status = "Fără preț"
+                elif target is None:
+                    status = "Fără țintă"
                 else:
-                    dist_pct = 0
-                    is_buy = False
+                    status = "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă"
                 
                 display_rows.append({
                     "Simbol": sym,
                     "Preț Curent": curr,
                     "Preț Țintă 🎯": target,
                     "Distanță (%)": dist_pct,
-                    "Recomandare": "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă",
+                    "Recomandare": status,
                     "Notă": note,
                     "_is_buy": is_buy 
                 })
@@ -6515,7 +6513,7 @@ def main():
 
             st.dataframe(
                 df_res.style.apply(highlight_buy, axis=1)
-                .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:.2f}%"}),
+                .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:+.2f}%"}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={
