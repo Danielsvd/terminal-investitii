@@ -2135,6 +2135,10 @@ def render_ledger_results():
                    + ", ".join(from_close + [f"curs {cur}/RON" for cur in fx_from_close]) + ".")
     if missing_fx:
         st.warning(f"⚠️ Curs valutar indisponibil pentru: **{', '.join(missing_fx)}**. Totalul în RON nu poate fi calculat.")
+    if st.button("🔄 Reîncarcă prețurile manuale", key="manual_prices_reload",
+                 help="Citește din nou foaia Preturi_manuale. Fără buton, modificările din foaie apar în cel mult 5 minute."):
+        load_manual_price_values.clear()  # golește doar cache-ul foii Preturi_manuale
+        st.rerun()
     manual_rows = valued[valued["PriceSource"] == ledger_calc.PRICE_MANUAL]
     if not manual_rows.empty:
         st.caption("ℹ️ Preț trecut de mână (foaia `Preturi_manuale`): " + "; ".join(
