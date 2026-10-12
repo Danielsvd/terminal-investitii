@@ -33,6 +33,7 @@ from analytics import simulation
 from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
+from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
@@ -1013,93 +1014,7 @@ def calculate_health_score_ext(info):
     
     return max(1, min(10, score)), pros, cons
 
-def get_sector_benchmarks(sector):
-    """Definește pragurile 'normale' în funcție de industrie."""
-    # Benchmarks implicite (Standard)
-    benchmarks = {"pe_threshold": 20, "roe_target": 0.12, "de_max": 150}
-    
-    # Ajustări pe sectoare specifice
-    sector_maps = {
-        "Technology": {"pe_threshold": 35, "roe_target": 0.20, "de_max": 100},
-        "Energy": {"pe_threshold": 12, "roe_target": 0.10, "de_max": 200},
-        "Financial Services": {"pe_threshold": 15, "roe_target": 0.10, "de_max": 400},
-        "Utilities": {"pe_threshold": 18, "roe_target": 0.08, "de_max": 300}
-    }
-    
-    return sector_maps.get(sector, benchmarks)
-    
-# Actualizăm funcția de audit să folosească aceste praguri
-def generate_advanced_audit_v2(info, alpha, beta, h_score):
-    """
-    Audit Instituțional Complet (6 Piloni).
-    Include protecție pentru date lipsă (NVS, BVB) și toate interpretările.
-    """
-    sector = info.get('sector') or 'sector necunoscut'
-    limits = get_sector_benchmarks(sector)
-    
-    # Valorile lipsă rămân None și pilonul respectiv e sărit. Înainte deveneau 0 și apăreau
-    # verdicte false („ROE 0%: eficiență sub-optimă", „0% datorii: structură sănătoasă").
-    pe = num(info, 'trailingPE') or 0
-    roe = num(info, 'returnOnEquity')
-    de = num(info, 'debtToEquity')
-    cr = num(info, 'currentRatio') or 0
-    
-    safe_alpha = alpha if alpha is not None else 0
-    safe_beta = beta
-    
-    audit = []
-    missing = [name for name, v in (("P/E", num(info, 'trailingPE')), ("ROE", roe), ("datorii", de),
-                                     ("lichiditate", num(info, 'currentRatio')), ("beta", beta)) if v is None]
-    if missing:
-        audit.append(f"ℹ️ **DATE LIPSĂ:** {', '.join(missing)}. Pilonii respectivi nu sunt evaluați.")
-
-    # --- 1. EVALUARE VS SECTOR ---
-    if pe > 0:
-        rel_price = pe / limits['pe_threshold']
-        if rel_price < 0.8 and roe > limits['roe_target']:
-            audit.append(f"💰 **EVALUARE:** Subevaluată în {sector}. P/E {pe:.1f} este atractiv față de media de {limits['pe_threshold']}.")
-        elif rel_price > 1.3:
-            audit.append(f"⚖️ **EVALUARE:** Scumpă raportat la sector ({pe:.1f} vs {limits['pe_threshold']}).")
-        else:
-            audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector} (P/E {pe:.1f}).")
-
-    # --- 2. PROFITABILITATE & EFICIENȚĂ ---
-    if roe is not None and roe > 0.25:
-        audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {roe*100:.1f}%). Management performant.")
-    elif roe is not None and roe < 0.10:
-        audit.append(f"📉 **PROFITABILITATE:** Eficiență sub-optimă ({roe*100:.1f}%). Capitalul nu produce suficient.")
-
-    # --- 3. SOLVABILITATE (DATORII) ---
-    if de is not None and de > limits['de_max']:
-        audit.append(f"🚩 **SOLVABILITATE:** Îndatorare peste limita sectorului ({de:.1f}%). Risc structural ridicat.")
-    elif de is not None:
-        audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({de:.1f}% debt/equity).")
-
-    # --- 4. LICHIDITATE (CASH-FLOW) ---
-    if cr > 0:
-        if cr < 1.0:
-            audit.append(f"❌ **LICHIDITATE:** Critică ({cr:.2f}). Firma depinde de finanțări externe pe termen scurt.")
-        elif cr > 1.5:
-            audit.append(f"💧 **LICHIDITATE:** Solidă ({cr:.2f}). Există suficient 'cash' pentru siguranță.")
-
-    # --- 5. PERFORMANȚĂ PIAȚĂ (ALPHA) ---
-    alpha_p = safe_alpha * 100
-    if safe_alpha > 0.02:
-        audit.append(f"📈 **PERFORMANȚĂ:** Alpha Pozitiv ({alpha_p:.1f}%). Randament peste indexul de referință.")
-    elif safe_alpha < -0.02:
-        audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({alpha_p:.1f}%). Activul pierde în fața pieței.")
-
-    # --- 6. RISC DE PIAȚĂ (BETA) ---
-    if safe_beta is None:
-        pass
-    elif safe_beta > 1.3:
-        audit.append(f"🎢 **VOLATILITATE (Beta {safe_beta:.2f}):** Risc ridicat. Mișcări mult mai ample decât piața.")
-    elif safe_beta < 0.8:
-        audit.append(f"🛡️ **VOLATILITATE (Beta {safe_beta:.2f}):** Profil defensiv. Stabilă în perioade de criză.")
-    else:
-        audit.append(f"⚖️ **VOLATILITATE (Beta {safe_beta:.2f}):** Mișcare sincronizată cu piața generală.")
-
-    return audit
+# get_sector_benchmarks și generate_advanced_audit_v2 sunt în analytics/audit.py (importate sus).
 
 ALTMAN_ZONE_TEXT = {
     "safe": ("ZONĂ SIGURĂ", "#3FB950", "Risc statistic scăzut de dificultate financiară."),
