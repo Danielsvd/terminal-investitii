@@ -1,0 +1,71 @@
+# Universul de control pentru testul istoric (piața SUA): ~55 de acțiuni S&P 500, toate cele 11 sectoare,
+# listate din 2012 sau mai devreme (META din mai 2012). Limită: sunt firmele care există și azi
+# (bias de supraviețuire), deci rezultatele sunt ușor optimiste.
+# Tehnologie
+AAPL
+MSFT
+NVDA
+ORCL
+CSCO
+INTC
+ADBE
+TXN
+# Comunicații
+GOOGL
+META
+VZ
+T
+DIS
+# Consum ciclic
+AMZN
+HD
+MCD
+NKE
+SBUX
+F
+# Consum de bază
+PG
+KO
+PEP
+WMT
+COST
+MO
+# Sănătate
+JNJ
+PFE
+MRK
+UNH
+ABT
+AMGN
+# Financiar
+JPM
+BAC
+WFC
+GS
+BRK-B
+AXP
+# Industrie
+CAT
+GE
+HON
+UNP
+MMM
+BA
+# Energie
+XOM
+CVX
+COP
+SLB
+# Utilități
+NEE
+DUK
+SO
+# Materiale
+LIN
+NEM
+APD
+NUE
+# Imobiliare
+AMT
+PLD
+O

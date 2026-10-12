@@ -5,3 +5,8 @@ __pycache__/
 venv/
 .streamlit/secrets.toml
 .DS_Store
+
+# Testul istoric: rezultate, cache de prețuri și liste private de simboluri (nu se publică)
+rezultat_*.csv
+tools/cache/
+simboluri_privat*.txt

@@ -1,0 +1,23 @@
+# Universul testului istoric pe BVB: companiile lichide. Simbolurile fără date sau cu istoric scurt
+# sunt raportate de script la final. Eșantion mic și corelat (BET e dominat de energie și bănci):
+# rezultatul e orientativ.
+TLV.RO
+BRD.RO
+SNP.RO
+SNG.RO
+TGN.RO
+SNN.RO
+H2O.RO
+EL.RO
+TEL.RO
+DIGI.RO
+ONE.RO
+M.RO
+TTS.RO
+BVB.RO
+SFG.RO
+AQ.RO
+ATB.RO
+COTE.RO
+TRP.RO
+WINE.RO
