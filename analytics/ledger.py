@@ -11,6 +11,7 @@ Convenții ale foii (o tranzacție pe rând):
 - O celulă goală înseamnă „lipsă” (NaN), niciodată 0.
 """
 import math
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -271,6 +272,59 @@ def xirr(flows, lo=-0.9999, hi=100.0, tol=1e-9, max_iter=200):
 NOMINAL_CLASSES = ("Obligatiuni",)      # fără preț de piață în sursele aplicației: evaluate la nominal
 BOND_NOMINAL = 100.0                    # titlurile de stat și obligațiunile din registru au nominal 100
 PRICE_LIVE, PRICE_CLOSE, PRICE_NOMINAL, PRICE_MISSING = "live", "ultima închidere", "nominal (proxy)", "lipsă"
+PRICE_MANUAL = "manual"                 # preț trecut de mână în foaia `Preturi_manuale`
+MANUAL_PRICE_COLUMNS = ("Symbol", "Price", "Date")
+MANUAL_DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S")
+
+
+def _manual_date(text):
+    """Data unui preț manual (formatele din MANUAL_DATE_FORMATS); None dacă lipsește sau nu poate fi citită."""
+    text = str(text or "").strip()
+    for fmt in MANUAL_DATE_FORMATS:
+        try:
+            return pd.Timestamp(datetime.strptime(text, fmt)).normalize()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_manual_prices(values):
+    """Prețurile trecute de mână în foaia `Preturi_manuale` (antet + rânduri, ca `get_all_values`).
+
+    Coloane: Symbol, Price, Date. Prețul e pe unitate, în moneda și unitatea din registru
+    (un titlu de stat cu nominal 100 cotat la 101,25% se trece 101,25).
+    Întoarce (dict simbol -> {"price": float, "date": Timestamp sau None}, probleme).
+    - Rândul cu prețul gol e ignorat (simbolul rămâne la regula obișnuită, de ex. nominal).
+    - Un preț nenumeric sau ≤ 0 e ignorat și raportat: nu devine 0.
+    - Dacă un simbol apare de mai multe ori, câștigă rândul cu data cea mai nouă
+      (la egalitate sau fără dată, ultimul rând), deci foaia poate păstra și istoricul.
+    """
+    if not values:
+        return {}, []
+    header = [str(h).strip() for h in values[0]]
+    missing = [c for c in MANUAL_PRICE_COLUMNS[:2] if c not in header]
+    if missing:
+        return {}, [f"Foaia Preturi_manuale nu are coloanele: {', '.join(missing)}."]
+    col = {name: header.index(name) for name in MANUAL_PRICE_COLUMNS if name in header}
+    best, problems = {}, []
+    for n, row in enumerate(values[1:], start=2):
+        cell = lambda name: (row[col[name]] if name in col and col[name] < len(row) else "")
+        symbol = str(cell("Symbol")).strip().upper()
+        raw_price = str(cell("Price")).strip()
+        if not symbol or not raw_price:
+            continue
+        price = _cell_to_float(raw_price)
+        if pd.isna(price) or price <= 0:
+            problems.append(f"Preturi_manuale, rândul {n}: preț invalid pentru {symbol} („{raw_price}”).")
+            continue
+        raw_date = str(cell("Date")).strip()
+        date = _manual_date(raw_date)
+        if raw_date and date is None:
+            problems.append(f"Preturi_manuale, rândul {n}: dată necitită pentru {symbol} („{raw_date}”); folosește AAAA-LL-ZZ.")
+        key = (date if date is not None else pd.Timestamp.min, n)
+        if symbol not in best or key >= best[symbol][0]:
+            best[symbol] = (key, {"price": float(price), "date": date})
+    return {symbol: item[1] for symbol, item in best.items()}, problems
 
 
 def _usable_price(mapping, symbol):
@@ -278,33 +332,47 @@ def _usable_price(mapping, symbol):
     return None if (price is None or pd.isna(price) or price <= 0) else float(price)
 
 
-def value_open_positions(positions, prices, close_prices=None, nominal_classes=NOMINAL_CLASSES, nominal=BOND_NOMINAL):
+def value_open_positions(positions, prices, close_prices=None, nominal_classes=NOMINAL_CLASSES, nominal=BOND_NOMINAL,
+                         manual_prices=None):
     """Evaluează pozițiile deschise: valoare de piață și profit nerealizat.
 
     prices: dict simbol -> preț curent sau None. close_prices: dict simbol -> ultima închidere,
-    folosită doar când prețul curent lipsește (sursa apare în `PriceSource`). Clasele din
-    `nominal_classes` nu au preț de piață disponibil și se evaluează la nominal; e un proxy
-    și e marcat ca atare. Fără niciun preț, valoarea rămâne NaN (nu 0: ar apărea ca pierdere de 100%).
+    folosită doar când prețul curent lipsește (sursa apare în `PriceSource`).
+    manual_prices: dict simbol -> {"price", "date"} din `parse_manual_prices`.
+    Ordinea surselor:
+    - clasele din `nominal_classes` (fără preț de piață în sursele aplicației): preț manual,
+      altfel nominal, care e un proxy și e marcat ca atare;
+    - restul: preț live, ultima închidere, apoi preț manual (doar când piața nu dă nimic).
+    Fără niciun preț, valoarea rămâne NaN (nu 0: ar apărea ca pierdere de 100%).
     Întoarce doar pozițiile cu cantitate > 0, cu coloanele în plus
-    Price, PriceSource, MarketValue, Unrealized, UnrealizedPct.
+    Price, PriceSource, PriceDate (doar la preț manual), MarketValue, Unrealized, UnrealizedPct.
     """
-    cols = list(positions.columns) + ["Price", "PriceSource", "MarketValue", "Unrealized", "UnrealizedPct"]
+    cols = list(positions.columns) + ["Price", "PriceSource", "PriceDate", "MarketValue", "Unrealized", "UnrealizedPct"]
     held = positions[positions["Quantity"] > QTY_EPS].copy()
     if held.empty:
         return pd.DataFrame(columns=cols)
-    price_list, source_list = [], []
+    price_list, source_list, date_list = [], [], []
     for rec in held.itertuples(index=False):
+        entry = (manual_prices or {}).get(str(rec.Symbol).upper())
+        manual = _usable_price({rec.Symbol: entry["price"]}, rec.Symbol) if entry else None
+        manual_date = entry.get("date") if entry else None
         if rec.Class in nominal_classes:
-            price_list.append(float(nominal)); source_list.append(PRICE_NOMINAL)
+            if manual is not None:
+                price_list.append(manual); source_list.append(PRICE_MANUAL); date_list.append(manual_date)
+            else:
+                price_list.append(float(nominal)); source_list.append(PRICE_NOMINAL); date_list.append(None)
             continue
         live, close = _usable_price(prices, rec.Symbol), _usable_price(close_prices, rec.Symbol)
         if live is not None:
-            price_list.append(live); source_list.append(PRICE_LIVE)
+            price_list.append(live); source_list.append(PRICE_LIVE); date_list.append(None)
         elif close is not None:
-            price_list.append(close); source_list.append(PRICE_CLOSE)
+            price_list.append(close); source_list.append(PRICE_CLOSE); date_list.append(None)
+        elif manual is not None:
+            price_list.append(manual); source_list.append(PRICE_MANUAL); date_list.append(manual_date)
         else:
-            price_list.append(np.nan); source_list.append(PRICE_MISSING)
+            price_list.append(np.nan); source_list.append(PRICE_MISSING); date_list.append(None)
     held["Price"], held["PriceSource"] = price_list, source_list
+    held["PriceDate"] = pd.Series([pd.NaT if d is None else d for d in date_list], index=held.index, dtype="datetime64[ns]")
     held["MarketValue"] = held["Quantity"] * held["Price"]
     held["Unrealized"] = held["MarketValue"] - held["CostBasis"]
     held["UnrealizedPct"] = np.where(held["CostBasis"] > 0, held["Unrealized"] / held["CostBasis"].where(held["CostBasis"] > 0) * 100, np.nan)

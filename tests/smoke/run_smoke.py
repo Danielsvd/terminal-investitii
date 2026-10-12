@@ -309,6 +309,9 @@ SHEETS = {
         ["2024-05-16 10:00:00", "AAPL", "Actiuni SUA", "TAX", "", "", "USD", "0", "-0,01", "BrokerB", "u3", ""],
         ["data greșită", "AAPL", "Actiuni SUA", "BUY", "1", "1", "USD", "0", "-1", "BrokerB", "u4", ""],
     ],
+    # preț manual pentru obligațiunea din registrul fals; data de azi, ca să nu apară avertismentul de preț vechi
+    "Preturi_manuale": [["Symbol", "Price", "Date"], ["R9901AE", "101,25", __import__("datetime").date.today().isoformat()],
+                        ["R9902AE", "", ""]],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
                ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
 }
@@ -502,6 +505,8 @@ def main():
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
+            at.button(key="manual_prices_reload").click().run()
+            check(at, "3. Portofoliu după reîncărcarea prețurilor manuale")
             at.toggle(key="ledger_curve").set_value(True).run()
             check(at, "3. Portofoliu cu curba reală din registru")
         if section == "7. Scanner Volum":

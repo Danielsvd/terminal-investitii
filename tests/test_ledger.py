@@ -459,3 +459,66 @@ def test_curba_nu_sare_la_o_consolidare_datata_diferit():
     # fără corecție, 17 august ar fi 1000 × 24 + 600 = 24.600
     assert list(curve) == pytest.approx([3000.0, 3000.0, 3000.0, 3000.0, 3050.0, 3050.0])
     assert fixes == [("TTT.RO", idx[2])]
+
+
+# --- Prețuri manuale (foaia `Preturi_manuale`) --------------------------------
+
+def test_parse_manual_prices_format_ro_pret_gol_si_pret_invalid():
+    prices, problems = L.parse_manual_prices([
+        ["Symbol", "Price", "Date"],
+        ["R9901AE", "101,25", "2026-10-10"],
+        ["r9902ae", "", ""],                      # preț gol: ignorat, fără problemă
+        ["R9903AE", "abc", "2026-10-10"],         # nenumeric: ignorat și raportat, nu devine 0
+        ["R9904AE", "0", "2026-10-10"],           # 0 nu e preț
+        ["R9905AE", "99,5", "10.10.2026"],        # dată în format românesc
+    ])
+    assert set(prices) == {"R9901AE", "R9905AE"}
+    assert prices["R9901AE"] == {"price": 101.25, "date": pd.Timestamp("2026-10-10")}
+    assert prices["R9905AE"]["date"] == pd.Timestamp("2026-10-10")
+    assert len(problems) == 2 and "R9903AE" in problems[0] and "R9904AE" in problems[1]
+
+
+def test_parse_manual_prices_castiga_data_cea_mai_noua_si_data_necitita_e_semnalata():
+    prices, problems = L.parse_manual_prices([
+        ["Symbol", "Price", "Date"],
+        ["R9901AE", "102", "2026-10-01"],
+        ["R9901AE", "98", "2026-07-01"],          # mai vechi, deși e mai jos în foaie
+        ["R9902AE", "97", "ieri"],
+    ])
+    assert prices["R9901AE"]["price"] == 102.0
+    assert prices["R9902AE"] == {"price": 97.0, "date": None}
+    assert len(problems) == 1 and "R9902AE" in problems[0]
+
+
+def test_parse_manual_prices_foaie_goala_sau_fara_coloane():
+    assert L.parse_manual_prices([]) == ({}, [])
+    assert L.parse_manual_prices(None) == ({}, [])
+    prices, problems = L.parse_manual_prices([["Simbol", "Pret"], ["R9901AE", "101"]])
+    assert prices == {} and "Symbol" in problems[0]
+
+
+def test_value_open_positions_pret_manual_la_obligatiuni_si_ca_rezerva_la_actiuni():
+    df, pos, _ = _valued({})
+    manual = {"R9901AE": {"price": 101.25, "date": pd.Timestamp("2026-10-10")},
+              "AAA.RO": {"price": 5.0, "date": None},
+              "CCC.RO": {"price": 19.0, "date": None}}
+    v = L.value_open_positions(pos, {"AAA.RO": 12.0, "CCC.RO": None}, manual_prices=manual).set_index("Symbol")
+    # obligațiune: 5 × 101,25 = 506,25 ; cost 495 ; nerealizat 11,25
+    assert v.loc["R9901AE", "MarketValue"] == pytest.approx(506.25)
+    assert v.loc["R9901AE", "Unrealized"] == pytest.approx(11.25)
+    assert v.loc["R9901AE", "PriceSource"] == L.PRICE_MANUAL
+    assert v.loc["R9901AE", "PriceDate"] == pd.Timestamp("2026-10-10")
+    # acțiune cu preț de piață: manualul NU îl înlocuiește
+    assert v.loc["AAA.RO", "Price"] == 12.0 and v.loc["AAA.RO", "PriceSource"] == L.PRICE_LIVE
+    # acțiune fără niciun preț de piață: manualul e folosit ca rezervă
+    assert v.loc["CCC.RO", "Price"] == 19.0 and v.loc["CCC.RO", "PriceSource"] == L.PRICE_MANUAL
+    # clasa de obligațiuni nu mai e marcată proxy când toate au preț manual
+    res = L.class_results(df, pos, v.reset_index(), "2025-01-01")
+    assert not res.loc[res["Class"] == "Obligatiuni", "Proxy"].iloc[0]
+
+
+def test_value_open_positions_fara_pret_manual_ramane_la_nominal():
+    _, pos, _ = _valued({})
+    v = L.value_open_positions(pos, {}, manual_prices={"ALTCEVA": {"price": 1.0, "date": None}}).set_index("Symbol")
+    assert v.loc["R9901AE", "Price"] == 100.0 and v.loc["R9901AE", "PriceSource"] == L.PRICE_NOMINAL
+    assert pd.isna(v.loc["R9901AE", "PriceDate"])
