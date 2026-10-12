@@ -505,6 +505,8 @@ def main():
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
+            at.button(key="manual_prices_reload").click().run()
+            check(at, "3. Portofoliu după reîncărcarea prețurilor manuale")
             at.toggle(key="ledger_curve").set_value(True).run()
             check(at, "3. Portofoliu cu curba reală din registru")
         if section == "7. Scanner Volum":
