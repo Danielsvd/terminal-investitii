@@ -595,7 +595,9 @@ BVB_HELP = {
     "rsi": "RSI 14 (Wilder), doar descriptiv. În testul pe BVB nu a dat semnal de intrare.",
     "roe": "ROE TTM = profit net pe 12 luni / capital propriu. În test NU a prezis randamentul (IC ≈ 0): informație, fără puncte.",
     "marja": "Marja netă TTM = profit net / cifră de afaceri pe 12 luni. În test NU a prezis randamentul: informație.",
-    "indatorare": "Datorii totale / capital propriu, din ultimul raport. În test NU a prezis randamentul: informație de risc.",
+    "indatorare": ("Datorii TOTALE (inclusiv furnizori, provizioane, venituri în avans) / capital propriu, din ultimul raport "
+                   "din fișier. Diferă de cardul „Datorii/Capital” din Yahoo, care ia doar datoria financiară. "
+                   "În test NU a prezis randamentul: informație de risc."),
 }
 
 
@@ -685,7 +687,7 @@ def render_bvb_decision(real_sym, hist):
         i1, i2, i3 = st.columns(3)
         i1.metric("ROE TTM", _bvb_fmt(me["ROE"], "pct"), help=BVB_HELP["roe"])
         i2.metric("Marjă netă TTM", _bvb_fmt(me["marja"], "pct"), help=BVB_HELP["marja"])
-        i3.metric("Datorii / capital propriu", _bvb_fmt(me["indatorare"], "x"), help=BVB_HELP["indatorare"])
+        i3.metric("Datorii totale / capital propriu", _bvb_fmt(me["indatorare"], "x"), help=BVB_HELP["indatorare"])
 
     with st.expander("Piotroski simplificat: criteriile"):
         if me["piotroski"]:
@@ -699,8 +701,10 @@ def render_bvb_decision(real_sym, hist):
                 rows_p.append({"Criteriu": c["criteriu"], "Valori (an trecut → acum)": v_txt,
                                "Rezultat": {True: "✓", False: "✗", None: "N/A"}[c["trece"]]})
             st.dataframe(pd.DataFrame(rows_p), hide_index=True, width='stretch')
-            st.caption(f"Raportul {me['raport_flux']} față de același raport de acum un an. "
-                       "N/A la emisiune = numărul de acțiuni a crescut de peste 1,65× (split sau acțiuni gratuite).")
+            st.caption(f"Raportul {me['raport_flux']} față de același raport de acum un an (TTM), din fișierul tău. "
+                       "N/A la emisiune = numărul de acțiuni a crescut de peste 1,65× (split sau acțiuni gratuite). "
+                       "Diferă de cardul „Piotroski F-Score” de mai jos (din Yahoo): acela compară ultimele două exerciții "
+                       "anuale, pe 9 criterii, și ia doar datoria financiară pe termen lung, nu toate datoriile pe termen lung.")
         else:
             st.caption("Fără raport comparabil de acum un an.")
 
