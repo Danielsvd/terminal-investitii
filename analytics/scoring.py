@@ -183,26 +183,63 @@ def technical_components(close, rsi_last):
 
 TECH_LABELS = {"trend": "Trend (SMA 50/200)", "momentum": "Momentum 12-1 luni", "rsi": "RSI 14 (Wilder)"}
 
+# Componentele care intră în sub-scorul tehnic. RSI NU intră: testul istoric (2012–2025) a arătat
+# IC ≈ 0 pe SUA și IC negativ pe BVB (−0,15: „supravândut" a continuat să scadă). RSI rămâne doar descriptiv.
+TECH_SCORED = ("trend", "momentum")
+
 
 def technical_pillars(close, rsi_last):
-    """Pilonii tehnici, gata de `combine`, cu ponderi egale între ei."""
+    """Pilonii tehnici care intră în scor (trend, momentum), cu ponderi egale."""
     comp = technical_components(close, rsi_last)
-    mom, rsi = comp["raw"]["momentum_12_1"], comp["raw"]["rsi"]
+    mom = comp["raw"]["momentum_12_1"]
     return [
         Pillar("trend", TECH_LABELS["trend"], "tehnic", comp["trend"]),
         Pillar("momentum", TECH_LABELS["momentum"], "tehnic", comp["momentum"],
                detail="N/A" if mom is None else f"{mom*100:+.1f}%"),
-        Pillar("rsi", TECH_LABELS["rsi"], "tehnic", comp["rsi"],
-               detail="N/A" if rsi is None else f"{rsi:.0f}"),
     ]
 
 
 def subscore_from_components(comp):
-    """Sub-scorul tehnic 0–100 din componentele lui `technical_components`: media celor cu date, sau None."""
-    s = _weighted_mean([(comp[k], 1.0) for k in ("trend", "momentum", "rsi")])
+    """Sub-scorul tehnic 0–100: media trendului și a momentumului (cele cu date), sau None."""
+    s = _weighted_mean([(comp[k], 1.0) for k in TECH_SCORED])
     return None if s is None else round(s * 100, 1)
 
 
-def technical_subscore(close, rsi_last):
-    """Sub-scorul tehnic 0–100 (media componentelor cu date) sau None."""
+def technical_subscore(close, rsi_last=None):
+    """Sub-scorul tehnic 0–100 (trend + momentum) sau None. `rsi_last` e păstrat pentru compatibilitate."""
     return subscore_from_components(technical_components(close, rsi_last))
+
+
+def rsi_description(rsi):
+    """Text descriptiv pentru RSI, fără semnal de intrare (testul istoric nu a confirmat unul)."""
+    if not _valid(rsi):
+        return "N/A"
+    if rsi >= 70:
+        zone = "supracumpărat"
+    elif rsi <= 30:
+        zone = "supravândut"
+    else:
+        zone = "neutru"
+    return f"{float(rsi):.0f} ({zone})"
+
+
+# Pragurile momentului la BVB, din testul istoric 2012–2025 (26 de companii, exces față de media BVB la 6 luni):
+#   ≥ 80: +6,1%, 54% cazuri pozitive (N = 1.259); 40–80: −1,5%, 40% (N = 769); < 40: −7,2%, 32% (N = 829). Stabile în 2012–2018 și 2019–2025.
+MOMENT_BANDS_BVB = ((80.0, "FAVORABIL", "#3FB950"), (40.0, "NEUTRU", "#D29922"), (0.0, "NEFAVORABIL", "#F85149"))
+
+
+def moment_label(score, is_bvb):
+    """(eticheta, culoarea, nota) pentru sub-scorul tehnic.
+
+    BVB: verdict pe pragurile testate. Alte piețe: fără verdict (testul pe acțiunile mari din SUA
+    nu a găsit putere de predicție), doar valoarea.
+    """
+    if not _valid(score):
+        return "N/A", "#8B949E", "Istoric de preț insuficient (trendul cere 50 de ședințe, momentumul 12 luni)."
+    if not is_bvb:
+        return ("FĂRĂ VERDICT", "#8B949E",
+                "Testul istoric pe acțiunile mari din SUA (2012–2025) nu a găsit putere de predicție; valoare descriptivă.")
+    for floor, label, color in MOMENT_BANDS_BVB:
+        if score >= floor:
+            return label, color, "Prag testat pe BVB 2012–2025."
+    return MOMENT_BANDS_BVB[-1][1], MOMENT_BANDS_BVB[-1][2], "Prag testat pe BVB 2012–2025."

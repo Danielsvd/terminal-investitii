@@ -2,8 +2,8 @@
 import pandas as pd
 import pytest
 
-from analytics.scoring import (Pillar, combine, linear_score, momentum_12_1, technical_pillars,
-                               technical_subscore, trend_score, verdict)
+from analytics.scoring import (Pillar, combine, linear_score, moment_label, momentum_12_1, rsi_description,
+                               technical_pillars, technical_subscore, trend_score, verdict)
 
 
 # --- linear_score ---------------------------------------------------------
@@ -122,9 +122,35 @@ def test_momentum_istoric_insuficient():
 def test_subscor_tehnic_si_piloni():
     idx = pd.bdate_range("2024-01-01", periods=250)
     close = pd.Series(range(1, 251), index=idx, dtype="float64")
-    # Trend 1,0; momentum N/A (sub 12 luni); RSI 50 → 0,5 → (1,0 + 0,5) / 2 = 0,75 → 75,0
-    assert technical_subscore(close, 50) == 75.0
+    # Trend 1,0; momentum N/A (sub 12 luni); RSI nu intră în scor → 100,0
+    assert technical_subscore(close, 50) == 100.0
+    assert technical_subscore(close) == 100.0
     pillars = technical_pillars(close, 50)
-    assert [p.score for p in pillars] == [1.0, None, 0.5]
-    assert pillars[1].detail == "N/A" and pillars[2].detail == "50"
+    assert [p.key for p in pillars] == ["trend", "momentum"]
+    assert [p.score for p in pillars] == [1.0, None]
+    assert pillars[1].detail == "N/A"
     assert technical_subscore(close.iloc[:10], None) is None
+
+
+def test_subscor_tehnic_media_trend_momentum():
+    s = _calendar_series()                       # trend: 1..; momentum +20% → (0,20 + 0,30) / 0,60 = 0,8333
+    comp_trend = trend_score(s)
+    expected = round((comp_trend + (0.20 + 0.30) / 0.60) / 2 * 100, 1)
+    assert technical_subscore(s, 99) == expected  # RSI 99 nu schimbă nimic
+    assert technical_subscore(s, 1) == expected
+
+
+def test_rsi_doar_descriptiv():
+    assert rsi_description(75) == "75 (supracumpărat)"
+    assert rsi_description(28.4) == "28 (supravândut)"
+    assert rsi_description(50) == "50 (neutru)"
+    assert rsi_description(None) == "N/A"
+
+
+def test_moment_bvb_si_alte_piete():
+    assert moment_label(80, True)[0] == "FAVORABIL"
+    assert moment_label(79.9, True)[0] == "NEUTRU"
+    assert moment_label(40, True)[0] == "NEUTRU"
+    assert moment_label(39.9, True)[0] == "NEFAVORABIL"
+    assert moment_label(95, False)[0] == "FĂRĂ VERDICT"
+    assert moment_label(None, True)[0] == "N/A"

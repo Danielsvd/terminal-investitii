@@ -152,7 +152,7 @@ def main(argv=None):
             ic = _ic_columns(rank_ic(div, col, "fwd_3m"))
             summary.append(pd.DataFrame([{"scor": f"{col} [doar luni cu dividend]", "orizont_luni": 3, **ic,
                                           "N": int(div[col].notna().sum())}]))
-    rez = pd.concat(summary, ignore_index=True)
+    rez = pd.DataFrame.from_records([row for t in summary for row in t.to_dict("records")])
     rez_path = str(Path(args.out).with_suffix("")) + "_rezumat.csv"
     rez.to_csv(rez_path, index=False)
 

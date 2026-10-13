@@ -138,6 +138,8 @@ def bucket_summary(df, score_col, ret_col, bins=SCORE_BINS, min_symbols=MIN_SYMB
         "pct_pozitiv": g.apply(lambda s: float((s > 0).mean()) if len(s) else np.nan),
         "nr_date": data.groupby("treapta", observed=False)["date"].nunique(),
     })
+    table["N"] = table["N"].astype(int)
+    table["nr_date"] = table["nr_date"].fillna(0).astype(int)
     return table
 
 
