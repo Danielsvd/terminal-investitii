@@ -13,6 +13,7 @@ Rulare, din rădăcina repo-ului:
 Cod de ieșire 0 = nicio excepție și niciun mesaj de eroare neașteptat.
 """
 import os
+import re
 import sys
 import time
 import types
@@ -539,6 +540,12 @@ def main():
                 text = str(el.value)
                 bucket = notes if any(m in text for m in EXPECTED_MESSAGES) else problems
                 bucket.append(f"[{label}] st.{kind}: {text[:200]}")
+        # HTML în st.markdown: o linie goală urmată de o linie indentată cu 4+ spații transformă
+        # restul blocului în cod (Daniel a văzut `<li style=...>` afișat ca text, 13.10.2026).
+        for el in at.markdown:
+            text = str(el.value)
+            if "<li" in text and re.search(r"\n[ \t]*\n {4,}<", text):
+                problems.append(f"[{label}] HTML afișat ca bloc de cod: {text[:120]!r}")
 
     at = AppTest.from_file(os.path.join(APP_DIR, "app.py"), default_timeout=300)
     at.secrets["gcp_service_account"] = {"type": "service_account"}
