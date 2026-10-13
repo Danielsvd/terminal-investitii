@@ -193,3 +193,38 @@ def final_verdict(tier, moment_score):
                 f"Momentul nu se poate calcula. Istoric, treapta fundamentală: {m:+.1%} la 6 luni, {p:.0%} cazuri pozitive (N = {n}).")
     lab, col, (m, p, n) = TWO_STEP[(int(tier), band)]
     return lab, col, f"Istoric, combinația aceasta: {m:+.1%} față de media BVB la 6 luni, {p:.0%} cazuri pozitive (N = {n})."
+
+
+MOMENT_LABELS = {"high": ("FAVORABIL", "#3FB950"), "mid": ("NEUTRU", "#D29922"), "low": ("NEFAVORABIL", "#F85149")}
+
+
+def score_rank(scores, symbol):
+    """(locul, din câte) al lui `symbol` după scor, 1 = cel mai bun; (None, n) dacă nu are scor."""
+    valid = scores.dropna()
+    if symbol not in valid.index:
+        return None, len(valid)
+    return int((valid > valid[symbol]).sum()) + 1, len(valid)
+
+
+def verdict_banner(tier, score, rank, n, moment_score):
+    """Elementele bandei de verdict, fiecare pas cu eticheta și scorul lui (fără etichete combinate).
+
+    Întoarce dict: fund_label, fund_color, fund_detail, moment_label, moment_color, moment_detail,
+    border (culoarea combinației din test) și text (rezultatul istoric al combinației)."""
+    if tier is None or pd.isna(tier):
+        fund_label, fund_color = "DATE INSUFICIENTE", "#8B949E"
+    else:
+        fund_label, fund_color = TIER_LABELS[int(tier)]
+    fund_detail = "N/A" if score is None or pd.isna(score) else f"{score:.0f}/100"
+    if rank is not None and n:
+        fund_detail += f" · locul {rank} din {n}"
+    band = moment_band(moment_score)
+    if band is None:
+        moment_label, moment_color, moment_detail = "N/A", "#8B949E", "istoric de preț insuficient"
+    else:
+        moment_label, moment_color = MOMENT_LABELS[band]
+        moment_detail = f"{moment_score:.0f}/100"
+    _, border, text = final_verdict(tier, moment_score)
+    return {"fund_label": fund_label, "fund_color": fund_color, "fund_detail": fund_detail,
+            "moment_label": moment_label, "moment_color": moment_color, "moment_detail": moment_detail,
+            "border": border, "text": text}

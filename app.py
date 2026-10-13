@@ -35,7 +35,7 @@ import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description
-from analytics.bvb_fundamental import current_indicators, cross_section, final_verdict, GN_LIMIT, TEST_NOTE
+from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
@@ -647,12 +647,20 @@ def render_bvb_decision(real_sym, hist):
     comp = technical_components(close, hist["RSI"].iloc[-1] if "RSI" in getattr(hist, "columns", []) else None)
     m_label, m_color, m_note = moment_label(moment, True)
     tier = row["treapta"]
-    v_label, v_color, v_text = final_verdict(tier, moment)
+    rank, n_ranked = score_rank(cs["scor"], tk)
+    vb = verdict_banner(tier, row["scor"], rank, n_ranked, moment)
 
     st.markdown(f"""
-        <div style="background:{v_color}1A; border:1px solid {v_color}66; border-radius:12px; padding:14px; margin:8px 0 14px 0;">
-            <div style="color:{v_color}; font-weight:bold; font-size:18px;">{html.escape(v_label)}</div>
-            <div style="color:#C9D1D9; font-size:13px; margin-top:4px;">{html.escape(v_text)}</div>
+        <div style="background:#161B22; border:1px solid {vb['border']}88; border-radius:12px; padding:14px; margin:8px 0 14px 0;">
+            <div style="display:flex; flex-wrap:wrap; gap:28px; align-items:baseline;">
+                <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Fundamental</span><br>
+                    <span style="color:{vb['fund_color']}; font-weight:bold; font-size:20px;">{html.escape(vb['fund_label'])}</span>
+                    <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(vb['fund_detail'])}</span></div>
+                <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Moment</span><br>
+                    <span style="color:{vb['moment_color']}; font-weight:bold; font-size:20px;">{html.escape(vb['moment_label'])}</span>
+                    <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(vb['moment_detail'])}</span></div>
+            </div>
+            <div style="color:#C9D1D9; font-size:13px; margin-top:8px;">{html.escape(vb['text'])}</div>
         </div>""", unsafe_allow_html=True)
 
     n_cmp = int(row["n_comparate"]) if pd.notna(row["n_comparate"]) else 0
