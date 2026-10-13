@@ -571,12 +571,28 @@ def get_bvb_file_prices(symbols):
     return {sym: positive_or_none(prices.get(f"{sym}.RO")) for sym in symbols}
 
 
+def bvb_file_market_cap(symbol, price):
+    """Capitalizarea unui emitent BVB din fișierele „Analiză companii”: prețul dat × acțiunile din ultimul
+    raport (aceeași regulă ca în secțiunea „Decizie BVB”, inclusiv verificarea de split). None dacă lipsește."""
+    if price is None:
+        return None
+    files, err = list_company_files()
+    if err:
+        return None
+    data = build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+    df = data["companii"].get(str(symbol).upper().replace(".RO", ""))
+    if df is None:
+        return None
+    mcap = current_indicators(df, price)["mcap"]
+    return None if pd.isna(mcap) else float(mcap)
+
+
 BVB_HELP = {
     "scor": ("Media percentilelor a patru indicatori față de celelalte companii BVB din fișierele tale "
              "(P/E, P/BV, randament dividend, Piotroski). 100 = cea mai bună pe toți, 0 = cea mai slabă. "
              "Treimea de sus = FAVORABIL, mijlocul = NEUTRU, treimea de jos = NEFAVORABIL. "
              "Test 2017–2026: treimea de sus a bătut media BVB cu +6,0% la 6 luni (56% cazuri pozitive), "
-             "treimea de jos a rămas cu −7,3% în urmă (32% pozitive)."),
+             "treimea de jos a rămas cu −7,0% în urmă (33% pozitive)."),
     "pe": ("P/E TTM = capitalizare (preț curent × acțiuni din ultimul raport) / profit net pe ultimele 12 luni, "
            "construit din cifrele cumulate din fișier. Mai mic = mai ieftin. Test: ieftinul a bătut scumpul (IC +0,17)."),
     "pbv": ("P/BV = capitalizare / capital propriu din ultimul raport. Mai mic = mai ieftin raportat la activul net. "
@@ -3283,6 +3299,8 @@ def main():
             p_has_list = bool(bvb_sector_peers(real_sym) or bvb_regional_peers(real_sym)) if p_is_bvb else bool(peer_list(real_sym, p_sector))
             if p_is_bvb:
                 own_row["Sursă"] = ""
+                if own_row["Capitalizare"] is None:
+                    own_row["Capitalizare"] = bvb_file_market_cap(real_sym, positive_or_none(hist["Close"].iloc[-1]) if hist is not None and not hist.empty else None)
                 bvb_sheet_data = load_bvb_fundamentals()
                 bvb_not_in_sheet = []
                 bvb_peer_prices = get_bvb_peer_prices(tuple(bvb_sector_peers(real_sym))) if bvb_sector_peers(real_sym) else {}
@@ -3296,6 +3314,7 @@ def main():
                     if b_row is None:
                         bvb_not_in_sheet.append(f"{b_sym}.RO")
                     else:
+                        b_row["Capitalizare"] = bvb_file_market_cap(b_sym, bvb_peer_prices.get(b_sym))
                         b_source = "foaie, preț curent" if "trailingPE" in b_repriced else "foaie, preț vechi"
                         peer_rows.append(dict(b_row, **{"Sursă": b_source}))
                 if bvb_not_in_sheet:
@@ -3379,7 +3398,9 @@ def main():
                           "La P/E și P/BV valorile negative sunt excluse. Eșantionul e mic și ales manual (companii mari): "
                           "arată unde se situează compania, nu dacă e scumpă sau ieftină.")
                 if p_region == "EU" or p_is_bvb:
-                    p_note += " Capitalizările sunt în moneda fiecărei burse; rapoartele nu depind de monedă."
+                    p_note += (" Capitalizările sunt în moneda fiecărei burse; rapoartele nu depind de monedă. La companiile BVB din foaie, "
+                               "capitalizarea = prețul curent × acțiunile din ultimul raport din fișierele „Analiză companii” "
+                               "(N/A dacă emitentul nu are fișier sau prețul lipsește).")
                 if p_is_bvb:
                     p_note += (" ROE, ROA și marja netă se compară direct între țări. P/E și P/BV nu: rata fără risc diferă între monede "
                                "(în RON e mult peste cea în EUR), deci un multiplu mai mic la București nu înseamnă, singur, subevaluare. "
