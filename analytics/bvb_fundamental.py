@@ -228,3 +228,79 @@ def verdict_banner(tier, score, rank, n, moment_score):
     return {"fund_label": fund_label, "fund_color": fund_color, "fund_detail": fund_detail,
             "moment_label": moment_label, "moment_color": moment_color, "moment_detail": moment_detail,
             "border": border, "text": text}
+
+
+_FACTOR_TEXT = {
+    # cheie: (nume, cheia valorii, formulare când e mai bun, formulare când e mai slab)
+    "EP": ("P/E", "PE", "mai ieftin raportat la profit decât", "mai scump raportat la profit decât"),
+    "BP": ("P/BV", "PBV", "mai ieftin raportat la capitalul propriu decât", "mai scump raportat la capitalul propriu decât"),
+    "DY": ("Randamentul dividendului", "DY", "dividend mai mare decât", "dividend mai mic decât"),
+    "PIO": ("Piotroski simplificat", "PIO", "s-a îmbunătățit mai mult decât", "s-a îmbunătățit mai puțin decât"),
+}
+_PIO_FAIL = {
+    "ROA TTM pozitiv": "ROA negativ",
+    "ROA în creștere": "ROA a scăzut",
+    "Lichiditate curentă în creștere": "lichiditatea curentă a scăzut",
+    "Datorii pe termen lung / active în scădere": "datoriile pe termen lung / active au crescut",
+    "Fără emisiune de acțiuni": "s-au emis acțiuni noi",
+    "Rotația activelor în creștere": "rotația activelor a scăzut",
+}
+
+
+def _value_text(key, me):
+    v = me.get(_FACTOR_TEXT[key][1])
+    if v is None or pd.isna(v):
+        return "N/A"
+    if key == "DY":
+        return f"{v * 100:.1f}%"
+    if key == "PIO":
+        return f"{v:.1f}/6"
+    return f"{v:.2f}"
+
+
+def _pio_change(c):
+    v = c.get("valoare")
+    if isinstance(v, tuple) and all(x is not None and pd.notna(x) for x in v):
+        pct = c["criteriu"].startswith("ROA") or "active" in c["criteriu"]
+        fmt = (lambda x: f"{x * 100:.1f}%") if pct and "Rotația" not in c["criteriu"] else (lambda x: f"{x:.2f}")
+        return f" ({fmt(v[0])} → {fmt(v[1])})"
+    return ""
+
+
+def explain_fundamental(me, cs, symbol):
+    """Explicația pasului fundamental: (puncte tari, la mijloc, puncte slabe, alte observații), liste de șiruri.
+
+    Pentru fiecare indicator: față de câte din celelalte companii din fișiere stă mai bine sau mai rău.
+    Treimea de sus = punct tare, treimea de jos = punct slab."""
+    strong, middle, weak, notes = [], [], [], []
+    for key, (name, _, good, bad) in _FACTOR_TEXT.items():
+        col = cs[key].dropna() if key in cs else pd.Series(dtype=float)
+        mine = cs.at[symbol, key] if symbol in cs.index else np.nan
+        if pd.isna(mine) or len(col) < 2:
+            notes.append(f"{name}: N/A (lipsesc date).")
+            continue
+        others = len(col) - 1
+        worse, better = int((col < mine).sum()), int((col > mine).sum())
+        ties = others - worse - better
+        position = (worse + 0.5 * ties) / others          # rangul mediu: egalitățile contează pe jumătate
+        tie_txt = f", la egalitate cu {ties / others:.0%}" if ties else ""
+        head = f"{name} {_value_text(key, me)} — "
+        if position >= 2 / 3:
+            strong.append(f"{head}{good} {worse / others:.0%} din celelalte {others} companii{tie_txt}.")
+        elif position <= 1 / 3:
+            weak.append(f"{head}{bad} {better / others:.0%} din celelalte {others} companii{tie_txt}.")
+        else:
+            middle.append(f"{head}{good} {worse / others:.0%} din celelalte {others} companii{tie_txt}.")
+    failed = [c for c in me.get("piotroski", []) if c["trece"] is False]
+    if failed:
+        notes.append("Piotroski, ce s-a deteriorat față de acum un an: "
+                     + "; ".join(_PIO_FAIL.get(c["criteriu"], c["criteriu"]) + _pio_change(c) for c in failed) + ".")
+    gn = me.get("GN")
+    if gn is not None and pd.notna(gn):
+        m_ok, p_ok, _ = GN_STATS["ok"]
+        m_over, p_over, _ = GN_STATS["over"]
+        if gn <= GN_LIMIT:
+            notes.append(f"GN {gn:.1f} ≤ 22,5: trece criteriul Graham (istoric {m_ok:+.1%} la 6 luni, {p_ok:.0%} pozitive).")
+        else:
+            notes.append(f"GN {gn:.1f} > 22,5: nu trece criteriul Graham (istoric {m_over:+.1%} la 6 luni, {p_over:.0%} pozitive).")
+    return strong, middle, weak, notes

@@ -109,3 +109,31 @@ def test_banda_cu_scoruri_separate():
     b = verdict_banner(np.nan, np.nan, None, 31, None)
     assert b["fund_label"] == "DATE INSUFICIENTE" and b["fund_detail"] == "N/A" and b["moment_label"] == "N/A"
     assert verdict_banner(0, 20, 30, 31, 39.9)["moment_label"] == "NEFAVORABIL"
+
+
+def test_explicatia_fundamentalului():
+    from analytics.bvb_fundamental import explain_fundamental
+    inds = {tk: {"EP": v, "BP": 7 - v, "DY": v, "PIO": 3.0} for tk, v in zip("ABCDEFG", (1, 2, 3, 4, 5, 6, 7))}
+    cs = cross_section(inds)
+    me = {"PE": 1 / 7, "PBV": 7.0, "DY": 7.0, "PIO": 3.0, "GN": 30.0,
+          "piotroski": [{"criteriu": "ROA în creștere", "valoare": (0.063, 0.046), "trece": False},
+                        {"criteriu": "ROA TTM pozitiv", "valoare": 0.046, "trece": True}]}
+    strong, middle, weak, notes = explain_fundamental(me, cs, "G")
+    # G: EP cel mai mare → mai ieftin decât 100%; BP cel mai mic → mai scump decât 100%; Piotroski egal → mijloc 0%/0%
+    assert "P/E 0.14 — mai ieftin raportat la profit decât 100% din celelalte 6 companii." in strong
+    assert "P/BV 7.00 — mai scump raportat la capitalul propriu decât 100% din celelalte 6 companii." in weak
+    # Piotroski egal la toți: rang mediu 50% → la mijloc, cu egalitatea menționată
+    assert "Piotroski simplificat 3.0/6 — s-a îmbunătățit mai mult decât 0% din celelalte 6 companii, la egalitate cu 100%." in middle
+    assert "Piotroski, ce s-a deteriorat față de acum un an: ROA a scăzut (6.3% → 4.6%)." in notes
+    assert any(n.startswith("GN 30.0 > 22,5") for n in notes)
+
+
+def test_explicatia_momentului():
+    from analytics.scoring import explain_moment
+    idx = pd.bdate_range("2024-01-01", periods=300)
+    up = pd.Series(np.linspace(10, 20, 300), index=idx)
+    lines = explain_moment(up, 65)
+    assert lines[0].startswith("Trend: 3 din 3 condiții (trend ascendent complet)")
+    assert lines[1].startswith("Momentum: +")
+    assert "nu intră în scor" in lines[2]
+    assert explain_moment(up.iloc[:20])[0].startswith("Istoric de preț insuficient")
