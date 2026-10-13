@@ -628,6 +628,13 @@ def _bvb_fmt(value, kind):
     return f"{value:.1f}"
 
 
+def compact_html(fragment):
+    """HTML pentru st.markdown fără linii goale și fără indentare. În Markdown, o linie indentată
+    cu 4+ spații după o linie goală devine bloc de cod: o listă goală (de ex. nimic „la mijloc”)
+    făcea ca restul casetei să apară ca text HTML brut."""
+    return "".join(line.strip() for line in fragment.splitlines() if line.strip())
+
+
 def render_bvb_decision(real_sym, hist):
     """Secțiunea „Decizie BVB în doi pași” pentru simbolurile .RO care au fișier în „Analiză companii”."""
     sym = str(real_sym).upper()
@@ -689,7 +696,7 @@ def render_bvb_decision(real_sym, hist):
 
     e1, e2 = st.columns(2)
     with e1:
-        st.markdown(f"""
+        st.markdown(compact_html(f"""
             <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
                 <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Fundamental: compania stă {html.escape(vb['fund_label'].lower())} ({html.escape(vb['fund_detail'])})</div>
                 <ul style="margin:0; padding-left:18px; font-size:13px;">
@@ -698,15 +705,15 @@ def render_bvb_decision(real_sym, hist):
                     {_li(["Puncte slabe: " + s for s in weak], "#F85149")}
                     {_li(notes, "#8B949E")}
                 </ul>
-            </div>""", unsafe_allow_html=True)
+            </div>"""), unsafe_allow_html=True)
     with e2:
-        st.markdown(f"""
+        st.markdown(compact_html(f"""
             <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
                 <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Momentul: {html.escape(vb['moment_label'].lower())} ({html.escape(vb['moment_detail'])})</div>
                 <ul style="margin:0; padding-left:18px; font-size:13px;">
                     {_li(moment_lines, "#C9D1D9")}
                 </ul>
-            </div>""", unsafe_allow_html=True)
+            </div>"""), unsafe_allow_html=True)
     st.write("")
 
     n_cmp = int(row["n_comparate"]) if pd.notna(row["n_comparate"]) else 0
@@ -862,7 +869,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     m_label, m_color, m_note = moment_label(moment, False)
     n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
     fund_detail = ("N/A" if res["score"] is None
-                   else f"{res['score']:.0f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
+                   else f"{int(res['score'])}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
     moment_detail = "N/A" if moment is None else f"tehnic {moment:.0f}/100, descriptiv"
 
     st.markdown(f"""
@@ -886,7 +893,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
 
     e1, e2 = st.columns(2)
     with e1:
-        st.markdown(f"""
+        st.markdown(compact_html(f"""
             <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
                 <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Fundamental: compania stă {html.escape(res['label'].lower())} ({html.escape(fund_detail)})</div>
                 <ul style="margin:0; padding-left:18px; font-size:13px;">
@@ -895,15 +902,15 @@ def render_global_decision(real_sym, info, hist, risk_stats):
                     {_li(["Puncte slabe: " + s for s in weak], "#F85149")}
                     {_li(["Fără date: " + s for s in missing], "#8B949E")}
                 </ul>
-            </div>""", unsafe_allow_html=True)
+            </div>"""), unsafe_allow_html=True)
     with e2:
-        st.markdown(f"""
+        st.markdown(compact_html(f"""
             <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
                 <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Momentul: {html.escape(m_label.lower())} ({html.escape(moment_detail)})</div>
                 <ul style="margin:0; padding-left:18px; font-size:13px;">
                     {_li(moment_lines, "#C9D1D9")}
                 </ul>
-            </div>""", unsafe_allow_html=True)
+            </div>"""), unsafe_allow_html=True)
     st.write("")
 
     pillar_help = {
