@@ -34,8 +34,8 @@ from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
-from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description
-from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, GN_LIMIT, TEST_NOTE
+from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
+from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
@@ -662,6 +662,35 @@ def render_bvb_decision(real_sym, hist):
             </div>
             <div style="color:#C9D1D9; font-size:13px; margin-top:8px;">{html.escape(vb['text'])}</div>
         </div>""", unsafe_allow_html=True)
+
+    # Explicația pe înțeles: fiecare pas, cu punctele tari și slabe (texte construite din cifrele de mai jos)
+    strong, middle, weak, notes = explain_fundamental(me, cs, tk)
+    moment_lines = explain_moment(close, comp["raw"]["rsi"])
+
+    def _li(items, color):
+        return "".join(f'<li style="color:{color}; margin-bottom:3px;">{html.escape(x)}</li>' for x in items)
+
+    e1, e2 = st.columns(2)
+    with e1:
+        st.markdown(f"""
+            <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
+                <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Fundamental: compania stă {html.escape(vb['fund_label'].lower())} ({html.escape(vb['fund_detail'])})</div>
+                <ul style="margin:0; padding-left:18px; font-size:13px;">
+                    {_li(["Puncte tari: " + s for s in strong], "#3FB950")}
+                    {_li(["La mijloc: " + s for s in middle], "#D29922")}
+                    {_li(["Puncte slabe: " + s for s in weak], "#F85149")}
+                    {_li(notes, "#8B949E")}
+                </ul>
+            </div>""", unsafe_allow_html=True)
+    with e2:
+        st.markdown(f"""
+            <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
+                <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Momentul: {html.escape(vb['moment_label'].lower())} ({html.escape(vb['moment_detail'])})</div>
+                <ul style="margin:0; padding-left:18px; font-size:13px;">
+                    {_li(moment_lines, "#C9D1D9")}
+                </ul>
+            </div>""", unsafe_allow_html=True)
+    st.write("")
 
     n_cmp = int(row["n_comparate"]) if pd.notna(row["n_comparate"]) else 0
     tier_txt = {2: "FAVORABIL", 1: "NEUTRU", 0: "NEFAVORABIL"}.get(int(tier), "") if pd.notna(tier) else "fără treaptă"

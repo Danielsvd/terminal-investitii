@@ -243,3 +243,33 @@ def moment_label(score, is_bvb):
         if score >= floor:
             return label, color, "Prag testat pe BVB 2012–2025."
     return MOMENT_BANDS_BVB[-1][1], MOMENT_BANDS_BVB[-1][2], "Prag testat pe BVB 2012–2025."
+
+
+def explain_moment(close, rsi_last=None):
+    """Explicația momentului în propoziții scurte (descriptiv, fără îndemnuri). Listă de șiruri."""
+    c = pd.Series(close, dtype="float64").dropna()
+    if len(c) < 50:
+        return ["Istoric de preț insuficient: trendul are nevoie de cel puțin 50 de ședințe."]
+    out = []
+    last, sma50 = c.iloc[-1], c.iloc[-50:].mean()
+    if len(c) >= 200:
+        sma200 = c.iloc[-200:].mean()
+        checks = [(last > sma50, f"prețul ({last:.4g}) e {'peste' if last > sma50 else 'sub'} media pe 50 de zile ({sma50:.4g})"),
+                  (last > sma200, f"{'peste' if last > sma200 else 'sub'} media pe 200 de zile ({sma200:.4g})"),
+                  (sma50 > sma200, f"media pe 50 e {'peste' if sma50 > sma200 else 'sub'} cea pe 200")]
+        n_ok = sum(ok for ok, _ in checks)
+        verdict = {3: "trend ascendent complet", 2: "trend majoritar ascendent", 1: "trend majoritar descendent",
+                   0: "trend descendent complet"}[n_ok]
+        out.append(f"Trend: {n_ok} din 3 condiții ({verdict}) — " + "; ".join(t for _, t in checks) + ".")
+    else:
+        out.append(f"Trend: prețul e {'peste' if last > sma50 else 'sub'} media pe 50 de zile "
+                   f"(sub 200 de ședințe, media pe 200 nu se calculează).")
+    mom = momentum_12_1(c)
+    if mom is None:
+        out.append("Momentum 12-1 luni: N/A (istoric sub 12 luni).")
+    else:
+        cap = " (peste +30%: notă maximă)" if mom >= MOMENTUM_SCALE[1] else " (sub −30%: notă minimă)" if mom <= MOMENTUM_SCALE[0] else ""
+        out.append(f"Momentum: {mom * 100:+.1f}% de acum 12 luni până acum o lună{cap}.")
+    if _valid(rsi_last):
+        out.append(f"RSI {rsi_description(rsi_last)}: doar informativ, nu intră în scor (nu a dat semnal în testul pe BVB).")
+    return out
