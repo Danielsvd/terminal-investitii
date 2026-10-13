@@ -35,6 +35,7 @@ import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
+from analytics import global_fundamental as gfund
 from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
@@ -796,6 +797,148 @@ def render_bvb_decision(real_sym, hist):
     st.caption(f"Sursa: fișierul „{data['fisiere'][tk]}”, bilanț {me['raport_bilant']}, profit TTM la "
                f"{me['raport_flux'] or 'N/A'}, dividend {me['raport_anual'] or 'N/A'}; preț "
                f"{_bvb_fmt(price, 'x')} lei (Yahoo, întârziat). {TEST_NOTE}")
+    st.markdown("---")
+
+
+NON_COMPANY_QUOTE_TYPES = ("ETF", "MUTUALFUND", "INDEX", "CRYPTOCURRENCY", "CURRENCY", "FUTURE")
+
+
+def global_fundamental_inputs(real_sym, info, hist, risk_stats):
+    """Intrările scorului fundamental SUA/UE (analytics/global_fundamental.py), din situațiile
+    financiare și din aceleași funcții ca secțiunile de mai jos din pagină (DCF, Altman, Piotroski).
+    Ipoteze fixe, independente de cursoarele calculatorului: g terminal 2%, WACC calculat."""
+    sym = str(real_sym).upper()
+    fin = get_financial_statements(real_sym)
+    t_curr = info.get('currency') or 'USD'
+    price = num(info, 'currentPrice') or num(info, 'previousClose')
+    if price is None and hist is not None and not hist.empty:
+        price = positive_or_none(hist['Close'].iloc[-1])
+    rf_val, rf_label = get_risk_free_for_currency(t_curr)
+    beta = risk_stats.get("beta")
+    financial = fund.is_financial_issuer(info.get('sector'), sym)
+    inp = {"financial": financial, "price": price, "pbv": num(info, 'priceToBook'),
+           "rf": rf_val, "rf_label": rf_label, "beta": beta, "beta_label": risk_stats.get("beta_label"),
+           "statement_errors": fin.get("errors", [])}
+    if financial:
+        inp.update(roe=num(info, 'returnOnEquity'), ke=fund.cost_of_equity(rf_val, beta))
+        return inp
+
+    dcf_in = fund.dcf_inputs(fin.get("income"), fin.get("balance"), fin.get("cashflow"),
+                             fin.get("q_cashflow"), fin.get("q_balance"))
+    dcf_na = fund.dcf_not_applicable_reason(info.get('sector'), info.get('industry'), sym)
+    fin_curr = info.get('financialCurrency')
+    if dcf_na is None and not info.get('sector') and not fin_curr:
+        dcf_na = "Yahoo nu a trimis sectorul și moneda de raportare: nu se poate exclude o bancă sau un ADR"
+    if dcf_na is None and fin_curr and fin_curr != t_curr:
+        dcf_na = f"situațiile sunt în {fin_curr}, acțiunea în {t_curr}; conversia valutară nu e implementată"
+    wacc_res = fund.wacc(rf_val, beta, num(info, 'marketCap'), dcf_in["total_debt"],
+                         dcf_in["interest_expense"], dcf_in["tax_rate"])
+    fcf, fcf_basis = dcf_in["fcf"], dcf_in["fcf_basis"]
+    if (fund.fcf_distortion_warning(dcf_in["cfo"], dcf_in["capex"], dcf_in["fcf"], dcf_in["fcf_average"])
+            and dcf_in["fcf_average"] is not None):
+        # FCF-ul curent e deformat (vârf de investiții, an atipic): DCF-ul invers pornește de la medie.
+        fcf, fcf_basis = dcf_in["fcf_average"], f"media ultimilor {dcf_in['fcf_average_years']} ani fiscali"
+    lev = fund.leverage_ratios(fin.get("income"), fin.get("balance"), fin.get("q_income"), fin.get("q_balance"))
+    inp.update(dcf_na=dcf_na, wacc=wacc_res["wacc"] if wacc_res else None, fcf=fcf,
+               fcf_basis=fcf_basis.split(" (")[0] if fcf_basis else None,
+               net_debt=dcf_in["net_debt"], shares=dcf_in["shares"], pe=num(info, 'trailingPE'),
+               piotroski=fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow")),
+               altman=calculate_altman_z(info, sym, fin), ebitda=lev["ebitda"], coverage=lev["interest_coverage"])
+    return inp
+
+
+def render_global_decision(real_sym, info, hist, risk_stats):
+    """Secțiunea „Scor fundamental” pentru acțiunile din afara BVB: scorul companiei și, separat,
+    momentul (fără verdict: testul pe SUA nu a găsit putere de predicție)."""
+    sym = str(real_sym).upper()
+    if sym.endswith(".RO") or (info.get('quoteType') or "").upper() in NON_COMPANY_QUOTE_TYPES:
+        return
+    st.subheader("🌍 Scor fundamental (praguri netestate)")
+    inp = global_fundamental_inputs(real_sym, info, hist, risk_stats)
+    res = gfund.fundamental_score(inp)
+    close = hist["Close"] if hist is not None and not hist.empty else pd.Series(dtype=float)
+    moment = technical_subscore(close)
+    comp = technical_components(close, hist["RSI"].iloc[-1] if "RSI" in getattr(hist, "columns", []) else None)
+    m_label, m_color, m_note = moment_label(moment, False)
+    n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
+    fund_detail = ("N/A" if res["score"] is None
+                   else f"{res['score']:.0f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
+    moment_detail = "N/A" if moment is None else f"tehnic {moment:.0f}/100, descriptiv"
+
+    st.markdown(f"""
+        <div style="background:#161B22; border:1px solid {res['color']}88; border-radius:12px; padding:14px; margin:8px 0 14px 0;">
+            <div style="display:flex; flex-wrap:wrap; gap:28px; align-items:baseline;">
+                <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Fundamental</span><br>
+                    <span style="color:{res['color']}; font-weight:bold; font-size:20px;">{html.escape(res['label'])}</span>
+                    <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(fund_detail)}</span></div>
+                <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Moment</span><br>
+                    <span style="color:{m_color}; font-weight:bold; font-size:20px;">{html.escape(m_label)}</span>
+                    <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(moment_detail)}</span></div>
+            </div>
+            <div style="color:#C9D1D9; font-size:13px; margin-top:8px;">{html.escape(res['note'])}</div>
+        </div>""", unsafe_allow_html=True)
+
+    strong, middle, weak, missing = gfund.explain(res)
+    moment_lines = explain_moment(close, comp["raw"]["rsi"]) + [m_note]
+
+    def _li(items, color):
+        return "".join(f'<li style="color:{color}; margin-bottom:3px;">{html.escape(x)}</li>' for x in items)
+
+    e1, e2 = st.columns(2)
+    with e1:
+        st.markdown(f"""
+            <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
+                <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Fundamental: compania stă {html.escape(res['label'].lower())} ({html.escape(fund_detail)})</div>
+                <ul style="margin:0; padding-left:18px; font-size:13px;">
+                    {_li(["Puncte tari: " + s for s in strong], "#3FB950")}
+                    {_li(["La mijloc: " + s for s in middle], "#D29922")}
+                    {_li(["Puncte slabe: " + s for s in weak], "#F85149")}
+                    {_li(["Fără date: " + s for s in missing], "#8B949E")}
+                </ul>
+            </div>""", unsafe_allow_html=True)
+    with e2:
+        st.markdown(f"""
+            <div style="background:#161B22; border:1px solid #30363D; border-radius:10px; padding:12px 14px; height:100%;">
+                <div style="color:#C9D1D9; font-weight:bold; margin-bottom:6px;">Momentul: {html.escape(m_label.lower())} ({html.escape(moment_detail)})</div>
+                <ul style="margin:0; padding-left:18px; font-size:13px;">
+                    {_li(moment_lines, "#C9D1D9")}
+                </ul>
+            </div>""", unsafe_allow_html=True)
+    st.write("")
+
+    pillar_help = {
+        "evaluare": ("Media componentelor cu date. Nefinanciare: DCF invers (creșterea FCF pe care o cere prețul; "
+                     "≤ 0% → 100, ≥ 20% → 0) și GN = P/E × P/BV (≤ 22,5 → 100, ≥ 90 → 0, scară logaritmică). "
+                     "Bănci și asigurători: P/BV față de P/BV justificat (ROE − g) / (ke − g); raport ≤ 0,7 → 100, ≥ 1,3 → 0."),
+        "calitate": "Piotroski F-Score: criterii îndeplinite / criterii evaluabile (minimum 6 din 9), ultimul an fiscal față de cel precedent.",
+        "sanatate": ("Media: zona Altman (sigură 100, gri 50, dificultate 0), datorie netă / EBITDA (≤ 1 → 100, ≥ 4 → 0), "
+                     "acoperirea dobânzii EBIT / dobânzi (≤ 1,5 → 0, ≥ 8 → 100)."),
+        "rentabilitate": "ROE față de costul capitalului propriu ke = rf + beta × 5%: −5 pp → 0, +5 pp → 100.",
+    }
+    cols = st.columns(len(res["pillars"]))
+    for col, p in zip(cols, res["pillars"]):
+        col.metric(p["label"], "N/A" if p["score"] is None else f"{p['score'] * 100:.0f}/100",
+                   help=pillar_help[p["key"]] + " Praguri netestate pe datele noastre.")
+
+    with st.expander("Componentele scorului fundamental"):
+        st.dataframe(pd.DataFrame([{
+            "Pilon": p["label"], "Componentă": c["label"], "Valoare": c["value"],
+            "Notă": "N/A" if c["score"] is None else f"{c['score'] * 100:.0f}/100",
+            "Explicație": c["text"]} for p in res["pillars"] for c in p["components"]]),
+            hide_index=True, width='stretch')
+        if res["financial"]:
+            ke = inp.get("ke")
+            st.caption("Bancă / asigurător / emitent financiar: DCF, Altman și Piotroski nu se aplică (datoria e materie primă, "
+                       "fluxul de numerar reflectă depozitele și creditele). ke = rf + beta × 5% = "
+                       + ("N/A" if ke is None else f"{ke * 100:.1f}%") + f"; rf: {inp['rf_label']}; beta: {inp['beta_label']}.")
+        else:
+            st.caption("Ipoteze fixe ale scorului, independente de cursoarele calculatorului de mai jos: g terminal 2%, "
+                       "WACC calculat, FCF TTM (sau media anilor fiscali când FCF-ul curent e deformat). "
+                       f"rf: {inp['rf_label']}; beta: {inp['beta_label']}. Detaliile (DCF cu ipotezele tale, Altman, "
+                       "Piotroski) sunt în secțiunile de mai jos.")
+        if inp.get("statement_errors"):
+            st.caption("Situații financiare necitite de la Yahoo: " + ", ".join(inp["statement_errors"]) + ".")
+    st.caption("„Decizie Master AI” de mai jos rămâne calculată ca înainte; se unifică cu acest scor la final.")
     st.markdown("---")
 
 
@@ -3110,8 +3253,14 @@ def main():
             # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
             st.markdown("---")
 
+            # Beta și alpha (un singur calcul, folosit de scorul fundamental, DCF, audit și scoruri)
+            risk_stats = resolve_beta_alpha(real_sym, info, hist)
+            beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
+
             # 2b. Decizie BVB în doi pași (doar .RO cu fișier în „Analiză companii”)
             render_bvb_decision(real_sym, hist)
+            # 2c. Scor fundamental pentru acțiunile din afara BVB (praguri netestate)
+            render_global_decision(real_sym, info, hist, risk_stats)
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
@@ -3142,8 +3291,6 @@ def main():
                         hide_index=True, width='stretch')
                     st.caption("Valorile companiei sunt cele din foaie, la prețul actualizării ei. Media e coloana A a foii; mediana e calculată "
                                "din aceleași companii și nu e trasă de extreme (un singur P/E foarte mare ridică media, nu și mediana).")
-            risk_stats = resolve_beta_alpha(real_sym, info, hist)
-            beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
             de_ratio = info.get('debtToEquity')
             de_display = f"{de_ratio:.2f}%" if de_ratio is not None else "N/A"
 
