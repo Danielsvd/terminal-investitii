@@ -139,7 +139,8 @@ def validate(df):
     Valorile care pică sunt puse pe NaN în tabelul curățat (nu se corectează și nu se estimează):
       - EBITDA mai mic decât rezultatul operațional (EBITDA = EBIT + amortizări); EBITDA 0 = necompletat;
       - cifra de afaceri cumulată care scade în cursul anului (T1 ≤ S1 ≤ 9 luni ≤ an): ambele valori;
-      - valori izolate de solduri, de peste 8× față de ambii vecini (de regulă lei vs mii de lei).
+      - valori izolate de solduri, de peste 8× față de ambii vecini (de regulă lei vs mii de lei);
+      - datorii totale sau pe termen scurt egale cu 0 (necompletate).
     Doar semnalate (rămân în calcul): bilanțul care nu se închide (±10%), suma activelor (±10%),
     numerarul izolat.
     """
@@ -149,6 +150,12 @@ def validate(df):
     def flag(i, key, msg, excluded):
         issues.append({"year": int(df.at[i, "year"]), "months": int(df.at[i, "months"]), "field": key,
                        "message": msg, "excluded": excluded})
+
+    # Datoriile totale și cele pe termen scurt nu pot fi 0 la o companie care funcționează: 0 = necompletat.
+    for key in ("liab", "liab_st"):
+        for i in df.index[df[key] == 0]:
+            flag(i, key, f"{FIELD_LABELS[key]} = 0 (necompletat în fișier)", True)
+            df.at[i, key] = np.nan
 
     for i in df.index:
         e, b = df.at[i, "ebitda"], df.at[i, "ebit"]

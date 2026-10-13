@@ -136,3 +136,15 @@ def test_ttm_cu_termen_lipsa():
     out = add_ttm(df)
     assert np.isnan(out.loc[1, "ni_ttm"])          # lipsește T1 2024
     assert out.loc[2, "ni_ttm"] == 50
+
+
+def test_datorii_zero_necompletate():
+    df = _frame(liab=[300, 0, 310, 320], liab_st=[100, 0, 0, 110], assets=[800] * 4, equity=[500] * 4,
+                year=[2024] * 4, months=[3, 6, 9, 12])
+    clean, issues = validate(df)
+    assert np.isnan(clean.loc[1, "liab"]) and np.isnan(clean.loc[1, "liab_st"]) and np.isnan(clean.loc[2, "liab_st"])
+    assert clean.loc[2, "liab"] == 310
+    zero = [i for i in issues if "necompletat" in i["message"]]
+    assert len(zero) == 3 and all(i["excluded"] for i in zero)
+    # bilanțul nu mai e semnalat pe rândul cu datorii lipsă (nu se poate verifica)
+    assert not [i for i in issues if i["field"] == "bilant" and i["months"] == 6]
