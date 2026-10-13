@@ -549,9 +549,15 @@ def main():
 
     radio().set_value("2. Analiză Companie").run()
     check(at, "2. Companie AAPL (date complete)")
+    has_global = lambda: any("Scor fundamental (praguri netestate)" in str(h.value) for h in at.subheader)
+    assert has_global(), "lipsește secțiunea Scor fundamental la AAPL"
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
+        if sym in ("SAP.DE", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
+            assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym in ("TLV.RO", "SNP.RO"):
+            assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
         if sym == "SNP.RO":
             assert any("Decizie BVB" in str(h.value) for h in at.subheader), "lipsește secțiunea Decizie BVB"
             at.button(key="bvb_files_reload").click().run()
