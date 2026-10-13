@@ -26,19 +26,20 @@ SHARE_SPLIT_RATIO = 1.65     # creștere a numărului de acțiuni peste acest ra
 
 TIER_LABELS = {2: ("FAVORABIL", "#3FB950"), 1: ("NEUTRU", "#D29922"), 0: ("NEFAVORABIL", "#F85149")}
 
-# Rezultatele testului: exces mediu față de media BVB la 6 luni, % cazuri pozitive, N.
-TIER_STATS = {2: (0.060, 0.556, 741), 1: (0.013, 0.479, 706), 0: (-0.073, 0.321, 785)}
+# Rezultatele testului (refăcut pe 13 oct. 2026, după corecturile din fișiere): exces mediu față de media BVB
+# la 6 luni, % cazuri pozitive, N.
+TIER_STATS = {2: (0.060, 0.556, 741), 1: (0.010, 0.473, 706), 0: (-0.070, 0.326, 785)}
 GN_STATS = {"ok": (0.029, 0.50, 1219), "over": (-0.036, 0.39, 918)}
 TWO_STEP = {
     (2, "high"): ("CANDIDAT, MOMENT FAVORABIL", "#3FB950", (0.092, 0.59, 386)),
     (2, "mid"): ("CANDIDAT, FĂRĂ SEMNAL DE MOMENT", "#238636", (0.043, 0.53, 198)),
     (2, "low"): ("CANDIDAT, TREND NEGATIV", "#D29922", (0.006, 0.52, 157)),
-    (1, "high"): ("NEUTRU, MOMENT FAVORABIL", "#D29922", (0.047, 0.55, 343)),
-    (1, "mid"): ("NEUTRU", "#D29922", (0.011, 0.46, 170)),
-    (1, "low"): ("NEUTRU, TREND NEGATIV", "#F85149", (-0.058, 0.33, 178)),
-    (0, "high"): ("NEFAVORABIL (MOMENTUL NU COMPENSEAZĂ)", "#F85149", (-0.009, 0.44, 214)),
-    (0, "mid"): ("NEFAVORABIL", "#F85149", (-0.067, 0.30, 224)),
-    (0, "low"): ("NEFAVORABIL, TREND NEGATIV", "#F85149", (-0.104, 0.27, 320)),
+    (1, "high"): ("NEUTRU, MOMENT FAVORABIL", "#D29922", (0.046, 0.54, 340)),
+    (1, "mid"): ("NEUTRU", "#D29922", (0.007, 0.46, 170)),
+    (1, "low"): ("NEUTRU, TREND NEGATIV", "#F85149", (-0.061, 0.33, 181)),
+    (0, "high"): ("NEFAVORABIL (MOMENTUL NU COMPENSEAZĂ)", "#F85149", (-0.007, 0.45, 217)),
+    (0, "mid"): ("NEFAVORABIL", "#F85149", (-0.064, 0.30, 224)),
+    (0, "low"): ("NEFAVORABIL, TREND NEGATIV", "#F85149", (-0.103, 0.27, 317)),
 }
 TEST_NOTE = ("Test istoric pe 31 de emitenți BVB din fișierele tale, mai 2017 – sept. 2026: exces față de media "
              "BVB la 6 luni. Media e trasă de câteva câștiguri mari; de aceea contează și procentul de cazuri pozitive. "

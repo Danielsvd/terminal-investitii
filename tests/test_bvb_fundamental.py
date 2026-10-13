@@ -105,7 +105,7 @@ def test_banda_cu_scoruri_separate():
     b = verdict_banner(1, 54.2, 14, 31, 100)
     assert b["fund_label"] == "NEUTRU" and b["fund_detail"] == "54/100 · locul 14 din 31"
     assert b["moment_label"] == "FAVORABIL" and b["moment_detail"] == "100/100"
-    assert "+4.7%" in b["text"] and "N = 343" in b["text"]
+    assert "+4.6%" in b["text"] and "N = 340" in b["text"]
     b = verdict_banner(np.nan, np.nan, None, 31, None)
     assert b["fund_label"] == "DATE INSUFICIENTE" and b["fund_detail"] == "N/A" and b["moment_label"] == "N/A"
     assert verdict_banner(0, 20, 30, 31, 39.9)["moment_label"] == "NEFAVORABIL"
