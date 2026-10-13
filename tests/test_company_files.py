@@ -102,10 +102,11 @@ def test_validare_ebitda_si_cifra_de_afaceri():
     clean, issues = validate(df)
     assert np.isnan(clean.loc[1, "ebitda"]) and np.isnan(clean.loc[2, "ebitda"])     # 5 < 9; 0 = necompletat
     assert clean.loc[0, "ebitda"] == 10 and clean.loc[3, "ebitda"] == 30
-    # 210 → 200 scade: ambele excluse; 400 rămâne
-    assert np.isnan(clean.loc[1, "rev"]) and np.isnan(clean.loc[2, "rev"]) and clean.loc[3, "rev"] == 400
-    fields = sorted(i["field"] for i in issues)
-    assert fields == ["ebitda", "rev"] and all(i["excluded"] for i in issues)
+    # 210 → 200 scade: rămâne în calcul (retratare confirmată cu rapoartele), doar semnalat
+    assert clean.loc[1, "rev"] == 210 and clean.loc[2, "rev"] == 200 and clean.loc[3, "rev"] == 400
+    by_field = {i["field"]: i for i in issues}
+    assert sorted(by_field) == ["ebitda", "rev"]
+    assert by_field["ebitda"]["excluded"] is True and by_field["rev"]["excluded"] is False
 
 
 def test_validare_valori_izolate_si_bilant():

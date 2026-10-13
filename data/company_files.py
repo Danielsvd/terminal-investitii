@@ -138,11 +138,11 @@ def validate(df):
 
     Valorile care pică sunt puse pe NaN în tabelul curățat (nu se corectează și nu se estimează):
       - EBITDA mai mic decât rezultatul operațional (EBITDA = EBIT + amortizări); EBITDA 0 = necompletat;
-      - cifra de afaceri cumulată care scade în cursul anului (T1 ≤ S1 ≤ 9 luni ≤ an): ambele valori;
       - valori izolate de solduri, de peste 8× față de ambii vecini (de regulă lei vs mii de lei);
       - datorii totale sau pe termen scurt egale cu 0 (necompletate).
     Doar semnalate (rămân în calcul): bilanțul care nu se închide (±10%), suma activelor (±10%),
-    numerarul izolat.
+    numerarul izolat, cifra de afaceri cumulată care scade în cursul anului (reclasificări / retratări
+    între rapoarte, cifre confirmate de Daniel).
     """
     df = df.copy().reset_index(drop=True)
     issues = []
@@ -177,10 +177,11 @@ def validate(df):
         for i in g.sort_values("months").index:
             r = df.at[i, "rev"]
             if prev is not None and pd.notna(r) and r < prev * 0.99:
-                flag(i, "rev", f"cifra de afaceri cumulată scade: {prev:,.0f} → {r:,.0f} (ambele excluse)", True)
-                df.at[i, "rev"] = np.nan
-                df.at[prev_i, "rev"] = np.nan
-            elif pd.notna(r):
+                # Cifre verificate de Daniel cu rapoartele (13 oct.): o scădere a cumulatului apare la
+                # reclasificări sau retratări între rapoarte. Rămân în calcul, doar semnalate.
+                flag(i, "rev", f"cifra de afaceri cumulată scade: {prev:,.0f} → {r:,.0f} "
+                               "(trimestrul implicit e negativ: reclasificare sau retratare între rapoarte)", False)
+            if pd.notna(r):
                 prev, prev_i = r, i
 
     for key in BALANCE_CHECKED:
