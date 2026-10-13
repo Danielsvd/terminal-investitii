@@ -34,6 +34,9 @@ from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
+from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description
+from analytics.bvb_fundamental import current_indicators, cross_section, final_verdict, GN_LIMIT, TEST_NOTE
+from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
@@ -484,6 +487,260 @@ def get_bvb_peer_prices(sheet_symbols):
     Foaia BVB se actualizează manual, deci multiplii ei pot fi la un preț vechi. În cache 15 minute."""
     prices = get_fast_live_prices([f"{sym}.RO" for sym in sheet_symbols])
     return {sym: prices.get(f"{sym}.RO") for sym in sheet_symbols}
+
+# =============================================================================
+# FIȘIERELE „ANALIZĂ COMPANII" (Google Drive, doar citire) -> SCORUL FUNDAMENTAL BVB
+# Folderul e partajat de Daniel cu contul de serviciu al aplicației, ca Viewer.
+# Fiecare fișier se recitește doar când i se schimbă data modificării (cache pe id + dată).
+# =============================================================================
+COMPANY_FOLDER_NAME = "Analiză companii"
+COMPANY_RANGES = ["'Date Q'!A1:Z60", "'Date Anuale'!A1:Z60"]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def list_company_files():
+    """(listă de fișiere {id, name, modified}, mesaj de eroare sau None). Un singur apel Drive."""
+    client = _get_gsheets_client()
+    if not client:
+        return [], "Fără conexiune la Google."
+    try:
+        query = (f"name = '{COMPANY_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' "
+                 "and trashed = false")
+        resp = client.http_client.request("get", "https://www.googleapis.com/drive/v3/files",
+                                          params={"q": query, "fields": "files(id,name)", "pageSize": 10})
+        folders = resp.json().get("files", [])
+        if not folders:
+            return [], (f"Folderul „{COMPANY_FOLDER_NAME}” nu este partajat cu contul de serviciu al aplicației "
+                        "(Drive → click dreapta pe folder → Share → adresa client_email, drept Viewer).")
+        files = client.list_spreadsheet_files(folder_id=folders[0]["id"])
+        return [{"id": f["id"], "name": f["name"], "modified": f.get("modifiedTime")} for f in files], None
+    except (gspread.exceptions.APIError, requests.exceptions.RequestException, ValueError, KeyError) as e:
+        print(f"DEBUG: lista fișierelor de analiză: {e}")
+        return [], f"Lista fișierelor din „{COMPANY_FOLDER_NAME}” nu a putut fi citită: {e}"
+
+
+@st.cache_data(ttl=30 * 24 * 3600, show_spinner=False, max_entries=300)
+def read_company_file(file_id, modified):
+    """Valorile foilor „Date Q” și „Date Anuale” (nevizualizate, adică numere, nu text formatat).
+    Cheia de cache include data modificării: un fișier editat se recitește automat.
+    O eroare nu se pune în cache (excepția trece mai departe)."""
+    client = _get_gsheets_client()
+    for attempt in (1, 2):
+        try:
+            res = client.http_client.values_batch_get(file_id, list(COMPANY_RANGES),
+                                                      params={"valueRenderOption": "UNFORMATTED_VALUE"})
+            ranges = res.get("valueRanges", [])
+            return [r.get("values", []) for r in ranges] + [[]] * (2 - len(ranges))
+        except gspread.exceptions.APIError as e:
+            if attempt == 1 and "429" in str(e):
+                time.sleep(10)          # limita Google: 60 de citiri pe minut
+                continue
+            raise
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_bvb_dataset(file_keys):
+    """Toate fișierele, parsate și validate. `file_keys` = tuplu (id, nume, data modificării).
+    Întoarce {companii: {simbol: tabel}, probleme: {simbol: [...]}, fisiere: {simbol: nume}, sarite, erori}."""
+    out = {"companii": {}, "probleme": {}, "fisiere": {}, "sarite": [], "erori": []}
+    for file_id, name, modified in file_keys:
+        tk = ticker_from_title(name)
+        if tk is None:
+            out["sarite"].append(name)
+            continue
+        try:
+            q_values, a_values = read_company_file(file_id, modified)
+        except (gspread.exceptions.APIError, requests.exceptions.RequestException, ValueError) as e:
+            out["erori"].append(f"{name}: {e}")
+            continue
+        if is_bank_template(q_values):
+            out["sarite"].append(f"{name} (bancă: alt șablon)")
+            continue
+        df, issues, missing = load_company(q_values, a_values)
+        if df.empty:
+            out["sarite"].append(f"{name} (fără perioade cu date)")
+            continue
+        out["companii"][tk], out["probleme"][tk], out["fisiere"][tk] = df, issues, name
+    return out
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_bvb_file_prices(symbols):
+    """Prețul curent al emitenților din fișiere (tuplu de simboluri BVB): {simbol: preț sau None}."""
+    prices = get_fast_live_prices([f"{sym}.RO" for sym in symbols])
+    return {sym: positive_or_none(prices.get(f"{sym}.RO")) for sym in symbols}
+
+
+BVB_HELP = {
+    "scor": ("Media percentilelor a patru indicatori față de celelalte companii BVB din fișierele tale "
+             "(P/E, P/BV, randament dividend, Piotroski). 100 = cea mai bună pe toți, 0 = cea mai slabă. "
+             "Treimea de sus = FAVORABIL, mijlocul = NEUTRU, treimea de jos = NEFAVORABIL. "
+             "Test 2017–2026: treimea de sus a bătut media BVB cu +6,0% la 6 luni (56% cazuri pozitive), "
+             "treimea de jos a rămas cu −7,3% în urmă (32% pozitive)."),
+    "pe": ("P/E TTM = capitalizare (preț curent × acțiuni din ultimul raport) / profit net pe ultimele 12 luni, "
+           "construit din cifrele cumulate din fișier. Mai mic = mai ieftin. Test: ieftinul a bătut scumpul (IC +0,17)."),
+    "pbv": ("P/BV = capitalizare / capital propriu din ultimul raport. Mai mic = mai ieftin raportat la activul net. "
+            "Test: IC +0,13, mai slab decât P/E."),
+    "dy": ("Randament dividend = profitul distribuit din ultimul an / capitalizarea de azi. "
+           "Test: dividendul mare a bătut dividendul mic (IC +0,13)."),
+    "pio": ("Piotroski simplificat: 6 criterii, ultimul raport față de același raport de acum un an: ROA pozitiv, "
+            "ROA în creștere, lichiditate curentă în creștere, datorii pe termen lung/active în scădere, fără emisiune "
+            "de acțiuni, rotația activelor în creștere. Fără criteriile de flux de numerar (nu sunt în fișiere). "
+            "Cel mai puternic indicator în test (IC +0,28)."),
+    "gn": ("GN = P/E × P/BV, pragul lui Graham 22,5. Test: GN ≤ 22,5 → +2,9% față de media BVB la 6 luni "
+           "(50% pozitive); GN > 22,5 → −3,6% (39% pozitive)."),
+    "moment": ("Media dintre trend (preț peste SMA 50 și SMA 200, SMA 50 peste SMA 200) și momentum 12-1 luni. "
+               "Test BVB 2012–2025: ≥ 80 → +6,1% față de media BVB la 6 luni (54% pozitive); "
+               "< 40 → −7,2% (32% pozitive). RSI nu intră: în test „supravândut” a continuat să scadă."),
+    "rsi": "RSI 14 (Wilder), doar descriptiv. În testul pe BVB nu a dat semnal de intrare.",
+    "roe": "ROE TTM = profit net pe 12 luni / capital propriu. În test NU a prezis randamentul (IC ≈ 0): informație, fără puncte.",
+    "marja": "Marja netă TTM = profit net / cifră de afaceri pe 12 luni. În test NU a prezis randamentul: informație.",
+    "indatorare": "Datorii totale / capital propriu, din ultimul raport. În test NU a prezis randamentul: informație de risc.",
+}
+
+
+def _bvb_fmt(value, kind):
+    if value is None or pd.isna(value):
+        return "N/A"
+    if kind == "pct":
+        return f"{value * 100:.1f}%"
+    if kind == "x":
+        return f"{value:.2f}"
+    return f"{value:.1f}"
+
+
+def render_bvb_decision(real_sym, hist):
+    """Secțiunea „Decizie BVB în doi pași” pentru simbolurile .RO care au fișier în „Analiză companii”."""
+    sym = str(real_sym).upper()
+    if not sym.endswith(".RO"):
+        return
+    st.subheader("🇷🇴 Decizie BVB în doi pași (testată pe istoric)")
+    files, err = list_company_files()
+    c_reload, _ = st.columns([1, 3])
+    if c_reload.button("🔄 Recitește fișierele de analiză", key="bvb_files_reload"):
+        list_company_files.clear()
+        build_bvb_dataset.clear()
+        st.rerun()
+    if err:
+        st.info(err)
+        return
+    with st.spinner("Citesc fișierele din „Analiză companii” (prima dată durează până la ~30 de secunde)..."):
+        data = build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+    tk = sym[:-3]
+    if tk not in data["companii"]:
+        st.caption(f"{tk} nu are fișier în „{COMPANY_FOLDER_NAME}” (sau e bancă, cu alt șablon). "
+                   "Secțiunea apare doar pentru emitenții din fișiere.")
+        return
+
+    prices = get_bvb_file_prices(tuple(sorted(data["companii"])))
+    price = prices.get(tk)
+    if price is None and hist is not None and not hist.empty:
+        price = positive_or_none(hist["Close"].iloc[-1])
+    indicators = {t: current_indicators(df, price if t == tk else prices.get(t))
+                  for t, df in data["companii"].items()}
+    cs = cross_section(indicators)
+    me, row = indicators[tk], cs.loc[tk]
+    close = hist["Close"] if hist is not None and not hist.empty else pd.Series(dtype=float)
+    moment = technical_subscore(close)
+    comp = technical_components(close, hist["RSI"].iloc[-1] if "RSI" in getattr(hist, "columns", []) else None)
+    m_label, m_color, m_note = moment_label(moment, True)
+    tier = row["treapta"]
+    v_label, v_color, v_text = final_verdict(tier, moment)
+
+    st.markdown(f"""
+        <div style="background:{v_color}1A; border:1px solid {v_color}66; border-radius:12px; padding:14px; margin:8px 0 14px 0;">
+            <div style="color:{v_color}; font-weight:bold; font-size:18px;">{html.escape(v_label)}</div>
+            <div style="color:#C9D1D9; font-size:13px; margin-top:4px;">{html.escape(v_text)}</div>
+        </div>""", unsafe_allow_html=True)
+
+    n_cmp = int(row["n_comparate"]) if pd.notna(row["n_comparate"]) else 0
+    tier_txt = {2: "FAVORABIL", 1: "NEUTRU", 0: "NEFAVORABIL"}.get(int(tier), "") if pd.notna(tier) else "fără treaptă"
+    pct = lambda k: (f"percentila {row[k + '_pct'] * 100:.0f}" if pd.notna(row.get(k + "_pct")) else "N/A")
+
+    st.markdown("**Pasul 1 · Fundamental** (relativ la celelalte companii BVB din fișierele tale)")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Scor fundamental", "N/A" if pd.isna(row["scor"]) else f"{row['scor']:.0f}/100",
+              f"{tier_txt} · din {n_cmp} companii", delta_color="off", delta_arrow="off", help=BVB_HELP["scor"])
+    c2.metric("P/E TTM", _bvb_fmt(me["PE"], "x"), pct("EP"), delta_color="off", delta_arrow="off", help=BVB_HELP["pe"])
+    c3.metric("P/BV", _bvb_fmt(me["PBV"], "x"), pct("BP"), delta_color="off", delta_arrow="off", help=BVB_HELP["pbv"])
+    c4.metric("Randament dividend", _bvb_fmt(me["DY"], "pct"), pct("DY"), delta_color="off", delta_arrow="off", help=BVB_HELP["dy"])
+    c5.metric("Piotroski simplificat", "N/A" if pd.isna(me["PIO"]) else f"{me['PIO']:.1f}/6", pct("PIO"),
+              delta_color="off", delta_arrow="off", help=BVB_HELP["pio"])
+    gn = me["GN"]
+    gn_txt = "N/A" if pd.isna(gn) else ("≤ 22,5 ✓" if gn <= GN_LIMIT else "> 22,5")
+
+    st.markdown("**Pasul 2 · Momentul** (tehnic, doar pentru intrare)")
+    t1, t2, t3, t4, t5 = st.columns(5)
+    t1.metric("Moment", "N/A" if moment is None else f"{moment:.0f}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
+    trend = comp["trend"]
+    t2.metric("Trend SMA 50/200", "N/A" if trend is None else f"{trend * 3:.0f} din 3" if len(close.dropna()) >= 200 else f"{trend:.0f} din 1",
+              help="Câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200 (sub 200 de ședințe: doar preț > SMA 50).")
+    mom_raw = comp["raw"]["momentum_12_1"]
+    t3.metric("Momentum 12-1 luni", _bvb_fmt(mom_raw, "pct"),
+              help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă), pe date calendaristice.")
+    t4.metric("RSI 14", rsi_description(comp["raw"]["rsi"]), help=BVB_HELP["rsi"])
+    t5.metric("GN (P/E × P/BV)", _bvb_fmt(gn, "x"), gn_txt, delta_color="off", delta_arrow="off", help=BVB_HELP["gn"])
+
+    with st.expander("Informații fără putere de predicție în test (ROE, marjă, îndatorare)"):
+        i1, i2, i3 = st.columns(3)
+        i1.metric("ROE TTM", _bvb_fmt(me["ROE"], "pct"), help=BVB_HELP["roe"])
+        i2.metric("Marjă netă TTM", _bvb_fmt(me["marja"], "pct"), help=BVB_HELP["marja"])
+        i3.metric("Datorii / capital propriu", _bvb_fmt(me["indatorare"], "x"), help=BVB_HELP["indatorare"])
+
+    with st.expander("Piotroski simplificat: criteriile"):
+        if me["piotroski"]:
+            rows_p = []
+            for c in me["piotroski"]:
+                v = c["valoare"]
+                if isinstance(v, tuple):
+                    v_txt = " → ".join(_bvb_fmt(x, "x") for x in v)
+                else:
+                    v_txt = _bvb_fmt(v, "x")
+                rows_p.append({"Criteriu": c["criteriu"], "Valori (an trecut → acum)": v_txt,
+                               "Rezultat": {True: "✓", False: "✗", None: "N/A"}[c["trece"]]})
+            st.dataframe(pd.DataFrame(rows_p), hide_index=True, width='stretch')
+            st.caption(f"Raportul {me['raport_flux']} față de același raport de acum un an. "
+                       "N/A la emisiune = numărul de acțiuni a crescut de peste 1,65× (split sau acțiuni gratuite).")
+        else:
+            st.caption("Fără raport comparabil de acum un an.")
+
+    with st.expander(f"Clasamentul BVB ({n_cmp} companii din fișiere)"):
+        table = pd.DataFrame({
+            "Simbol": cs.index,
+            "Scor": cs["scor"].round(0),
+            "Treaptă": cs["treapta"].map({2.0: "FAVORABIL", 1.0: "NEUTRU", 0.0: "NEFAVORABIL"}).fillna("N/A"),
+            "P/E": [indicators[t]["PE"] for t in cs.index],
+            "P/BV": [indicators[t]["PBV"] for t in cs.index],
+            "Dividend %": [indicators[t]["DY"] * 100 if pd.notna(indicators[t]["DY"]) else np.nan for t in cs.index],
+            "Piotroski /6": cs["PIO"],
+            "Ultimul raport": [indicators[t]["raport_bilant"] for t in cs.index],
+        }).sort_values("Scor", ascending=False, na_position="last")
+        st.dataframe(table.round(2), hide_index=True, width='stretch')
+        no_price = [t for t, p in prices.items() if p is None]
+        if no_price:
+            st.caption("Fără preț Yahoo acum (multiplii lor sunt N/A): " + ", ".join(sorted(no_price)) + ".")
+
+    issues = data["probleme"].get(tk, [])
+    with st.expander(f"Calitatea datelor din fișierul {data['fisiere'][tk]} ({len(issues)} semnalări)"):
+        if issues:
+            st.dataframe(pd.DataFrame([{
+                "Perioadă": period_label(i["year"], i["months"]),
+                "Câmp": COMPANY_FIELD_LABELS.get(i["field"], i["field"]),
+                "Problemă": i["message"],
+                "Efect": "exclus din calcul" if i["excluded"] else "doar semnalat"} for i in issues]),
+                hide_index=True, width='stretch')
+        else:
+            st.caption("Nicio problemă găsită de verificările automate.")
+        if data["erori"]:
+            st.caption("Fișiere necitite: " + "; ".join(data["erori"]))
+
+    for w in me["avertismente"]:
+        st.warning(w)
+    st.caption(f"Sursa: fișierul „{data['fisiere'][tk]}”, bilanț {me['raport_bilant']}, profit TTM la "
+               f"{me['raport_flux'] or 'N/A'}, dividend {me['raport_anual'] or 'N/A'}; preț "
+               f"{_bvb_fmt(price, 'x')} lei (Yahoo, întârziat). {TEST_NOTE}")
+    st.markdown("---")
+
 
 def _read_peer_rows(symbols):
     """Citește din Yahoo indicatorii unor comparabili: (rânduri, simboluri fără date).
@@ -2795,6 +3052,9 @@ def main():
 
             # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
             st.markdown("---")
+
+            # 2b. Decizie BVB în doi pași (doar .RO cu fișier în „Analiză companii”)
+            render_bvb_decision(real_sym, hist)
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
