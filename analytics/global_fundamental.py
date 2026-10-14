@@ -6,7 +6,10 @@ literatură și din convențiile proiectului și sunt NETESTATE pe datele noastr
 istoric. Eticheta o spune.
 
 Companii nefinanciare, trei piloni cu pondere egală (fiecare 0–1, media componentelor cu date):
-  Evaluare   DCF invers (creșterea FCF pe care o cere prețul) și GN = P/E × P/BV (Graham)
+  Evaluare   DCF invers (creșterea FCF pe care o cere prețul) și randamentul profitului E/P față de
+             randamentul obligațiunilor AAA (criteriul lui Graham: E/P ≥ 2 × AAA). GN = P/E × P/BV
+             se afișează doar informativ: la companiile cu răscumpărări masive capitalul propriu
+             contabil e micșorat, iar P/BV și GN nu mai măsoară evaluarea.
   Calitate   Piotroski F-Score (9 criterii, ultimii doi ani fiscali), pe criteriile evaluabile
   Sănătate   zona Altman, datorie netă / EBITDA, acoperirea dobânzii
 Bănci și asigurători (bilanțul lor nu se citește ca al unei companii industriale):
@@ -25,6 +28,8 @@ REVERSE_DCF_BOUNDS = (-0.50, 1.00)
 REVERSE_DCF_SCALE = (0.20, 0.0)      # prețul cere ≥ 20% creștere/an → 0; ≤ 0% → 1
 GN_LIMIT = 22.5                      # Graham: P/E × P/BV ≤ 22,5
 GN_WORST = 90.0                      # de 4 ori pragul (de ex. P/E 30 × P/BV 3) → 0; scară logaritmică
+GN_UNINFORMATIVE_PBV = 10.0          # peste acest P/BV, GN e marcat „neinformativ” (capital contabil micșorat)
+EY_AAA_SCALE = (1.0, 2.0)            # E/P / AAA ≤ 1 → 0; ≥ 2 → 1 (Graham cerea E/P ≥ 2 × AAA)
 ND_EBITDA_SCALE = (4.0, 1.0)         # datorie netă / EBITDA ≥ 4 → 0; ≤ 1 → 1
 COVERAGE_SCALE = (1.5, 8.0)          # EBIT / dobânzi ≤ 1,5 → 0; ≥ 8 → 1
 ALTMAN_SCORE = {"safe": 1.0, "grey": 0.5, "distress": 0.0}
@@ -47,8 +52,9 @@ def _pct(x, digits=1):
     return f"{x * 100:+.{digits}f}%" if _num(x) else "N/A"
 
 
-def _component(label, value_txt, score, text):
-    return {"label": label, "value": value_txt, "score": score, "text": text}
+def _component(label, value_txt, score, text, info=False):
+    """info=True: componenta se afișează, dar nu intră în scor (score rămâne None)."""
+    return {"label": label, "value": value_txt, "score": None if info else score, "text": text, "info": info}
 
 
 # --- Evaluare -----------------------------------------------------------------
@@ -100,6 +106,63 @@ def gn_score(pe, pbv):
     return gn, linear_score(math.log(gn), math.log(GN_WORST), math.log(GN_LIMIT))
 
 
+def earnings_yield(pe, eps):
+    """(E/P, pierdere): E/P = 1 / P/E când P/E > 0. Fără P/E, dar cu EPS ≤ 0 → (None, True):
+    compania e pe pierdere, randamentul profitului e negativ. Altfel (None, False) = date lipsă."""
+    if _num(pe) and pe > 0:
+        return 1.0 / pe, False
+    if _num(eps) and eps <= 0:
+        return None, True
+    return None, False
+
+
+def earnings_yield_vs_aaa(ey, aaa_pct):
+    """(raport E/P / AAA, notă 0–1). aaa_pct e în procente (5,3 = 5,3%). ≤ 1 → 0, ≥ 2 → 1.
+    Date lipsă sau AAA ≤ 0 → (None, None)."""
+    if not (_num(ey) and _num(aaa_pct)) or aaa_pct <= 0:
+        return None, None
+    ratio = ey / (aaa_pct / 100)
+    return ratio, linear_score(ratio, *EY_AAA_SCALE)
+
+
+def ey_component(inp):
+    """Componenta de evaluare „E/P față de AAA” (criteriul lui Graham pe randament)."""
+    label = "E/P față de AAA"
+    aaa, aaa_label = inp.get("aaa"), inp.get("aaa_label") or "randament AAA"
+    ey, loss = earnings_yield(inp.get("pe"), inp.get("eps"))
+    if loss:
+        return _component(label, "pierdere", 0.0,
+                          "E/P față de AAA: compania e pe pierdere în ultimele 12 luni, randamentul profitului e negativ "
+                          "(notă zero).")
+    if ey is None:
+        return _component(label, "N/A", None, "E/P față de AAA: N/A (lipsește P/E).")
+    if not _num(aaa) or aaa <= 0:
+        return _component(label, "N/A", None, f"E/P față de AAA: N/A ({aaa_label}).")
+    ratio, score = earnings_yield_vs_aaa(ey, aaa)
+    return _component(label, f"{ratio:.2f}×", score,
+                      f"Randamentul profitului E/P = 1 / P/E = {ey * 100:.2f}% față de {aaa:.2f}% ({aaa_label}): "
+                      f"{ratio:.2f}× (Graham cerea minimum 2×; ≤ 1× → zero, ≥ 2× → notă maximă).")
+
+
+def gn_component(inp):
+    """GN = P/E × P/BV, doar informativ (nu intră în scor). Marcat „neinformativ” peste P/BV 10."""
+    pe, pbv = inp.get("pe"), inp.get("pbv")
+    gn, _ = gn_score(pe, pbv)
+    if gn is None:
+        return _component("GN (Graham)", "N/A", None,
+                          "GN = P/E × P/BV: N/A (P/E sau P/BV lipsă sau negativ: pierdere ori capital propriu negativ). "
+                          "Informativ, nu intră în scor.", info=True)
+    if pbv > GN_UNINFORMATIVE_PBV:
+        return _component("GN (Graham)", f"{gn:.1f} (neinformativ)", None,
+                          f"GN = P/E × P/BV = {gn:.1f}, neinformativ: P/BV {pbv:.1f} > {GN_UNINFORMATIVE_PBV:.0f}, "
+                          "capitalul propriu contabil e micșorat (răscumpărări de acțiuni, pierderi acumulate), "
+                          "deci P/BV nu mai măsoară evaluarea. Nu intră în scor.", info=True)
+    rel = "sub" if gn <= GN_LIMIT else "peste"
+    return _component("GN (Graham)", f"{gn:.1f}", None,
+                      f"GN = P/E × P/BV = {gn:.1f}, {rel} pragul lui Graham de 22,5. Informativ: nu intră în scor "
+                      "(evaluarea pe profit se face prin E/P față de AAA).", info=True)
+
+
 def valuation_components(inp):
     out = []
     dcf_na = inp.get("dcf_na")
@@ -129,15 +192,8 @@ def valuation_components(inp):
             out.append(_component("DCF invers", val, score,
                                   f"DCF invers: {txt} în primul an, care scade spre {TERMINAL_GROWTH * 100:.0f}% în anul 5 "
                                   f"(WACC {wacc * 100:.1f}%, pornind de la {base}). Sub 0% → notă maximă, peste 20% → zero."))
-    gn, s = gn_score(inp.get("pe"), inp.get("pbv"))
-    if gn is None:
-        out.append(_component("GN (Graham)", "N/A", None,
-                              "GN = P/E × P/BV: N/A (P/E sau P/BV lipsă sau negativ: pierdere ori capital propriu negativ)."))
-    else:
-        rel = "sub" if gn <= GN_LIMIT else "peste"
-        out.append(_component("GN (Graham)", f"{gn:.1f}", s,
-                              f"GN = P/E × P/BV = {gn:.1f}, {rel} pragul lui Graham de 22,5 "
-                              f"(≤ 22,5 → notă maximă, ≥ {GN_WORST:.0f} → zero)."))
+    out.append(ey_component(inp))
+    out.append(gn_component(inp))
     return out, rev
 
 
@@ -246,7 +302,8 @@ def _pillar(key, components):
 def fundamental_score(inp):
     """Scorul fundamental SUA/UE dintr-un dict de intrări deja calculate (vezi app.py).
 
-    Chei: financial (bool), price, dcf_na, wacc, fcf, fcf_basis, net_debt, shares, pe, pbv, piotroski
+    Chei: financial (bool), price, dcf_na, wacc, fcf, fcf_basis, net_debt, shares, pe, eps, aaa (procente),
+    aaa_label, pbv, piotroski
     ({passed, evaluable}), altman ({value, variant, zone}), ebitda, coverage, roe, ke.
     Întoarce {score (0–100 sau None), label, color, note, pillars, financial, reverse_dcf}.
     """
@@ -275,10 +332,13 @@ def fundamental_score(inp):
 
 
 def explain(result, good=0.67, bad=0.33):
-    """(puncte tari, la mijloc, puncte slabe, fără date): textele componentelor după notă."""
+    """(puncte tari, la mijloc, puncte slabe, fără date): textele componentelor după notă.
+    Componentele informative (care nu intră în scor) sunt în info_notes."""
     strong, middle, weak, missing = [], [], [], []
     for p in result["pillars"]:
         for c in p["components"]:
+            if c.get("info"):
+                continue
             if not _num(c["score"]):
                 missing.append(c["text"])
             elif c["score"] >= good:
@@ -290,5 +350,10 @@ def explain(result, good=0.67, bad=0.33):
     return strong, middle, weak, missing
 
 
-__all__ = ["fundamental_score", "explain", "reverse_dcf_growth", "justified_pbv", "gn_score", "TEST_NOTE",
-           "UNTESTED_NOTE"]
+def info_notes(result):
+    """Textele componentelor informative (afișate, dar fără notă în scor)."""
+    return [c["text"] for p in result["pillars"] for c in p["components"] if c.get("info")]
+
+
+__all__ = ["fundamental_score", "explain", "info_notes", "reverse_dcf_growth", "justified_pbv", "gn_score",
+           "earnings_yield", "earnings_yield_vs_aaa", "TEST_NOTE", "UNTESTED_NOTE"]

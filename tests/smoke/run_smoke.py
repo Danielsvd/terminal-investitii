@@ -558,6 +558,12 @@ def main():
     check(at, "2. Companie AAPL (date complete)")
     has_global = lambda: any("Scor fundamental (praguri netestate)" in str(h.value) for h in at.subheader)
     assert has_global(), "lipsește secțiunea Scor fundamental la AAPL"
+    comp_df = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
+    assert comp_df is not None, "lipsește tabelul cu componentele scorului fundamental la AAPL"
+    by_comp = dict(zip(comp_df["Componentă"], comp_df["Notă"]))
+    assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
+    assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
+    print(f"AAPL componente: {by_comp}")
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")

@@ -846,9 +846,13 @@ def global_fundamental_inputs(real_sym, info, hist, risk_stats):
         # FCF-ul curent e deformat (vârf de investiții, an atipic): DCF-ul invers pornește de la medie.
         fcf, fcf_basis = dcf_in["fcf_average"], f"media ultimilor {dcf_in['fcf_average_years']} ani fiscali"
     lev = fund.leverage_ratios(fin.get("income"), fin.get("balance"), fin.get("q_income"), fin.get("q_balance"))
+    # Randamentul AAA pentru criteriul lui Graham pe randament (E/P ≥ 2 × AAA): același Y ca la Graham revizuit
+    # (USD: FRED AAA; EUR: proxy Bund + marja AAA din SUA; alte valute: N/A).
+    aaa, aaa_label = get_graham_yield(t_curr)
     inp.update(dcf_na=dcf_na, wacc=wacc_res["wacc"] if wacc_res else None, fcf=fcf,
                fcf_basis=fcf_basis.split(" (")[0] if fcf_basis else None,
                net_debt=dcf_in["net_debt"], shares=dcf_in["shares"], pe=num(info, 'trailingPE'),
+               eps=num(info, 'trailingEps'), aaa=aaa, aaa_label=aaa_label,
                piotroski=fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow")),
                altman=calculate_altman_z(info, sym, fin), ebitda=lev["ebitda"], coverage=lev["interest_coverage"])
     return inp
@@ -886,6 +890,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
         </div>""", unsafe_allow_html=True)
 
     strong, middle, weak, missing = gfund.explain(res)
+    info_lines = gfund.info_notes(res)
     moment_lines = explain_moment(close, comp["raw"]["rsi"]) + [m_note]
 
     def _li(items, color):
@@ -901,6 +906,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
                     {_li(["La mijloc: " + s for s in middle], "#D29922")}
                     {_li(["Puncte slabe: " + s for s in weak], "#F85149")}
                     {_li(["Fără date: " + s for s in missing], "#8B949E")}
+                    {_li(["Informativ: " + s for s in info_lines], "#8B949E")}
                 </ul>
             </div>"""), unsafe_allow_html=True)
     with e2:
@@ -915,7 +921,8 @@ def render_global_decision(real_sym, info, hist, risk_stats):
 
     pillar_help = {
         "evaluare": ("Media componentelor cu date. Nefinanciare: DCF invers (creșterea FCF pe care o cere prețul; "
-                     "≤ 0% → 100, ≥ 20% → 0) și GN = P/E × P/BV (≤ 22,5 → 100, ≥ 90 → 0, scară logaritmică). "
+                     "≤ 0% → 100, ≥ 20% → 0) și randamentul profitului E/P față de randamentul AAA (criteriul lui "
+                     "Graham: ≤ 1× → 0, ≥ 2× → 100). GN = P/E × P/BV apare doar informativ. "
                      "Bănci și asigurători: P/BV față de P/BV justificat (ROE − g) / (ke − g); raport ≤ 0,7 → 100, ≥ 1,3 → 0."),
         "calitate": "Piotroski F-Score: criterii îndeplinite / criterii evaluabile (minimum 6 din 9), ultimul an fiscal față de cel precedent.",
         "sanatate": ("Media: zona Altman (sigură 100, gri 50, dificultate 0), datorie netă / EBITDA (≤ 1 → 100, ≥ 4 → 0), "
@@ -930,7 +937,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     with st.expander("Componentele scorului fundamental"):
         st.dataframe(pd.DataFrame([{
             "Pilon": p["label"], "Componentă": c["label"], "Valoare": c["value"],
-            "Notă": "N/A" if c["score"] is None else f"{c['score'] * 100:.0f}/100",
+            "Notă": ("informativ" if c.get("info") else "N/A" if c["score"] is None else f"{c['score'] * 100:.0f}/100"),
             "Explicație": c["text"]} for p in res["pillars"] for c in p["components"]]),
             hide_index=True, width='stretch')
         if res["financial"]:
