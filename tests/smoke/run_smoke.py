@@ -620,6 +620,14 @@ def main():
         radio().set_value(section).run()
         check(at, section)
         if section == "3. Portofoliu":
+            pos_df = next((d.value for d in at.dataframe if {"Simbol", "Cantitate", "Sursă preț"} <= set(getattr(d.value, "columns", []))), None)
+            assert pos_df is not None, "lipsește tabelul pozițiilor deschise"
+            qty = dict(zip(pos_df["Simbol"], pos_df["Cantitate"]))
+            # foaia Portofoliu are 367 TLV.RO; registrul fals are 100 + 10 − 30 = 80
+            assert qty.get("TLV.RO") == "367.0000", f"pozițiile nu vin din foaia Portofoliu: {qty}"
+            # titlul de stat nu e în foaie: rămâne din registru
+            assert qty.get("R9901AE") == "3.0000", f"titlul de stat lipsește din poziții: {qty}"
+            assert any("diferă de registru" in str(e.value) for e in at.info), "lipsește nota cu diferențele foaie / registru"
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
