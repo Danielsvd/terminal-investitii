@@ -585,6 +585,11 @@ def main():
         check(at, f"2. Companie {sym}")
         if sym in ("SAP.DE", "EURO.PA", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
             assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym == "EURO.PA":     # alpha UE: față de Euro Stoxx 50, nu față de SPY
+            alpha_m = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
+            alpha_help = alpha_m.proto.help if alpha_m is not None else ""
+            assert "Euro Stoxx 50" in alpha_help and "SPY" not in alpha_help, f"alpha EURO.PA: {alpha_help!r}"
+            print(f"EURO.PA alpha: {alpha_help}")
         if sym == "EURO.PA":     # EUR: AAA = Bund + marja AAA − GS10 din SUA, pe aceeași lună
             df_c = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
             ep_txt = dict(zip(df_c["Componentă"], df_c["Explicație"])).get("E/P față de AAA", "") if df_c is not None else ""
