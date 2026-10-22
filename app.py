@@ -873,7 +873,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     m_label, m_color, m_note = moment_label(moment, False)
     n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
     fund_detail = ("N/A" if res["score"] is None
-                   else f"{int(res['score'])}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
+                   else f"{res['score']:.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
     moment_detail = "N/A" if moment is None else f"tehnic {moment:.0f}/100, descriptiv"
 
     st.markdown(f"""
@@ -1361,25 +1361,42 @@ def get_aaa_yield():
     return None, "Randamentul obligațiunilor AAA (FRED) nu a putut fi citit."
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_aaa_spread():
+    """Marja AAA față de titlurile SUA pe 10 ani, pe aceeași lună (FRED `AAA` și `GS10`, ambele lunare):
+    (dict din fund.aaa_treasury_spread, descriere) sau (None, motiv). Fără valoare de rezervă."""
+    try:
+        end = datetime.today()
+        start = end - timedelta(days=200)
+        aaa = web.DataReader('AAA', 'fred', start, end).iloc[:, 0]
+        gs10 = web.DataReader('GS10', 'fred', start, end).iloc[:, 0]
+        res = fund.aaa_treasury_spread(aaa, gs10)
+        if res is not None and 0 < res["aaa"] < 25 and 0 < res["treasury"] < 25:
+            return res, f"marja AAA din SUA {res['spread']:.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
+        print("DEBUG: marja AAA (FRED AAA/GS10): nicio lună comună validă")
+    except Exception as e:
+        print(f"DEBUG: marja AAA (FRED AAA/GS10) indisponibilă: {e}")
+    return None, "Marja AAA față de titlurile SUA (FRED AAA, GS10) nu a putut fi citită."
+
+
 def get_graham_yield(currency):
     """Y din formula revizuită a lui Graham, în procente, pentru valuta acțiunii.
 
     USD: randamentul AAA din FRED. Alte valute: nu există o serie AAA locală, deci se
-    aproximează ca rată fără risc a valutei + marja AAA față de titlurile SUA pe 10 ani;
-    eticheta spune că e proxy. (None, motiv) dacă lipsește oricare componentă.
+    aproximează ca rată fără risc a valutei + marja AAA față de titlurile SUA pe 10 ani,
+    calculată pe aceeași lună (FRED AAA − GS10); eticheta spune că e proxy.
+    (None, motiv) dacă lipsește oricare componentă.
     """
-    aaa, aaa_label = get_aaa_yield()
-    if aaa is None:
-        return None, aaa_label
     cur = (currency or "").upper()
     if cur == "USD":
-        return aaa, aaa_label
-    rf_us, _ = get_risk_free_for_currency("USD")
+        return get_aaa_yield()
+    spread, spread_label = get_aaa_spread()
+    if spread is None:
+        return None, spread_label
     rf_local, rf_label = get_risk_free_for_currency(cur)
-    if rf_us is None or rf_local is None:
-        return None, f"Nu pot aproxima randamentul AAA în {cur or 'valuta necunoscută'} (lipsește o rată fără risc)."
-    spread = max(aaa - rf_us * 100, 0.0)
-    return rf_local * 100 + spread, f"proxy: {rf_label} + marja AAA din SUA ({spread:.2f} pp)"
+    if rf_local is None:
+        return None, f"Nu pot aproxima randamentul AAA în {cur or 'valuta necunoscută'} (lipsește rata fără risc: {rf_label})"
+    return rf_local * 100 + spread["spread"], f"proxy: {rf_label} + {spread_label}"
 
 
 @st.cache_data(ttl=21600, show_spinner=False)

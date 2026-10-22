@@ -587,3 +587,24 @@ def test_dcf_verdict_fara_verdict_pe_fcf_deformat():
     # date lipsă: nici verdict, nici "fără verdict" (cardul arată N/A)
     for bad in ((None, 100.0), (100.0, None), (100.0, -5.0)):
         assert F.dcf_verdict(*bad, fcf_distorted=True, on_average_basis=False) == (None, None, None)
+
+
+# --- Marja AAA față de titlurile SUA pe 10 ani (proxy AAA pentru EUR/RON) ------
+
+def test_marja_aaa_pe_aceeasi_luna():
+    from analytics.fundamentals import aaa_treasury_spread
+    # AAA are și septembrie, GS10 doar până în august: marja se ia pe august, nu amestecă lunile
+    aaa = pd.Series([5.90, 6.00, 6.03], index=pd.to_datetime(["2026-07-01", "2026-08-01", "2026-09-01"]))
+    gs10 = pd.Series([4.95, 5.10], index=pd.to_datetime(["2026-07-01", "2026-08-01"]))
+    res = aaa_treasury_spread(aaa, gs10)
+    assert str(res["month"]) == "2026-08"
+    assert res["spread"] == pytest.approx(0.90) and res["aaa"] == 6.00 and res["treasury"] == 5.10
+
+
+def test_marja_aaa_negativa_si_date_lipsa():
+    from analytics.fundamentals import aaa_treasury_spread
+    idx = pd.to_datetime(["2026-09-01"])
+    assert aaa_treasury_spread(pd.Series([4.0], index=idx), pd.Series([4.5], index=idx))["spread"] == 0.0
+    assert aaa_treasury_spread(pd.Series([5.0], index=idx), pd.Series([4.0], index=pd.to_datetime(["2026-08-01"]))) is None
+    assert aaa_treasury_spread(None, pd.Series([4.0], index=idx)) is None
+    assert aaa_treasury_spread(pd.Series(dtype=float), pd.Series([4.0], index=idx)) is None
