@@ -217,7 +217,8 @@ class FakeTicker:
             return pd.DataFrame({"strike": strikes,
                                  "openInterest": rng.integers(0, 5000, len(strikes)).astype(float),
                                  "volume": rng.integers(0, 2000, len(strikes)).astype(float),
-                                 "impliedVolatility": rng.uniform(0.15, 0.6, len(strikes))})
+                                 "impliedVolatility": rng.uniform(0.15, 0.6, len(strikes)),
+                                 "bid": np.full(len(strikes), 1.0)})
         calls, puts = side(), side()
         calls.loc[0, "openInterest"] = np.nan   # Yahoo trimite uneori NaN
         return types.SimpleNamespace(calls=calls, puts=puts)
@@ -513,6 +514,9 @@ def install_fakes():
 # Rularea
 # --------------------------------------------------------------------------
 EXPECTED_MESSAGES = (
+    "(prag absolut 45%, netestat)", "(prag absolut 20%, netestat)",   # nivelul IV la bani pe lanțul sintetic
+    "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
+    "Fără opțiuni listate în Yahoo", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
     "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
@@ -580,6 +584,9 @@ def main():
     curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4.20% − 3 luni 3.90%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
                     "SNP.RO": "România, titluri de stat 10 ani 7.12% (BCE) − ROBOR 3M 5.87% (Eurostat), 2026-08"}
     assert curve_expect["AAPL"] in page_text(), "lipsește curba SUA în ratingul AAPL"
+    metric_labels = [str(m.label) for m in at.metric]
+    assert "Delta call / put" in metric_labels, f"lipsesc greeks la AAPL: {metric_labels}"
+    assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")

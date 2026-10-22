@@ -30,6 +30,7 @@ from analytics.portfolio import value_positions, portfolio_curve as build_portfo
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
 from analytics import simulation
+from analytics import options as opt_calc
 from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
@@ -4582,138 +4583,182 @@ def main():
             st.subheader("🕵️‍♂️ Raze X: Fluxul de Bani din Opțiuni (Pro)")
 
             from ai_engine import get_options_analysis_ai
-            with st.spinner("Se decodează contractele Market Makerilor..."):
-                # Folosim simbolul real identificat anterior
-                opt_data, opt_msg = get_options_analysis_ai(real_sym)
+            with st.spinner("Se citește lanțul de opțiuni..."):
+                # Folosim simbolul real identificat anterior; dividendul anual pentru q (Black-Scholes)
+                opt_data, opt_msg = get_options_analysis_ai(real_sym, num(info, 'dividendRate'))
             if opt_data:
-                # Afișăm ora la care au fost preluate datele din Yahoo
-                st.caption(f"⏱️ Date opțiuni actualizate la ora: {opt_data.get('timestamp', 'N/A')}")
-                
-                # ... restul codului de afișare GEX, IV, etc.    
-            if opt_data:
-                # FIX DEFINIȚIE PREȚ: Luăm prețul curent din variabila 'hist' deja existentă
-                current_market_price = hist['Close'].iloc[-1] if not hist.empty else 0
+                def _f(v, fmt, na="N/A"):
+                    return na if v is None else format(v, fmt)
 
-                # --- 1. CARD GEX (NOUA FUNCȚIONALITATE) ---
-                st.markdown(f"""
+                spot_opt = opt_data['spot']
+                q_txt = ("q = 0 presupus (Yahoo nu dă dividendul anual)" if opt_data['q_assumed']
+                         else f"dividend continuu q = {opt_data['q']*100:.2f}%")
+                r_txt = (f"r = {opt_data['r']*100:.2f}% din {opt_data['r_src']} (proxy)" if opt_data['r'] is not None
+                         else "r indisponibil → greeks și GEX N/A")
+                st.caption(f"⏱️ Date opțiuni la ora {opt_data.get('timestamp', 'N/A')} · expirarea **{opt_data['expiration']}** "
+                           f"({opt_data['days']} zile; aleasă din 20–45, cea mai apropiată de 30) · preț {spot_opt:.2f} · {r_txt} · {q_txt}")
+                if opt_data['missing']:
+                    st.caption("Lipsesc: " + "; ".join(opt_data['missing']) + ".")
+
+                # --- 1. CARD GEX (estimare cu gamma Black-Scholes) ---
+                gex_val = opt_data['net_gex']
+                gex_txt = f"{gex_val:,.0f} USD / 1%" if gex_val is not None else "N/A"
+                gex_head, _, gex_body = opt_data['gex_verdict'].partition(': ')
+                st.markdown(compact_html(f"""
                     <div style="background:{opt_data['gex_color']}22; padding:25px; border-radius:15px; border-left: 10px solid {opt_data['gex_color']}; margin-bottom:25px; border: 1px solid {opt_data['gex_color']}44;">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:bold;">Expunere Netă la Radiații Gamma (Proxy)</p>
-                                <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{opt_data['net_gex']:,.0f} unități</h1>
+                                <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:bold;">Expunere netă la gamma (GEX, estimare) · {opt_data['gex_n']} contracte</p>
+                                <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{gex_txt}</h1>
                             </div>
                             <div style="text-align:right;">
                                 <span style="background:{opt_data['gex_color']}; color:white; padding:8px 16px; border-radius:25px; font-weight:bold; font-size:13px;">
-                                    {opt_data['gex_verdict'].split(':')[0]}
+                                    {gex_head}
                                 </span>
                             </div>
                         </div>
-                        <p style="margin:10px 0 0 0; font-size:15px; color:#C9D1D9;">{opt_data['gex_verdict'].split(': ')[1]}</p>
+                        <p style="margin:10px 0 0 0; font-size:15px; color:#C9D1D9;">{gex_body}</p>
                     </div>
-                """, unsafe_allow_html=True)
+                """), unsafe_allow_html=True)
+                st.caption("GEX = Σ gamma Black-Scholes × open interest × 100 × preț² × 1%, call cu +, put cu −, pe expirarea aleasă. "
+                           "Arată cu cât s-ar schimba delta totală a dealerilor (în USD) la o mișcare de 1% a prețului. "
+                           "Semnul presupune că dealerii sunt long call și short put: e o convenție, nu poziția lor reală.")
 
                 # --- RÂNDUL 1: VITEZOMETRU ȘI METRICE ---
                 col_gau, col_met = st.columns([1.5, 2])
 
                 with col_gau:
-                    # Preluăm culoarea din opt_data calculată mai sus
-                    iv_display_color = opt_data.get('iv_color', '#FFFFFF')
-                    
-                    fig_iv = go.Figure(go.Indicator(
-                        mode = "gauge+number",
-                        value = opt_data['iv'],
-                        domain = {'x': [0, 1], 'y': [0, 1]},
-                        title = {'text': "Termometru IV", 'font': {'size': 18, 'color': '#8B949E'}},
-                        # --- AICI COLORĂM NUMĂRUL (Procentul) ---
-                        number = {
-                            'suffix': "%", 
-                            'font': {'color': iv_display_color, 'size': 50} 
-                        },
-                        gauge = {
-                            'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
-                            'bar': {'color': iv_display_color}, # Bara urmărește culoarea textului
-                            'bgcolor': "rgba(0,0,0,0)",
-                            'borderwidth': 2,
-                            'bordercolor': "#30363D",
-                            'steps': [
-                                {'range': [0, 25], 'color': 'rgba(63, 185, 80, 0.1)'},
-                                {'range': [25, 50], 'color': 'rgba(210, 153, 34, 0.1)'},
-                                {'range': [50, 100], 'color': 'rgba(248, 81, 73, 0.1)'}
-                            ]
-                        }
-                    ))
-                    fig_iv.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_iv, width='stretch')
+                    iv_display_color = opt_data.get('iv_color', '#8B949E')
+                    if opt_data['iv'] is not None:
+                        fig_iv = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = opt_data['iv'],
+                            domain = {'x': [0, 1], 'y': [0, 1]},
+                            title = {'text': f"IV la bani · {opt_data['days']} zile", 'font': {'size': 18, 'color': '#8B949E'}},
+                            number = {
+                                'suffix': "%",
+                                'font': {'color': iv_display_color, 'size': 50}
+                            },
+                            gauge = {
+                                'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                                'bar': {'color': iv_display_color},
+                                'bgcolor': "rgba(0,0,0,0)",
+                                'borderwidth': 2,
+                                'bordercolor': "#30363D",
+                                'steps': [
+                                    {'range': [0, 25], 'color': 'rgba(63, 185, 80, 0.1)'},
+                                    {'range': [25, 50], 'color': 'rgba(210, 153, 34, 0.1)'},
+                                    {'range': [50, 100], 'color': 'rgba(248, 81, 73, 0.1)'}
+                                ]
+                            }
+                        ))
+                        fig_iv.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
+                        st.plotly_chart(fig_iv, width='stretch')
+                        st.caption(f"IV la bani = media IV call și put interpolate la preț ({opt_data['iv_sides']} din 2 părți cu cotații). "
+                                   "Culorile folosesc praguri absolute 25% / 50% · netestat.")
+                    else:
+                        st.metric("IV la bani", "N/A", help="Nu există cotații cu bid > 0 care să încadreze prețul curent pe expirarea aleasă.")
 
                 with col_met:
+                    oi_pc, vol_pc = opt_data['oi_pc_ratio'], opt_data['vol_pc_ratio']
                     m1, m2 = st.columns(2)
-                    m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}",
-                              help="Open Interest (Banii blocați): Raportul total al pariurilor pe scădere (Puts) vs creștere (Calls). Sub 0.7 = Optimism (Bullish); Peste 1.0 = Pesimism/Frică (Bearish).")
-                    m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}",
-                              help="Volum (Banii de azi): Indică panica sau entuziasmul intraday. Se mișcă mai rapid decât OI. Valori mari bruste indică vânzări de panică.")
-                    
+                    m1.metric("Put/Call (open interest)", _f(oi_pc, ".2f"),
+                              help="Σ open interest put / Σ open interest call, pe expirarea aleasă. Poziții deschise acumulate. "
+                                   "Pragurile <0,7 optimism / >1,1 pesimism sunt convenții de piață, netestate aici. N/A = fără open interest la call-uri.")
+                    m2.metric("Put/Call (volum)", _f(vol_pc, ".2f"),
+                              help="Σ volum put / Σ volum call, pe expirarea aleasă, în ședința curentă. Se mișcă mai repede decât open interest-ul. N/A = fără volum la call-uri.")
+
                     m3, m4 = st.columns(2)
                     mp = opt_data['max_pain']
                     mp_display = f"${mp:.1f}" if mp is not None else "N/A"
-                    if mp is not None and current_market_price > 0:
-                        diff_mp = ((mp / current_market_price) - 1) * 100
-                        m3.metric("Preț Max Pain", mp_display, f"{diff_mp:.1f}% față de preț",
-                                  help="Strike-ul la care opțiunile acestei expirări ar valora cel mai puțin, calculat din open interest. Este un reper, nu o țintă de preț.")
+                    mp_help = ("Strike-ul la care opțiunile acestei expirări ar valora cel mai puțin la expirare, "
+                               "calculat din open interest. Este un reper, nu o țintă de preț.")
+                    if mp is not None:
+                        diff_mp = ((mp / spot_opt) - 1) * 100
+                        m3.metric("Preț Max Pain", mp_display, f"{diff_mp:.1f}% față de preț", help=mp_help)
                     else:
-                        m3.metric("Preț Max Pain", mp_display)
-                    m4.metric("Data Expirării", opt_data['expiration'])
-                # --- INTEGRARE IV RANK & PERCENTILE ---
+                        m3.metric("Preț Max Pain", mp_display, help=mp_help)
+                    m4.metric("Expirare", opt_data['expiration'], f"{opt_data['days']} zile", delta_color="off",
+                              help="Expirarea cu 20–45 de zile rămase cea mai apropiată de 30. Expirările de câteva zile au IV deformat de timpul scurt.")
+
+                # --- IV RANK, PERCENTILE ȘI IV / VOLATILITATE REALIZATĂ ---
                 with col_met:
-                    # Obținem datele din motorul AI
-                    from ai_engine import calculate_iv_rank_percentile
-                    iv_rank, iv_pct = calculate_iv_rank_percentile(real_sym, opt_data['iv'])
-                    
-                    st.write("") # Spațiu vizual
-                    c_rank1, c_rank2 = st.columns(2)
-                    
-                    # Interpretare culori
-                    rank_col = "#F85149" if iv_rank > 70 else ("#3FB950" if iv_rank < 30 else "#D29922")
-                    
-                    c_rank1.metric("IV Rank", f"{iv_rank:.1f}%", 
-                                help="Unde se află IV-ul de azi între minimul și maximul din ultimul an.")
-                    c_rank2.metric("IV Percentile", f"{iv_pct:.1f}%",
-                                help="Câte zile din ultimul an au avut un IV mai mic decât cel de azi.")
+                    st.write("")
+                    hv30 = opt_calc.realized_vol(hist['Close']) if hist is not None and not hist.empty else None
+                    iv_hv = (opt_data['iv'] / (hv30 * 100)) if (opt_data['iv'] is not None and hv30) else None
+                    # IV Rank cere istoricul IV la bani (foaia IV_istoric), care se construiește în pasul următor.
+                    iv_rank = None
+                    c_rank1, c_rank2, c_rank3 = st.columns(3)
+                    c_rank1.metric("IV Rank", "N/A",
+                                   help="(IV de azi − minim) / (maxim − minim) pe ultimul an, din istoricul IV la bani. "
+                                        "Istoricul se construiește zilnic în foaia IV_istoric; sub 20 de observații nu se calculează.")
+                    c_rank2.metric("IV Percentile", "N/A",
+                                   help="Procentul zilelor din ultimul an cu IV la bani mai mic decât azi. Cere același istoric ca IV Rank.")
+                    c_rank3.metric("IV / volatilitate realizată 30z", _f(iv_hv, ".2f"),
+                                   f"realizată {hv30*100:.1f}%" if hv30 else None, delta_color="off",
+                                   help="IV la bani / volatilitatea realizată pe ultimele 30 de zile calendaristice (randamente log, √252). "
+                                        "Peste 1: piața plătește pentru mai multă mișcare decât a avut acțiunea recent. Nu este IV Rank.")
 
-                # --- VERDICT FINAL OPȚIUNI (ACTUALIZAT) ---
-                if iv_rank > 80:
-                    st.warning(f"💎 **STRATEGIE SHORT VOL:** Opțiunile sunt la extreme istorice. Este un moment excelent pentru a VINDE volatilitate (ex: Covered Calls), nu pentru a cumpăra.")
-                elif iv_rank < 20:
-                    st.success(f"🛒 **STRATEGIE LONG VOL:** Opțiunile sunt neobișnuit de ieftine față de istoric. Moment ideal pentru achiziție de protecție (Puts) sau speculă (Calls).")    
+                # --- VERDICT IV RANK (praguri netestate; activ doar când există istoric IV) ---
+                if iv_rank is not None and iv_rank > 80:
+                    st.warning("💎 **IV Rank peste 80 (netestat):** opțiunile sunt scumpe față de propriul istoric pe un an; vânzarea de volatilitate (ex. covered calls) e în avantaj față de cumpărare.")
+                elif iv_rank is not None and iv_rank < 20:
+                    st.success("🛒 **IV Rank sub 20 (netestat):** opțiunile sunt ieftine față de propriul istoric pe un an; cumpărarea de protecție (put) sau de call-uri costă mai puțin.")
 
-                # --- RÂNDUL 2: VERDICTUL INTELIGENT (RESTABILIT) ---
-                oi_pc = opt_data['oi_pc_ratio']
-                vol_pc = opt_data['vol_pc_ratio']
-                iv_val = opt_data['iv']
-
-                if oi_pc < 0.7 and vol_pc < 0.7:
-                    v_text, v_col = "🚀 **BULLISH CONVINCED:** Instituțiile cumpără masiv. Trend ascendent solid.", "#3FB950"
-                elif oi_pc < 0.7 and vol_pc > 1.1:
-                    v_text, v_col = "🔄 **DIVERGENȚĂ:** Optimism pe termen lung, dar azi apare frică (Puts). Posibilă corecție!", "#D29922"
-                elif oi_pc > 1.1:
-                    v_text, v_col = "🐻 **BEARISH DOMINANT:** Piața pariază pe scădere. Opțiunile Put domină peisajul.", "#F85149"
+                # --- GREEKS LA BANI ȘI MIȘCAREA AȘTEPTATĂ ---
+                st.markdown(f"#### 📐 Greeks la bani (strike {_f(opt_data['atm_strike'], '.2f')}, Black-Scholes)")
+                gc, gp = opt_data['greeks_call'], opt_data['greeks_put']
+                if gc and gp:
+                    g1, g2, g3, g4 = st.columns(4)
+                    g1.metric("Delta call / put", f"{gc['delta']:.2f} / {gp['delta']:.2f}",
+                              help="Variația prețului opțiunii la +1 USD în prețul acțiunii. Black-Scholes cu IV la bani, r și q din antet.")
+                    g2.metric("Gamma", f"{gc['gamma']:.4f}",
+                              help="Variația deltei la +1 USD în prețul acțiunii; aceeași pentru call și put.")
+                    g3.metric("Theta call / put (pe zi)", f"{gc['theta_day']:.3f} / {gp['theta_day']:.3f}",
+                              help="Pierderea de valoare într-o zi calendaristică, pe o acțiune suport (un contract = 100). Theta anual / 365.")
+                    g4.metric("Vega (la 1 pp de IV)", f"{gc['vega_pt']:.3f}",
+                              help="Variația prețului opțiunii la +1 punct procentual de volatilitate implicită; aceeași pentru call și put.")
                 else:
-                    v_text, v_col = "⚖️ **NEUTRU:** Echilibru între cumpărători și vânzători.", "#8B949E"
+                    st.info("Greeks N/A: lipsesc IV la bani sau rata fără risc (vezi antetul secțiunii).")
+                em = opt_data['expected_move']
+                if em is not None:
+                    st.metric("Mișcare așteptată până la expirare (±1σ)", f"±{em:.2f} ({em / spot_opt * 100:.1f}%)",
+                              help="Preț × IV la bani × √(zile/365). Intervalul de ±1 abatere standard implicat de opțiuni "
+                                   "(~68% probabilitate sub ipoteza de normalitate, care subestimează cozile).")
+
+                # --- RÂNDUL 2: VERDICTUL PUT/CALL (praguri netestate) ---
+                iv_val = opt_data['iv']
+                if oi_pc is None or vol_pc is None:
+                    v_text, v_col = "⚖️ **PUT/CALL INCOMPLET:** lipsește open interest-ul sau volumul la call-uri; fără verdict.", "#8B949E"
+                elif oi_pc < 0.7 and vol_pc < 0.7:
+                    v_text, v_col = "🚀 **OPTIMISM ÎN OPȚIUNI (netestat):** call-urile domină și în pozițiile deschise, și în volumul de azi.", "#3FB950"
+                elif oi_pc < 0.7 and vol_pc > 1.1:
+                    v_text, v_col = "🔄 **DIVERGENȚĂ (netestat):** pozițiile deschise sunt optimiste, dar azi volumul e dominat de put-uri.", "#D29922"
+                elif oi_pc > 1.1:
+                    v_text, v_col = "🐻 **PESIMISM ÎN OPȚIUNI (netestat):** put-urile domină pozițiile deschise (pot fi și acoperiri, nu doar pariuri pe scădere).", "#F85149"
+                else:
+                    v_text, v_col = "⚖️ **NEUTRU (netestat):** echilibru între put-uri și call-uri.", "#8B949E"
 
                 st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_text}</div>", unsafe_allow_html=True)
 
-                # --- RÂNDUL 3: STRATEGIA IV (RESTABILIT) ---
-                if iv_val > 45:
-                    st.warning(f"⚠️ **ALERTA IV:** Deși direcția pare {v_text.split(':')[0][2:]}, opțiunile sunt **prea scumpe** ({iv_val:.1f}%). Riscul de scădere a valorii prin volatilitate este uriaș.")
-                elif iv_val < 20:
-                    st.success(f"💎 **OPORTUNITATE IV:** Opțiunile sunt foarte ieftine ({iv_val:.1f}%). Moment ideal pentru a paria pe direcția identificată.")
+                # --- RÂNDUL 3: NIVELUL IV (praguri absolute netestate) ---
+                if iv_val is not None and iv_val > 45:
+                    st.warning(f"⚠️ **IV ridicat (prag absolut 45%, netestat):** opțiunile la bani sunt scumpe ({iv_val:.1f}%). Pragul absolut nu ține cont de volatilitatea obișnuită a acestei acțiuni.")
+                elif iv_val is not None and iv_val < 20:
+                    st.success(f"💎 **IV scăzut (prag absolut 20%, netestat):** opțiunile la bani sunt ieftine ({iv_val:.1f}%).")
 
-                # --- RÂNDUL 4: DETALIEREA INDICATORILOR (RESTABILIT) ---
+                # --- RÂNDUL 4: DETALIEREA INDICATORILOR ---
                 st.markdown("#### 🔍 Detalierea Indicatorilor")
+                def _interp(v, low, high, t_low, t_high, t_mid):
+                    if v is None:
+                        return "N/A"
+                    return (t_low if v < low else t_high if v > high else t_mid) + " (netestat)"
                 interpretare_data = [
-                    {"Indicator": "📉 Put/Call (OI)", "Valoare": f"{oi_pc:.2f}", "Interpretare": "Bullish" if oi_pc < 0.7 else "Bearish" if oi_pc > 1.1 else "Neutru"},
-                    {"Indicator": "⚡ Put/Call (Volum)", "Valoare": f"{vol_pc:.2f}", "Interpretare": "Sentiment Bullish" if vol_pc < 0.7 else "Panică" if vol_pc > 1.1 else "Normal"},
+                    {"Indicator": "📉 Put/Call (OI)", "Valoare": _f(oi_pc, ".2f"), "Interpretare": _interp(oi_pc, 0.7, 1.1, "Optimism", "Pesimism", "Neutru")},
+                    {"Indicator": "⚡ Put/Call (Volum)", "Valoare": _f(vol_pc, ".2f"), "Interpretare": _interp(vol_pc, 0.7, 1.1, "Optimism azi", "Presiune put azi", "Normal")},
                     {"Indicator": "🧲 Max Pain Price", "Valoare": mp_display, "Interpretare": f"Reper la expirarea din {opt_data['expiration']}, nu țintă de preț"},
-                    {"Indicator": "🌡️ Volatilitate (IV)", "Valoare": f"{iv_val:.1f}%", "Interpretare": "EVITĂ derivate (Scump)" if iv_val > 40 else "OK de cumpărat (Ieftin)"}
+                    {"Indicator": "🌡️ IV la bani", "Valoare": _f(iv_val, ".1f") + ("%" if iv_val is not None else ""), "Interpretare": _interp(iv_val, 20, 40, "Ieftin", "Scump", "Mediu")},
+                    {"Indicator": "📏 IV / realizată 30z", "Valoare": _f(iv_hv, ".2f"), "Interpretare": "N/A" if iv_hv is None else ("IV peste mișcarea recentă" if iv_hv > 1 else "IV sub mișcarea recentă")},
                 ]
                 st.table(interpretare_data)
             else:
@@ -4730,7 +4775,8 @@ def main():
             s_mos = mos_val
             s_rvol = rvol if 'rvol' in dir() else 1.0
             s_score_final = s_score_val if 's_score_val' in dir() else 0
-            opt_final = opt_data if 'opt_data' in dir() else None
+            # Pilonul de opțiuni intră în Master AI doar cu P/C pe open interest și IV la bani calculate; altfel lipsește (fără puncte)
+            opt_final = opt_data if (opt_data and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None) else None
             
             # Extragem datele specifice modulelor adiacente
             z_score_val = z_val_swot if 'z_val_swot' in dir() else None
