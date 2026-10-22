@@ -1308,7 +1308,8 @@ def resolve_beta_alpha(symbol, info, hist):
     deci se calculează față de BET (prin TVBETETF.RO, proxy), pe randamente săptămânale.
     La celelalte piețe rămâne beta Yahoo; dacă lipsește, se calculează față de indicele pieței.
     Alpha: când beta e calculat aici, alpha folosește același benchmark și rata fără risc a
-    valutei; când beta e din Yahoo, rămâne calculul existent (față de SPY).
+    valutei. Cu beta din Yahoo: acțiunile în USD rămân pe calculul existent (față de SPY); cele în EUR
+    se compară cu DAX (.DE) sau Euro Stoxx 50, cu beta calculat față de același indice; alte valute: N/A.
     Întoarce un dict: beta, beta_label, alpha, alpha_label. Valorile lipsă sunt None.
     """
     currency = info.get('currency') or 'USD'
@@ -1343,11 +1344,39 @@ def resolve_beta_alpha(symbol, info, hist):
             out["alpha_label"] = "indisponibil: lipsește beta"
             return out
 
-    if out["beta"] is not None:
-        out["alpha"] = calculate_alpha(hist, out["beta"])
-        out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
-    else:
+    if out["beta"] is None:
         out["alpha_label"] = "indisponibil: lipsește beta"
+        return out
+    cur = currency.upper()
+    if cur == "EUR":
+        # Zona euro: alpha față de indicele pieței (DAX pentru .DE, Euro Stoxx 50 în rest), în EUR, cu rata
+        # fără risc în EUR. Jensen cere beta față de ACELAȘI indice, deci se calculează aici (săptămânal);
+        # beta Yahoo rămâne cel folosit în DCF și WACC.
+        bench_sym, bench_name = beta_benchmark(symbol, cur)
+        if bench_sym == "^STOXX50E":
+            bench_name += " (indice de preț, fără dividende)"
+        bench_close = get_benchmark_close(bench_sym)
+        own = beta_weekly(hist['Close'], bench_close)
+        rf_val, rf_label = get_risk_free_for_currency(cur)
+        if own is None or own["beta"] <= 0:
+            out["alpha_label"] = f"indisponibil: beta față de {bench_name} nu se poate calcula (sub 52 de săptămâni comune)"
+        elif rf_val is None:
+            out["alpha_label"] = f"indisponibil: {rf_label}"
+        else:
+            alpha = jensen_alpha(hist['Close'], bench_close, own["beta"], rf_val)
+            if alpha is None:
+                out["alpha_label"] = f"indisponibil: sub un an de ședințe comune cu {bench_name}"
+            else:
+                out["alpha"] = alpha["alpha"]
+                out["alpha_label"] = (f"față de {bench_name}, {alpha['start']:%d.%m.%Y}–{alpha['end']:%d.%m.%Y}; "
+                                      f"beta {own['beta']:.2f} față de același indice ({own['n']} randamente săptămânale; "
+                                      f"beta Yahoo din DCF rămâne separat); rată fără risc {rf_val * 100:.2f}% [{rf_label}]")
+        return out
+    if cur != "USD":
+        out["alpha_label"] = f"indisponibil: nu există încă un indice de referință în {cur} (doar SUA, zona euro, BVB)"
+        return out
+    out["alpha"] = calculate_alpha(hist, out["beta"])
+    out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
     return out
 
 
