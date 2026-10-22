@@ -32,6 +32,7 @@ from analytics import ledger as ledger_calc
 from analytics import simulation
 from analytics import options as opt_calc
 from data import portfolio_sheet
+from data import iv_history
 from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
@@ -2331,6 +2332,45 @@ def load_ledger_values():
         return None
 
 MANUAL_PRICE_STALE_DAYS = 30  # peste atât, prețul manual e semnalat ca vechi
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_iv_history_values():
+    """Conținutul brut al foii `IV_istoric` (valori neformatate); None dacă foaia lipsește sau nu poate fi citită."""
+    ws = connect_to_gsheets("IV_istoric")
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+    except gspread.exceptions.GSpreadException as e:
+        print(f"DEBUG: foaia IV_istoric nu a putut fi citită: {e}")
+        return None
+
+def update_iv_history(symbol, iv_pct):
+    """Salvează IV-ul la bani de azi în `IV_istoric` (o dată pe zi și simbol, doar în timpul ședinței SUA)
+    și întoarce {"rank": iv_rank_percentile(...), "note": text pentru interfață}."""
+    values = load_iv_history_values()
+    df, problems = iv_history.parse_iv_history(values)
+    now = now_ro()  # cu fus orar; se convertește la New York în iv_history
+    session = iv_history.us_session_date(now)
+    note = ""
+    if values is None:
+        note = "Foaia IV_istoric nu a putut fi citită; IV Rank rămâne N/A."
+    elif iv_pct is not None and iv_history.us_session_open(now) and iv_history.should_save(df, symbol, session):
+        ws = connect_to_gsheets("IV_istoric")
+        try:
+            ws.append_row(iv_history.make_row(session, symbol, iv_pct / 100), value_input_option="RAW")
+            load_iv_history_values.clear()  # golește doar cache-ul foii IV_istoric
+            df, problems = iv_history.parse_iv_history(load_iv_history_values())
+            note = f"IV-ul de azi ({iv_pct:.1f}%) a fost salvat în IV_istoric pentru {session:%d.%m.%Y}."
+        except (gspread.exceptions.GSpreadException, AttributeError) as e:
+            print(f"DEBUG: IV_istoric, scriere eșuată pentru {symbol}: {e}")
+            note = "IV-ul de azi nu a putut fi salvat în IV_istoric."
+    series = iv_history.history_for(df, symbol)
+    rank = opt_calc.iv_rank_percentile(series, None if iv_pct is None else iv_pct / 100, as_of=pd.Timestamp(session))
+    span = f", {rank['first']:%d.%m.%Y} – {rank['last']:%d.%m.%Y}" if rank["n"] else ""
+    note = " ".join(x for x in [note, f"Istoric IV la bani pentru {symbol}: {rank['n']} zile în ultimul an{span}. "
+                                "Se salvează automat o valoare pe zi, doar cât bursa SUA e deschisă."] + problems if x)
+    return {"rank": rank, "note": note}
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_manual_price_values():
@@ -4732,18 +4772,24 @@ def main():
                     st.write("")
                     hv30 = opt_calc.realized_vol(hist['Close']) if hist is not None and not hist.empty else None
                     iv_hv = (opt_data['iv'] / (hv30 * 100)) if (opt_data['iv'] is not None and hv30) else None
-                    # IV Rank cere istoricul IV la bani (foaia IV_istoric), care se construiește în pasul următor.
-                    iv_rank = None
+                    # IV Rank din istoricul IV la bani (foaia IV_istoric), salvat zilnic în timpul ședinței SUA.
+                    iv_store = update_iv_history(real_sym, opt_data['iv'])
+                    rk = iv_store["rank"]
+                    iv_rank = rk["rank"]
+                    obs_txt = f"{rk['n']} zile de istoric" + ("" if rk["n"] >= opt_calc.MIN_IV_OBS else f" (minimum {opt_calc.MIN_IV_OBS})")
                     c_rank1, c_rank2, c_rank3 = st.columns(3)
-                    c_rank1.metric("IV Rank", "N/A",
-                                   help="(IV de azi − minim) / (maxim − minim) pe ultimul an, din istoricul IV la bani. "
-                                        "Istoricul se construiește zilnic în foaia IV_istoric; sub 20 de observații nu se calculează.")
-                    c_rank2.metric("IV Percentile", "N/A",
+                    c_rank1.metric("IV Rank", _f(iv_rank, ".1f") + ("%" if iv_rank is not None else ""), obs_txt, delta_color="off",
+                                   help="(IV de azi − minim) / (maxim − minim) pe ultimul an, din istoricul IV la bani salvat zilnic în foaia IV_istoric. "
+                                        f"Sub {opt_calc.MIN_IV_OBS} de zile de istoric nu se calculează (N/A).")
+                    c_rank2.metric("IV Percentile", _f(rk["percentile"], ".1f") + ("%" if rk["percentile"] is not None else ""),
+                                   obs_txt, delta_color="off",
                                    help="Procentul zilelor din ultimul an cu IV la bani mai mic decât azi. Cere același istoric ca IV Rank.")
                     c_rank3.metric("IV / volatilitate realizată 30z", _f(iv_hv, ".2f"),
                                    f"realizată {hv30*100:.1f}%" if hv30 else None, delta_color="off",
                                    help="IV la bani / volatilitatea realizată pe ultimele 30 de zile calendaristice (randamente log, √252). "
                                         "Peste 1: piața plătește pentru mai multă mișcare decât a avut acțiunea recent. Nu este IV Rank.")
+
+                st.caption(iv_store["note"])
 
                 # --- VERDICT IV RANK (praguri netestate; activ doar când există istoric IV) ---
                 if iv_rank is not None and iv_rank > 80:
