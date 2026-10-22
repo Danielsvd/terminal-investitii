@@ -586,6 +586,8 @@ def main():
     assert curve_expect["AAPL"] in page_text(), "lipsește curba SUA în ratingul AAPL"
     metric_labels = [str(m.label) for m in at.metric]
     assert "Delta call / put" in metric_labels, f"lipsesc greeks la AAPL: {metric_labels}"
+    raw_bold = [str(m.value)[-120:] for m in at.markdown if "<div" in str(m.value) and "(netestat):" in str(m.value) and "**" in str(m.value)]
+    assert not raw_bold, f"casete HTML cu ** neinterpretat: {raw_bold}"
     assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()

@@ -4785,7 +4785,9 @@ def main():
                 else:
                     v_text, v_col = "⚖️ **NEUTRU (netestat):** echilibru între put-uri și call-uri.", "#8B949E"
 
-                st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_text}</div>", unsafe_allow_html=True)
+                # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
+                v_html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", v_text)
+                st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_html}</div>", unsafe_allow_html=True)
 
                 # --- RÂNDUL 3: NIVELUL IV (praguri absolute netestate) ---
                 if iv_val is not None and iv_val > 45:
