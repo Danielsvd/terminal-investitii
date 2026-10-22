@@ -318,6 +318,10 @@ SHEETS = {
     # preț manual pentru obligațiunea din registrul fals; data de azi, ca să nu apară avertismentul de preț vechi
     "Preturi_manuale": [["Symbol", "Price", "Date"], ["R9901AE", "101,25", __import__("datetime").date.today().isoformat()],
                         ["R9902AE", "", ""]],
+    # istoric IV la bani sintetic pentru AAPL: 25 de zile, IV 0,20 … 0,44
+    "IV_istoric": [["Date", "Symbol", "IV_ATM"]] + [
+        [(__import__("datetime").date.today() - __import__("datetime").timedelta(days=40 - i)).isoformat(), "AAPL", (20 + i) / 100]
+        for i in range(25)],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
                ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
 }
@@ -586,6 +590,9 @@ def main():
     assert curve_expect["AAPL"] in page_text(), "lipsește curba SUA în ratingul AAPL"
     metric_labels = [str(m.label) for m in at.metric]
     assert "Delta call / put" in metric_labels, f"lipsesc greeks la AAPL: {metric_labels}"
+    rank_metric = next((m for m in at.metric if str(m.label) == "IV Rank"), None)
+    assert rank_metric is not None and str(rank_metric.value) != "N/A", f"IV Rank lipsește la AAPL: {rank_metric and rank_metric.value}"
+    assert "25 zile de istoric" in str(rank_metric.delta), f"numărul de zile din IV_istoric: {rank_metric.delta}"
     raw_bold = [str(m.value)[-120:] for m in at.markdown if "<div" in str(m.value) and "(netestat):" in str(m.value) and "**" in str(m.value)]
     assert not raw_bold, f"casete HTML cu ** neinterpretat: {raw_bold}"
     assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
