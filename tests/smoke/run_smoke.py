@@ -13,6 +13,7 @@ Rulare, din rădăcina repo-ului:
 Cod de ieșire 0 = nicio excepție și niciun mesaj de eroare neașteptat.
 """
 import os
+import re
 import sys
 import time
 import types
@@ -101,6 +102,8 @@ def _info_for(sym):
         return dict(SPARSE_INFO)
     if sym == "LOSS":
         return dict(LOSS_INFO)
+    if sym.endswith(".PA"):   # companie din zona euro cu date complete: AAA în EUR = proxy
+        return dict(RICH_INFO, currency="EUR", financialCurrency="EUR")
     return dict(RICH_INFO)
 
 
@@ -109,7 +112,7 @@ class _FastInfo:
         df = _ohlcv(sym, 5)
         self.last_price = float(df["Close"].iloc[-1]) if df["Close"].notna().any() else None
         self.previous_close = float(df["Close"].iloc[-2]) if df["Close"].notna().any() else None
-        self.currency = "RON" if sym.endswith(".RO") else ("EUR" if sym.endswith(".DE") else "USD")
+        self.currency = "RON" if sym.endswith(".RO") else ("EUR" if sym.endswith((".DE", ".PA")) else "USD")
         self.market_cap = 1e9
 
 
@@ -258,8 +261,8 @@ def fake_fred(code, source, start, end):
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
-            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4}[code]
-    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA") else 0.0
+            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5}[code]
+    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)
 
 
@@ -353,9 +356,69 @@ class FakeSpreadsheet:
         return FakeWorksheet(name)
 
 
+# Fișierele „Analiză companii” (Drive): un emitent cu șablon de bancă (sărit) și 8 emitenți cu date cumulate.
+COMPANY_FILES = ["0-Dashboard", "TLV", "SNP", "TGN", "SNG", "EL", "H2O", "TEL", "WINE", "DN Agrar"]
+_RAW_LABELS = ["Datorii totale", "Cifră de afaceri", "Profit Net", "Profit distribuit", "Ebitda",
+               "Rezultat operațional", "Capital propriu (Activ Net)", "Conturi la bănci", "Datorii termen scurt",
+               "Datorii termen lung", "Active totale", "Active imobilizate", "Active circulante (curente)",
+               "Stocuri", "Creanțe", "Preț curent acțiune", "Nr. de acțiuni emise"]
+
+
+def _company_sheets(name):
+    """(Date Q, Date Anuale) sintetice, ca valorile nevizualizate din Google Sheets."""
+    if name == "TLV":
+        return [["Criteriu", "Q1 2025"], ["Datorii la clienți (depozite)", 1e9]], [["Criteriu", "2024"]]
+    k = 1 + _seed(name) % 7
+    sym = f"{name.split()[0].upper()}.RO"
+    # Prețul din fișier = prețul pe care îl va folosi aplicația (live reușit sau ultima închidere), ca să nu
+    # declanșeze avertismentul de split pe datele sintetice.
+    price = _FastInfo(sym).last_price if _seed(sym) % 2 == 0 else float(_ohlcv(sym, 1260)["Close"].iloc[-1])
+    q_per = [f"Q{i} {y}" for y in (2024, 2025, 2026) for i in (1, 2, 3)][:-1] + ["Q3 2026"]
+    a_per = ["2023", "2024", "2025", "2026", "2025/2024", "Media"]
+
+    def block(periods, annual):
+        rows = [["Criteriu"] + periods, ["Marjă netă"] + ["#DIV/0!"] * len(periods)]
+        for lab in _RAW_LABELS:
+            vals = []
+            for j, per in enumerate(periods):
+                future = per.startswith("Q3 2026") or per in ("2026", "2025/2024", "Media")
+                if future:
+                    vals.append(0 if lab != "Preț curent acțiune" else 10)
+                    continue
+                months = 12 if annual else 3 * int(per[1])
+                base = (1 + 0.1 * j) * k * 1e7
+                v = {"Cifră de afaceri": base * months, "Profit Net": base * months * 0.1,
+                     "Ebitda": base * months * 0.2, "Rezultat operațional": base * months * 0.15,
+                     "Profit distribuit": base * 0.5 if annual else 0,
+                     "Capital propriu (Activ Net)": 5e8 * k, "Datorii totale": 3e8 * k,
+                     "Active totale": 8e8 * k, "Active imobilizate": 5e8 * k, "Active circulante (curente)": 3e8 * k,
+                     "Datorii termen scurt": 1e8 * k, "Datorii termen lung": 2e8 * k - j * 1e6,
+                     "Stocuri": 5e7, "Creanțe": 8e7, "Conturi la bănci": 6e7,
+                     "Preț curent acțiune": price, "Nr. de acțiuni emise": 1e8}[lab]
+                vals.append(v)
+            rows.append([lab] + vals)
+        return rows
+
+    return block(q_per, False), block(a_per, True)
+
+
+class FakeHTTPClient:
+    def request(self, method, url, params=None, **k):
+        return types.SimpleNamespace(json=lambda: {"files": [{"id": "folder-1", "name": "Analiză companii"}]})
+
+    def values_batch_get(self, file_id, ranges, params=None):
+        q, a = _company_sheets(file_id)
+        return {"valueRanges": [{"values": q}, {"values": a}]}
+
+
 class FakeClient:
+    http_client = FakeHTTPClient()
+
     def open(self, name):
         return FakeSpreadsheet()
+
+    def list_spreadsheet_files(self, title=None, folder_id=None):
+        return [{"id": n, "name": n, "modifiedTime": "2026-10-01T00:00:00Z"} for n in COMPANY_FILES]
 
 
 # --------------------------------------------------------------------------
@@ -479,6 +542,12 @@ def main():
                 text = str(el.value)
                 bucket = notes if any(m in text for m in EXPECTED_MESSAGES) else problems
                 bucket.append(f"[{label}] st.{kind}: {text[:200]}")
+        # HTML în st.markdown: o linie goală urmată de o linie indentată cu 4+ spații transformă
+        # restul blocului în cod (Daniel a văzut `<li style=...>` afișat ca text, 13.10.2026).
+        for el in at.markdown:
+            text = str(el.value)
+            if "<li" in text and re.search(r"\n[ \t]*\n {4,}<", text):
+                problems.append(f"[{label}] HTML afișat ca bloc de cod: {text[:120]!r}")
 
     at = AppTest.from_file(os.path.join(APP_DIR, "app.py"), default_timeout=300)
     at.secrets["gcp_service_account"] = {"type": "service_account"}
@@ -489,9 +558,30 @@ def main():
 
     radio().set_value("2. Analiză Companie").run()
     check(at, "2. Companie AAPL (date complete)")
-    for sym in ("TLV.RO", "SAP.DE", "LOSS", "NEWCO", "EMPTY", "INVALID"):
+    has_global = lambda: any("Scor fundamental (praguri netestate)" in str(h.value) for h in at.subheader)
+    assert has_global(), "lipsește secțiunea Scor fundamental la AAPL"
+    comp_df = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
+    assert comp_df is not None, "lipsește tabelul cu componentele scorului fundamental la AAPL"
+    by_comp = dict(zip(comp_df["Componentă"], comp_df["Notă"]))
+    assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
+    assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
+    print(f"AAPL componente: {by_comp}")
+    for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
+        if sym in ("SAP.DE", "EURO.PA", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
+            assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym == "EURO.PA":     # EUR: AAA = Bund + marja AAA − GS10 din SUA, pe aceeași lună
+            df_c = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
+            ep_txt = dict(zip(df_c["Componentă"], df_c["Explicație"])).get("E/P față de AAA", "") if df_c is not None else ""
+            assert "FRED AAA − GS10" in ep_txt, f"proxy AAA EUR fără marja pe aceeași lună: {ep_txt!r}"
+            print(f"EURO.PA E/P: {ep_txt}")
+        if sym in ("TLV.RO", "SNP.RO"):
+            assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
+        if sym == "SNP.RO":
+            assert any("Decizie BVB" in str(h.value) for h in at.subheader), "lipsește secțiunea Decizie BVB"
+            at.button(key="bvb_files_reload").click().run()
+            check(at, "2. Companie SNP.RO după recitirea fișierelor")
     at.sidebar.text_input[0].set_value("AAPL").run()
     for opt in ("1 Lună", "5 Ani"):
         at.selectbox[0].set_value(opt).run()

@@ -571,6 +571,31 @@ def graham_revised(eps, growth_pct, aaa_yield_pct):
     return eps * multiple * 4.4 / aaa_yield_pct
 
 
+def aaa_treasury_spread(aaa, treasury_10y):
+    """Marja obligațiunilor corporative AAA față de titlurile de stat SUA pe 10 ani, pe aceeași lună.
+
+    `aaa` și `treasury_10y` sunt serii lunare FRED (`AAA`, `GS10`), în procente, indexate pe dată.
+    Se ia ultima lună prezentă în ambele serii, ca marja să nu amestece o valoare lunară cu una
+    zilnică din altă perioadă. Marja negativă se plafonează la 0 (AAA nu se tranzacționează sub
+    titlurile de stat; o valoare negativă e eroare de date). Întoarce {"spread", "aaa", "treasury",
+    "month"} (procente; month = pd.Period lunar) sau None dacă nu există nicio lună comună.
+    """
+    if aaa is None or treasury_10y is None or len(aaa) == 0 or len(treasury_10y) == 0:
+        return None
+
+    def _monthly(series):
+        s = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
+        s.index = pd.DatetimeIndex(s.index).to_period("M")
+        return s[~s.index.duplicated(keep="last")]
+
+    both = pd.concat([_monthly(aaa).rename("aaa"), _monthly(treasury_10y).rename("t10")], axis=1, join="inner").dropna()
+    if both.empty:
+        return None
+    month = both.index.max()
+    a, t = float(both.loc[month, "aaa"]), float(both.loc[month, "t10"])
+    return {"spread": max(a - t, 0.0), "aaa": a, "treasury": t, "month": month}
+
+
 # --- Altman Z ----------------------------------------------------------------
 
 RETAINED_EARNINGS_ROWS = ("Retained Earnings",)
