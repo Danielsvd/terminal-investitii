@@ -40,8 +40,14 @@ MIN_PILLARS = 2
 
 PILLAR_LABELS = {"evaluare": "Evaluare", "calitate": "Calitate", "sanatate": "Sănătate financiară",
                  "rentabilitate": "Rentabilitate"}
-TEST_NOTE = ("Praguri din literatură, netestate pe datele noastre: scorul e orientativ până la testul istoric "
-             "pe SUA/UE. Fără clasament: nu există încă un univers de comparație ca la BVB.")
+# Testul istoric (tools/backtest_fundamental.py, rulat de Daniel pe 22.10.2026): 56 de companii S&P 500,
+# 2021–2026, exces față de media universului. IC 6 luni +0,04, 12 luni −0,03; banda ≥ 70 a rămas în urmă
+# (median −10,9% la 12 luni, 33% din cazuri peste medie). Decizia lui Daniel: scorul și etichetele rămân,
+# dar ca descriere, nu ca predicție (la fel ca momentul tehnic pe SUA).
+TEST_NOTE = ("Scor descriptiv, fără putere de predicție demonstrată: în testul istoric pe SUA (56 de companii "
+             "S&P 500, 2022–2026) corelația scor → randament a fost ≈ 0 (IC −0,03 la 12 luni), iar banda "
+             "FAVORABIL a rămas în urma mediei (median −10,9% la 12 luni). Etichetele descriu compania, nu "
+             "prezic prețul. UE: netestat.")
 
 
 def _num(x):

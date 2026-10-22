@@ -558,7 +558,7 @@ def main():
 
     radio().set_value("2. Analiză Companie").run()
     check(at, "2. Companie AAPL (date complete)")
-    has_global = lambda: any("Scor fundamental (praguri netestate)" in str(h.value) for h in at.subheader)
+    has_global = lambda: any("Scor fundamental (descriptiv" in str(h.value) for h in at.subheader)
     assert has_global(), "lipsește secțiunea Scor fundamental la AAPL"
     comp_df = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
     assert comp_df is not None, "lipsește tabelul cu componentele scorului fundamental la AAPL"

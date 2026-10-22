@@ -864,7 +864,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     sym = str(real_sym).upper()
     if sym.endswith(".RO") or (info.get('quoteType') or "").upper() in NON_COMPANY_QUOTE_TYPES:
         return
-    st.subheader("🌍 Scor fundamental (praguri netestate)")
+    st.subheader("🌍 Scor fundamental (descriptiv, fără putere de predicție în test)")
     inp = global_fundamental_inputs(real_sym, info, hist, risk_stats)
     res = gfund.fundamental_score(inp)
     close = hist["Close"] if hist is not None and not hist.empty else pd.Series(dtype=float)
@@ -873,7 +873,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     m_label, m_color, m_note = moment_label(moment, False)
     n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
     fund_detail = ("N/A" if res["score"] is None
-                   else f"{res['score']:.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
+                   else f"{res['score']:.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date · descriptiv")
     moment_detail = "N/A" if moment is None else f"tehnic {moment:.0f}/100, descriptiv"
 
     st.markdown(f"""
@@ -932,7 +932,8 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     cols = st.columns(len(res["pillars"]))
     for col, p in zip(cols, res["pillars"]):
         col.metric(p["label"], "N/A" if p["score"] is None else f"{p['score'] * 100:.0f}/100",
-                   help=pillar_help[p["key"]] + " Praguri netestate pe datele noastre.")
+                   help=pillar_help[p["key"]] + " Test istoric SUA 2022–2026: fără putere de predicție; "
+                   "pragurile sunt orientative.")
 
     with st.expander("Componentele scorului fundamental"):
         st.dataframe(pd.DataFrame([{
@@ -3290,7 +3291,7 @@ def main():
 
             # 2b. Decizie BVB în doi pași (doar .RO cu fișier în „Analiză companii”)
             render_bvb_decision(real_sym, hist)
-            # 2c. Scor fundamental pentru acțiunile din afara BVB (praguri netestate)
+            # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
             render_global_decision(real_sym, info, hist, risk_stats)
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
