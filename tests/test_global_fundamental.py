@@ -55,7 +55,7 @@ def test_scor_industrial_calculat_de_mana():
     assert by["evaluare"] == pytest.approx(0.5, abs=1e-6)
     assert by["calitate"] == pytest.approx(6 / 9) and by["sanatate"] == pytest.approx(2 / 3)
     assert res["score"] == pytest.approx(61.1) and res["label"] == "NEUTRU"
-    assert "netestate" in res["note"]
+    assert "descriptiv" in res["note"] and "IC −0,03" in res["note"]
 
 
 def test_datorie_neta_ebitda_si_cazuri_limita():
