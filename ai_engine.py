@@ -11,6 +11,7 @@ from sklearn.ensemble import IsolationForest
 import yfinance as yf
 from datetime import date, datetime
 
+from analytics import options as opt_calc
 from analytics.options import max_pain
 from data.helpers import num, now_ro
 
@@ -414,53 +415,120 @@ def calculate_and_plot_seasonality(hist_data):
         return None, f"Eroare procesare sezonalitate: {e}"
 
 @st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute
-def get_options_analysis_ai(ticker_sym):
+def get_options_analysis_ai(ticker_sym, dividend_rate=None):
+    """Lanțul de opțiuni pe expirarea din 20–45 de zile (cea mai apropiată de 30).
+
+    Calculele sunt în analytics/options.py. `dividend_rate` = dividendul anual pe
+    acțiune (info['dividendRate']); lipsă → q = 0, marcat ca presupunere.
+    Valorile care nu pot fi calculate sunt None (afișate N/A), niciodată 0.
+    Cheile vechi (iv, oi_pc_ratio, vol_pc_ratio, max_pain, net_gex, gex_*) rămân.
+    """
     try:
         t = yf.Ticker(ticker_sym)
-        
-        # Pasul 1: Obținem datele de expirare (Primul apel API)
-        expirations = t.options
-        if not expirations: 
-            return None, "Fără date de opțiuni disponibile pentru acest simbol."
-            
-        # Pasul 2: Obținem lanțul de opțiuni (Al doilea apel API - cel mai greu)
-        opts = t.option_chain(expirations[0])
-        calls, puts = opts.calls, opts.puts
-        
-        # Preluăm prețul curent rapid
-        spot = t.fast_info.last_price
-        if not spot: spot = calls['strike'].median() # Fallback dacă lipsește prețul
 
-        # --- Calcule GEX & IV (identic cu ce ai deja) ---
-        calls['gex'] = calls['openInterest'] * (spot / ((calls['strike'] - spot)**2 + 1))
-        puts['gex'] = puts['openInterest'] * (spot / ((puts['strike'] - spot)**2 + 1)) * -1
-        total_gex = calls['gex'].sum() + puts['gex'].sum()
-        
-        avg_iv = (calls['impliedVolatility'].mean() + puts['impliedVolatility'].mean()) / 2 * 100
-        
-        gex_verdict = "🛡️ GAMMA LUNGĂ: Stabilitate" if total_gex > 0 else "🔥 GAMMA SCURTĂ: Volatilitate"
-        gex_color = "#3FB950" if total_gex > 0 else "#F85149"
-        
-        iv_txt_color = "#3FB950" if avg_iv < 25 else ("#D29922" if avg_iv < 50 else "#F85149")
+        expirations = t.options
+        if not expirations:
+            return None, "Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE)."
+
+        today = now_ro().date()
+        chosen = opt_calc.choose_expiration(expirations, today)
+        if chosen is None:
+            return None, (f"Nicio expirare cu 20–45 de zile rămase (disponibile: {len(expirations)}, "
+                          f"prima {expirations[0]}, ultima {expirations[-1]}).")
+        expiration, days = chosen
+        T = days / 365.0
+
+        opts = t.option_chain(expiration)
+        calls, puts = opts.calls, opts.puts
+
+        try:
+            spot = num({"p": t.fast_info.last_price}, "p")
+        except (KeyError, AttributeError, TypeError, ValueError) as e:
+            print(f"DEBUG: fast_info.last_price {ticker_sym}: {e}")
+            spot = None
+        if spot is None or spot <= 0:
+            return None, "Prețul curent nu a putut fi citit; opțiunile nu se pot evalua fără el."
+
+        missing = []
+
+        # Rata fără risc pe ~3 luni: ^IRX (procente, randament de discount) → rată continuă (proxy).
+        r, r_src = None, None
+        try:
+            irx = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)["Close"].dropna()
+            if not irx.empty and 0 <= float(irx.iloc[-1]) < 25:
+                r = float(np.log1p(float(irx.iloc[-1]) / 100.0))
+                r_src = f"^IRX {float(irx.iloc[-1]):.2f}% ({irx.index[-1]:%d.%m.%Y})"
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            print(f"DEBUG: ^IRX indisponibil: {e}")
+        if r is None:
+            missing.append("rata fără risc (^IRX)")
+
+        # Dividend: randament continuu din dividendul anual pe acțiune.
+        div = num({"d": dividend_rate}, "d")
+        q_assumed = div is None
+        q = float(np.log1p(div / spot)) if div is not None and div >= 0 else 0.0
+
+        iv_atm, iv_sides = opt_calc.atm_iv(calls, puts, spot)
+        if iv_atm is None:
+            missing.append("IV la bani (fără cotații cu bid > 0 în jurul prețului)")
+
+        # Strike-ul listat cel mai apropiat de preț, pentru greeks.
+        strikes = pd.to_numeric(pd.concat([calls["strike"], puts["strike"]]), errors="coerce").dropna()
+        atm_strike = float(strikes.iloc[(strikes - spot).abs().argmin()]) if not strikes.empty else None
+
+        greeks_call = greeks_put = None
+        if iv_atm is not None and r is not None and atm_strike is not None:
+            greeks_call = opt_calc.bs_greeks(spot, atm_strike, T, r, q, iv_atm, "call")
+            greeks_put = opt_calc.bs_greeks(spot, atm_strike, T, r, q, iv_atm, "put")
+
+        net_gex, gex_n = (None, 0)
+        if r is not None:
+            net_gex, gex_n = opt_calc.gamma_exposure(calls, puts, spot, T, r, q)
+
+        if net_gex is None:
+            gex_verdict, gex_color = "GEX N/A: Nu s-a putut estima (lipsesc IV, open interest sau rata fără risc).", "#8B949E"
+        elif net_gex > 0:
+            gex_verdict, gex_color = "🛡️ GAMMA POZITIVĂ (estimare): Dacă dealerii sunt long call / short put, ei vând pe creșteri și cumpără pe scăderi, ceea ce tinde să tempereze mișcările.", "#3FB950"
+        else:
+            gex_verdict, gex_color = "🔥 GAMMA NEGATIVĂ (estimare): Dacă dealerii sunt long call / short put, ei cumpără pe creșteri și vând pe scăderi, ceea ce tinde să amplifice mișcările.", "#F85149"
+
+        iv_pct = iv_atm * 100 if iv_atm is not None else None
+        if iv_pct is None:
+            iv_txt_color = "#8B949E"
+        else:
+            iv_txt_color = "#3FB950" if iv_pct < 25 else ("#D29922" if iv_pct < 50 else "#F85149")
 
         return {
-            "expiration": expirations[0],
-            "oi_pc_ratio": puts['openInterest'].sum() / calls['openInterest'].sum() if calls['openInterest'].sum() > 0 else 0,
-            "vol_pc_ratio": puts['volume'].sum() / calls['volume'].sum() if calls['volume'].sum() > 0 else 0,
-            # Max Pain real: strike-ul la care valoarea totală a opțiunilor la expirare e minimă
-            # (analytics/options.py). Înainte era returnat prețul curent. None = fără open interest.
+            "expiration": expiration,
+            "days": days,
+            "spot": spot,
+            "oi_pc_ratio": opt_calc.put_call_ratio(calls, puts, "openInterest"),
+            "vol_pc_ratio": opt_calc.put_call_ratio(calls, puts, "volume"),
+            # Max Pain pe expirarea aleasă (analytics/options.py). None = fără open interest.
             "max_pain": max_pain(calls, puts),
-            "iv": avg_iv,
+            "iv": iv_pct,  # IV la bani, în procente; None = N/A
+            "iv_sides": iv_sides,
             "iv_color": iv_txt_color,
-            "net_gex": total_gex,
+            "net_gex": net_gex,
+            "gex_n": gex_n,
             "gex_verdict": gex_verdict,
             "gex_color": gex_color,
-            "timestamp": now_ro().strftime("%H:%M") # Adăugăm ora salvării în cache
+            "atm_strike": atm_strike,
+            "greeks_call": greeks_call,
+            "greeks_put": greeks_put,
+            "expected_move": opt_calc.expected_move(spot, iv_atm, days),
+            "r": r,
+            "r_src": r_src,
+            "q": q,
+            "q_assumed": q_assumed,
+            "missing": missing,
+            "timestamp": now_ro().strftime("%H:%M")
         }, "Succes"
 
     except Exception as e:
-        # Dacă Yahoo ne blochează (Eroare 429), returnăm un mesaj specific
+        # Ultima plasă: yfinance ridică tipuri de excepții nedocumentate (HTTP, JSON, 429).
         error_msg = str(e)
+        print(f"DEBUG: opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
         if "429" in error_msg or "Too Many Requests" in error_msg:
             return None, "🚨 LIMITĂ ATINSĂ: Yahoo Finance a restricționat temporar accesul. Reîncearcă în 15 minute."
         return None, f"Eroare Opțiuni: {error_msg}"
