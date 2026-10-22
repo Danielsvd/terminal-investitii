@@ -102,6 +102,8 @@ def _info_for(sym):
         return dict(SPARSE_INFO)
     if sym == "LOSS":
         return dict(LOSS_INFO)
+    if sym.endswith(".PA"):   # companie din zona euro cu date complete: AAA în EUR = proxy
+        return dict(RICH_INFO, currency="EUR", financialCurrency="EUR")
     return dict(RICH_INFO)
 
 
@@ -110,7 +112,7 @@ class _FastInfo:
         df = _ohlcv(sym, 5)
         self.last_price = float(df["Close"].iloc[-1]) if df["Close"].notna().any() else None
         self.previous_close = float(df["Close"].iloc[-2]) if df["Close"].notna().any() else None
-        self.currency = "RON" if sym.endswith(".RO") else ("EUR" if sym.endswith(".DE") else "USD")
+        self.currency = "RON" if sym.endswith(".RO") else ("EUR" if sym.endswith((".DE", ".PA")) else "USD")
         self.market_cap = 1e9
 
 
@@ -259,8 +261,8 @@ def fake_fred(code, source, start, end):
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
-            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4}[code]
-    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA") else 0.0
+            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5}[code]
+    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)
 
 
@@ -564,11 +566,16 @@ def main():
     assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
     assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
     print(f"AAPL componente: {by_comp}")
-    for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "LOSS", "NEWCO", "EMPTY", "INVALID"):
+    for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
-        if sym in ("SAP.DE", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
+        if sym in ("SAP.DE", "EURO.PA", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
             assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym == "EURO.PA":     # EUR: AAA = Bund + marja AAA − GS10 din SUA, pe aceeași lună
+            df_c = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
+            ep_txt = dict(zip(df_c["Componentă"], df_c["Explicație"])).get("E/P față de AAA", "") if df_c is not None else ""
+            assert "FRED AAA − GS10" in ep_txt, f"proxy AAA EUR fără marja pe aceeași lună: {ep_txt!r}"
+            print(f"EURO.PA E/P: {ep_txt}")
         if sym in ("TLV.RO", "SNP.RO"):
             assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
         if sym == "SNP.RO":
