@@ -300,3 +300,26 @@ def watchlist_status(price, target):
     if price is None or target is None:
         return price, target, None, False
     return price, target, (price - target) / target * 100, price <= target
+
+
+def format_ro(value, decimals=2, suffix="", trim=False):
+    """Număr în format românesc: punct la mii, virgulă la zecimale („1.250”, „4.562,50”).
+
+    trim=True scoate zerourile de la final („1.250,0000” → „1.250”, „0,3048” rămâne).
+    Lipsă, NaN sau text nenumeric → „N/A”, niciodată 0.
+    """
+    if value is None or isinstance(value, bool):
+        return "N/A"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v != v or v in (float("inf"), float("-inf")):
+        return "N/A"
+    text = f"{v:,.{decimals}f}"
+    if trim and "." in text:
+        text = text.rstrip("0").rstrip(".")
+    text = text.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+    if text in ("-0", "-0,00") or (text.startswith("-") and set(text[1:]) <= set("0,.")):
+        text = text[1:]
+    return text + suffix

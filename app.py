@@ -43,7 +43,7 @@ from data.company_files import load_company, is_bank_template, ticker_from_title
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status
+from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -2532,7 +2532,8 @@ def _ledger_num(value, decimals=2, suffix=""):
     """Număr pentru tabel; valoarea lipsă se afișează „N/A”, nu 0."""
     if value is None or pd.isna(value):
         return "N/A"
-    return f"{value:,.{decimals}f}{suffix}"
+    # format românesc: 1.250,50 (punct la mii, virgulă la zecimale)
+    return format_ro(value, decimals, suffix)
 
 def render_ledger_import(values):
     """Importul unui export de la broker în foaia `Tranzactii`: previzualizare, apoi scriere doar a rândurilor noi."""
@@ -2728,7 +2729,7 @@ def render_ledger_results(df_pf=None):
     with st.expander("Poziții deschise (foaia Portofoliu; titlurile de stat din registru)"):
         st.dataframe(pd.DataFrame({
             "Simbol": valued["Symbol"], "Clasă": valued["Class"], "Monedă": valued["Currency"],
-            "Cantitate": valued["Quantity"].map(lambda v: _ledger_num(v, 4)),
+            "Cantitate": valued["Quantity"].map(lambda v: format_ro(v, 4, trim=True)),
             "Cost mediu": valued["AvgCost"].map(lambda v: _ledger_num(v, 4)),
             "Preț": valued["Price"].map(lambda v: _ledger_num(v, 4)),
             "Sursă preț": [src if pd.isna(day) else f"{src} ({day:%d.%m.%Y})"
@@ -5067,9 +5068,9 @@ def main():
                     st.caption(f"ℹ️ Preț live indisponibil pentru {', '.join(pf_notes['price_from_close'])}: s-a folosit ultima închidere.")
 
                 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{total_invested:,.2f} {currency_symbol}")
-                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{total_current:,.2f} {currency_symbol}")
-                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{total_profit_val:,.2f} {currency_symbol}", f"{total_profit_pct:.2f}%")
+                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{format_ro(total_invested)} {currency_symbol}")
+                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{format_ro(total_current)} {currency_symbol}")
+                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{format_ro(total_profit_val)} {currency_symbol}", f"{format_ro(total_profit_pct)}%")
 
                 if pf_notes.get('curve_start') is not None:
                     st.caption(
@@ -5114,7 +5115,7 @@ def main():
                     st.plotly_chart(fig_mc, width='stretch')
 
                     c_mc1, c_mc2, c_mc3 = st.columns(3)
-                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{mc['p5']:,.2f} {currency_symbol}",
+                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{format_ro(mc['p5'])} {currency_symbol}",
                                 help="**Cum se calculează:** percentila 5 a valorii finale din cele 1000 de scenarii, fiecare construit din randamente zilnice "
                                      "trase la întâmplare din istoricul portofoliului.\n\n**Ce înseamnă:** în 95% din scenarii portofoliul a terminat anul peste această valoare.")
                     c_mc2.metric("Variația în scenariul pesimist", f"{mc['change_p5_pct']:+.2f}%",
@@ -5188,7 +5189,7 @@ def main():
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
                 c_r1.metric("Max Drawdown", f"{max_dd*100:.2f}%", help="Cea mai mare scădere istorică.")
                 c_r2.metric("Sharpe Ratio", f"{sharpe:.2f}", help="Eficiența profitului vs risc (Ideal > 1).")
-                c_r3.metric("VaR (95%)", f"{currency_symbol} {abs(var_abs):,.2f}", help="Pierderea maximă probabilă într-o singură zi.")
+                c_r3.metric("VaR (95%)", f"{currency_symbol} {format_ro(abs(var_abs))}", help="Pierderea maximă probabilă într-o singură zi.")
                 c_r4.metric("Volatilitate Anualizată", f"{vol_ann*100:.2f}%", help="Agitația generală a prețurilor portofoliului.")
 
                 # Rândul 2: Relația Strategică cu Piața (Benchmark-ul)
@@ -5259,10 +5260,10 @@ def main():
                     st.dataframe(
                         df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
                         .format({
-                            # până la 4 zecimale, fără zerouri inutile (0.31 nu mai apare ca 0.3)
-                            'Quantity': lambda q: f"{q:,.4f}".rstrip('0').rstrip('.'),
-                            'AvgPrice': '{:.4f}', 'CurrentPrice': '{:.4f}',
-                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                            # format românesc; cantitatea până la 4 zecimale, fără zerouri inutile (1.250, 0,3048)
+                            'Quantity': lambda q: format_ro(q, 4, trim=True),
+                            'AvgPrice': lambda v: format_ro(v, 4), 'CurrentPrice': lambda v: format_ro(v, 4),
+                            'MarketValue': lambda v: format_ro(v), 'Profit': lambda v: format_ro(v), 'Profit %': lambda v: format_ro(v, 2, "%")
                         }, na_rep="N/A"),
                         width='stretch'
                     )        
