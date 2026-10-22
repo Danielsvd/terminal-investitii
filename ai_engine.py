@@ -414,8 +414,28 @@ def calculate_and_plot_seasonality(hist_data):
     except Exception as e:
         return None, f"Eroare procesare sezonalitate: {e}"
 
-@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute
+class _OptionsUnavailable(Exception):
+    """Opțiunile nu pot fi evaluate acum; mesajul e pentru utilizator. Nu se pune în cache."""
+
+
 def get_options_analysis_ai(ticker_sym, dividend_rate=None):
+    """(date, mesaj). Doar rezultatele reușite stau în cache (15 minute); un răspuns gol
+    sau o eroare Yahoo se reîncearcă la următoarea afișare, nu rămâne blocat 15 minute."""
+    try:
+        return _options_analysis_cached(ticker_sym, dividend_rate), "Succes"
+    except _OptionsUnavailable as e:
+        return None, str(e)
+    except Exception as e:
+        # Ultima plasă: yfinance ridică tipuri de excepții nedocumentate (HTTP, JSON, 429).
+        error_msg = str(e)
+        print(f"DEBUG: opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
+        if "429" in error_msg or "Too Many Requests" in error_msg:
+            return None, "🚨 LIMITĂ ATINSĂ: Yahoo Finance a restricționat temporar accesul. Reîncearcă în câteva minute."
+        return None, f"Eroare Opțiuni: {error_msg}"
+
+
+@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute, doar pentru rezultate reușite
+def _options_analysis_cached(ticker_sym, dividend_rate=None):
     """Lanțul de opțiuni pe expirarea din 20–45 de zile (cea mai apropiată de 30).
 
     Calculele sunt în analytics/options.py. `dividend_rate` = dividendul anual pe
@@ -423,115 +443,110 @@ def get_options_analysis_ai(ticker_sym, dividend_rate=None):
     Valorile care nu pot fi calculate sunt None (afișate N/A), niciodată 0.
     Cheile vechi (iv, oi_pc_ratio, vol_pc_ratio, max_pain, net_gex, gex_*) rămân.
     """
+    t = yf.Ticker(ticker_sym)
+
+    expirations = t.options
+    if not expirations:
+        if "." in ticker_sym:
+            raise _OptionsUnavailable("Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE).")
+        raise _OptionsUnavailable(
+            f"Yahoo nu a trimis lista de expirări pentru {ticker_sym}. La acțiunile SUA asta înseamnă de obicei "
+            "un răspuns gol sau limitat de la Yahoo, nu lipsa opțiunilor. Se reîncearcă la următoarea afișare.")
+
+    today = now_ro().date()
+    chosen = opt_calc.choose_expiration(expirations, today)
+    if chosen is None:
+        raise _OptionsUnavailable(f"Nicio expirare cu 20–45 de zile rămase (disponibile: {len(expirations)}, "
+                      f"prima {expirations[0]}, ultima {expirations[-1]}).")
+    expiration, days = chosen
+    T = days / 365.0
+
+    opts = t.option_chain(expiration)
+    calls, puts = opts.calls, opts.puts
+
     try:
-        t = yf.Ticker(ticker_sym)
+        spot = num({"p": t.fast_info.last_price}, "p")
+    except (KeyError, AttributeError, TypeError, ValueError) as e:
+        print(f"DEBUG: fast_info.last_price {ticker_sym}: {e}")
+        spot = None
+    if spot is None or spot <= 0:
+        raise _OptionsUnavailable("Prețul curent nu a putut fi citit; opțiunile nu se pot evalua fără el.")
 
-        expirations = t.options
-        if not expirations:
-            return None, "Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE)."
+    missing = []
 
-        today = now_ro().date()
-        chosen = opt_calc.choose_expiration(expirations, today)
-        if chosen is None:
-            return None, (f"Nicio expirare cu 20–45 de zile rămase (disponibile: {len(expirations)}, "
-                          f"prima {expirations[0]}, ultima {expirations[-1]}).")
-        expiration, days = chosen
-        T = days / 365.0
+    # Rata fără risc pe ~3 luni: ^IRX (procente, randament de discount) → rată continuă (proxy).
+    r, r_src = None, None
+    try:
+        irx = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)["Close"].dropna()
+        if not irx.empty and 0 <= float(irx.iloc[-1]) < 25:
+            r = float(np.log1p(float(irx.iloc[-1]) / 100.0))
+            r_src = f"^IRX {float(irx.iloc[-1]):.2f}% ({irx.index[-1]:%d.%m.%Y})"
+    except (KeyError, IndexError, ValueError, TypeError) as e:
+        print(f"DEBUG: ^IRX indisponibil: {e}")
+    if r is None:
+        missing.append("rata fără risc (^IRX)")
 
-        opts = t.option_chain(expiration)
-        calls, puts = opts.calls, opts.puts
+    # Dividend: randament continuu din dividendul anual pe acțiune.
+    div = num({"d": dividend_rate}, "d")
+    q_assumed = div is None
+    q = float(np.log1p(div / spot)) if div is not None and div >= 0 else 0.0
 
-        try:
-            spot = num({"p": t.fast_info.last_price}, "p")
-        except (KeyError, AttributeError, TypeError, ValueError) as e:
-            print(f"DEBUG: fast_info.last_price {ticker_sym}: {e}")
-            spot = None
-        if spot is None or spot <= 0:
-            return None, "Prețul curent nu a putut fi citit; opțiunile nu se pot evalua fără el."
+    iv_atm, iv_sides = opt_calc.atm_iv(calls, puts, spot)
+    if iv_atm is None:
+        missing.append("IV la bani (fără cotații cu bid > 0 în jurul prețului)")
 
-        missing = []
+    # Strike-ul listat cel mai apropiat de preț, pentru greeks.
+    strikes = pd.to_numeric(pd.concat([calls["strike"], puts["strike"]]), errors="coerce").dropna()
+    atm_strike = float(strikes.iloc[(strikes - spot).abs().argmin()]) if not strikes.empty else None
 
-        # Rata fără risc pe ~3 luni: ^IRX (procente, randament de discount) → rată continuă (proxy).
-        r, r_src = None, None
-        try:
-            irx = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)["Close"].dropna()
-            if not irx.empty and 0 <= float(irx.iloc[-1]) < 25:
-                r = float(np.log1p(float(irx.iloc[-1]) / 100.0))
-                r_src = f"^IRX {float(irx.iloc[-1]):.2f}% ({irx.index[-1]:%d.%m.%Y})"
-        except (KeyError, IndexError, ValueError, TypeError) as e:
-            print(f"DEBUG: ^IRX indisponibil: {e}")
-        if r is None:
-            missing.append("rata fără risc (^IRX)")
+    greeks_call = greeks_put = None
+    if iv_atm is not None and r is not None and atm_strike is not None:
+        greeks_call = opt_calc.bs_greeks(spot, atm_strike, T, r, q, iv_atm, "call")
+        greeks_put = opt_calc.bs_greeks(spot, atm_strike, T, r, q, iv_atm, "put")
 
-        # Dividend: randament continuu din dividendul anual pe acțiune.
-        div = num({"d": dividend_rate}, "d")
-        q_assumed = div is None
-        q = float(np.log1p(div / spot)) if div is not None and div >= 0 else 0.0
+    net_gex, gex_n = (None, 0)
+    if r is not None:
+        net_gex, gex_n = opt_calc.gamma_exposure(calls, puts, spot, T, r, q)
 
-        iv_atm, iv_sides = opt_calc.atm_iv(calls, puts, spot)
-        if iv_atm is None:
-            missing.append("IV la bani (fără cotații cu bid > 0 în jurul prețului)")
+    if net_gex is None:
+        gex_verdict, gex_color = "GEX N/A: Nu s-a putut estima (lipsesc IV, open interest sau rata fără risc).", "#8B949E"
+    elif net_gex > 0:
+        gex_verdict, gex_color = "🛡️ GAMMA POZITIVĂ (estimare): Dacă dealerii sunt long call / short put, ei vând pe creșteri și cumpără pe scăderi, ceea ce tinde să tempereze mișcările.", "#3FB950"
+    else:
+        gex_verdict, gex_color = "🔥 GAMMA NEGATIVĂ (estimare): Dacă dealerii sunt long call / short put, ei cumpără pe creșteri și vând pe scăderi, ceea ce tinde să amplifice mișcările.", "#F85149"
 
-        # Strike-ul listat cel mai apropiat de preț, pentru greeks.
-        strikes = pd.to_numeric(pd.concat([calls["strike"], puts["strike"]]), errors="coerce").dropna()
-        atm_strike = float(strikes.iloc[(strikes - spot).abs().argmin()]) if not strikes.empty else None
+    iv_pct = iv_atm * 100 if iv_atm is not None else None
+    if iv_pct is None:
+        iv_txt_color = "#8B949E"
+    else:
+        iv_txt_color = "#3FB950" if iv_pct < 25 else ("#D29922" if iv_pct < 50 else "#F85149")
 
-        greeks_call = greeks_put = None
-        if iv_atm is not None and r is not None and atm_strike is not None:
-            greeks_call = opt_calc.bs_greeks(spot, atm_strike, T, r, q, iv_atm, "call")
-            greeks_put = opt_calc.bs_greeks(spot, atm_strike, T, r, q, iv_atm, "put")
-
-        net_gex, gex_n = (None, 0)
-        if r is not None:
-            net_gex, gex_n = opt_calc.gamma_exposure(calls, puts, spot, T, r, q)
-
-        if net_gex is None:
-            gex_verdict, gex_color = "GEX N/A: Nu s-a putut estima (lipsesc IV, open interest sau rata fără risc).", "#8B949E"
-        elif net_gex > 0:
-            gex_verdict, gex_color = "🛡️ GAMMA POZITIVĂ (estimare): Dacă dealerii sunt long call / short put, ei vând pe creșteri și cumpără pe scăderi, ceea ce tinde să tempereze mișcările.", "#3FB950"
-        else:
-            gex_verdict, gex_color = "🔥 GAMMA NEGATIVĂ (estimare): Dacă dealerii sunt long call / short put, ei cumpără pe creșteri și vând pe scăderi, ceea ce tinde să amplifice mișcările.", "#F85149"
-
-        iv_pct = iv_atm * 100 if iv_atm is not None else None
-        if iv_pct is None:
-            iv_txt_color = "#8B949E"
-        else:
-            iv_txt_color = "#3FB950" if iv_pct < 25 else ("#D29922" if iv_pct < 50 else "#F85149")
-
-        return {
-            "expiration": expiration,
-            "days": days,
-            "spot": spot,
-            "oi_pc_ratio": opt_calc.put_call_ratio(calls, puts, "openInterest"),
-            "vol_pc_ratio": opt_calc.put_call_ratio(calls, puts, "volume"),
-            # Max Pain pe expirarea aleasă (analytics/options.py). None = fără open interest.
-            "max_pain": max_pain(calls, puts),
-            "iv": iv_pct,  # IV la bani, în procente; None = N/A
-            "iv_sides": iv_sides,
-            "iv_color": iv_txt_color,
-            "net_gex": net_gex,
-            "gex_n": gex_n,
-            "gex_verdict": gex_verdict,
-            "gex_color": gex_color,
-            "atm_strike": atm_strike,
-            "greeks_call": greeks_call,
-            "greeks_put": greeks_put,
-            "expected_move": opt_calc.expected_move(spot, iv_atm, days),
-            "r": r,
-            "r_src": r_src,
-            "q": q,
-            "q_assumed": q_assumed,
-            "missing": missing,
-            "timestamp": now_ro().strftime("%H:%M")
-        }, "Succes"
-
-    except Exception as e:
-        # Ultima plasă: yfinance ridică tipuri de excepții nedocumentate (HTTP, JSON, 429).
-        error_msg = str(e)
-        print(f"DEBUG: opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
-        if "429" in error_msg or "Too Many Requests" in error_msg:
-            return None, "🚨 LIMITĂ ATINSĂ: Yahoo Finance a restricționat temporar accesul. Reîncearcă în 15 minute."
-        return None, f"Eroare Opțiuni: {error_msg}"
+    return {
+        "expiration": expiration,
+        "days": days,
+        "spot": spot,
+        "oi_pc_ratio": opt_calc.put_call_ratio(calls, puts, "openInterest"),
+        "vol_pc_ratio": opt_calc.put_call_ratio(calls, puts, "volume"),
+        # Max Pain pe expirarea aleasă (analytics/options.py). None = fără open interest.
+        "max_pain": max_pain(calls, puts),
+        "iv": iv_pct,  # IV la bani, în procente; None = N/A
+        "iv_sides": iv_sides,
+        "iv_color": iv_txt_color,
+        "net_gex": net_gex,
+        "gex_n": gex_n,
+        "gex_verdict": gex_verdict,
+        "gex_color": gex_color,
+        "atm_strike": atm_strike,
+        "greeks_call": greeks_call,
+        "greeks_put": greeks_put,
+        "expected_move": opt_calc.expected_move(spot, iv_atm, days),
+        "r": r,
+        "r_src": r_src,
+        "q": q,
+        "q_assumed": q_assumed,
+        "missing": missing,
+        "timestamp": now_ro().strftime("%H:%M")
+    }
 
 def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_score, opt_data, spread, z_score, q_ratio, regime_msg):
     """
