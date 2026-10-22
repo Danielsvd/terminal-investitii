@@ -126,6 +126,8 @@ class FakeTicker:
         df = _ohlcv(self.ticker, _n_rows(period), tz="America/New_York").dropna(how="all")
         if self.ticker == "^TNX":      # randament în procente, ca la Yahoo (4,2 = 4,2%)
             df = df.assign(Close=4.2)
+        if self.ticker == "^IRX":      # titluri SUA 3 luni, în procente
+            df = df.assign(Close=3.9)
         df.index.name = "Date"
         return df
 
@@ -462,9 +464,17 @@ def install_fakes():
     # BCE: randamentul titlurilor de stat RO pe 10 ani (rata fără risc pentru RON)
     import requests
 
+    EUROSTAT_ROBOR = {"id": ["freq", "int_rt", "geo", "time"], "size": [1, 1, 1, 2],
+                      "dimension": {"time": {"category": {"index": {"2026-07": 0, "2026-08": 1}}}},
+                      "value": {"0": 6.02, "1": 5.87}}
+
     def fake_requests_get(url, *a, **k):
+        if "ec.europa.eu/eurostat" in url:      # ROBOR 3M (Eurostat irt_st_m)
+            return types.SimpleNamespace(status_code=200, text="", json=lambda: EUROSTAT_ROBOR)
         if "data-api.ecb.europa.eu" not in url:
             raise requests.ConnectionError("fără rețea în testul de fum")
+        if "/YC/" in url:                       # curba AAA a zonei euro, 10 ani − 3 luni, zilnic
+            return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-10-20,0.61\nX,2026-10-21,0.64\n")
         return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-07,7.25\nX,2026-08,7.12\n")
 
     requests.get = fake_requests_get
@@ -566,6 +576,10 @@ def main():
     assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
     assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
     print(f"AAPL componente: {by_comp}")
+    page_text = lambda: " ".join(str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.success) + list(at.error) + list(at.warning))
+    curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4.20% − 3 luni 3.90%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
+                    "SNP.RO": "România, titluri de stat 10 ani 7.12% (BCE) − ROBOR 3M 5.87% (Eurostat), 2026-08"}
+    assert curve_expect["AAPL"] in page_text(), "lipsește curba SUA în ratingul AAPL"
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
@@ -578,6 +592,8 @@ def main():
             print(f"EURO.PA E/P: {ep_txt}")
         if sym in ("TLV.RO", "SNP.RO"):
             assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
+        if sym in curve_expect:
+            assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
         if sym == "SNP.RO":
             assert any("Decizie BVB" in str(h.value) for h in at.subheader), "lipsește secțiunea Decizie BVB"
             at.button(key="bvb_files_reload").click().run()

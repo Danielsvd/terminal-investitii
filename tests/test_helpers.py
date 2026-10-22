@@ -229,3 +229,19 @@ def test_watchlist_status_fara_zero_inventat():
     # țintă goală în foaie (smart_to_float dă 0): fără distanță, fără semnal
     assert watchlist_status(50.0, 0.0) == (50.0, None, None, False)
     assert watchlist_status(float("nan"), float("nan")) == (None, None, None, False)
+
+
+def test_serie_bce_si_eurostat():
+    from data.helpers import parse_ecb_series, parse_eurostat_monthly
+    s = parse_ecb_series("KEY,TIME_PERIOD,OBS_VALUE\nX,2026-08,7.12\nX,2026-07,7.25\nX,2026-09,\n")
+    assert list(s.index) == ["2026-07", "2026-08"] and s["2026-08"] == 7.12
+    assert parse_ecb_series("<html>eroare</html>").empty and parse_ecb_series(None).empty
+    obj = {"id": ["freq", "int_rt", "geo", "time"], "size": [1, 1, 1, 3],
+           "dimension": {"time": {"category": {"index": {"2026M06": 0, "2026M07": 1, "2026M08": 2}}}},
+           "value": {"0": 6.1, "1": 6.02}}                               # august fără valoare
+    r = parse_eurostat_monthly(obj)
+    assert list(r.index) == ["2026-06", "2026-07"] and r["2026-07"] == 6.02
+    # Mai multe țări în răspuns: nu se ghicește care e România
+    obj2 = dict(obj, size=[1, 1, 2, 3])
+    assert parse_eurostat_monthly(obj2).empty
+    assert parse_eurostat_monthly({"eroare": 1}).empty

@@ -198,6 +198,54 @@ def parse_ecb_csv(text):
     return max(valid, key=lambda item: item[0])
 
 
+def parse_ecb_series(text):
+    """Toate observațiile dintr-un răspuns CSV al BCE, ca serie indexată pe perioadă (text, ex. "2026-08"
+    sau "2026-08-14"), sortată crescător. Serie goală dacă răspunsul nu are forma așteptată."""
+    if not text or not isinstance(text, str):
+        return pd.Series(dtype=float)
+    try:
+        rows = list(csv.DictReader(io.StringIO(text)))
+    except csv.Error:
+        return pd.Series(dtype=float)
+    out = {}
+    for row in rows:
+        period = (row.get("TIME_PERIOD") or "").strip()
+        try:
+            value = float(row.get("OBS_VALUE"))
+        except (TypeError, ValueError):
+            continue
+        if period and value == value:
+            out[period] = value
+    return pd.Series(out, dtype=float).sort_index()
+
+
+# --- Eurostat (API de diseminare, JSON-stat 2.0) -----------------------------
+
+def parse_eurostat_monthly(obj):
+    """Seria lunară dintr-un răspuns JSON-stat Eurostat filtrat pe o singură combinație (o țară, un indicator):
+    indexată pe perioada "AAAA-LL", sortată crescător. Toate dimensiunile în afară de `time` trebuie să aibă
+    un singur element; altfel (sau la orice formă neașteptată) serie goală, nu o valoare ghicită."""
+    try:
+        ids, sizes = list(obj["id"]), list(obj["size"])
+        if any(size != 1 for dim, size in zip(ids, sizes) if dim != "time"):
+            return pd.Series(dtype=float)
+        times = obj["dimension"]["time"]["category"]["index"]
+        values = obj["value"]
+    except (KeyError, TypeError):
+        return pd.Series(dtype=float)
+    out = {}
+    for label, pos in times.items():
+        raw = values.get(str(pos)) if isinstance(values, dict) else (values[pos] if pos < len(values) else None)
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        m = re.fullmatch(r"(\d{4})-?M?(\d{2})", str(label))
+        if m and v == v:
+            out[f"{m.group(1)}-{m.group(2)}"] = v
+    return pd.Series(out, dtype=float).sort_index()
+
+
 def positive_or_none(value):
     """Prețul țintă dintr-o celulă de foaie: număr strict pozitiv sau None.
 

@@ -594,11 +594,13 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
     except: pass
 
     # 8. MACROECONOMIE & REGIM (Max 5 puncte)
-    if spread > 0:
+    if spread is None:
+        reasons.append("ℹ️ **Macro:** curba randamentelor pieței acțiunii indisponibilă; fără puncte.")
+    elif spread > 0:
         score += 5
     else:
         score -= 10
-        reasons.append("🚨 **Avertisment Macro:** Curba randamentelor 10Y-3M inversată. Risc sistemic!")
+        reasons.append("🚨 **Avertisment Macro:** Curba randamentelor 10Y-3M a pieței acțiunii inversată. Risc sistemic!")
         
     if "PANICĂ" in str(regime_msg).upper():
         score -= 15 # Penalizare drastică

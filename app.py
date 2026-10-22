@@ -25,7 +25,7 @@ from threading import Lock
 
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
-from analytics.macro import yoy_pct, real_rate
+from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
@@ -41,7 +41,7 @@ from data.company_files import load_company, is_bank_template, ticker_from_title
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number, watchlist_status
+from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -405,7 +405,7 @@ def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
     except:
         return 0.0
 
-def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
+def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, spread_label=None):
     score = 50
     details = []
     
@@ -433,12 +433,15 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
         details.append(f"🚨 **Evaluare:** Supraevaluare semnificativă. Risc ridicat de corecție.")
 
     # 3. ANALIZA MACRO
-    if spread_val < 0:
+    if spread_val is None:
+        details.append(f"ℹ️ **Macro:** {spread_label or 'curba randamentelor pieței indisponibilă'}. Pilon neinclus.")
+    elif spread_val < 0:
         score -= 20
-        details.append("🚨 **Macro:** Curbă 10Y-3M inversată. Risc sistemic de recesiune detectat.")
+        details.append(f"🚨 **Macro:** Curba 10 ani − 3 luni inversată ({spread_val:+.2f} pp; {spread_label}). "
+                       "Risc de recesiune pe piața acțiunii.")
     else:
         score += 5
-        details.append("✅ **Macro:** Mediul economic este favorabil expansiunii.")
+        details.append(f"✅ **Macro:** Curba 10 ani − 3 luni normală ({spread_val:+.2f} pp; {spread_label}).")
 
     # 4. SĂNĂTATE FINANCIARĂ
     roe = num(info, 'returnOnEquity')
@@ -1398,6 +1401,65 @@ def get_graham_yield(currency):
     if rf_local is None:
         return None, f"Nu pot aproxima randamentul AAA în {cur or 'valuta necunoscută'} (lipsește rata fără risc: {rf_label})"
     return rf_local * 100 + spread["spread"], f"proxy: {rf_label} + {spread_label}"
+
+
+ECB_EU_CURVE_URL = "https://data-api.ecb.europa.eu/service/data/YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SRS_10Y_3M"
+ECB_RO_10Y_URL = "https://data-api.ecb.europa.eu/service/data/IRS/M.RO.L.L40.CI.0000.RON.N.Z"
+EUROSTAT_MONEY_MARKET_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/irt_st_m"
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_market_curve(market):
+    """Panta curbei randamentelor (10 ani − 3 luni, în puncte procentuale) pe piața acțiunii:
+    (spread, descriere) sau (None, motiv). Fără valoare de rezervă.
+
+    US: ^TNX − ^IRX (Yahoo), aceeași zi. EU: curba titlurilor de stat AAA din zona euro (BCE, zilnic,
+    seria gata calculată 10 ani − 3 luni; proxy pentru Bund). RO: titluri de stat 10 ani (BCE, lunar)
+    − ROBOR 3M (Eurostat irt_st_m, lunar), pe aceeași lună.
+    """
+    def _valid(x):
+        return x is not None and x == x and -10 < x < 10
+
+    if market == "US":
+        try:
+            t10 = yf.Ticker("^TNX").history(period="10d", auto_adjust=False)['Close']
+            t3 = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)['Close']
+            res = same_day_spread(t10, t3)
+            if res is not None and _valid(res["spread"]):
+                return res["spread"], (f"SUA, titluri de stat 10 ani {res['long']:.2f}% − 3 luni {res['short']:.2f}% "
+                                       f"(^TNX − ^IRX, {res['date']:%d.%m.%Y})")
+        except Exception as e:
+            print(f"DEBUG: curba SUA (^TNX/^IRX) indisponibilă: {e}")
+        return None, "curba SUA (^TNX − ^IRX) nu a putut fi citită"
+    if market == "EU":
+        try:
+            resp = requests.get(ECB_EU_CURVE_URL, params={"lastNObservations": 5, "format": "csvdata"}, timeout=10)
+            if resp.status_code == 200:
+                obs = parse_ecb_csv(resp.text)
+                if obs is not None and _valid(obs[1]):
+                    return obs[1], f"zona euro, curba titlurilor de stat AAA 10 ani − 3 luni (BCE, {obs[0]}; proxy pentru Bund)"
+            else:
+                print(f"DEBUG: BCE (curba zonei euro): HTTP {resp.status_code}")
+        except requests.RequestException as e:
+            print(f"DEBUG: BCE (curba zonei euro) indisponibilă: {e}")
+        return None, "curba zonei euro (BCE) nu a putut fi citită"
+    if market == "RO":
+        try:
+            r10 = requests.get(ECB_RO_10Y_URL, params={"lastNObservations": 6, "format": "csvdata"}, timeout=10)
+            r3 = requests.get(EUROSTAT_MONEY_MARKET_URL,
+                              params={"geo": "RO", "int_rt": "IRT_M3", "freq": "M", "lastTimePeriod": 6}, timeout=10)
+            if r10.status_code == 200 and r3.status_code == 200:
+                res = monthly_spread(parse_ecb_series(r10.text), parse_eurostat_monthly(r3.json()))
+                if res is not None and _valid(res["spread"]):
+                    return res["spread"], (f"România, titluri de stat 10 ani {res['long']:.2f}% (BCE) − ROBOR 3M "
+                                           f"{res['short']:.2f}% (Eurostat), {res['month']}")
+                print("DEBUG: curba RO: nicio lună comună între BCE și Eurostat")
+            else:
+                print(f"DEBUG: curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
+        except (requests.RequestException, ValueError) as e:
+            print(f"DEBUG: curba RO indisponibilă: {e}")
+        return None, "curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită"
+    return None, "nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)"
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -3138,15 +3200,10 @@ def main():
                     hit_positions = np.flatnonzero(hist['ATR_Stop_Hit'].to_numpy())
                     if len(hit_positions) and (len(hist) - 1 - hit_positions[-1]) <= 5:
                         sl_hit_note = f" · stop atins pe {hist.index[hit_positions[-1]].strftime('%d.%m')}, resetat"
-            # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
-            try:
-                # Înlocuim 2Y=F (delistat) cu ^IRX (3-Month Yield)
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                # Spread-ul preferat de FED: 10Y - 3M
-                spread = t_10y - t_3m
-            except:
-                spread = 0.5 # Fallback neutru
+            # Curba randamentelor (10 ani − 3 luni) a pieței acțiunii: SUA, zona euro sau România.
+            # None = indisponibilă; consumatorii (SWOT, rating, Decizie Master AI) nu o punctează.
+            curve_market = market_of(real_sym, info.get('currency'))
+            spread, spread_label = get_market_curve(curve_market)
             
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
@@ -4415,19 +4472,13 @@ def main():
             st.subheader("🎯 Verdict Final: Rating de Investiție")
 
             # Pregătim variabilele (inițializare explicită — nu mai depindem de locals())
-            try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                curr_spread = t_10y - t_3m
-            except:
-                curr_spread = 0.5
 
             s_inst = inst_percent  # None = acționariat indisponibil
             s_mos = mos_val
             s_rvol = rvol if 'rvol' in dir() or rvol is not None else 1.0
             
             # Apelăm funcția PRO folosind noul spread 10Y-3M
-            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos)
+            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos, spread_label)
             
             r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
             r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
@@ -4657,12 +4708,8 @@ def main():
             cash_ratio = q_ratio if 'q_ratio' in dir() else 1.0
             ai_regime = regime_msg if 'regime_msg' in dir() else "Neutru"
 
-            # Extragem Spread-ul Macro la cald
-            try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                curr_spread = t_10y - t_3m
-            except: curr_spread = 0.5
+            # Curba pieței acțiunii, aceeași ca în rating (None = indisponibilă, fără puncte)
+            curr_spread = spread
 
             # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
             from ai_engine import calculate_master_ai_score
