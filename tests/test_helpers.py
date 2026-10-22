@@ -245,3 +245,16 @@ def test_serie_bce_si_eurostat():
     obj2 = dict(obj, size=[1, 1, 2, 3])
     assert parse_eurostat_monthly(obj2).empty
     assert parse_eurostat_monthly({"eroare": 1}).empty
+
+
+def test_format_ro():
+    from data.helpers import format_ro
+    assert format_ro(1250, 4, trim=True) == "1.250"
+    assert format_ro(1250, 4) == "1.250,0000"
+    assert format_ro(4562.5) == "4.562,50"
+    assert format_ro(0.3048, 4, trim=True) == "0,3048"
+    assert format_ro(-264.47) == "-264,47"
+    assert format_ro(1234567.891, 2) == "1.234.567,89"
+    assert format_ro(106.2, 1, "%") == "106,2%"
+    assert format_ro(-0.001) == "0,00"
+    assert format_ro(None) == "N/A" and format_ro(float("nan")) == "N/A" and format_ro("x") == "N/A"
