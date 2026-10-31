@@ -16,7 +16,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from data.helpers import smart_to_float
+from data.helpers import ro, smart_to_float
 
 COLUMNS = ["Date", "Symbol", "Class", "Type", "Quantity", "Price", "Currency", "Fees", "Amount", "Broker", "ID", "Notes"]
 NUMERIC = ["Quantity", "Price", "Fees", "Amount"]
@@ -146,7 +146,7 @@ def build_positions(ledger):
         elif typ == "SELL":
             held = st["Quantity"]
             if qty > held + 1e-6:
-                problems.append(f"{sym}: vânzare de {qty:g} la {rec.Date:%Y-%m-%d}, dar în registru sunt doar {held:g} "
+                problems.append(f"{sym}: vânzare de {ro(qty):g} la {rec.Date:%Y-%m-%d}, dar în registru sunt doar {ro(held):g} "
                                 "(lipsește istoric). Profitul realizat pe acest simbol nu e de încredere.")
                 sold_cost = st["CostBasis"]
                 st["Quantity"], st["CostBasis"] = 0.0, 0.0
@@ -489,7 +489,7 @@ def external_flows(ledger, fx_history, base="RON"):
             continue
         rate = fx_on(fx_history, rec.Currency, rec.Date, base)
         if rate is None:
-            problems.append(f"{rec.Date:%Y-%m-%d}: fără curs {rec.Currency}/{base} pentru {rec.Type} de {amount:,.2f} {rec.Currency}.")
+            problems.append(f"{rec.Date:%Y-%m-%d}: fără curs {rec.Currency}/{base} pentru {rec.Type} de {ro(amount):,.2f} {rec.Currency}.")
         rows.append({"Date": rec.Date, "Currency": rec.Currency, "Amount": float(amount),
                      "Rate": np.nan if rate is None else rate,
                      "AmountBase": np.nan if rate is None else float(amount) * rate})
