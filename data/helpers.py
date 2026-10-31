@@ -280,12 +280,12 @@ def scale_number(value):
     să fie scalate la fel ca cele pozitive, cu semnul păstrat."""
     size = abs(value)
     if size >= 1e12:
-        return f"{value / 1e12:.2f} T"
+        return f"{ro(value / 1e12):.2f} T"
     if size >= 1e9:
-        return f"{value / 1e9:.2f} B"
+        return f"{ro(value / 1e9):.2f} B"
     if size >= 1e6:
-        return f"{value / 1e6:.2f} M"
-    return f"{value:,.2f}"
+        return f"{ro(value / 1e6):.2f} M"
+    return f"{ro(value):,.2f}"
 
 
 def watchlist_status(price, target):
@@ -300,6 +300,45 @@ def watchlist_status(price, target):
     if price is None or target is None:
         return price, target, None, False
     return price, target, (price - target) / target * 100, price <= target
+
+
+def ro_separators(text):
+    """Separatorii unui număr formatat american, schimbați în cei românești: „1,234.5” → „1.234,5”."""
+    return text.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+class ro:
+    """Număr afișat în format românesc direct dintr-un f-string, cu specificația obișnuită.
+
+    f"{ro(x):,.2f}" → „1.234,56”; f"{ro(x):+.1%}" → „+12,3%”; f"{ro(n):,}" → „12.345”.
+    Schimbă doar afișarea: valoarea nu se modifică. O valoare nenumerică (None, text) dă
+    aceeași eroare ca f"{x:.2f}", ca să nu ascundă o lipsă tratată greșit în apelant.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __format__(self, spec):
+        return ro_separators(format(self.value, spec))
+
+
+def ro_spec(spec, suffix=""):
+    """Formatter pentru pandas Styler / map: ro_spec(",.2f")(1234.5) → „1.234,50”; lipsă → „N/A”.
+
+    În Styler păstrează valorile numerice dedesubt, deci sortarea pe coloană rămâne numerică.
+    `suffix` se adaugă doar la numere („ USD”, „%”), nu și la „N/A”.
+    """
+    def _fmt(v):
+        if v is None or isinstance(v, str):
+            return "N/A" if v is None else v
+        try:
+            if pd.isna(v):
+                return "N/A"
+        except (TypeError, ValueError):
+            pass
+        return format(ro(v), spec) + suffix
+    return _fmt
 
 
 def format_ro(value, decimals=2, suffix="", trim=False):
@@ -319,7 +358,7 @@ def format_ro(value, decimals=2, suffix="", trim=False):
     text = f"{v:,.{decimals}f}"
     if trim and "." in text:
         text = text.rstrip("0").rstrip(".")
-    text = text.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+    text = ro_separators(text)
     if text in ("-0", "-0,00") or (text.startswith("-") and set(text[1:]) <= set("0,.")):
         text = text[1:]
     return text + suffix

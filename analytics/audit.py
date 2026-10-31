@@ -3,7 +3,7 @@
 Mutate din app.py fără schimbarea numelor sau a semnăturilor. Regula: un indicator
 lipsă (None) nu devine 0; pilonul respectiv e sărit și apare în lista „DATE LIPSĂ".
 """
-from data.helpers import num
+from data.helpers import num, ro
 
 
 def get_sector_benchmarks(sector):
@@ -50,50 +50,50 @@ def generate_advanced_audit_v2(info, alpha, beta, h_score):
     if pe is not None and pe > 0:
         rel_price = pe / limits['pe_threshold']
         if rel_price < 0.8 and roe is not None and roe > limits['roe_target']:
-            audit.append(f"💰 **EVALUARE:** Subevaluată în {sector}. P/E {pe:.1f} este atractiv față de media de {limits['pe_threshold']}.")
+            audit.append(f"💰 **EVALUARE:** Subevaluată în {sector}. P/E {ro(pe):.1f} este atractiv față de media de {limits['pe_threshold']}.")
         elif rel_price < 0.8 and roe is None:
-            audit.append(f"📊 **EVALUARE:** P/E {pe:.1f} sub pragul sectorului ({limits['pe_threshold']}), "
+            audit.append(f"📊 **EVALUARE:** P/E {ro(pe):.1f} sub pragul sectorului ({limits['pe_threshold']}), "
                          f"dar ROE lipsește: nu se poate confirma că prețul mic nu reflectă o rentabilitate slabă.")
         elif rel_price > 1.3:
-            audit.append(f"⚖️ **EVALUARE:** Scumpă raportat la sector ({pe:.1f} vs {limits['pe_threshold']}).")
+            audit.append(f"⚖️ **EVALUARE:** Scumpă raportat la sector ({ro(pe):.1f} vs {limits['pe_threshold']}).")
         else:
-            audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector} (P/E {pe:.1f}).")
+            audit.append(f"📊 **EVALUARE:** Preț corect în contextul {sector} (P/E {ro(pe):.1f}).")
 
     # --- 2. PROFITABILITATE & EFICIENȚĂ ---
     if roe is not None and roe > 0.25:
-        audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {roe*100:.1f}%). Management performant.")
+        audit.append(f"🚀 **PROFITABILITATE:** Eficiență de elită (ROE {ro(roe*100):.1f}%). Management performant.")
     elif roe is not None and roe < 0.10:
-        audit.append(f"📉 **PROFITABILITATE:** Eficiență sub-optimă ({roe*100:.1f}%). Capitalul nu produce suficient.")
+        audit.append(f"📉 **PROFITABILITATE:** Eficiență sub-optimă ({ro(roe*100):.1f}%). Capitalul nu produce suficient.")
 
     # --- 3. SOLVABILITATE (DATORII) ---
     if de is not None and de > limits['de_max']:
-        audit.append(f"🚩 **SOLVABILITATE:** Îndatorare peste limita sectorului ({de:.1f}%). Risc structural ridicat.")
+        audit.append(f"🚩 **SOLVABILITATE:** Îndatorare peste limita sectorului ({ro(de):.1f}%). Risc structural ridicat.")
     elif de is not None:
-        audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({de:.1f}% debt/equity).")
+        audit.append(f"✅ **SOLVABILITATE:** Structură de capital sănătoasă ({ro(de):.1f}% debt/equity).")
 
     # --- 4. LICHIDITATE (CASH-FLOW) ---
     if cr is not None and cr > 0:
         if cr < 1.0:
-            audit.append(f"❌ **LICHIDITATE:** Critică ({cr:.2f}). Firma depinde de finanțări externe pe termen scurt.")
+            audit.append(f"❌ **LICHIDITATE:** Critică ({ro(cr):.2f}). Firma depinde de finanțări externe pe termen scurt.")
         elif cr > 1.5:
-            audit.append(f"💧 **LICHIDITATE:** Solidă ({cr:.2f}). Există suficient 'cash' pentru siguranță.")
+            audit.append(f"💧 **LICHIDITATE:** Solidă ({ro(cr):.2f}). Există suficient 'cash' pentru siguranță.")
 
     # --- 5. PERFORMANȚĂ PIAȚĂ (ALPHA) ---
     if alpha is not None:
         alpha_p = alpha * 100
         if alpha > 0.02:
-            audit.append(f"📈 **PERFORMANȚĂ:** Alpha Pozitiv ({alpha_p:.1f}%). Randament peste indexul de referință.")
+            audit.append(f"📈 **PERFORMANȚĂ:** Alpha Pozitiv ({ro(alpha_p):.1f}%). Randament peste indexul de referință.")
         elif alpha < -0.02:
-            audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({alpha_p:.1f}%). Activul pierde în fața pieței.")
+            audit.append(f"🥀 **PERFORMANȚĂ:** Subperformanță ({ro(alpha_p):.1f}%). Activul pierde în fața pieței.")
 
     # --- 6. RISC DE PIAȚĂ (BETA) ---
     if beta is None:
         pass
     elif beta > 1.3:
-        audit.append(f"🎢 **VOLATILITATE (Beta {beta:.2f}):** Risc ridicat. Mișcări mult mai ample decât piața.")
+        audit.append(f"🎢 **VOLATILITATE (Beta {ro(beta):.2f}):** Risc ridicat. Mișcări mult mai ample decât piața.")
     elif beta < 0.8:
-        audit.append(f"🛡️ **VOLATILITATE (Beta {beta:.2f}):** Profil defensiv. Stabilă în perioade de criză.")
+        audit.append(f"🛡️ **VOLATILITATE (Beta {ro(beta):.2f}):** Profil defensiv. Stabilă în perioade de criză.")
     else:
-        audit.append(f"⚖️ **VOLATILITATE (Beta {beta:.2f}):** Mișcare sincronizată cu piața generală.")
+        audit.append(f"⚖️ **VOLATILITATE (Beta {ro(beta):.2f}):** Mișcare sincronizată cu piața generală.")
 
     return audit

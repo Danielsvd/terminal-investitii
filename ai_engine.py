@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 from analytics import options as opt_calc
 from analytics.options import max_pain
-from data.helpers import num, now_ro
+from data.helpers import num, now_ro, ro
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
@@ -153,6 +153,7 @@ def render_ai_chart(forecast, hist):
     # Ascundem axa X dintre cele două grafice pentru continuitate
     fig.update_xaxes(showticklabels=False, row=1, col=1)
     
+    fig.update_layout(separators=",.")   # punct la mii, virgulă la zecimale
     st.plotly_chart(fig, width='stretch')
 
 def _altman_distress(z):
@@ -184,7 +185,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     if num(info, 'currentRatio') is not None and num(info, 'currentRatio') < 1.0: swot["Weaknesses"].append("Probleme potențiale de lichiditate pe termen scurt.")
 
     # --- OPPORTUNITIES ---
-    if mos_val is not None and mos_val > 25: swot["Opportunities"].append(f"Fereastră de achiziție sub-evaluată ({mos_val:.1f}% discount).")
+    if mos_val is not None and mos_val > 25: swot["Opportunities"].append(f"Fereastră de achiziție sub-evaluată ({ro(mos_val):.1f}% discount).")
     if sector == "Technology": swot["Opportunities"].append("Expansiune prin integrare AI și automatizare.")
     if sector == "Energy": swot["Opportunities"].append("Tranziția către surse regenerabile și eficiență carbon.")
 
@@ -230,7 +231,7 @@ def detect_market_regime_ai(hist_data):
         if not cluster_history.empty:
             win_rate = (cluster_history['Fwd_20d_Ret'] > 0).mean() * 100
             avg_fwd_ret = cluster_history['Fwd_20d_Ret'].mean()
-            backtest_msg = f"📊 **Backtest:** Rata de succes istorică {win_rate:.1f}% | Profit mediu forward (20z): {avg_fwd_ret:+.2f}%"
+            backtest_msg = f"📊 **Backtest:** Rata de succes istorică {ro(win_rate):.1f}% | Profit mediu forward (20z): {ro(avg_fwd_ret):+.2f}%"
         else:
             backtest_msg = "ℹ️ Date istorice insuficiente pentru un backtest relevant."
 
@@ -480,7 +481,7 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
         irx = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)["Close"].dropna()
         if not irx.empty and 0 <= float(irx.iloc[-1]) < 25:
             r = float(np.log1p(float(irx.iloc[-1]) / 100.0))
-            r_src = f"^IRX {float(irx.iloc[-1]):.2f}% ({irx.index[-1]:%d.%m.%Y})"
+            r_src = f"^IRX {ro(float(irx.iloc[-1])):.2f}% ({irx.index[-1]:%d.%m.%Y})"
     except (KeyError, IndexError, ValueError, TypeError) as e:
         print(f"DEBUG: ^IRX indisponibil: {e}")
     if r is None:
@@ -613,9 +614,9 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
         reasons.append("ℹ️ **Acționariat:** Yahoo nu a trimis deținerile instituționale. Pilon neinclus în scor.")
     elif inst_pct > 60:
         score += 10
-        reasons.append(f"✅ **Dominare Instituțională:** Balenele dețin {inst_pct:.0f}%, oferind stabilitate prețului.")
+        reasons.append(f"✅ **Dominare Instituțională:** Balenele dețin {ro(inst_pct):.0f}%, oferind stabilitate prețului.")
     elif inst_pct < 30:
-        reasons.append(f"⚠️ **Lipsă Instituții:** Doar {inst_pct:.0f}% la fonduri. Preț expus la speculă de retail.")
+        reasons.append(f"⚠️ **Lipsă Instituții:** Doar {ro(inst_pct):.0f}% la fonduri. Preț expus la speculă de retail.")
     else:
         score += 5
         
@@ -639,10 +640,10 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
             
         if iv < 30:
             score += 5
-            reasons.append(f"✅ **Volatilitate (IV) Scăzută:** Primele de asigurare sunt ieftine ({iv:.1f}%).")
+            reasons.append(f"✅ **Volatilitate (IV) Scăzută:** Primele de asigurare sunt ieftine ({ro(iv):.1f}%).")
         elif iv > 50:
             score -= 10 # Penalizare
-            reasons.append(f"⚠️ **IV Extem ({iv:.1f}%):** Opțiunile sunt foarte scumpe. Piața așteaptă șocuri de preț.")
+            reasons.append(f"⚠️ **IV Extem ({ro(iv):.1f}%):** Opțiunile sunt foarte scumpe. Piața așteaptă șocuri de preț.")
 
     # 6. SENTIMENT NLP (Max 10 puncte)
     if s_score > 0.15:
@@ -671,7 +672,7 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
             reasons.append("✅ **Oversold (Supra-vândut):** Indicatorul RSI sugerează o panică exagerată. Bun de intrare.")
         elif rsi > 75:
             score -= 15 # Penalizare gravă
-            reasons.append(f"🚨 **Overbought (RSI {rsi:.0f}):** Acțiunea este extrem de supra-cumpărată. Corecție iminentă!")
+            reasons.append(f"🚨 **Overbought (RSI {ro(rsi):.0f}):** Acțiunea este extrem de supra-cumpărată. Corecție iminentă!")
         else:
             score += 5
     except: pass
@@ -739,19 +740,19 @@ def calculate_master_macro_verdict(df_sectors, credit_ratio_series, corr_matrix,
     # 2. PILONUL VIX (Frica / Complăcere) - 20%
     if vix_val > 25:
         score -= 20
-        reasons.append(f"🚨 **Panică (VIX {vix_val:.1f}):** Frica este ridicată. Piața este vulnerabilă la căderi bruște.")
+        reasons.append(f"🚨 **Panică (VIX {ro(vix_val):.1f}):** Frica este ridicată. Piața este vulnerabilă la căderi bruște.")
     elif vix_val < 15:
         score += 10
-        reasons.append(f"✅ **Liniște (VIX {vix_val:.1f}):** Volatilitatea este scăzută, favorizând trendul ascendent.")
+        reasons.append(f"✅ **Liniște (VIX {ro(vix_val):.1f}):** Volatilitatea este scăzută, favorizând trendul ascendent.")
     else:
-        reasons.append(f"⚖️ **VIX Stabil ({vix_val:.1f}):** Frica este în limite normale.")
+        reasons.append(f"⚖️ **VIX Stabil ({ro(vix_val):.1f}):** Frica este în limite normale.")
 
     # 3. PILONUL DOLAR (Corelația SPY/UUP) - 15%
     try:
         spy_uup = corr_matrix.loc['Acțiuni (SPY)', 'Dolar (UUP)']
         if spy_uup < -0.7:
             score -= 15
-            reasons.append(f"⚠️ **Dolar Dominant:** Corelație inversă severă ({spy_uup:.2f}). Orice creștere a Dolarului va lovi bursa.")
+            reasons.append(f"⚠️ **Dolar Dominant:** Corelație inversă severă ({ro(spy_uup):.2f}). Orice creștere a Dolarului va lovi bursa.")
         else:
             score += 5
     except: pass
@@ -946,7 +947,7 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     # STRATUL 1: SUPRA-CORELAȚII (BOMBE MACROECONOMICE)
     # =========================================================
     if oil_trend > 0.05 and cpi_change > 0.2:
-        bullets.append({"icon": "🌪️", "color": "#F85149", "text": f"BUCLA INFLAȚIEI: Petrolul crește violent (+{oil_trend*100:.1f}%), iar datele CPI confirmă scumpirile. FED este blocată. Mediu toxic pentru acțiunile de creștere (Growth)."})
+        bullets.append({"icon": "🌪️", "color": "#F85149", "text": f"BUCLA INFLAȚIEI: Petrolul crește violent (+{ro(oil_trend*100):.1f}%), iar datele CPI confirmă scumpirile. FED este blocată. Mediu toxic pentru acțiunile de creștere (Growth)."})
         cross_asset_flags += 1
         
     if cpi_change > 0.2 and unrate_change > 0:
@@ -954,7 +955,7 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
         cross_asset_flags += 1
 
     if gold_trend > 0.03 and dxy_trend > 0.015:
-        bullets.append({"icon": "🥇", "color": "#FFAB00", "text": f"PARADOXUL FRICII: Aurul (+{gold_trend*100:.1f}%) și Dolarul (+{dxy_trend*100:.1f}%) cresc simultan. Marile fonduri acumulează orice activ de siguranță, semn de panică sistemică."})
+        bullets.append({"icon": "🥇", "color": "#FFAB00", "text": f"PARADOXUL FRICII: Aurul (+{ro(gold_trend*100):.1f}%) și Dolarul (+{ro(dxy_trend*100):.1f}%) cresc simultan. Marile fonduri acumulează orice activ de siguranță, semn de panică sistemică."})
         cross_asset_flags += 1
 
     if copper_trend < -0.04 and indpro_change < -0.5:
@@ -966,33 +967,33 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     # =========================================================
     # Inflație
     if cpi_change > 0.2:
-        bullets.append({"icon": "🔥", "color": "#F85149", "text": f"INFLAȚIE (CPI): Accelerare ({cpi_change:+.2f} pct). Prețurile nu cedează, menținând presiunea pe consumatori și pe dobânzile FED."})
+        bullets.append({"icon": "🔥", "color": "#F85149", "text": f"INFLAȚIE (CPI): Accelerare ({ro(cpi_change):+.2f} pct). Prețurile nu cedează, menținând presiunea pe consumatori și pe dobânzile FED."})
     elif cpi_change <= 0:
-        bullets.append({"icon": "❄️", "color": "#3FB950", "text": f"INFLAȚIE (CPI): Dezinflație confirmată ({cpi_change:+.2f} pct). Oferă băncii centrale motive să reducă dobânzile (Dovish)."})
+        bullets.append({"icon": "❄️", "color": "#3FB950", "text": f"INFLAȚIE (CPI): Dezinflație confirmată ({ro(cpi_change):+.2f} pct). Oferă băncii centrale motive să reducă dobânzile (Dovish)."})
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"INFLAȚIE (CPI): Creștere sub control ({cpi_change:+.2f} pct). Prețurile se stabilizează fără șocuri majore."})
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"INFLAȚIE (CPI): Creștere sub control ({ro(cpi_change):+.2f} pct). Prețurile se stabilizează fără șocuri majore."})
 
     # Piața Muncii
     if unrate_change > 0 or nfp_change < 50:
-        bullets.append({"icon": "⚠️", "color": "#D29922", "text": f"PIAȚA MUNCII: Se răcește. Șomajul e la {unrate_curr:.1f}%, iar joburile noi scârțâie ({nfp_change:+.0f}K). Risc de recesiune dacă trendul continuă."})
+        bullets.append({"icon": "⚠️", "color": "#D29922", "text": f"PIAȚA MUNCII: Se răcește. Șomajul e la {ro(unrate_curr):.1f}%, iar joburile noi scârțâie ({ro(nfp_change):+.0f}K). Risc de recesiune dacă trendul continuă."})
     elif nfp_change > 150:
-        bullets.append({"icon": "💪", "color": "#3FB950", "text": f"PIAȚA MUNCII: Robustă (Soft Landing). Crearea a {nfp_change:+.0f}K joburi arată o economie de fier care ignoră dobânzile mari."})
+        bullets.append({"icon": "💪", "color": "#3FB950", "text": f"PIAȚA MUNCII: Robustă (Soft Landing). Crearea a {ro(nfp_change):+.0f}K joburi arată o economie de fier care ignoră dobânzile mari."})
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"PIAȚA MUNCII: Echilibrată ({nfp_change:+.0f}K joburi adăugate). Angajările sunt la un nivel sustenabil, fără surprize."})
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"PIAȚA MUNCII: Echilibrată ({ro(nfp_change):+.0f}K joburi adăugate). Angajările sunt la un nivel sustenabil, fără surprize."})
 
     # Consum
     if retail_change < -0.5:
-        bullets.append({"icon": "🛒", "color": "#F85149", "text": f"CONSUM: Fragil. Vânzările de retail au scăzut ({retail_change:+.2f} pct). Motorul economiei americane dă semne de oboseală."})
+        bullets.append({"icon": "🛒", "color": "#F85149", "text": f"CONSUM: Fragil. Vânzările de retail au scăzut ({ro(retail_change):+.2f} pct). Motorul economiei americane dă semne de oboseală."})
     elif retail_change > 0.5:
-        bullets.append({"icon": "🛍️", "color": "#3FB950", "text": f"CONSUM: Puternic. Populația cheltuie masiv ({retail_change:+.2f} pct), ceea ce va susține direct profiturile companiilor."})
+        bullets.append({"icon": "🛍️", "color": "#3FB950", "text": f"CONSUM: Puternic. Populația cheltuie masiv ({ro(retail_change):+.2f} pct), ceea ce va susține direct profiturile companiilor."})
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"CONSUM: Stabil. Vânzările de retail sunt constante ({retail_change:+.2f} pct). Fără anomalii în comportamentul de cumpărare."})
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"CONSUM: Stabil. Vânzările de retail sunt constante ({ro(retail_change):+.2f} pct). Fără anomalii în comportamentul de cumpărare."})
 
     # Decizia FED
     if fed_change < -0.1:
-        bullets.append({"icon": "💸", "color": "#3FB950", "text": f"POLITICA FED: Ciclu de relaxare (Tăieri de {fed_change:+.2f} pct). Banii mai ieftini acționează ca un stimulent major pentru bursa de acțiuni."})
+        bullets.append({"icon": "💸", "color": "#3FB950", "text": f"POLITICA FED: Ciclu de relaxare (Tăieri de {ro(fed_change):+.2f} pct). Banii mai ieftini acționează ca un stimulent major pentru bursa de acțiuni."})
     elif fed_change > 0.1:
-        bullets.append({"icon": "🏦", "color": "#F85149", "text": f"POLITICA FED: Restrictivă (Creșteri de {fed_change:+.2f} pct). Dobânzile mari atrag capitalul dinspre acțiuni spre depozite și obligațiuni."})
+        bullets.append({"icon": "🏦", "color": "#F85149", "text": f"POLITICA FED: Restrictivă (Creșteri de {ro(fed_change):+.2f} pct). Dobânzile mari atrag capitalul dinspre acțiuni spre depozite și obligațiuni."})
     else:
         bullets.append({"icon": "⚖️", "color": "#8B949E", "text": "POLITICA FED: Dobânda menținută. Banca Centrală este în faza de așteptare ('Wait and See')."})
 
@@ -1001,43 +1002,43 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     # =========================================================
     
     if dxy_trend > 0.015 and cross_asset_flags == 0:
-        bullets.append({"icon": "💵", "color": "#F85149", "text": f"DOLAR: Puternic (+{dxy_trend*100:.1f}% într-o lună). Moneda americană acționează ca un obstacol major pentru S&P 500."})
+        bullets.append({"icon": "💵", "color": "#F85149", "text": f"DOLAR: Puternic (+{ro(dxy_trend*100):.1f}% într-o lună). Moneda americană acționează ca un obstacol major pentru S&P 500."})
     elif dxy_trend < -0.015:
-        bullets.append({"icon": "💸", "color": "#3FB950", "text": f"DOLAR: Slab (-{abs(dxy_trend)*100:.1f}%). Oferă o fereastră de oportunitate masivă pentru piețele globale și cripto."})
+        bullets.append({"icon": "💸", "color": "#3FB950", "text": f"DOLAR: Slab (-{ro(abs(dxy_trend)*100):.1f}%). Oferă o fereastră de oportunitate masivă pentru piețele globale și cripto."})
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"DOLAR: Consolidare ({dxy_trend*100:+.1f}%). Valuta se tranzacționează în interval neutru."})
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"DOLAR: Consolidare ({ro(dxy_trend*100):+.1f}%). Valuta se tranzacționează în interval neutru."})
 
     if oil_trend > 0.06:
         bullets.append({
             "icon": "🛢️", 
             "color": "#F85149", # Schimbăm în Roșu (era Galben) pentru că +40% e critic
-            "text": f"ȘOC PETROLIER: Țițeiul a explodat (+{oil_trend*100:.1f}%). Această creștere violentă a costurilor la energie va pune o presiune imensă pe inflație și va forța FED-ul să rămână Hawkish."
+            "text": f"ȘOC PETROLIER: Țițeiul a explodat (+{ro(oil_trend*100):.1f}%). Această creștere violentă a costurilor la energie va pune o presiune imensă pe inflație și va forța FED-ul să rămână Hawkish."
         })
     elif oil_trend < -0.06:
         bullets.append({
             "icon": "⛽", 
             "color": "#3FB950", 
-            "text": f"RELAXARE ENERGETICĂ: Petrolul scade semnificativ (-{abs(oil_trend)*100:.1f}%). Este un semnal puternic de dezinflație care ajută marjele de profit ale companiilor."
+            "text": f"RELAXARE ENERGETICĂ: Petrolul scade semnificativ (-{ro(abs(oil_trend)*100):.1f}%). Este un semnal puternic de dezinflație care ajută marjele de profit ale companiilor."
         })
     else:
         # Mesajul de stabilitate apare DOAR dacă variația e mică
         bullets.append({
             "icon": "⚖️", 
             "color": "#8B949E", 
-            "text": f"PETROL: Preț stabil ({oil_trend*100:+.1f}%). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
+            "text": f"PETROL: Preț stabil ({ro(oil_trend*100):+.1f}%). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
         })
 
     if yield_spread < 0:
-        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({yield_spread:.2f}). Semnalul istoric de recesiune este în continuare aprins."})
+        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({ro(yield_spread):.2f}). Semnalul istoric de recesiune este în continuare aprins."})
     else:
-        bullets.append({"icon": "📈", "color": "#3FB950", "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({yield_spread:.2f}). Creditarea corporativă este sănătoasă."})
+        bullets.append({"icon": "📈", "color": "#3FB950", "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({ro(yield_spread):.2f}). Creditarea corporativă este sănătoasă."})
 
     if vix_val > 22:
-        bullets.append({"icon": "⚡", "color": "#F85149", "text": f"VIX (OPȚIUNI): Panică ({vix_val:.1f}). Cererea pentru contracte Put explodează. Volatilitatea e la putere."})
+        bullets.append({"icon": "⚡", "color": "#F85149", "text": f"VIX (OPȚIUNI): Panică ({ro(vix_val):.1f}). Cererea pentru contracte Put explodează. Volatilitatea e la putere."})
     elif vix_val < 14:
-        bullets.append({"icon": "🧘", "color": "#3FB950", "text": f"VIX (OPȚIUNI): Liniște absolută ({vix_val:.1f}). Piața e calmă, dar favorizează apariția unor „Black Swans”."})
+        bullets.append({"icon": "🧘", "color": "#3FB950", "text": f"VIX (OPȚIUNI): Liniște absolută ({ro(vix_val):.1f}). Piața e calmă, dar favorizează apariția unor „Black Swans”."})
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"VIX (OPȚIUNI): Moderație ({vix_val:.1f}). Investitorii nu evaluează riscuri imediate majore."})
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"VIX (OPȚIUNI): Moderație ({ro(vix_val):.1f}). Investitorii nu evaluează riscuri imediate majore."})
 
     # =========================================================
     # SORTARE (Sistem Profesional de Prioritizare Vizuală)

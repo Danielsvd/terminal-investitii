@@ -100,8 +100,8 @@ def test_banca_roe_sub_g_si_ke_lipsa():
 
 def test_explicatia_pe_note():
     strong, middle, weak, missing = explain(fundamental_score(_industrial(coverage=None)))
-    assert any(t.startswith("Datorie netă / EBITDA = 0.00") for t in strong)
-    assert any(t.startswith("DCF invers: prețul cere o creștere a FCF de 10.0%") for t in middle)
+    assert any(t.startswith("Datorie netă / EBITDA = 0,00") for t in strong)
+    assert any(t.startswith("DCF invers: prețul cere o creștere a FCF de 10,0%") for t in middle)
     assert any(t.startswith("Acoperirea dobânzii: N/A") for t in missing) and weak == []
     assert math.isclose(fundamental_score(_industrial())["score"], 61.1)
 
@@ -144,7 +144,7 @@ def test_gn_informativ_nu_intra_in_scor():
     strong, middle, weak, missing = explain(res)
     assert not any("GN" in t for t in strong + middle + weak + missing)
     notes = info_notes(res)
-    assert len(notes) == 1 and "P/BV 52.0 > 10" in notes[0]
+    assert len(notes) == 1 and "P/BV 52,0 > 10" in notes[0]
     # P/BV normal: GN afișat cu pragul, tot informativ
     notes = info_notes(fundamental_score(_industrial(pe=15, pbv=1.2)))
-    assert notes[0].startswith("GN = P/E × P/BV = 18.0, sub pragul")
+    assert notes[0].startswith("GN = P/E × P/BV = 18,0, sub pragul")

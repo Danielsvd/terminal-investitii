@@ -207,12 +207,12 @@ from data.helpers import scale_number  # noqa: E402
 
 
 def test_scale_number_pozitive_si_negative():
-    assert scale_number(4.97e12) == "4.97 T" and scale_number(76.89e9) == "76.89 B"
-    assert scale_number(57.07e6) == "57.07 M" and scale_number(1234.5) == "1,234.50"
+    assert scale_number(4.97e12) == "4,97 T" and scale_number(76.89e9) == "76,89 B"
+    assert scale_number(57.07e6) == "57,07 M" and scale_number(1234.5) == "1.234,50"
     # INTC pe aplicația de test: profit net -11.288.999.936 apărea nescalat
-    assert scale_number(-11_288_999_936.0) == "-11.29 B"
-    assert scale_number(-2.5e6) == "-2.50 M" and scale_number(-950.0) == "-950.00"
-    assert scale_number(0) == "0.00"
+    assert scale_number(-11_288_999_936.0) == "-11,29 B"
+    assert scale_number(-2.5e6) == "-2,50 M" and scale_number(-950.0) == "-950,00"
+    assert scale_number(0) == "0,00"
 
 
 def test_watchlist_status_fara_zero_inventat():
@@ -258,3 +258,28 @@ def test_format_ro():
     assert format_ro(106.2, 1, "%") == "106,2%"
     assert format_ro(-0.001) == "0,00"
     assert format_ro(None) == "N/A" and format_ro(float("nan")) == "N/A" and format_ro("x") == "N/A"
+
+
+def test_ro_format_spec():
+    from data.helpers import ro, ro_spec, ro_separators
+    assert f"{ro(1234.567):,.2f}" == "1.234,57"
+    assert f"{ro(0.1234):+.1%}" == "+12,3%"
+    assert f"{ro(-5818738.4):,.0f}" == "-5.818.738"
+    assert f"{ro(12345):,}" == "12.345"
+    assert f"{ro(2026):.0f}" == "2026"                  # anii rămân fără punct
+    assert f"{ro(0.52):.2f} / {ro(-0.48):.2f}" == "0,52 / -0,48"
+    assert f"{ro(float('nan')):.2f}" == "nan"           # aceeași afișare ca înainte
+    import pytest
+    with pytest.raises(TypeError):
+        f"{ro(None):.2f}"                               # lipsa nu devine număr
+    assert ro_spec(",.2f")(1234.5) == "1.234,50"
+    assert ro_spec(".1f")(None) == "N/A" and ro_spec(".1f")(float("nan")) == "N/A"
+    assert ro_spec(".1f")("N/A") == "N/A"
+    assert ro_separators("1,234.5") == "1.234,5"
+
+
+def test_ro_spec_sufix_doar_la_numere():
+    from data.helpers import ro_spec
+    assert ro_spec(",.0f", " USD")(2e11) == "200.000.000.000 USD"
+    assert ro_spec(".2f", "%")(8.0) == "8,00%" and ro_spec(".2f", "%")(None) == "N/A"
+    assert ro_spec(".2%")(-0.0909) == "-9,09%"
