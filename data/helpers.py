@@ -269,10 +269,10 @@ def entry_target_view(price, target):
     if target is None or target != target or target <= 0:
         return "N/A", "Fără preț țintă în watchlist", "#8B949E"
     if price <= target:
-        return f"{target:.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
+        return f"{ro(target):.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
     dist_pct = (price - target) / target * 100
     color = "#D29922" if dist_pct < 5 else "#8B949E"
-    return f"{target:.2f}", f"⏳ +{dist_pct:.1f}% peste țintă", color
+    return f"{ro(target):.2f}", f"⏳ +{ro(dist_pct):.1f}% peste țintă", color
 
 
 def scale_number(value):

@@ -195,9 +195,9 @@ def test_entry_target_view_fara_tinta_nu_afiseaza_zero():
 
 def test_entry_target_view_cu_tinta():
     # AAPL din aplicația de test: 340,65 față de 243 -> (340,65 - 243) / 243 = 40,2%
-    assert entry_target_view(340.65, 243.0) == ("243.00", "⏳ +40.2% peste țintă", "#8B949E")
+    assert entry_target_view(340.65, 243.0) == ("243,00", "⏳ +40,2% peste țintă", "#8B949E")
     # 102 față de 100 -> 2% peste, sub pragul de 5% -> galben
-    assert entry_target_view(102.0, 100.0) == ("100.00", "⏳ +2.0% peste țintă", "#D29922")
+    assert entry_target_view(102.0, 100.0) == ("100,00", "⏳ +2,0% peste țintă", "#D29922")
     # la țintă sau sub ea -> zonă de achiziție
     assert entry_target_view(100.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
     assert entry_target_view(95.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
