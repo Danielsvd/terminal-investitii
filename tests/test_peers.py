@@ -116,8 +116,8 @@ def test_bursa_si_brokerul_nu_intra_in_grupul_bancilor():
 
 
 def test_format_peer_value_lipsa_devine_na():
-    assert format_peer_value("P/E", 27.78) == "27.8" and format_peer_value("P/BV", 2.1325) == "2.13"
-    assert format_peer_value("ROE (%)", 7.67) == "7.7%" and format_peer_value("Datorii/Capital (%)", 26.6) == "27%"
+    assert format_peer_value("P/E", 27.78) == "27,8" and format_peer_value("P/BV", 2.1325) == "2,13"
+    assert format_peer_value("ROE (%)", 7.67) == "7,7%" and format_peer_value("Datorii/Capital (%)", 26.6) == "27%"
     for missing in (None, float("nan"), "text"):
         assert format_peer_value("P/E", missing) == "N/A"         # nu „None", nu 0
 

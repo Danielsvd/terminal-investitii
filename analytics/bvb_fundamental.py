@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from data.company_files import period_label
+from data.helpers import ro
 
 GN_LIMIT = 22.5
 SCORED = ("EP", "BP", "DY", "PIO")
@@ -128,7 +129,7 @@ def current_indicators(df, price, as_of=None):
                      and not (1 / SPLIT_SUSPECT <= price / manual <= SPLIT_SUSPECT))
     if split_suspect:
         out["avertismente"].append(
-            f"Prețul curent ({price:,.4f} lei) diferă de peste {SPLIT_SUSPECT:.0f}× de cel din fișier ({manual:,.4f} lei): "
+            f"Prețul curent ({ro(price):,.4f} lei) diferă de peste {ro(SPLIT_SUSPECT):.0f}× de cel din fișier ({ro(manual):,.4f} lei): "
             "posibil split sau acțiuni gratuite neactualizate în fișier. Multiplii de preț nu se calculează.")
     shares = bal.get("shares")
     if _ok(price, shares) and price > 0 and shares > 0 and not split_suspect:
@@ -191,9 +192,9 @@ def final_verdict(tier, moment_score):
         lab, col = TIER_LABELS[int(tier)]
         m, p, n = TIER_STATS[int(tier)]
         return (f"FUNDAMENTAL {lab}", col,
-                f"Momentul nu se poate calcula. Istoric, treapta fundamentală: {m:+.1%} la 6 luni, {p:.0%} cazuri pozitive (N = {n}).")
+                f"Momentul nu se poate calcula. Istoric, treapta fundamentală: {ro(m):+.1%} la 6 luni, {ro(p):.0%} cazuri pozitive (N = {n}).")
     lab, col, (m, p, n) = TWO_STEP[(int(tier), band)]
-    return lab, col, f"Istoric, combinația aceasta: {m:+.1%} față de media BVB la 6 luni, {p:.0%} cazuri pozitive (N = {n})."
+    return lab, col, f"Istoric, combinația aceasta: {ro(m):+.1%} față de media BVB la 6 luni, {ro(p):.0%} cazuri pozitive (N = {n})."
 
 
 MOMENT_LABELS = {"high": ("FAVORABIL", "#3FB950"), "mid": ("NEUTRU", "#D29922"), "low": ("NEFAVORABIL", "#F85149")}
@@ -216,7 +217,7 @@ def verdict_banner(tier, score, rank, n, moment_score):
         fund_label, fund_color = "DATE INSUFICIENTE", "#8B949E"
     else:
         fund_label, fund_color = TIER_LABELS[int(tier)]
-    fund_detail = "N/A" if score is None or pd.isna(score) else f"{score:.0f}/100"
+    fund_detail = "N/A" if score is None or pd.isna(score) else f"{ro(score):.0f}/100"
     if rank is not None and n:
         fund_detail += f" · locul {rank} din {n}"
     band = moment_band(moment_score)
@@ -224,7 +225,7 @@ def verdict_banner(tier, score, rank, n, moment_score):
         moment_label, moment_color, moment_detail = "N/A", "#8B949E", "istoric de preț insuficient"
     else:
         moment_label, moment_color = MOMENT_LABELS[band]
-        moment_detail = f"{moment_score:.0f}/100"
+        moment_detail = f"{ro(moment_score):.0f}/100"
     _, border, text = final_verdict(tier, moment_score)
     return {"fund_label": fund_label, "fund_color": fund_color, "fund_detail": fund_detail,
             "moment_label": moment_label, "moment_color": moment_color, "moment_detail": moment_detail,
@@ -253,17 +254,17 @@ def _value_text(key, me):
     if v is None or pd.isna(v):
         return "N/A"
     if key == "DY":
-        return f"{v * 100:.1f}%"
+        return f"{ro(v * 100):.1f}%"
     if key == "PIO":
-        return f"{v:.1f}/6"
-    return f"{v:.2f}"
+        return f"{ro(v):.1f}/6"
+    return f"{ro(v):.2f}"
 
 
 def _pio_change(c):
     v = c.get("valoare")
     if isinstance(v, tuple) and all(x is not None and pd.notna(x) for x in v):
         pct = c["criteriu"].startswith("ROA") or "active" in c["criteriu"]
-        fmt = (lambda x: f"{x * 100:.1f}%") if pct and "Rotația" not in c["criteriu"] else (lambda x: f"{x:.2f}")
+        fmt = (lambda x: f"{ro(x * 100):.1f}%") if pct and "Rotația" not in c["criteriu"] else (lambda x: f"{ro(x):.2f}")
         return f" ({fmt(v[0])} → {fmt(v[1])})"
     return ""
 
@@ -284,14 +285,14 @@ def explain_fundamental(me, cs, symbol):
         worse, better = int((col < mine).sum()), int((col > mine).sum())
         ties = others - worse - better
         position = (worse + 0.5 * ties) / others          # rangul mediu: egalitățile contează pe jumătate
-        tie_txt = f", la egalitate cu {ties / others:.0%}" if ties else ""
+        tie_txt = f", la egalitate cu {ro(ties / others):.0%}" if ties else ""
         head = f"{name} {_value_text(key, me)} — "
         if position >= 2 / 3:
-            strong.append(f"{head}{good} {worse / others:.0%} din celelalte {others} companii{tie_txt}.")
+            strong.append(f"{head}{good} {ro(worse / others):.0%} din celelalte {others} companii{tie_txt}.")
         elif position <= 1 / 3:
-            weak.append(f"{head}{bad} {better / others:.0%} din celelalte {others} companii{tie_txt}.")
+            weak.append(f"{head}{bad} {ro(better / others):.0%} din celelalte {others} companii{tie_txt}.")
         else:
-            middle.append(f"{head}{good} {worse / others:.0%} din celelalte {others} companii{tie_txt}.")
+            middle.append(f"{head}{good} {ro(worse / others):.0%} din celelalte {others} companii{tie_txt}.")
     failed = [c for c in me.get("piotroski", []) if c["trece"] is False]
     if failed:
         notes.append("Piotroski, ce s-a deteriorat față de acum un an: "
@@ -301,7 +302,7 @@ def explain_fundamental(me, cs, symbol):
         m_ok, p_ok, _ = GN_STATS["ok"]
         m_over, p_over, _ = GN_STATS["over"]
         if gn <= GN_LIMIT:
-            notes.append(f"GN {gn:.1f} ≤ 22,5: trece criteriul Graham (istoric {m_ok:+.1%} la 6 luni, {p_ok:.0%} pozitive).")
+            notes.append(f"GN {ro(gn):.1f} ≤ 22,5: trece criteriul Graham (istoric {ro(m_ok):+.1%} la 6 luni, {ro(p_ok):.0%} pozitive).")
         else:
-            notes.append(f"GN {gn:.1f} > 22,5: nu trece criteriul Graham (istoric {m_over:+.1%} la 6 luni, {p_over:.0%} pozitive).")
+            notes.append(f"GN {ro(gn):.1f} > 22,5: nu trece criteriul Graham (istoric {ro(m_over):+.1%} la 6 luni, {ro(p_over):.0%} pozitive).")
     return strong, middle, weak, notes

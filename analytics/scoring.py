@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from data.helpers import ro
+
 GROUP_WEIGHTS = {"fundamental": 0.60, "tehnic": 0.25, "context": 0.15}
 GROUP_LABELS = {"fundamental": "Fundamental", "tehnic": "Tehnic", "context": "Context (sentiment, opțiuni)"}
 
@@ -195,7 +197,7 @@ def technical_pillars(close, rsi_last):
     return [
         Pillar("trend", TECH_LABELS["trend"], "tehnic", comp["trend"]),
         Pillar("momentum", TECH_LABELS["momentum"], "tehnic", comp["momentum"],
-               detail="N/A" if mom is None else f"{mom*100:+.1f}%"),
+               detail="N/A" if mom is None else f"{ro(mom*100):+.1f}%"),
     ]
 
 
@@ -220,7 +222,7 @@ def rsi_description(rsi):
         zone = "supravândut"
     else:
         zone = "neutru"
-    return f"{float(rsi):.0f} ({zone})"
+    return f"{ro(float(rsi)):.0f} ({zone})"
 
 
 # Pragurile momentului la BVB, din testul istoric 2012–2025 (26 de companii, exces față de media BVB la 6 luni):
@@ -254,8 +256,8 @@ def explain_moment(close, rsi_last=None):
     last, sma50 = c.iloc[-1], c.iloc[-50:].mean()
     if len(c) >= 200:
         sma200 = c.iloc[-200:].mean()
-        checks = [(last > sma50, f"prețul ({last:.4g}) e {'peste' if last > sma50 else 'sub'} media pe 50 de zile ({sma50:.4g})"),
-                  (last > sma200, f"{'peste' if last > sma200 else 'sub'} media pe 200 de zile ({sma200:.4g})"),
+        checks = [(last > sma50, f"prețul ({ro(last):.4g}) e {'peste' if last > sma50 else 'sub'} media pe 50 de zile ({ro(sma50):.4g})"),
+                  (last > sma200, f"{'peste' if last > sma200 else 'sub'} media pe 200 de zile ({ro(sma200):.4g})"),
                   (sma50 > sma200, f"media pe 50 e {'peste' if sma50 > sma200 else 'sub'} cea pe 200")]
         n_ok = sum(ok for ok, _ in checks)
         verdict = {3: "trend ascendent complet", 2: "trend majoritar ascendent", 1: "trend majoritar descendent",
@@ -269,7 +271,7 @@ def explain_moment(close, rsi_last=None):
         out.append("Momentum 12-1 luni: N/A (istoric sub 12 luni).")
     else:
         cap = " (peste +30%: notă maximă)" if mom >= MOMENTUM_SCALE[1] else " (sub −30%: notă minimă)" if mom <= MOMENTUM_SCALE[0] else ""
-        out.append(f"Momentum: {mom * 100:+.1f}% de acum 12 luni până acum o lună{cap}.")
+        out.append(f"Momentum: {ro(mom * 100):+.1f}% de acum 12 luni până acum o lună{cap}.")
     if _valid(rsi_last):
         out.append(f"RSI {rsi_description(rsi_last)}: doar informativ, nu intră în scor (nu a dat semnal în testul pe BVB).")
     return out

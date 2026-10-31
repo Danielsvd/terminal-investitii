@@ -22,6 +22,7 @@ doi piloni cu date.
 import math
 
 from analytics.scoring import UNTESTED_NOTE, VERDICT_BANDS, linear_score
+from data.helpers import ro
 
 TERMINAL_GROWTH = 0.02          # g terminal al DCF-ului invers și al P/BV justificat (ca valoarea implicită din calculator)
 REVERSE_DCF_BOUNDS = (-0.50, 1.00)
@@ -55,7 +56,7 @@ def _num(x):
 
 
 def _pct(x, digits=1):
-    return f"{x * 100:+.{digits}f}%" if _num(x) else "N/A"
+    return f"{ro(x * 100):+.{digits}f}%" if _num(x) else "N/A"
 
 
 def _component(label, value_txt, score, text, info=False):
@@ -145,9 +146,9 @@ def ey_component(inp):
     if not _num(aaa) or aaa <= 0:
         return _component(label, "N/A", None, f"E/P față de AAA: N/A ({aaa_label}).")
     ratio, score = earnings_yield_vs_aaa(ey, aaa)
-    return _component(label, f"{ratio:.2f}×", score,
-                      f"Randamentul profitului E/P = 1 / P/E = {ey * 100:.2f}% față de {aaa:.2f}% ({aaa_label}): "
-                      f"{ratio:.2f}× (Graham cerea minimum 2×; ≤ 1× → zero, ≥ 2× → notă maximă).")
+    return _component(label, f"{ro(ratio):.2f}×", score,
+                      f"Randamentul profitului E/P = 1 / P/E = {ro(ey * 100):.2f}% față de {ro(aaa):.2f}% ({aaa_label}): "
+                      f"{ro(ratio):.2f}× (Graham cerea minimum 2×; ≤ 1× → zero, ≥ 2× → notă maximă).")
 
 
 def gn_component(inp):
@@ -159,13 +160,13 @@ def gn_component(inp):
                           "GN = P/E × P/BV: N/A (P/E sau P/BV lipsă sau negativ: pierdere ori capital propriu negativ). "
                           "Informativ, nu intră în scor.", info=True)
     if pbv > GN_UNINFORMATIVE_PBV:
-        return _component("GN (Graham)", f"{gn:.1f} (neinformativ)", None,
-                          f"GN = P/E × P/BV = {gn:.1f}, neinformativ: P/BV {pbv:.1f} > {GN_UNINFORMATIVE_PBV:.0f}, "
+        return _component("GN (Graham)", f"{ro(gn):.1f} (neinformativ)", None,
+                          f"GN = P/E × P/BV = {ro(gn):.1f}, neinformativ: P/BV {ro(pbv):.1f} > {ro(GN_UNINFORMATIVE_PBV):.0f}, "
                           "capitalul propriu contabil e micșorat (răscumpărări de acțiuni, pierderi acumulate), "
                           "deci P/BV nu mai măsoară evaluarea. Nu intră în scor.", info=True)
     rel = "sub" if gn <= GN_LIMIT else "peste"
-    return _component("GN (Graham)", f"{gn:.1f}", None,
-                      f"GN = P/E × P/BV = {gn:.1f}, {rel} pragul lui Graham de 22,5. Informativ: nu intră în scor "
+    return _component("GN (Graham)", f"{ro(gn):.1f}", None,
+                      f"GN = P/E × P/BV = {ro(gn):.1f}, {rel} pragul lui Graham de 22,5. Informativ: nu intră în scor "
                       "(evaluarea pe profit se face prin E/P față de AAA).", info=True)
 
 
@@ -193,11 +194,11 @@ def valuation_components(inp):
             elif rev["bound"] == "high":
                 val, txt = "> +100%", "prețul cere o creștere a FCF de peste 100% pe an"
             else:
-                val, txt = _pct(g), f"prețul cere o creștere a FCF de {g * 100:.1f}% pe an"
+                val, txt = _pct(g), f"prețul cere o creștere a FCF de {ro(g * 100):.1f}% pe an"
             base = inp.get("fcf_basis") or "FCF"
             out.append(_component("DCF invers", val, score,
-                                  f"DCF invers: {txt} în primul an, care scade spre {TERMINAL_GROWTH * 100:.0f}% în anul 5 "
-                                  f"(WACC {wacc * 100:.1f}%, pornind de la {base}). Sub 0% → notă maximă, peste 20% → zero."))
+                                  f"DCF invers: {txt} în primul an, care scade spre {ro(TERMINAL_GROWTH * 100):.0f}% în anul 5 "
+                                  f"(WACC {ro(wacc * 100):.1f}%, pornind de la {base}). Sub 0% → notă maximă, peste 20% → zero."))
     out.append(ey_component(inp))
     out.append(gn_component(inp))
     return out, rev
@@ -213,8 +214,8 @@ def quality_components(inp):
         return [_component("Piotroski F-Score", "N/A", None,
                            f"Piotroski: N/A ({n} criterii evaluabile din 9; minimum {PIOTROSKI_MIN_EVALUABLE}).")]
     score = passed / evaluable
-    return [_component("Piotroski F-Score", f"{passed:.0f}/{evaluable:.0f}", score,
-                       f"Piotroski: {passed:.0f} din {evaluable:.0f} criterii evaluabile îndeplinite "
+    return [_component("Piotroski F-Score", f"{ro(passed):.0f}/{ro(evaluable):.0f}", score,
+                       f"Piotroski: {ro(passed):.0f} din {ro(evaluable):.0f} criterii evaluabile îndeplinite "
                        "(ultimul an fiscal față de cel precedent).")]
 
 
@@ -224,8 +225,8 @@ def health_components(inp):
     zone = alt.get("zone")
     if zone in ALTMAN_SCORE:
         names = {"safe": "zona sigură", "grey": "zona gri", "distress": "zona de dificultate"}
-        out.append(_component(f"Altman {alt.get('variant') or 'Z'}", f"{alt['value']:.2f}", ALTMAN_SCORE[zone],
-                              f"Altman {alt.get('variant') or 'Z'} = {alt['value']:.2f}: {names[zone]} "
+        out.append(_component(f"Altman {alt.get('variant') or 'Z'}", f"{ro(alt['value']):.2f}", ALTMAN_SCORE[zone],
+                              f"Altman {alt.get('variant') or 'Z'} = {ro(alt['value']):.2f}: {names[zone]} "
                               "(sigură → notă maximă, gri → jumătate, dificultate → zero)."))
     else:
         out.append(_component("Altman", "N/A", None, "Altman: N/A (date insuficiente în bilanț)."))
@@ -233,9 +234,9 @@ def health_components(inp):
     nd, ebitda = inp.get("net_debt"), inp.get("ebitda")
     if _num(nd) and _num(ebitda) and ebitda > 0:
         ratio = nd / ebitda
-        txt = (f"Datorie netă / EBITDA = {ratio:.2f}" + (" (numerar net)" if ratio < 0 else "")
+        txt = (f"Datorie netă / EBITDA = {ro(ratio):.2f}" + (" (numerar net)" if ratio < 0 else "")
                + " (≤ 1 → notă maximă, ≥ 4 → zero).")
-        out.append(_component("Datorie netă / EBITDA", f"{ratio:.2f}", linear_score(ratio, *ND_EBITDA_SCALE), txt))
+        out.append(_component("Datorie netă / EBITDA", f"{ro(ratio):.2f}", linear_score(ratio, *ND_EBITDA_SCALE), txt))
     elif _num(nd) and _num(ebitda):
         if nd <= 0:
             out.append(_component("Datorie netă / EBITDA", "numerar net", 1.0,
@@ -248,8 +249,8 @@ def health_components(inp):
 
     cov = inp.get("coverage")
     if _num(cov):
-        out.append(_component("Acoperirea dobânzii", f"{cov:.1f}x", linear_score(cov, *COVERAGE_SCALE),
-                              f"Acoperirea dobânzii (EBIT / dobânzi) = {cov:.1f}x (≤ 1,5 → zero, ≥ 8 → notă maximă)."))
+        out.append(_component("Acoperirea dobânzii", f"{ro(cov):.1f}x", linear_score(cov, *COVERAGE_SCALE),
+                              f"Acoperirea dobânzii (EBIT / dobânzi) = {ro(cov):.1f}x (≤ 1,5 → zero, ≥ 8 → notă maximă)."))
     else:
         out.append(_component("Acoperirea dobânzii", "N/A", None,
                               "Acoperirea dobânzii: N/A (dobânda nu e raportată sau rândul include alte costuri financiare)."))
@@ -281,19 +282,19 @@ def financial_components(inp):
     if not _num(pbv) or pbv <= 0:
         val.append(_component("P/BV față de ROE", "N/A", None, "P/BV față de ROE: N/A (lipsește P/BV)."))
     elif just is None or just <= 0:
-        val.append(_component("P/BV față de ROE", f"P/BV {pbv:.2f}", 0.0,
-                              f"ROE {roe * 100:.1f}% e sub creșterea pe termen lung ({TERMINAL_GROWTH * 100:.0f}%): "
+        val.append(_component("P/BV față de ROE", f"P/BV {ro(pbv):.2f}", 0.0,
+                              f"ROE {ro(roe * 100):.1f}% e sub creșterea pe termen lung ({ro(TERMINAL_GROWTH * 100):.0f}%): "
                               "capitalul nu se remunerează, orice P/BV pozitiv e scump."))
     else:
         ratio = pbv / just
-        val.append(_component("P/BV față de ROE", f"{pbv:.2f} / {just:.2f}", linear_score(ratio, *PBV_RATIO_SCALE),
-                              f"P/BV {pbv:.2f} față de P/BV justificat {just:.2f} = (ROE {roe * 100:.1f}% − "
-                              f"{TERMINAL_GROWTH * 100:.0f}%) / (ke {ke * 100:.1f}% − {TERMINAL_GROWTH * 100:.0f}%): "
-                              f"raport {ratio:.2f} (≤ 0,7 → notă maximă, ≥ 1,3 → zero)."))
+        val.append(_component("P/BV față de ROE", f"{ro(pbv):.2f} / {ro(just):.2f}", linear_score(ratio, *PBV_RATIO_SCALE),
+                              f"P/BV {ro(pbv):.2f} față de P/BV justificat {ro(just):.2f} = (ROE {ro(roe * 100):.1f}% − "
+                              f"{ro(TERMINAL_GROWTH * 100):.0f}%) / (ke {ro(ke * 100):.1f}% − {ro(TERMINAL_GROWTH * 100):.0f}%): "
+                              f"raport {ro(ratio):.2f} (≤ 0,7 → notă maximă, ≥ 1,3 → zero)."))
     spread = roe - ke
-    prof.append(_component("ROE − ke", f"{spread * 100:+.1f} pp", linear_score(spread, *ROE_SPREAD_SCALE),
-                           f"ROE {roe * 100:.1f}% față de costul capitalului propriu {ke * 100:.1f}%: "
-                           f"{spread * 100:+.1f} pp (−5 pp → zero, +5 pp → notă maximă)."))
+    prof.append(_component("ROE − ke", f"{ro(spread * 100):+.1f} pp", linear_score(spread, *ROE_SPREAD_SCALE),
+                           f"ROE {ro(roe * 100):.1f}% față de costul capitalului propriu {ro(ke * 100):.1f}%: "
+                           f"{ro(spread * 100):+.1f} pp (−5 pp → zero, +5 pp → notă maximă)."))
     return val, prof
 
 
