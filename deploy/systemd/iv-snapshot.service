@@ -1,0 +1,17 @@
+# Jobul zilnic IV_istoric pe serverul lui Daniel. Copie în /etc/systemd/system/ (vezi deploy/README.md).
+[Unit]
+Description=IV_istoric: salvarea zilnica a IV-ului la bani (simboluri SUA)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=svd
+Group=svd
+WorkingDirectory=/home/svd/apps/iv-job
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/svd/apps/terminal-investitii/.venv/bin/python -m tools.iv_snapshot --secrets /home/svd/apps/terminal-investitii/.streamlit/secrets.toml
+TimeoutStartSec=15min
+MemoryMax=1G
+Nice=10
+NoNewPrivileges=true
