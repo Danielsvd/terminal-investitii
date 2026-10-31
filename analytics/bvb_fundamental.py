@@ -260,12 +260,31 @@ def _value_text(key, me):
     return f"{ro(v):.2f}"
 
 
+def _pio_is_pct(criteriu):
+    """ROA și datoriile pe termen lung / active sunt rapoarte la active: se afișează în %.
+    Lichiditatea, rotația activelor și raportul acțiunilor rămân rapoarte simple."""
+    return (criteriu.startswith("ROA") or "active" in criteriu) and "Rotația" not in criteriu
+
+
+def piotroski_value_text(c):
+    """Valoarea unui criteriu Piotroski simplificat pentru tabel: „6,3% → 4,6%”, „1,90 → 1,34”, „4,6%”.
+    O valoare lipsă devine „N/A”, nu 0."""
+    pct = _pio_is_pct(c["criteriu"])
+
+    def fmt(x):
+        if x is None or pd.isna(x):
+            return "N/A"
+        return f"{ro(x * 100):.1f}%" if pct else f"{ro(x):.2f}"
+    v = c.get("valoare")
+    if isinstance(v, tuple):
+        return " → ".join(fmt(x) for x in v)
+    return fmt(v)
+
+
 def _pio_change(c):
     v = c.get("valoare")
     if isinstance(v, tuple) and all(x is not None and pd.notna(x) for x in v):
-        pct = c["criteriu"].startswith("ROA") or "active" in c["criteriu"]
-        fmt = (lambda x: f"{ro(x * 100):.1f}%") if pct and "Rotația" not in c["criteriu"] else (lambda x: f"{ro(x):.2f}")
-        return f" ({fmt(v[0])} → {fmt(v[1])})"
+        return f" ({piotroski_value_text(c)})"
     return ""
 
 

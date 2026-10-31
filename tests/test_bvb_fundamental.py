@@ -137,3 +137,15 @@ def test_explicatia_momentului():
     assert lines[1].startswith("Momentum: +")
     assert "nu intră în scor" in lines[2]
     assert explain_moment(up.iloc[:20])[0].startswith("Istoric de preț insuficient")
+
+
+def test_piotroski_valori_in_procente_unde_e_cazul():
+    from analytics.bvb_fundamental import piotroski_value_text
+    assert piotroski_value_text({"criteriu": "ROA în creștere", "valoare": (0.063, 0.046)}) == "6,3% → 4,6%"
+    assert piotroski_value_text({"criteriu": "ROA TTM pozitiv", "valoare": 0.046}) == "4,6%"
+    assert piotroski_value_text({"criteriu": "Datorii pe termen lung / active în scădere",
+                                 "valoare": (0.184, 0.219)}) == "18,4% → 21,9%"
+    assert piotroski_value_text({"criteriu": "Lichiditate curentă în creștere", "valoare": (1.9, 1.34)}) == "1,90 → 1,34"
+    assert piotroski_value_text({"criteriu": "Rotația activelor în creștere", "valoare": (0.61, 0.62)}) == "0,61 → 0,62"
+    assert piotroski_value_text({"criteriu": "ROA în creștere", "valoare": (None, 0.05)}) == "N/A → 5,0%"
+    assert piotroski_value_text({"criteriu": "ROA TTM pozitiv", "valoare": float("nan")}) == "N/A"
