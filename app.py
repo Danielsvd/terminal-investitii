@@ -39,12 +39,12 @@ from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performanc
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
 from analytics import global_fundamental as gfund
-from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, GN_LIMIT, TEST_NOTE
+from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec
+from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -766,12 +766,7 @@ def render_bvb_decision(real_sym, hist):
         if me["piotroski"]:
             rows_p = []
             for c in me["piotroski"]:
-                v = c["valoare"]
-                if isinstance(v, tuple):
-                    v_txt = " → ".join(_bvb_fmt(x, "x") for x in v)
-                else:
-                    v_txt = _bvb_fmt(v, "x")
-                rows_p.append({"Criteriu": c["criteriu"], "Valori (an trecut → acum)": v_txt,
+                rows_p.append({"Criteriu": c["criteriu"], "Valori (an trecut → acum)": piotroski_value_text(c),
                                "Rezultat": {True: "✓", False: "✗", None: "N/A"}[c["trece"]]})
             st.dataframe(pd.DataFrame(rows_p), hide_index=True, width='stretch')
             st.caption(f"Raportul {me['raport_flux']} față de același raport de acum un an (TTM), din fișierul tău. "
@@ -1416,7 +1411,7 @@ def get_aaa_spread():
         gs10 = web.DataReader('GS10', 'fred', start, end).iloc[:, 0]
         res = fund.aaa_treasury_spread(aaa, gs10)
         if res is not None and 0 < res["aaa"] < 25 and 0 < res["treasury"] < 25:
-            return res, f"marja AAA din SUA {res['spread']:.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
+            return res, f"marja AAA din SUA {ro(res['spread']):.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
         print("DEBUG: marja AAA (FRED AAA/GS10): nicio lună comună validă")
     except Exception as e:
         print(f"DEBUG: marja AAA (FRED AAA/GS10) indisponibilă: {e}")
@@ -4840,7 +4835,7 @@ def main():
                     v_text, v_col = "⚖️ **NEUTRU (netestat):** echilibru între put-uri și call-uri.", "#8B949E"
 
                 # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
-                v_html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", v_text)
+                v_html = md_bold_html(v_text)
                 st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_html}</div>", unsafe_allow_html=True)
 
                 # --- RÂNDUL 3: NIVELUL IV (praguri absolute netestate) ---
@@ -4918,6 +4913,8 @@ def main():
                 
                 # Afișăm lista curățată și sortată (Roșu sus, Verde jos)
                 for reason in m_reasons:
+                    # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
+                    reason = md_bold_html(reason)
                     if "🚨" in reason:
                         st.markdown(f"<div style='background:rgba(248, 81, 73, 0.15); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #F85149; color:#FFD8D8;'>{reason}</div>", unsafe_allow_html=True)
                     elif "⚠️" in reason:

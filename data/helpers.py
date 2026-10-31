@@ -1,6 +1,7 @@
 """Utilitare de citire sigură a datelor. Fără Streamlit, fără rețea."""
 import calendar
 import csv
+import html
 import io
 import re
 from datetime import datetime
@@ -300,6 +301,12 @@ def watchlist_status(price, target):
     if price is None or target is None:
         return price, target, None, False
     return price, target, (price - target) / target * 100, price <= target
+
+
+def md_bold_html(text):
+    """Text pentru o casetă HTML (st.markdown cu unsafe_allow_html): caracterele HTML se escapează,
+    iar **bold** din Markdown, care nu se interpretează în interiorul unui <div>, devine <b>bold</b>."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(str(text), quote=False))
 
 
 def ro_separators(text):

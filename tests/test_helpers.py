@@ -283,3 +283,11 @@ def test_ro_spec_sufix_doar_la_numere():
     assert ro_spec(",.0f", " USD")(2e11) == "200.000.000.000 USD"
     assert ro_spec(".2f", "%")(8.0) == "8,00%" and ro_spec(".2f", "%")(None) == "N/A"
     assert ro_spec(".2%")(-0.0909) == "-9,09%"
+
+
+def test_md_bold_html():
+    from data.helpers import md_bold_html
+    assert md_bold_html("✅ **Cash Machine:** text") == "✅ <b>Cash Machine:</b> text"
+    assert md_bold_html("**A** și **B**") == "<b>A</b> și <b>B</b>"
+    assert md_bold_html("P/E < 15 & **ok**") == "P/E &lt; 15 &amp; <b>ok</b>"
+    assert md_bold_html("fără bold") == "fără bold"
