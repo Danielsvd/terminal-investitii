@@ -2645,31 +2645,28 @@ def render_ledger_import(values):
             st.success(f"Adăugate {len(fresh_all)} rânduri. Verifică mai jos numerarul pe broker față de soldul din aplicația brokerului.")
             st.rerun()
 
-def render_ledger_results(df_pf=None):
+def render_ledger_results():
     """Rezultatele din tranzacțiile reale: pe clase (în moneda fiecăreia) și valoarea totală de azi în RON.
 
     Calculele sunt în analytics/ledger.py (testate în tests/test_ledger.py). Aici doar se citesc
-    foaia și prețurile și se afișează.
+    foaia și prețurile și se afișează. Întoarce pozițiile din registru (pentru taburile pe monedă)
+    sau None când registrul nu poate fi citit ori e gol.
     """
     st.subheader("📒 Poziții și rezultate")
     values = load_ledger_values()
     if values is None:
         st.info("Foaia `Tranzactii` nu a putut fi citită din `portofoliu_db`.")
-        return
+        return None
     render_ledger_import(values)
     ledger_df, problems = ledger_calc.parse_ledger(values)
     if ledger_df.empty:
         st.info("Foaia `Tranzactii` nu conține tranzacții. " + " ".join(problems))
-        return
+        return None
     positions, position_problems = ledger_calc.build_positions(ledger_df)
     problems = problems + position_problems
 
     # Pozițiile deschise vin din registrul `Tranzactii` (exporturile brokerilor), ca toate celelalte
-    # rezultate. Foaia Portofoliu (taburile pe monedă de mai jos) e doar comparată cu registrul.
-    sheet_diffs = []
-    if df_pf is not None and not df_pf.empty:
-        _, sheet_diffs, _ = portfolio_sheet.merge_positions(df_pf, positions)
-
+    # rezultate și ca taburile pe monedă de mai jos.
     held = positions[positions["Quantity"] > ledger_calc.QTY_EPS]
     live_symbols = held.loc[~held["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"].tolist()
     with st.spinner("Citim prețurile pentru pozițiile din registru..."):
@@ -2700,13 +2697,6 @@ def render_ledger_results(df_pf=None):
         "impozite, comisioane și XIRR. Tranzacțiile de după ultima dată apar după importul unui export nou. "
         "Totalul în RON e la cursul de azi."
     )
-    if sheet_diffs:
-        st.info(
-            f"ℹ️ Foaia `Portofoliu` (folosită de taburile pe monedă de mai jos) diferă de registru, actualizat până la "
-            f"{last_trade:%d.%m.%Y}, la: "
-            + "; ".join(f"**{sym}** foaie {_ledger_num(sq, 4)}, registru {_ledger_num(lq, 4)}" for sym, sq, lq in sheet_diffs)
-            + ". Pozițiile de aici folosesc registrul. Importă exportul nou de la broker sau corectează foaia."
-        )
     from_close = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_CLOSE, "Symbol"])
     if from_close or fx_from_close:
         st.caption("ℹ️ Preț live indisponibil, s-a folosit ultima închidere pentru: "
@@ -2788,6 +2778,7 @@ def render_ledger_results(df_pf=None):
         with st.expander(f"⚠️ {len(problems)} probleme în registru"):
             for problem in problems[:50]:
                 st.write(f"- {problem}")
+    return positions
 
 from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
 
@@ -5142,6 +5133,8 @@ def main():
         st.title("💼 Portofoliu Personal")
         
         with st.expander("➕ Adaugă Tranzacție Nouă"):
+            st.caption("Scrie un rând în foaia `Portofoliu`, care nu mai alimentează această pagină: pozițiile vin din "
+                       "registrul `Tranzactii`. Pentru tranzacții noi folosește importul exportului de la broker, de mai jos.")
             with st.form("add_pf"):
                 c1, c2, c3, c4 = st.columns(4)
                 s = c1.text_input("Simbol (ex: AAPL, EUNL.DE, TLV.RO)").upper()
@@ -5156,13 +5149,14 @@ def main():
                     st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
 
-        # Secțiunea de sus: pozițiile din registrul `Tranzactii`. Taburile pe monedă: foaia Portofoliu.
-        df_pf = load_portfolio()
-        render_ledger_results(df_pf)
+        # Toată pagina folosește pozițiile din registrul `Tranzactii` (exporturile brokerilor);
+        # foaia Portofoliu nu mai alimentează pagina.
+        ledger_positions = render_ledger_results()
+        df_pf = ledger_calc.tab_frame(ledger_positions)
         st.markdown("---")
 
         if df_pf.empty:
-            st.info("Portofoliul este gol sau nu s-a putut conecta la Google Sheets.")
+            st.info("Nu există acțiuni sau ETF-uri deschise în registrul `Tranzactii` (sau registrul nu a putut fi citit).")
         else:
             st.markdown("### Perioadă Analiză")
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")

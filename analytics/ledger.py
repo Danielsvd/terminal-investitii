@@ -708,3 +708,27 @@ def flows_on_index(ext_flows, index):
         if i < len(index) and not pd.isna(amount):
             out.iloc[i] += float(amount)
     return out
+
+
+TAB_COLUMNS = ["Symbol", "Date", "Quantity", "AvgPrice", "Currency"]
+
+
+def tab_frame(positions):
+    """Pozițiile deschise din registru, în formatul taburilor pe monedă (Monte Carlo, benchmark, optimizator).
+
+    Coloane: Symbol, Date (goală: registrul are mai multe cumpărări), Quantity, AvgPrice, Currency.
+    - Doar cantitățile > 0; fără `NOMINAL_CLASSES` (titlurile de stat nu intră în Monte Carlo și optimizator).
+    - AvgPrice = costul mediu din registru (CostBasis / Quantity): include comisioanele de cumpărare,
+      iar acțiunile gratuite au cost 0, deci costul mediu scade (aceeași regulă ca în `build_positions`).
+    """
+    if positions is None or len(positions) == 0:
+        return pd.DataFrame(columns=TAB_COLUMNS)
+    open_ = positions[(positions["Quantity"] > QTY_EPS) & ~positions["Class"].isin(NOMINAL_CLASSES)]
+    out = pd.DataFrame({
+        "Symbol": open_["Symbol"].astype(str),
+        "Date": "",
+        "Quantity": open_["Quantity"].astype(float),
+        "AvgPrice": (open_["CostBasis"] / open_["Quantity"]).astype(float),
+        "Currency": open_["Currency"].astype(str).str.upper(),
+    })
+    return out[TAB_COLUMNS].sort_values(["Currency", "Symbol"]).reset_index(drop=True)
