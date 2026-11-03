@@ -1,4 +1,5 @@
-"""Jobul zilnic pentru foaia `IV_istoric`: salvează IV-ul la bani al simbolurilor SUA din `Portofoliu` și `watchlist`.
+"""Jobul zilnic pentru foaia `IV_istoric`: salvează IV-ul la bani al simbolurilor SUA din pozițiile deschise
+(registrul `Tranzactii` și foaia `Portofoliu`) și din `watchlist`.
 
 Rulează pe serverul lui Daniel (timer systemd, luni–vineri, în timpul ședinței de la New York), cu aceeași
 cheie ca aplicația (`.streamlit/secrets.toml`). Folosește exact aceleași calcule ca aplicația
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from analytics import ledger as ledger_calc  # noqa: E402
 from analytics import options as opt_calc  # noqa: E402
 from data import iv_history  # noqa: E402
 
@@ -63,6 +65,22 @@ def us_symbols(portfolio_values, watchlist_values):
         if US_SYMBOL.match(s):
             out.add(s)
     return sorted(out)
+
+
+def ledger_us_symbols(ledger_values):
+    """Simbolurile SUA cu poziție deschisă în registrul `Tranzactii` (Currency USD, cantitate > 0).
+
+    Funcție pură: primește rândurile foii (antet + rânduri). Registrul gol sau necitibil → [].
+    """
+    if not ledger_values:
+        return []
+    ledger_df, _ = ledger_calc.parse_ledger(ledger_values)
+    if ledger_df.empty:
+        return []
+    positions, _ = ledger_calc.build_positions(ledger_df)
+    open_usd = positions[(positions["Quantity"] > ledger_calc.QTY_EPS)
+                         & (positions["Currency"].astype(str).str.upper() == "USD")]
+    return sorted({s for s in open_usd["Symbol"].astype(str).str.strip().str.upper() if US_SYMBOL.match(s)})
 
 
 def rows_to_write(history_df, ivs, session_date):
@@ -125,6 +143,12 @@ def main(argv=None):
 
     book = open_spreadsheet(args.secrets)
     symbols = us_symbols(book.sheet1.get_all_values(), book.worksheet("watchlist").get_all_values())
+    try:
+        from_ledger = ledger_us_symbols(book.worksheet("Tranzactii").get_all_values())
+    except Exception as e:  # registrul lipsă nu oprește jobul: rămân foaia Portofoliu și watchlist
+        print(f"Registrul Tranzactii necitit ({type(e).__name__}: {e}); folosesc doar Portofoliu și watchlist.")
+        from_ledger = []
+    symbols = sorted(set(symbols) | set(from_ledger))
     print(f"Simboluri SUA ({len(symbols)}): {', '.join(symbols) or '-'}")
 
     ws = book.worksheet("IV_istoric")
