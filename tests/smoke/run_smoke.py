@@ -655,7 +655,8 @@ def main():
             assert qty.get("TLV.RO") == "80", f"pozițiile nu vin din registrul Tranzactii: {qty}"
             # titlul de stat nu e în foaie: rămâne din registru
             assert qty.get("R9901AE") == "3", f"titlul de stat lipsește din poziții: {qty}"
-            assert any("diferă de registru" in str(e.value) for e in at.info), "lipsește nota cu diferențele foaie / registru"
+            # taburile pe monedă folosesc tot registrul: tabul RON are poziții (nu mesajul de portofoliu gol)
+            assert not any("Nu există acțiuni sau ETF-uri deschise" in str(e.value) for e in at.info), "taburile nu primesc pozițiile din registru"
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
