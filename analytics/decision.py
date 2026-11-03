@@ -94,7 +94,8 @@ def characterize(*, is_bvb, fund_label, fund_score=None, moment_score=None, pill
     band = moment_band(moment_score)
     parts = []
     if fund_label in FUND_LABELS:
-        score_txt = "" if _num(fund_score) is None else f" ({ro(_num(fund_score)):.0f}/100)"
+        # Același număr de zecimale ca în secțiunea de scor: BVB întreg, SUA/UE o zecimală.
+        score_txt = "" if _num(fund_score) is None else f" ({ro(_num(fund_score)):{'.0f' if is_bvb else '.1f'}}/100)"
         first = f"Fundamental, {_FUND_TEXT[fund_label]}{ref}{score_txt}"
     else:
         first = "Fundamentalul nu se poate evalua (date insuficiente)"
@@ -165,7 +166,8 @@ def context_flags(*, is_bvb, is_financial=False, altman_zone=None, spread=None, 
     # Regimul de piață K-Means (pe istoricul acțiunii)
     if regime_msg:
         clean = str(regime_msg).replace("**", "").strip()
-        level = "alerta" if "PANICĂ" in clean.upper() else "info"
+        # Model netestat: cel mult atenționare galbenă; roșul rămâne pentru Altman și curba inversată.
+        level = "atentie" if "PANICĂ" in clean.upper() else "info"
         flags.append(_flag(level, "Regim K-Means", clean + " (model, netestat)."))
 
     # Opțiuni: doar cu valori calculabile
