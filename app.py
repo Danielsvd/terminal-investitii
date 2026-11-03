@@ -39,7 +39,7 @@ from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performanc
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
 from analytics import global_fundamental as gfund
-from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, GN_LIMIT, TEST_NOTE
+from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, final_verdict, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
@@ -813,6 +813,12 @@ def render_bvb_decision(real_sym, hist):
     st.caption(f"Sursa: fișierul „{data['fisiere'][tk]}”, bilanț {me['raport_bilant']}, profit TTM la "
                f"{me['raport_flux'] or 'N/A'}, dividend {me['raport_anual'] or 'N/A'}; preț "
                f"{_bvb_fmt(price, 'x')} lei (Yahoo, întârziat). {TEST_NOTE}")
+    _, _, history_text = final_verdict(tier, moment)
+    return {"is_bvb": True, "fund_label": vb["fund_label"], "fund_color": vb["fund_color"],
+            "fund_score": None if pd.isna(row["scor"]) else float(row["scor"]), "fund_detail": vb["fund_detail"],
+            "fund_basis": "testat pe BVB", "moment": moment, "moment_label": vb["moment_label"],
+            "moment_color": vb["moment_color"], "moment_detail": vb["moment_detail"],
+            "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False}
     st.markdown("---")
 
 
@@ -962,8 +968,14 @@ def render_global_decision(real_sym, info, hist, risk_stats):
                        "Piotroski) sunt în secțiunile de mai jos.")
         if inp.get("statement_errors"):
             st.caption("Situații financiare necitite de la Yahoo: " + ", ".join(inp["statement_errors"]) + ".")
-    st.caption("„Decizie Master AI” de mai jos rămâne calculată ca înainte; se unifică cu acest scor la final.")
+    st.caption("„Decizie Master AI” de mai jos reia acest scor și momentul, fără să le recalculeze.")
     st.markdown("---")
+    return {"is_bvb": False, "fund_label": res["label"], "fund_color": res["color"], "fund_score": res["score"],
+            "fund_detail": fund_detail, "fund_basis": "descriptiv, netestat", "moment": moment,
+            "moment_label": m_label, "moment_color": m_color, "moment_detail": moment_detail,
+            "moment_basis": "descriptiv, fără verdict",
+            "pillars": [(p["label"], None if p["score"] is None else p["score"] * 100) for p in res["pillars"]],
+            "history_text": None, "financial": bool(res["financial"])}
 
 
 def _read_peer_rows(symbols):
@@ -3323,6 +3335,9 @@ def main():
             # None = indisponibilă; consumatorii (SWOT, rating, Decizie Master AI) nu o punctează.
             curve_market = market_of(real_sym, info.get('currency'))
             spread, spread_label = get_market_curve(curve_market)
+            # Intrările sintezei „Decizie Master AI” calculate doar în anumite ramuri: inițializare explicită.
+            regime_msg, z_val_swot, s_score_val, c_news_ai = None, None, None, []
+            rvol, iv_rank, iv_days = None, None, 0
             
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
@@ -3466,9 +3481,11 @@ def main():
             beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
 
             # 2b. Decizie BVB în doi pași (doar .RO cu fișier în „Analiză companii”)
-            render_bvb_decision(real_sym, hist)
+            bvb_decision = render_bvb_decision(real_sym, hist)
             # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
-            render_global_decision(real_sym, info, hist, risk_stats)
+            global_decision = render_global_decision(real_sym, info, hist, risk_stats)
+            # Sinteza „Decizie Master AI” refolosește exact acest rezultat (nu recalculează)
+            score_decision = bvb_decision or global_decision
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
@@ -4584,51 +4601,7 @@ def main():
                     else:
                         st.warning("Modelul AI nu a putut genera predicția.")
             
-            # ==================================================
-            # CALCUL RATING FINAL (CONCLUZIA)
-            # ==================================================
-            st.markdown("---")
-            st.subheader("🎯 Verdict Final: Rating de Investiție")
-
-            # Pregătim variabilele (inițializare explicită — nu mai depindem de locals())
-
-            s_inst = inst_percent  # None = acționariat indisponibil
-            s_mos = mos_val
-            s_rvol = rvol if 'rvol' in dir() or rvol is not None else 1.0
-            
-            # Apelăm funcția PRO folosind noul spread 10Y-3M
-            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos, spread_label)
-            
-            r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
-            r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
-            # Fără acționariat, DCF, ROE și datorii, scorul ar fi doar 50 + macro: nu e un verdict.
-            if s_inst is None and s_mos is None and num(info, 'returnOnEquity') is None and num(info, 'debtToEquity') is None:
-                r_color, r_label = "#8B949E", "DATE INSUFICIENTE"
-
-            # Afișare UI
-            c_res1, c_res2 = st.columns([1, 2])
-            with c_res1:
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {r_color}; text-align:center;">
-                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Investiție</p>
-                        <h1 style="color:{r_color}; margin:15px 0; font-size:54px;">{final_score}</h1>
-                        <div style="background:{r_color}22; color:{r_color}; padding:5px; border-radius:5px; font-weight:bold;">{r_label}</div>
-                    </div>
-                """, unsafe_allow_html=True)
-
-            with c_res2:
-                st.markdown("#### 🔍 Argumente pentru acest Scor:")
-                for item in highlights:
-                    st.write(item)
-
-                # --- AFISARE SCOR SĂNĂTATE FINANCIARĂ UNIFORMIZAT ---
-                # Stabilim pictograma în funcție de nota de sănătate (h_score)
-                if h_score is None:
-                    st.write("⚪ **Sănătate Financiară:** indisponibilă (lipsesc datoriile, ROE și lichiditatea).")
-                else:
-                    h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
-                    st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
-
+            # Verdict Final (rating vechi): mutat în arhiva de la „Decizie Master AI”.
             st.markdown("---")
             
             # ==================================================
@@ -4779,6 +4752,7 @@ def main():
                     iv_store = update_iv_history(real_sym, opt_data['iv'])
                     rk = iv_store["rank"]
                     iv_rank = rk["rank"]
+                    iv_days = rk["n"]
                     obs_txt = f"{rk['n']} zile de istoric" + ("" if rk["n"] >= opt_calc.MIN_IV_OBS else f" (minimum {opt_calc.MIN_IV_OBS})")
                     c_rank1, c_rank2, c_rank3 = st.columns(3)
                     c_rank1.metric("IV Rank", _f(iv_rank, ".1f") + ("%" if iv_rank is not None else ""), obs_txt, delta_color="off",
@@ -4862,67 +4836,184 @@ def main():
                 st.info(opt_msg)
                         
             # =================================================================
-            # 👑 VERDICT FINAL MASTER AI: DECIZIA DE INVESTIȚIE (RADIOGRAFIE)
+            # 👑 DECIZIE MASTER AI: SINTEZA ÎN TREI PAȘI (fundamental, moment, context)
+            # Pașii nu se adună. Fundamentalul și momentul vin neschimbate din secțiunea de scor de sus;
+            # contextul e o listă de alerte fără puncte. Metoda veche rămâne în arhivă, neschimbată.
             # =================================================================
             st.markdown("---")
             st.subheader("👑 Decizie Master AI")
-            
-            # --- PROTECȚIE VARIABILE (inițializare explicită — fără locals()) ---
-            s_inst = inst_percent  # None = acționariat indisponibil
-            s_mos = mos_val
-            s_rvol = rvol if 'rvol' in dir() else 1.0
-            s_score_final = s_score_val if 's_score_val' in dir() else 0
-            # Pilonul de opțiuni intră în Master AI doar cu P/C pe open interest și IV la bani calculate; altfel lipsește (fără puncte)
-            opt_final = opt_data if (opt_data and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None) else None
-            
-            # Extragem datele specifice modulelor adiacente
-            z_score_val = z_val_swot if 'z_val_swot' in dir() else None
-            cash_ratio = q_ratio if 'q_ratio' in dir() else 1.0
-            ai_regime = regime_msg if 'regime_msg' in dir() else "Neutru"
+            from analytics.decision import characterize, context_flags, count_alerts
+            rsi_now = hist["RSI"].iloc[-1] if "RSI" in hist.columns else None
+            opt_ok = bool(opt_data) and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None
+            is_bvb_sym = str(real_sym).upper().endswith(".RO")
+            is_fin = (score_decision["financial"] if score_decision
+                      else (info.get('sector') or "") == "Financial Services")
+            ctx_flags = context_flags(
+                is_bvb=is_bvb_sym, is_financial=is_fin, altman_zone=z_val_swot,
+                spread=spread, spread_label=spread_label, regime_msg=regime_msg,
+                opt_pc=opt_data.get('oi_pc_ratio') if opt_ok else None,
+                opt_iv=opt_data.get('iv') if opt_ok else None,
+                iv_rank=iv_rank, iv_days=iv_days, min_iv_days=opt_calc.MIN_IV_OBS,
+                sentiment=s_score_val if c_news_ai else None, n_news=len(c_news_ai or []),
+                inst_pct=inst_percent, q_ratio=q_ratio, rsi=rsi_now, rvol=rvol)
+            n_alerts = count_alerts(ctx_flags)
 
-            # Curba pieței acțiunii, aceeași ca în rating (None = indisponibilă, fără puncte)
-            curr_spread = spread
-
-            # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
-            from ai_engine import calculate_master_ai_score
-            m_score, m_action, m_col, m_advice, m_reasons = calculate_master_ai_score(
-                info, hist, h_score, s_mos, s_inst, s_rvol, s_score_final, opt_final, 
-                curr_spread, z_score_val, cash_ratio, ai_regime
-            )
-
-            # --- AFIȘARE VIZUALĂ DE IMPACT (Dashboard Bloomberg-style) ---
-            col_m1, col_m2 = st.columns([1, 1.8])
-            
-            with col_m1:
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:30px; border-radius:15px; border:3px solid {m_col}; text-align:center; height: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-                        <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing: 1px;">Scor Algoritmic Integrat</p>
-                        <h1 style="color:{m_col}; margin:15px 0; font-size:80px; text-shadow: 0 0 10px {m_col}44;">{int(m_score)}<span style="font-size: 20px; color:#8B949E; text-shadow: none;">/100</span></h1>
-                        <div style="background:{m_col}; color:white; padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
-                            {m_action}
+            if score_decision is None:
+                st.info("Fără scor fundamental pentru acest simbol (ETF, fond, indice sau emitent .RO fără fișier în "
+                        f"„{COMPANY_FOLDER_NAME}”). Sinteza arată doar contextul; metoda veche e în arhivă.")
+            else:
+                d = score_decision
+                alert_color = "#F85149" if any(f["level"] == "alerta" for f in ctx_flags) else (
+                    "#D29922" if n_alerts else "#3FB950")
+                phrase = characterize(is_bvb=d["is_bvb"], fund_label=d["fund_label"], fund_score=d["fund_score"],
+                                      moment_score=d["moment"], pillars=d["pillars"], n_alerts=n_alerts,
+                                      history_text=d["history_text"])
+                st.markdown(compact_html(f"""
+                    <div style="background:#161B22; border:1px solid #30363D; border-radius:12px; padding:16px; margin:8px 0 12px 0;">
+                        <div style="display:flex; flex-wrap:wrap; gap:32px; align-items:baseline;">
+                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 1 · Fundamental</span><br>
+                                <span style="color:{d['fund_color']}; font-weight:bold; font-size:22px;">{html.escape(d['fund_label'])}</span>
+                                <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(d['fund_detail'])}</span><br>
+                                <span style="color:#8B949E; font-size:12px;">{html.escape(d['fund_basis'])}</span></div>
+                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 2 · Moment</span><br>
+                                <span style="color:{d['moment_color']}; font-weight:bold; font-size:22px;">{html.escape(d['moment_label'])}</span>
+                                <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(d['moment_detail'])}</span><br>
+                                <span style="color:#8B949E; font-size:12px;">{html.escape(d['moment_basis'])}</span></div>
+                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 3 · Context</span><br>
+                                <span style="color:{alert_color}; font-weight:bold; font-size:22px;">{n_alerts} {'alertă' if n_alerts == 1 else 'alerte'}</span><br>
+                                <span style="color:#8B949E; font-size:12px;">fără puncte</span></div>
                         </div>
-                        <p style="color:#8B949E; font-size:13px; margin-top:15px; line-height:1.4;">
-                            {m_advice}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
+                        <div style="color:#C9D1D9; font-size:14px; margin-top:12px; line-height:1.5;">{html.escape(phrase)}</div>
+                    </div>"""), unsafe_allow_html=True)
+                if d["pillars"]:
+                    p_cols = st.columns(len(d["pillars"]))
+                    for col, (p_name, p_score) in zip(p_cols, d["pillars"]):
+                        col.metric(p_name, "N/A" if p_score is None else f"{ro(p_score):.0f}/100",
+                                   help="Pilonul scorului fundamental din secțiunea „Scor fundamental” de sus; aceeași valoare.")
 
-            with col_m2:
-                st.markdown("#### 🧠 Radiografia Deciziei (De ce să faci asta?)")
-                st.markdown("<p style='color:#8B949E; font-size:13px; margin-bottom:15px;'>Algoritmul a scanat toți cei 10 piloni (DCF, Tehnic, Opțiuni, Macro, Sentiment, Instituții, Bilanț, Cash-Flow, Faliment, Volum) și a identificat următoarele:</p>", unsafe_allow_html=True)
-                
-                # Afișăm lista curățată și sortată (Roșu sus, Verde jos)
-                for reason in m_reasons:
-                    # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
-                    reason = md_bold_html(reason)
-                    if "🚨" in reason:
-                        st.markdown(f"<div style='background:rgba(248, 81, 73, 0.15); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #F85149; color:#FFD8D8;'>{reason}</div>", unsafe_allow_html=True)
-                    elif "⚠️" in reason:
-                        st.markdown(f"<div style='background:rgba(210, 153, 34, 0.1); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #D29922;'>{reason}</div>", unsafe_allow_html=True)
-                    elif "✅" in reason:
-                        st.markdown(f"<div style='background:rgba(63, 185, 80, 0.05); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3FB950;'>{reason}</div>", unsafe_allow_html=True)
+            st.markdown("#### 🧭 Context (alerte fără puncte)")
+            flag_style = {"alerta": ("rgba(248, 81, 73, 0.15)", "#F85149", "🚨"),
+                          "atentie": ("rgba(210, 153, 34, 0.1)", "#D29922", "⚠️"),
+                          "pozitiv": ("rgba(63, 185, 80, 0.05)", "#3FB950", "✅"),
+                          "info": ("#21262D", "#8B949E", "ℹ️")}
+            for f in ctx_flags:
+                bg, border, icon = flag_style[f["level"]]
+                st.markdown(f"<div style='background:{bg}; padding:10px 12px; border-radius:8px; margin-bottom:6px; "
+                            f"border-left:4px solid {border};'>{icon} <b>{html.escape(f['title'])}:</b> {html.escape(f['text'])}</div>",
+                            unsafe_allow_html=True)
+            st.caption("Pașii nu se adună într-un scor total. Contextul nu modifică scorurile: opțiunile și știrile nu au istoric "
+                       "pentru un test, iar curba randamentelor e un semnal al pieței, nu al companiei.")
+
+            with st.expander("🗄️ Metoda veche (arhivă, netestată): Verdict Final și Master AI pe 10 piloni"):
+                st.caption("Calculele vechi, păstrate neschimbate pentru comparație. Adună tehnicul cu fundamentalul, "
+                           "folosesc praguri netestate și pot contrazice sinteza de mai sus.")
+                # ==================================================
+                # CALCUL RATING FINAL (CONCLUZIA)
+                # ==================================================
+                st.markdown("##### 🎯 Verdict Final: Rating de Investiție (arhivă)")
+
+                # Pregătim variabilele (inițializare explicită — nu mai depindem de locals())
+
+                s_inst = inst_percent  # None = acționariat indisponibil
+                s_mos = mos_val
+                s_rvol = rvol if rvol is not None else 1.0
+            
+                # Apelăm funcția PRO folosind noul spread 10Y-3M
+                final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos, spread_label)
+            
+                r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
+                r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
+                # Fără acționariat, DCF, ROE și datorii, scorul ar fi doar 50 + macro: nu e un verdict.
+                if s_inst is None and s_mos is None and num(info, 'returnOnEquity') is None and num(info, 'debtToEquity') is None:
+                    r_color, r_label = "#8B949E", "DATE INSUFICIENTE"
+
+                # Afișare UI
+                c_res1, c_res2 = st.columns([1, 2])
+                with c_res1:
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {r_color}; text-align:center;">
+                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Investiție</p>
+                            <h1 style="color:{r_color}; margin:15px 0; font-size:54px;">{final_score}</h1>
+                            <div style="background:{r_color}22; color:{r_color}; padding:5px; border-radius:5px; font-weight:bold;">{r_label}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with c_res2:
+                    st.markdown("#### 🔍 Argumente pentru acest Scor:")
+                    for item in highlights:
+                        st.write(item)
+
+                    # --- AFISARE SCOR SĂNĂTATE FINANCIARĂ UNIFORMIZAT ---
+                    # Stabilim pictograma în funcție de nota de sănătate (h_score)
+                    if h_score is None:
+                        st.write("⚪ **Sănătate Financiară:** indisponibilă (lipsesc datoriile, ROE și lichiditatea).")
                     else:
-                        st.markdown(f"<div style='background:#21262D; padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #8B949E;'>{reason}</div>", unsafe_allow_html=True)
+                        h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
+                        st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
+
+
+                # =================================================================
+                # 👑 VERDICT FINAL MASTER AI: DECIZIA DE INVESTIȚIE (RADIOGRAFIE)
+                # =================================================================
+                st.markdown("##### 👑 Decizie Master AI (arhivă)")
+            
+                # --- PROTECȚIE VARIABILE (inițializare explicită — fără locals()) ---
+                s_inst = inst_percent  # None = acționariat indisponibil
+                s_mos = mos_val
+                s_rvol = rvol if rvol is not None else 1.0
+                s_score_final = s_score_val if s_score_val is not None else 0
+                # Pilonul de opțiuni intră în Master AI doar cu P/C pe open interest și IV la bani calculate; altfel lipsește (fără puncte)
+                opt_final = opt_data if (opt_data and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None) else None
+            
+                # Extragem datele specifice modulelor adiacente
+                z_score_val = z_val_swot
+                cash_ratio = q_ratio
+                ai_regime = regime_msg or "Neutru"
+
+                # Curba pieței acțiunii, aceeași ca în rating (None = indisponibilă, fără puncte)
+                curr_spread = spread
+
+                # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
+                from ai_engine import calculate_master_ai_score
+                m_score, m_action, m_col, m_advice, m_reasons = calculate_master_ai_score(
+                    info, hist, h_score, s_mos, s_inst, s_rvol, s_score_final, opt_final, 
+                    curr_spread, z_score_val, cash_ratio, ai_regime
+                )
+
+                # --- AFIȘARE VIZUALĂ DE IMPACT (Dashboard Bloomberg-style) ---
+                col_m1, col_m2 = st.columns([1, 1.8])
+            
+                with col_m1:
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:30px; border-radius:15px; border:3px solid {m_col}; text-align:center; height: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                            <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing: 1px;">Scor Algoritmic Integrat</p>
+                            <h1 style="color:{m_col}; margin:15px 0; font-size:80px; text-shadow: 0 0 10px {m_col}44;">{int(m_score)}<span style="font-size: 20px; color:#8B949E; text-shadow: none;">/100</span></h1>
+                            <div style="background:{m_col}; color:white; padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
+                                {m_action}
+                            </div>
+                            <p style="color:#8B949E; font-size:13px; margin-top:15px; line-height:1.4;">
+                                {m_advice}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col_m2:
+                    st.markdown("#### 🧠 Radiografia Deciziei (De ce să faci asta?)")
+                    st.markdown("<p style='color:#8B949E; font-size:13px; margin-bottom:15px;'>Algoritmul a scanat toți cei 10 piloni (DCF, Tehnic, Opțiuni, Macro, Sentiment, Instituții, Bilanț, Cash-Flow, Faliment, Volum) și a identificat următoarele:</p>", unsafe_allow_html=True)
+                
+                    # Afișăm lista curățată și sortată (Roșu sus, Verde jos)
+                    for reason in m_reasons:
+                        # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
+                        reason = md_bold_html(reason)
+                        if "🚨" in reason:
+                            st.markdown(f"<div style='background:rgba(248, 81, 73, 0.15); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #F85149; color:#FFD8D8;'>{reason}</div>", unsafe_allow_html=True)
+                        elif "⚠️" in reason:
+                            st.markdown(f"<div style='background:rgba(210, 153, 34, 0.1); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #D29922;'>{reason}</div>", unsafe_allow_html=True)
+                        elif "✅" in reason:
+                            st.markdown(f"<div style='background:rgba(63, 185, 80, 0.05); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3FB950;'>{reason}</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"<div style='background:#21262D; padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #8B949E;'>{reason}</div>", unsafe_allow_html=True)
+            
             
             # ==================================================
             # MODUL NOU: PREZENTARE GENERALĂ AI (CLONA XTB PERPLEXITY)

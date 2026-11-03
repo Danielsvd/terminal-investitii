@@ -596,6 +596,23 @@ def main():
     raw_bold = [str(m.value)[-120:] for m in at.markdown if "<div" in str(m.value) and "(netestat):" in str(m.value) and "**" in str(m.value)]
     assert not raw_bold, f"casete HTML cu ** neinterpretat: {raw_bold}"
     assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
+
+    def master_matches_top(sym):
+        """Sinteza „Decizie Master AI”: pasul 1 are exact eticheta și scorul din secțiunea de scor de sus;
+        metoda veche e doar în arhivă (expander)."""
+        texts = [str(m.value) for m in at.markdown]
+        master = [t for t in texts if "Pasul 1 · Fundamental" in t and "Pasul 3 · Context" in t]
+        assert master, f"lipsește sinteza Master AI în trei pași la {sym}"
+        m = re.search(r"Pasul 1 · Fundamental</span><br>\s*<span[^>]*>([^<]+)</span>\s*<span[^>]*>&nbsp;([^<]+)</span>", master[0])
+        assert m, f"pasul 1 necitibil la {sym}: {master[0][:200]!r}"
+        label, detail = m.group(1), m.group(2)
+        top = [t for t in texts if "Pasul 3 · Context" not in t and label in t and detail in t]
+        assert top, f"pasul 1 din Master AI ({label} {detail}) diferă de secțiunea de scor la {sym}"
+        assert "Pasul 3 · Context" in master[0] and "fără puncte" in master[0], f"lipsește pasul 3 la {sym}"
+        assert any("Metoda veche" in str(e.label) for e in at.expander), f"lipsește arhiva metodei vechi la {sym}"
+        print(f"{sym} Master AI pasul 1: {label} {detail}")
+
+    master_matches_top("AAPL")
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
@@ -615,6 +632,8 @@ def main():
             assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
         if sym in curve_expect:
             assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
+        if sym in ("SAP.DE", "SNP.RO"):
+            master_matches_top(sym)
         if sym == "SNP.RO":
             assert any("Decizie BVB" in str(h.value) for h in at.subheader), "lipsește secțiunea Decizie BVB"
             at.button(key="bvb_files_reload").click().run()
