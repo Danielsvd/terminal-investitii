@@ -25,23 +25,26 @@ from threading import Lock
 
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
-from analytics.macro import yoy_pct, real_rate
+from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
 from analytics import simulation
+from analytics import options as opt_calc
+from data import portfolio_sheet
+from data import iv_history
 from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
 from analytics import global_fundamental as gfund
-from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, GN_LIMIT, TEST_NOTE
+from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, final_verdict, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, positive_or_none, entry_target_view, scale_number, watchlist_status
+from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -277,6 +280,12 @@ def parse_date(entry):
 
 # --- FUNCȚIE NOUĂ DE PARSARE INTELIGENTĂ (SENIOR FIX) ---
 # smart_to_float este acum în data/helpers.py (aceeași logică, cu teste în tests/test_helpers.py)
+def plot_ro(fig, **kwargs):
+    """st.plotly_chart cu separatori românești: punct la mii, virgulă la zecimale („1.234,5”).
+    Se aplică axelor, etichetelor și casetelor de hover; nu schimbă datele graficului."""
+    fig.update_layout(separators=",.")
+    return st.plotly_chart(fig, **kwargs)
+
 def format_large_currency(val):
     """Formatează numerele mari (Trilioane, Miliarde) pentru afișare string."""
     try:
@@ -284,10 +293,10 @@ def format_large_currency(val):
             val = smart_to_float(val)
         
         if val is None or val == 0: return "-"
-        if val >= 1e12: return f"$ {val/1e12:.2f} T"
-        if val >= 1e9: return f"$ {val/1e9:.2f} B"
-        if val >= 1e6: return f"$ {val/1e6:.2f} M"
-        return f"$ {val:,.2f}"
+        if val >= 1e12: return f"{ro(val/1e12):.2f} T USD"
+        if val >= 1e9: return f"{ro(val/1e9):.2f} B USD"
+        if val >= 1e6: return f"{ro(val/1e6):.2f} M USD"
+        return f"{ro(val):,.2f} USD"
     except:
         return str(val)
     
@@ -299,7 +308,7 @@ def format_num(val, is_pct=False):
         val = smart_to_float(val)
     if pd.isna(val): return "N/A"
         
-    if is_pct: return f"{val * 100:.2f}%"
+    if is_pct: return f"{ro(val * 100):.2f}%"
     return scale_number(val)
 
 def format_amount(val):
@@ -308,10 +317,10 @@ def format_amount(val):
         return "N/A"
     sign = "-" if val < 0 else ""
     a = abs(val)
-    if a >= 1e12: return f"{sign}{a/1e12:,.2f} T"
-    if a >= 1e9: return f"{sign}{a/1e9:,.2f} mld"
-    if a >= 1e6: return f"{sign}{a/1e6:,.2f} mil"
-    return f"{sign}{a:,.2f}"
+    if a >= 1e12: return f"{sign}{ro(a/1e12):,.2f} T"
+    if a >= 1e9: return f"{sign}{ro(a/1e9):,.2f} mld"
+    if a >= 1e6: return f"{sign}{ro(a/1e6):,.2f} mil"
+    return f"{sign}{ro(a):,.2f}"
 
 def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
     """Calculează Beta și Corelația globală a întregului portofoliu."""
@@ -405,7 +414,7 @@ def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
     except:
         return 0.0
 
-def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
+def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, spread_label=None):
     score = 50
     details = []
     
@@ -427,24 +436,27 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val):
         details.append("ℹ️ **Evaluare:** DCF indisponibil sau neaplicabil acestui emitent. Pilon neinclus.")
     elif mos_val > 25:
         score += 15
-        details.append(f"✅ **Evaluare:** Marjă de siguranță excelentă ({mos_val:.1f}%). Preț subevaluat.")
+        details.append(f"✅ **Evaluare:** Marjă de siguranță excelentă ({ro(mos_val):.1f}%). Preț subevaluat.")
     elif mos_val < -10:
         score -= 15
         details.append(f"🚨 **Evaluare:** Supraevaluare semnificativă. Risc ridicat de corecție.")
 
     # 3. ANALIZA MACRO
-    if spread_val < 0:
+    if spread_val is None:
+        details.append(f"ℹ️ **Macro:** {spread_label or 'curba randamentelor pieței indisponibilă'}. Pilon neinclus.")
+    elif spread_val < 0:
         score -= 20
-        details.append("🚨 **Macro:** Curbă 10Y-3M inversată. Risc sistemic de recesiune detectat.")
+        details.append(f"🚨 **Macro:** Curba 10 ani − 3 luni inversată ({ro(spread_val):+.2f} pp; {spread_label}). "
+                       "Risc de recesiune pe piața acțiunii.")
     else:
         score += 5
-        details.append("✅ **Macro:** Mediul economic este favorabil expansiunii.")
+        details.append(f"✅ **Macro:** Curba 10 ani − 3 luni normală ({ro(spread_val):+.2f} pp; {spread_label}).")
 
     # 4. SĂNĂTATE FINANCIARĂ
     roe = num(info, 'returnOnEquity')
     if roe is not None and roe > 0.20:
         score += 10
-        details.append(f"🚀 **Eficiență:** ROE excepțional ({roe*100:.1f}%).")
+        details.append(f"🚀 **Eficiență:** ROE excepțional ({ro(roe*100):.1f}%).")
     
     debt = num(info, 'debtToEquity')
     if debt is not None and debt > 150:
@@ -622,10 +634,10 @@ def _bvb_fmt(value, kind):
     if value is None or pd.isna(value):
         return "N/A"
     if kind == "pct":
-        return f"{value * 100:.1f}%"
+        return f"{ro(value * 100):.1f}%"
     if kind == "x":
-        return f"{value:.2f}"
-    return f"{value:.1f}"
+        return f"{ro(value):.2f}"
+    return f"{ro(value):.1f}"
 
 
 def compact_html(fragment):
@@ -718,25 +730,25 @@ def render_bvb_decision(real_sym, hist):
 
     n_cmp = int(row["n_comparate"]) if pd.notna(row["n_comparate"]) else 0
     tier_txt = {2: "FAVORABIL", 1: "NEUTRU", 0: "NEFAVORABIL"}.get(int(tier), "") if pd.notna(tier) else "fără treaptă"
-    pct = lambda k: (f"percentila {row[k + '_pct'] * 100:.0f}" if pd.notna(row.get(k + "_pct")) else "N/A")
+    pct = lambda k: (f"percentila {ro(row[k + '_pct'] * 100):.0f}" if pd.notna(row.get(k + "_pct")) else "N/A")
 
     st.markdown("**Pasul 1 · Fundamental** (relativ la celelalte companii BVB din fișierele tale)")
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Scor fundamental", "N/A" if pd.isna(row["scor"]) else f"{row['scor']:.0f}/100",
+    c1.metric("Scor fundamental", "N/A" if pd.isna(row["scor"]) else f"{ro(row['scor']):.0f}/100",
               f"{tier_txt} · din {n_cmp} companii", delta_color="off", delta_arrow="off", help=BVB_HELP["scor"])
     c2.metric("P/E TTM", _bvb_fmt(me["PE"], "x"), pct("EP"), delta_color="off", delta_arrow="off", help=BVB_HELP["pe"])
     c3.metric("P/BV", _bvb_fmt(me["PBV"], "x"), pct("BP"), delta_color="off", delta_arrow="off", help=BVB_HELP["pbv"])
     c4.metric("Randament dividend", _bvb_fmt(me["DY"], "pct"), pct("DY"), delta_color="off", delta_arrow="off", help=BVB_HELP["dy"])
-    c5.metric("Piotroski simplificat", "N/A" if pd.isna(me["PIO"]) else f"{me['PIO']:.1f}/6", pct("PIO"),
+    c5.metric("Piotroski simplificat", "N/A" if pd.isna(me["PIO"]) else f"{ro(me['PIO']):.1f}/6", pct("PIO"),
               delta_color="off", delta_arrow="off", help=BVB_HELP["pio"])
     gn = me["GN"]
     gn_txt = "N/A" if pd.isna(gn) else ("≤ 22,5 ✓" if gn <= GN_LIMIT else "> 22,5")
 
     st.markdown("**Pasul 2 · Momentul** (tehnic, doar pentru intrare)")
     t1, t2, t3, t4, t5 = st.columns(5)
-    t1.metric("Moment", "N/A" if moment is None else f"{moment:.0f}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
+    t1.metric("Moment", "N/A" if moment is None else f"{ro(moment):.0f}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
     trend = comp["trend"]
-    t2.metric("Trend SMA 50/200", "N/A" if trend is None else f"{trend * 3:.0f} din 3" if len(close.dropna()) >= 200 else f"{trend:.0f} din 1",
+    t2.metric("Trend SMA 50/200", "N/A" if trend is None else f"{ro(trend * 3):.0f} din 3" if len(close.dropna()) >= 200 else f"{ro(trend):.0f} din 1",
               help="Câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200 (sub 200 de ședințe: doar preț > SMA 50).")
     mom_raw = comp["raw"]["momentum_12_1"]
     t3.metric("Momentum 12-1 luni", _bvb_fmt(mom_raw, "pct"),
@@ -754,12 +766,7 @@ def render_bvb_decision(real_sym, hist):
         if me["piotroski"]:
             rows_p = []
             for c in me["piotroski"]:
-                v = c["valoare"]
-                if isinstance(v, tuple):
-                    v_txt = " → ".join(_bvb_fmt(x, "x") for x in v)
-                else:
-                    v_txt = _bvb_fmt(v, "x")
-                rows_p.append({"Criteriu": c["criteriu"], "Valori (an trecut → acum)": v_txt,
+                rows_p.append({"Criteriu": c["criteriu"], "Valori (an trecut → acum)": piotroski_value_text(c),
                                "Rezultat": {True: "✓", False: "✗", None: "N/A"}[c["trece"]]})
             st.dataframe(pd.DataFrame(rows_p), hide_index=True, width='stretch')
             st.caption(f"Raportul {me['raport_flux']} față de același raport de acum un an (TTM), din fișierul tău. "
@@ -780,7 +787,9 @@ def render_bvb_decision(real_sym, hist):
             "Piotroski /6": cs["PIO"],
             "Ultimul raport": [indicators[t]["raport_bilant"] for t in cs.index],
         }).sort_values("Scor", ascending=False, na_position="last")
-        st.dataframe(table.round(2), hide_index=True, width='stretch')
+        st.dataframe(table.style.format({"Scor": ro_spec(".0f"), "P/E": ro_spec(",.2f"), "P/BV": ro_spec(",.2f"),
+                                         "Dividend %": ro_spec(".2f"), "Piotroski /6": ro_spec(".1f")}),
+                     hide_index=True, width='stretch')
         no_price = [t for t, p in prices.items() if p is None]
         if no_price:
             st.caption("Fără preț Yahoo acum (multiplii lor sunt N/A): " + ", ".join(sorted(no_price)) + ".")
@@ -804,6 +813,12 @@ def render_bvb_decision(real_sym, hist):
     st.caption(f"Sursa: fișierul „{data['fisiere'][tk]}”, bilanț {me['raport_bilant']}, profit TTM la "
                f"{me['raport_flux'] or 'N/A'}, dividend {me['raport_anual'] or 'N/A'}; preț "
                f"{_bvb_fmt(price, 'x')} lei (Yahoo, întârziat). {TEST_NOTE}")
+    _, _, history_text = final_verdict(tier, moment)
+    return {"is_bvb": True, "fund_label": vb["fund_label"], "fund_color": vb["fund_color"],
+            "fund_score": None if pd.isna(row["scor"]) else float(row["scor"]), "fund_detail": vb["fund_detail"],
+            "fund_basis": "testat pe BVB", "moment": moment, "moment_label": vb["moment_label"],
+            "moment_color": vb["moment_color"], "moment_detail": vb["moment_detail"],
+            "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False}
     st.markdown("---")
 
 
@@ -864,7 +879,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     sym = str(real_sym).upper()
     if sym.endswith(".RO") or (info.get('quoteType') or "").upper() in NON_COMPANY_QUOTE_TYPES:
         return
-    st.subheader("🌍 Scor fundamental (praguri netestate)")
+    st.subheader("🌍 Scor fundamental (descriptiv, fără putere de predicție în test)")
     inp = global_fundamental_inputs(real_sym, info, hist, risk_stats)
     res = gfund.fundamental_score(inp)
     close = hist["Close"] if hist is not None and not hist.empty else pd.Series(dtype=float)
@@ -873,8 +888,8 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     m_label, m_color, m_note = moment_label(moment, False)
     n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
     fund_detail = ("N/A" if res["score"] is None
-                   else f"{res['score']:.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date")
-    moment_detail = "N/A" if moment is None else f"tehnic {moment:.0f}/100, descriptiv"
+                   else f"{ro(res['score']):.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date · descriptiv")
+    moment_detail = "N/A" if moment is None else f"tehnic {ro(moment):.0f}/100, descriptiv"
 
     st.markdown(f"""
         <div style="background:#161B22; border:1px solid {res['color']}88; border-radius:12px; padding:14px; margin:8px 0 14px 0;">
@@ -931,20 +946,21 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     }
     cols = st.columns(len(res["pillars"]))
     for col, p in zip(cols, res["pillars"]):
-        col.metric(p["label"], "N/A" if p["score"] is None else f"{p['score'] * 100:.0f}/100",
-                   help=pillar_help[p["key"]] + " Praguri netestate pe datele noastre.")
+        col.metric(p["label"], "N/A" if p["score"] is None else f"{ro(p['score'] * 100):.0f}/100",
+                   help=pillar_help[p["key"]] + " Test istoric SUA 2022–2026: fără putere de predicție; "
+                   "pragurile sunt orientative.")
 
     with st.expander("Componentele scorului fundamental"):
         st.dataframe(pd.DataFrame([{
             "Pilon": p["label"], "Componentă": c["label"], "Valoare": c["value"],
-            "Notă": ("informativ" if c.get("info") else "N/A" if c["score"] is None else f"{c['score'] * 100:.0f}/100"),
+            "Notă": ("informativ" if c.get("info") else "N/A" if c["score"] is None else f"{ro(c['score'] * 100):.0f}/100"),
             "Explicație": c["text"]} for p in res["pillars"] for c in p["components"]]),
             hide_index=True, width='stretch')
         if res["financial"]:
             ke = inp.get("ke")
             st.caption("Bancă / asigurător / emitent financiar: DCF, Altman și Piotroski nu se aplică (datoria e materie primă, "
                        "fluxul de numerar reflectă depozitele și creditele). ke = rf + beta × 5% = "
-                       + ("N/A" if ke is None else f"{ke * 100:.1f}%") + f"; rf: {inp['rf_label']}; beta: {inp['beta_label']}.")
+                       + ("N/A" if ke is None else f"{ro(ke * 100):.1f}%") + f"; rf: {inp['rf_label']}; beta: {inp['beta_label']}.")
         else:
             st.caption("Ipoteze fixe ale scorului, independente de cursoarele calculatorului de mai jos: g terminal 2%, "
                        "WACC calculat, FCF TTM (sau media anilor fiscali când FCF-ul curent e deformat). "
@@ -952,8 +968,14 @@ def render_global_decision(real_sym, info, hist, risk_stats):
                        "Piotroski) sunt în secțiunile de mai jos.")
         if inp.get("statement_errors"):
             st.caption("Situații financiare necitite de la Yahoo: " + ", ".join(inp["statement_errors"]) + ".")
-    st.caption("„Decizie Master AI” de mai jos rămâne calculată ca înainte; se unifică cu acest scor la final.")
+    st.caption("„Decizie Master AI” de mai jos reia acest scor și momentul, fără să le recalculeze.")
     st.markdown("---")
+    return {"is_bvb": False, "fund_label": res["label"], "fund_color": res["color"], "fund_score": res["score"],
+            "fund_detail": fund_detail, "fund_basis": "descriptiv, netestat", "moment": moment,
+            "moment_label": m_label, "moment_color": m_color, "moment_detail": moment_detail,
+            "moment_basis": "descriptiv, fără verdict",
+            "pillars": [(p["label"], None if p["score"] is None else p["score"] * 100) for p in res["pillars"]],
+            "history_text": None, "financial": bool(res["financial"])}
 
 
 def _read_peer_rows(symbols):
@@ -1304,7 +1326,8 @@ def resolve_beta_alpha(symbol, info, hist):
     deci se calculează față de BET (prin TVBETETF.RO, proxy), pe randamente săptămânale.
     La celelalte piețe rămâne beta Yahoo; dacă lipsește, se calculează față de indicele pieței.
     Alpha: când beta e calculat aici, alpha folosește același benchmark și rata fără risc a
-    valutei; când beta e din Yahoo, rămâne calculul existent (față de SPY).
+    valutei. Cu beta din Yahoo: acțiunile în USD rămân pe calculul existent (față de SPY); cele în EUR
+    se compară cu DAX (.DE) sau Euro Stoxx 50, cu beta calculat față de același indice; alte valute: N/A.
     Întoarce un dict: beta, beta_label, alpha, alpha_label. Valorile lipsă sunt None.
     """
     currency = info.get('currency') or 'USD'
@@ -1327,7 +1350,7 @@ def resolve_beta_alpha(symbol, info, hist):
             if alpha is not None:
                 out["alpha"] = alpha["alpha"]
                 out["alpha_label"] = (f"față de {bench_name}, {alpha['start']:%d.%m.%Y}–{alpha['end']:%d.%m.%Y}; "
-                                      f"rată fără risc {rf_val * 100:.2f}% [{rf_label}]")
+                                      f"rată fără risc {ro(rf_val * 100):.2f}% [{rf_label}]")
             elif rf_val is None:
                 out["alpha_label"] = f"indisponibil: {rf_label}"
             else:
@@ -1339,11 +1362,39 @@ def resolve_beta_alpha(symbol, info, hist):
             out["alpha_label"] = "indisponibil: lipsește beta"
             return out
 
-    if out["beta"] is not None:
-        out["alpha"] = calculate_alpha(hist, out["beta"])
-        out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
-    else:
+    if out["beta"] is None:
         out["alpha_label"] = "indisponibil: lipsește beta"
+        return out
+    cur = currency.upper()
+    if cur == "EUR":
+        # Zona euro: alpha față de indicele pieței (DAX pentru .DE, Euro Stoxx 50 în rest), în EUR, cu rata
+        # fără risc în EUR. Jensen cere beta față de ACELAȘI indice, deci se calculează aici (săptămânal);
+        # beta Yahoo rămâne cel folosit în DCF și WACC.
+        bench_sym, bench_name = beta_benchmark(symbol, cur)
+        if bench_sym == "^STOXX50E":
+            bench_name += " (indice de preț, fără dividende)"
+        bench_close = get_benchmark_close(bench_sym)
+        own = beta_weekly(hist['Close'], bench_close)
+        rf_val, rf_label = get_risk_free_for_currency(cur)
+        if own is None or own["beta"] <= 0:
+            out["alpha_label"] = f"indisponibil: beta față de {bench_name} nu se poate calcula (sub 52 de săptămâni comune)"
+        elif rf_val is None:
+            out["alpha_label"] = f"indisponibil: {rf_label}"
+        else:
+            alpha = jensen_alpha(hist['Close'], bench_close, own["beta"], rf_val)
+            if alpha is None:
+                out["alpha_label"] = f"indisponibil: sub un an de ședințe comune cu {bench_name}"
+            else:
+                out["alpha"] = alpha["alpha"]
+                out["alpha_label"] = (f"față de {bench_name}, {alpha['start']:%d.%m.%Y}–{alpha['end']:%d.%m.%Y}; "
+                                      f"beta {ro(own['beta']):.2f} față de același indice ({own['n']} randamente săptămânale; "
+                                      f"beta Yahoo din DCF rămâne separat); rată fără risc {ro(rf_val * 100):.2f}% [{rf_label}]")
+        return out
+    if cur != "USD":
+        out["alpha_label"] = f"indisponibil: nu există încă un indice de referință în {cur} (doar SUA, zona euro, BVB)"
+        return out
+    out["alpha"] = calculate_alpha(hist, out["beta"])
+    out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
     return out
 
 
@@ -1372,7 +1423,7 @@ def get_aaa_spread():
         gs10 = web.DataReader('GS10', 'fred', start, end).iloc[:, 0]
         res = fund.aaa_treasury_spread(aaa, gs10)
         if res is not None and 0 < res["aaa"] < 25 and 0 < res["treasury"] < 25:
-            return res, f"marja AAA din SUA {res['spread']:.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
+            return res, f"marja AAA din SUA {ro(res['spread']):.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
         print("DEBUG: marja AAA (FRED AAA/GS10): nicio lună comună validă")
     except Exception as e:
         print(f"DEBUG: marja AAA (FRED AAA/GS10) indisponibilă: {e}")
@@ -1397,6 +1448,65 @@ def get_graham_yield(currency):
     if rf_local is None:
         return None, f"Nu pot aproxima randamentul AAA în {cur or 'valuta necunoscută'} (lipsește rata fără risc: {rf_label})"
     return rf_local * 100 + spread["spread"], f"proxy: {rf_label} + {spread_label}"
+
+
+ECB_EU_CURVE_URL = "https://data-api.ecb.europa.eu/service/data/YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SRS_10Y_3M"
+ECB_RO_10Y_URL = "https://data-api.ecb.europa.eu/service/data/IRS/M.RO.L.L40.CI.0000.RON.N.Z"
+EUROSTAT_MONEY_MARKET_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/irt_st_m"
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_market_curve(market):
+    """Panta curbei randamentelor (10 ani − 3 luni, în puncte procentuale) pe piața acțiunii:
+    (spread, descriere) sau (None, motiv). Fără valoare de rezervă.
+
+    US: ^TNX − ^IRX (Yahoo), aceeași zi. EU: curba titlurilor de stat AAA din zona euro (BCE, zilnic,
+    seria gata calculată 10 ani − 3 luni; proxy pentru Bund). RO: titluri de stat 10 ani (BCE, lunar)
+    − ROBOR 3M (Eurostat irt_st_m, lunar), pe aceeași lună.
+    """
+    def _valid(x):
+        return x is not None and x == x and -10 < x < 10
+
+    if market == "US":
+        try:
+            t10 = yf.Ticker("^TNX").history(period="10d", auto_adjust=False)['Close']
+            t3 = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)['Close']
+            res = same_day_spread(t10, t3)
+            if res is not None and _valid(res["spread"]):
+                return res["spread"], (f"SUA, titluri de stat 10 ani {ro(res['long']):.2f}% − 3 luni {ro(res['short']):.2f}% "
+                                       f"(^TNX − ^IRX, {res['date']:%d.%m.%Y})")
+        except Exception as e:
+            print(f"DEBUG: curba SUA (^TNX/^IRX) indisponibilă: {e}")
+        return None, "curba SUA (^TNX − ^IRX) nu a putut fi citită"
+    if market == "EU":
+        try:
+            resp = requests.get(ECB_EU_CURVE_URL, params={"lastNObservations": 5, "format": "csvdata"}, timeout=10)
+            if resp.status_code == 200:
+                obs = parse_ecb_csv(resp.text)
+                if obs is not None and _valid(obs[1]):
+                    return obs[1], f"zona euro, curba titlurilor de stat AAA 10 ani − 3 luni (BCE, {obs[0]}; proxy pentru Bund)"
+            else:
+                print(f"DEBUG: BCE (curba zonei euro): HTTP {resp.status_code}")
+        except requests.RequestException as e:
+            print(f"DEBUG: BCE (curba zonei euro) indisponibilă: {e}")
+        return None, "curba zonei euro (BCE) nu a putut fi citită"
+    if market == "RO":
+        try:
+            r10 = requests.get(ECB_RO_10Y_URL, params={"lastNObservations": 6, "format": "csvdata"}, timeout=10)
+            r3 = requests.get(EUROSTAT_MONEY_MARKET_URL,
+                              params={"geo": "RO", "int_rt": "IRT_M3", "freq": "M", "lastTimePeriod": 6}, timeout=10)
+            if r10.status_code == 200 and r3.status_code == 200:
+                res = monthly_spread(parse_ecb_series(r10.text), parse_eurostat_monthly(r3.json()))
+                if res is not None and _valid(res["spread"]):
+                    return res["spread"], (f"România, titluri de stat 10 ani {ro(res['long']):.2f}% (BCE) − ROBOR 3M "
+                                           f"{ro(res['short']):.2f}% (Eurostat), {res['month']}")
+                print("DEBUG: curba RO: nicio lună comună între BCE și Eurostat")
+            else:
+                print(f"DEBUG: curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
+        except (requests.RequestException, ValueError) as e:
+            print(f"DEBUG: curba RO indisponibilă: {e}")
+        return None, "curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită"
+    return None, "nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)"
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -1718,9 +1828,9 @@ def plot_correlation_matrix(tickers):
             for j in range(len(corr_matrix)):
                 val = corr_matrix.iloc[i, j]
                 if i == j: label = "1.00"
-                elif val > 0.8: label = f"{val:.2f}<br>⚠️ Risc"
-                elif val > 0.5: label = f"{val:.2f}<br>Moderat"
-                else: label = f"{val:.2f}<br>✅ OK"
+                elif val > 0.8: label = f"{ro(val):.2f}<br>⚠️ Risc"
+                elif val > 0.5: label = f"{ro(val):.2f}<br>Moderat"
+                else: label = f"{ro(val):.2f}<br>✅ OK"
                 row_text.append(label)
             text_matrix.append(row_text)
 
@@ -1743,7 +1853,7 @@ def plot_correlation_matrix(tickers):
             xaxis=dict(side="bottom")
         )
 
-        st.plotly_chart(fig, width='stretch')
+        plot_ro(fig, width='stretch')
         
         # 4. RAPORT VIZUAL STILIZAT (Cards)
         st.markdown("### 📋 Analiză Strategica a Diversificării")
@@ -1783,7 +1893,7 @@ def plot_correlation_matrix(tickers):
                             </div>
                             <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
                             <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
-                                <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{score:.2f}</span>
+                                <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{ro(score):.2f}</span>
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
@@ -1849,15 +1959,15 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
-        st.plotly_chart(fig, width='stretch')
+        plot_ro(fig, width='stretch')
 
         # Afișare Alpha Card (Rămâne neschimbat, dar folosim variabilele noi)
         alpha_color = "#3FB950" if alpha > 0 else "#F85149"
         st.markdown(f"""
             <div style="background-color: #161B22; padding: 20px; border-radius: 12px; border-top: 4px solid {alpha_color}; text-align: center;">
                 <h4 style="color: #8B949E; margin-bottom: 5px;">Alpha (Diferență față de {bench_name})</h4>
-                <h1 style="color: {alpha_color}; margin: 0;">{alpha:+.2f}%</h1>
-                <p style="color: #8B949E; font-size: 14px;">Portofoliu: {port_ret:+.2f}% | {bench_name}: {bench_ret:+.2f}%</p>
+                <h1 style="color: {alpha_color}; margin: 0;">{ro(alpha):+.2f}%</h1>
+                <p style="color: #8B949E; font-size: 14px;">Portofoliu: {ro(port_ret):+.2f}% | {bench_name}: {ro(bench_ret):+.2f}%</p>
             </div>
         """, unsafe_allow_html=True)
 
@@ -1899,7 +2009,7 @@ def generate_market_narrative(ticker_data, symbol, name):
             trend = "o scădere semnificativă"
             sentiment = "negativ"
             
-        text = f"**{name}** a înregistrat {trend} de **{change_pct:.2f}%**, închizând la {curr:,.2f}. Sentimentul pieței este {sentiment}."
+        text = f"**{name}** a înregistrat {trend} de **{ro(change_pct):.2f}%**, închizând la {ro(curr):,.2f}. Sentimentul pieței este {sentiment}."
         return text, change_pct, curr
     except Exception as e:
         return f"Nu s-au putut genera date pentru {name}.", 0, 0
@@ -2056,15 +2166,24 @@ def calculate_bvb_sentiment(bvb_data):
     
 # --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
 def load_portfolio():
-    """Citește datele din Google Sheets folosind Secrets."""
+    """Foaia `Portofoliu` (prima foaie) → DataFrame Symbol, Date, Quantity, AvgPrice, Currency, cu numere.
+
+    Se citește cu UNFORMATTED_VALUE: celulele numerice vin ca numere, deci „1.250” (mii, format RO)
+    rămâne 1250. Înainte, get_all_records primea textul formatat și îl citea ca 1,25.
+    Problemele de citire sunt în `df.attrs["problems"]`. Fără cache: foaia se actualizează manual.
+    """
     sheet = connect_to_gsheets()  # Sheet1 implicit = portofoliu
-    if sheet:
-        try:
-            data = sheet.get_all_records()
-            return pd.DataFrame(data)
-        except:
-            return pd.DataFrame()
-    return pd.DataFrame()
+    if not sheet:
+        return pd.DataFrame()
+    try:
+        values = sheet.get_all_values(value_render_option="UNFORMATTED_VALUE",
+                                      date_time_render_option="FORMATTED_STRING")
+    except gspread.exceptions.GSpreadException as e:
+        print(f"DEBUG: foaia Portofoliu nu a putut fi citită: {e}")
+        return pd.DataFrame()
+    df, problems = portfolio_sheet.parse_portfolio_values(values)
+    df.attrs["problems"] = problems
+    return df
 
 # --- FUNCȚII WATCHLIST (CORECȚIE BUG) ---
 def load_watchlist():
@@ -2229,6 +2348,45 @@ def load_ledger_values():
 
 MANUAL_PRICE_STALE_DAYS = 30  # peste atât, prețul manual e semnalat ca vechi
 
+@st.cache_data(ttl=600, show_spinner=False)
+def load_iv_history_values():
+    """Conținutul brut al foii `IV_istoric` (valori neformatate); None dacă foaia lipsește sau nu poate fi citită."""
+    ws = connect_to_gsheets("IV_istoric")
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+    except gspread.exceptions.GSpreadException as e:
+        print(f"DEBUG: foaia IV_istoric nu a putut fi citită: {e}")
+        return None
+
+def update_iv_history(symbol, iv_pct):
+    """Salvează IV-ul la bani de azi în `IV_istoric` (o dată pe zi și simbol, doar în timpul ședinței SUA)
+    și întoarce {"rank": iv_rank_percentile(...), "note": text pentru interfață}."""
+    values = load_iv_history_values()
+    df, problems = iv_history.parse_iv_history(values)
+    now = now_ro()  # cu fus orar; se convertește la New York în iv_history
+    session = iv_history.us_session_date(now)
+    note = ""
+    if values is None:
+        note = "Foaia IV_istoric nu a putut fi citită; IV Rank rămâne N/A."
+    elif iv_pct is not None and iv_history.us_session_open(now) and iv_history.should_save(df, symbol, session):
+        ws = connect_to_gsheets("IV_istoric")
+        try:
+            ws.append_row(iv_history.make_row(session, symbol, iv_pct / 100), value_input_option="RAW")
+            load_iv_history_values.clear()  # golește doar cache-ul foii IV_istoric
+            df, problems = iv_history.parse_iv_history(load_iv_history_values())
+            note = f"IV-ul de azi ({ro(iv_pct):.1f}%) a fost salvat în IV_istoric pentru {session:%d.%m.%Y}."
+        except (gspread.exceptions.GSpreadException, AttributeError) as e:
+            print(f"DEBUG: IV_istoric, scriere eșuată pentru {symbol}: {e}")
+            note = "IV-ul de azi nu a putut fi salvat în IV_istoric."
+    series = iv_history.history_for(df, symbol)
+    rank = opt_calc.iv_rank_percentile(series, None if iv_pct is None else iv_pct / 100, as_of=pd.Timestamp(session))
+    span = f", {rank['first']:%d.%m.%Y} – {rank['last']:%d.%m.%Y}" if rank["n"] else ""
+    note = " ".join(x for x in [note, f"Istoric IV la bani pentru {symbol}: {rank['n']} zile în ultimul an{span}. "
+                                "Se salvează automat o valoare pe zi, doar cât bursa SUA e deschisă."] + problems if x)
+    return {"rank": rank, "note": note}
+
 @st.cache_data(ttl=300, show_spinner=False)
 def load_manual_price_values():
     """Conținutul brut al foii `Preturi_manuale` (antet + rânduri); None dacă foaia lipsește sau nu poate fi citită."""
@@ -2312,7 +2470,7 @@ def get_ledger_market_history(symbols, start):
 
 def render_ledger_total(ledger_df, positions, total_ron, asof):
     """Rezultatul întregului portofoliu în RON: depuneri nete, profit, XIRR, apoi (la cerere) curba reală și TWR."""
-    st.markdown("**Întregul portofoliu, în RON**")
+    st.markdown("**Întregul portofoliu, în RON** · din registrul `Tranzactii`")
     start = (ledger_df["Date"].min() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
     fx_history = get_ledger_fx_history(start)
     ext, flow_problems = ledger_calc.external_flows(ledger_df, fx_history)
@@ -2321,9 +2479,9 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     m1, m2, m3 = st.columns(3)
     m1.metric("Bani depuși, net (RON)", _ledger_num(result["net_invested"]), help=LEDGER_HELP["net_invested"])
     profit_pct = (result["profit"] / result["net_invested"] * 100) if result["profit"] is not None and result["net_invested"] else None
-    m2.metric("Profit total (RON)", _ledger_num(result["profit"]), None if profit_pct is None else f"{profit_pct:.1f}% din banii depuși",
+    m2.metric("Profit total (RON)", _ledger_num(result["profit"]), None if profit_pct is None else f"{ro(profit_pct):.1f}% din banii depuși",
               help=LEDGER_HELP["profit"])
-    m3.metric("XIRR total (% pe an)", "N/A" if result["xirr"] is None else f"{result['xirr'] * 100:.1f}%", help=LEDGER_HELP["xirr"])
+    m3.metric("XIRR total (% pe an)", "N/A" if result["xirr"] is None else f"{ro(result['xirr'] * 100):.1f}%", help=LEDGER_HELP["xirr"])
     st.caption(
         f"Din {len(ext)} depuneri, retrageri și solduri de deschidere, fiecare convertită în RON la cursul din ziua ei. "
         "Profit total = valoarea de azi − banii depuși net; include și efectul cursului valutar. "
@@ -2358,8 +2516,8 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     years = (cumulative.index[-1] - cumulative.index[0]).days / 365.25
     twr_annual = ((1 + twr_total) ** (1 / years) - 1) if (years >= 1 and twr_total > -1) else None
     t1, t2, t3 = st.columns(3)
-    t1.metric("TWR total", f"{twr_total * 100:.1f}%", help=LEDGER_HELP["twr"])
-    t2.metric("TWR anualizat", "N/A" if twr_annual is None else f"{twr_annual * 100:.1f}%", help=LEDGER_HELP["twr_annual"])
+    t1.metric("TWR total", f"{ro(twr_total * 100):.1f}%", help=LEDGER_HELP["twr"])
+    t2.metric("TWR anualizat", "N/A" if twr_annual is None else f"{ro(twr_annual * 100):.1f}%", help=LEDGER_HELP["twr_annual"])
     t3.metric("Perioada măsurată", f"{cumulative.index[0]:%d.%m.%Y} – {cumulative.index[-1]:%d.%m.%Y}", help=LEDGER_HELP["period"])
 
     deposits = flows_daily.cumsum().reindex(valid_curve.index)
@@ -2374,7 +2532,7 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1.0),
         xaxis=dict(showgrid=False), yaxis=dict(gridcolor="rgba(255,255,255,0.08)", tickformat=",.0f"),
     )
-    st.plotly_chart(fig_ledger, width='stretch')
+    plot_ro(fig_ledger, width='stretch')
     st.caption(
         "Distanța dintre cele două linii e profitul. TWR măsoară randamentul investițiilor fără efectul momentului depunerilor "
         "(comparabil cu un indice); XIRR îl include. Valorile în valută sunt convertite la cursul din fiecare zi."
@@ -2405,20 +2563,20 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
         st.info(f"Prea puține zile cu valoare ({len(daily_returns)}) pentru indicatori de risc; sunt necesare cel puțin 60.")
         return
     pct = lambda v, d=1: "N/A" if v is None else f"{v * 100:.{d}f}%"
-    ratio = lambda v: "N/A" if v is None else f"{v:.2f}"
+    ratio = lambda v: "N/A" if v is None else f"{ro(v):.2f}"
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("Volatilitate anualizată", pct(risk["vol_ann"]), help=LEDGER_HELP["vol"])
     r2.metric("Sharpe", ratio(risk["sharpe"]), help=LEDGER_HELP["sharpe"])
     r3.metric("Sortino", ratio(risk["sortino"]), help=LEDGER_HELP["sortino"])
     r4.metric("Scădere maximă de la vârf", pct(risk["max_drawdown"]), help=LEDGER_HELP["max_dd"])
-    in_ron = (lambda v: "") if total_ron is None else (lambda v: f"{v * total_ron:,.0f} RON la valoarea de azi")
+    in_ron = (lambda v: "") if total_ron is None else (lambda v: f"{ro(v * total_ron):,.0f} RON la valoarea de azi")
     v1, v2, v3 = st.columns(3)
     v1.metric("VaR 95% istoric (1 zi)", pct(risk["var95_hist"], 2), in_ron(risk["var95_hist"]), delta_color="off", help=LEDGER_HELP["var_hist"])
     v2.metric("CVaR 95% (1 zi)", pct(risk["cvar95"], 2), in_ron(risk["cvar95"]), delta_color="off", help=LEDGER_HELP["cvar"])
     v3.metric("VaR 95% parametric (1 zi)", pct(risk["var95_param"], 2), in_ron(risk["var95_param"]), delta_color="off", help=LEDGER_HELP["var_param"])
     st.caption(
         f"Din {risk['n']} randamente zilnice, {risk['start']:%d.%m.%Y} – {risk['end']:%d.%m.%Y}, în RON. "
-        + (f"Rata fără risc: {rf_ron * 100:.2f}% ({rf_label}); e pe 10 ani, deci proxy pentru o rată pe termen scurt. "
+        + (f"Rata fără risc: {ro(rf_ron * 100):.2f}% ({rf_label}); e pe 10 ani, deci proxy pentru o rată pe termen scurt. "
            if rf_ron is not None else f"Sharpe și Sortino lipsesc: {rf_label} ")
         + "VaR istoric = pierderea de o zi depășită în 5% din zile; CVaR = pierderea medie din acele zile; "
           "VaR parametric presupune distribuție normală și subestimează cozile. "
@@ -2429,7 +2587,8 @@ def _ledger_num(value, decimals=2, suffix=""):
     """Număr pentru tabel; valoarea lipsă se afișează „N/A”, nu 0."""
     if value is None or pd.isna(value):
         return "N/A"
-    return f"{value:,.{decimals}f}{suffix}"
+    # format românesc: 1.250,50 (punct la mii, virgulă la zecimale)
+    return format_ro(value, decimals, suffix)
 
 def render_ledger_import(values):
     """Importul unui export de la broker în foaia `Tranzactii`: previzualizare, apoi scriere doar a rândurilor noi."""
@@ -2462,7 +2621,7 @@ def render_ledger_import(values):
             st.markdown(f"**{uploaded.name}** — {broker}: {len(records)} operațiuni citite, **{len(fresh)} noi**, "
                         f"{len(records) - len(fresh)} deja în foaie.")
             if control and control.get("reported") is not None and abs(control["reported"] - control["parsed"]) > 0.01:
-                st.warning(f"⚠️ Numerarul citit ({control['parsed']:,.2f}) diferă de totalul din raport ({control['reported']:,.2f}): "
+                st.warning(f"⚠️ Numerarul citit ({ro(control['parsed']):,.2f}) diferă de totalul din raport ({ro(control['reported']):,.2f}): "
                            "importul e incomplet. Vezi operațiunile nerecunoscute de mai jos.")
             for problem in import_problems[:20]:
                 st.write(f"- ⚠️ {problem}")
@@ -2490,21 +2649,24 @@ def render_ledger_results():
     """Rezultatele din tranzacțiile reale: pe clase (în moneda fiecăreia) și valoarea totală de azi în RON.
 
     Calculele sunt în analytics/ledger.py (testate în tests/test_ledger.py). Aici doar se citesc
-    foaia și prețurile și se afișează.
+    foaia și prețurile și se afișează. Întoarce pozițiile din registru (pentru taburile pe monedă)
+    sau None când registrul nu poate fi citit ori e gol.
     """
-    st.subheader("📒 Rezultate din registrul de tranzacții")
+    st.subheader("📒 Poziții și rezultate")
     values = load_ledger_values()
     if values is None:
         st.info("Foaia `Tranzactii` nu a putut fi citită din `portofoliu_db`.")
-        return
+        return None
     render_ledger_import(values)
     ledger_df, problems = ledger_calc.parse_ledger(values)
     if ledger_df.empty:
         st.info("Foaia `Tranzactii` nu conține tranzacții. " + " ".join(problems))
-        return
+        return None
     positions, position_problems = ledger_calc.build_positions(ledger_df)
     problems = problems + position_problems
 
+    # Pozițiile deschise vin din registrul `Tranzactii` (exporturile brokerilor), ca toate celelalte
+    # rezultate și ca taburile pe monedă de mai jos.
     held = positions[positions["Quantity"] > ledger_calc.QTY_EPS]
     live_symbols = held.loc[~held["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"].tolist()
     with st.spinner("Citim prețurile pentru pozițiile din registru..."):
@@ -2521,6 +2683,7 @@ def render_ledger_results():
     fx_rates = {cur: prices.get(sym) or closes_last.get(sym) for cur, sym in LEDGER_FX_SYMBOLS.items()}
     fx_from_close = [cur for cur, sym in LEDGER_FX_SYMBOLS.items() if not prices.get(sym) and closes_last.get(sym)]
     by_currency, total_ron, missing_fx = ledger_calc.consolidate(results, cash, fx_rates)
+    last_trade = ledger_df["Date"].max()
 
     positions_ron = (by_currency["Positions"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
     cash_ron = (by_currency["Cash"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
@@ -2529,8 +2692,10 @@ def render_ledger_results():
     k2.metric("Poziții (RON)", _ledger_num(positions_ron), help=LEDGER_HELP["positions"])
     k3.metric("Numerar la brokeri (RON)", _ledger_num(cash_ron), help=LEDGER_HELP["cash"])
     st.caption(
-        f"Din {len(ledger_df)} tranzacții, {ledger_df['Date'].min():%d.%m.%Y} – {ledger_df['Date'].max():%d.%m.%Y}. "
-        "Totalul în RON e la cursul de azi. Registrul se actualizează când încarci un export nou de la broker."
+        f"Totul vine din registrul `Tranzactii`, completat din exporturile brokerilor ({len(ledger_df)} tranzacții, "
+        f"{ledger_df['Date'].min():%d.%m.%Y} – {last_trade:%d.%m.%Y}): poziții, numerar, realizat, dividende, "
+        "impozite, comisioane și XIRR. Tranzacțiile de după ultima dată apar după importul unui export nou. "
+        "Totalul în RON e la cursul de azi."
     )
     from_close = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_CLOSE, "Symbol"])
     if from_close or fx_from_close:
@@ -2590,7 +2755,7 @@ def render_ledger_results():
     with st.expander("Poziții deschise din registru"):
         st.dataframe(pd.DataFrame({
             "Simbol": valued["Symbol"], "Clasă": valued["Class"], "Monedă": valued["Currency"],
-            "Cantitate": valued["Quantity"].map(lambda v: _ledger_num(v, 4)),
+            "Cantitate": valued["Quantity"].map(lambda v: format_ro(v, 4, trim=True)),
             "Cost mediu": valued["AvgCost"].map(lambda v: _ledger_num(v, 4)),
             "Preț": valued["Price"].map(lambda v: _ledger_num(v, 4)),
             "Sursă preț": [src if pd.isna(day) else f"{src} ({day:%d.%m.%Y})"
@@ -2613,6 +2778,7 @@ def render_ledger_results():
         with st.expander(f"⚠️ {len(problems)} probleme în registru"):
             for problem in problems[:50]:
                 st.write(f"- {problem}")
+    return positions
 
 from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
 
@@ -2941,13 +3107,13 @@ def get_fred_macro_data():
                 
                 if code in ['PAYEMS', 'ADPCHGS', 'JTSJOL']:
                     change = val_curr - val_prev
-                    trend = f"{change:+.0f}K"
+                    trend = f"{ro(change):+.0f}K"
                 elif code in ['UNRATE', 'FEDFUNDS', 'UMCSENT']:
                     change = val_curr - val_prev
-                    trend = f"{change:+.2f} pct."
+                    trend = f"{ro(change):+.2f} pct."
                 else:
                     change = ((val_curr - val_prev) / val_prev) * 100
-                    trend = f"{change:+.2f}%"
+                    trend = f"{ro(change):+.2f}%"
                 
                 yoy = yoy_pct(col_data) if code in yoy_codes else None
                     
@@ -2956,7 +3122,7 @@ def get_fred_macro_data():
                     "Valoare Curentă": val_curr,
                     "Lună Precedentă": val_prev,
                     "Evoluție (MoM)": trend,
-                    "Evoluție (An/An)": f"{yoy:+.2f}%" if yoy is not None else "—",
+                    "Evoluție (An/An)": f"{ro(yoy):+.2f}%" if yoy is not None else "—",
                     "_simbol": code,
                     "_change_raw": change,
                     "_yoy": yoy
@@ -3137,15 +3303,13 @@ def main():
                     hit_positions = np.flatnonzero(hist['ATR_Stop_Hit'].to_numpy())
                     if len(hit_positions) and (len(hist) - 1 - hit_positions[-1]) <= 5:
                         sl_hit_note = f" · stop atins pe {hist.index[hit_positions[-1]].strftime('%d.%m')}, resetat"
-            # Definim variabilele globale de diagnostic la început pentru a fi disponibile peste tot
-            try:
-                # Înlocuim 2Y=F (delistat) cu ^IRX (3-Month Yield)
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                # Spread-ul preferat de FED: 10Y - 3M
-                spread = t_10y - t_3m
-            except:
-                spread = 0.5 # Fallback neutru
+            # Curba randamentelor (10 ani − 3 luni) a pieței acțiunii: SUA, zona euro sau România.
+            # None = indisponibilă; consumatorii (SWOT, rating, Decizie Master AI) nu o punctează.
+            curve_market = market_of(real_sym, info.get('currency'))
+            spread, spread_label = get_market_curve(curve_market)
+            # Intrările sintezei „Decizie Master AI” calculate doar în anumite ramuri: inițializare explicită.
+            regime_msg, z_val_swot, s_score_val, c_news_ai = None, None, None, []
+            rvol, iv_rank, iv_days = None, None, 0
             
         if hist is None or hist.empty:
             st.error("Simbol invalid sau date indisponibile.")
@@ -3184,8 +3348,8 @@ def main():
             # --- 3. AFIȘARE CARD DINAMIC CONSOLIDAT (ȚINTĂ | LIVE | STOP) ---
             if curr_price > 0:
                 dist_sl = ((curr_price - sl_price) / curr_price) * 100 if sl_price else 0
-                sl_display = f"{sl_price:.2f}" if sl_price else "N/A"
-                sl_risk_display = f"Risc: -{dist_sl:.1f}%{sl_hit_note}" if sl_price else "Istoric insuficient pentru ATR"
+                sl_display = f"{ro(sl_price):.2f}" if sl_price else "N/A"
+                sl_risk_display = f"Risc: -{ro(dist_sl):.1f}%{sl_hit_note}" if sl_price else "Istoric insuficient pentru ATR"
                 
                 # Culori pentru statusul țintei
                 target_text, t_status, t_color = entry_target_view(curr_price, target_p)
@@ -3199,7 +3363,7 @@ def main():
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: center; border-left: 1px solid #30363D; border-right: 1px solid #30363D;">
                                 <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
-                                <h2 style="color:{t_color}; margin:5px 0; font-size:28px;">{curr_price:.2f}</h2>
+                                <h2 style="color:{t_color}; margin:5px 0; font-size:28px;">{ro(curr_price):.2f}</h2>
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: right;">
                                 <p style="color:#F85149; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Stop-Loss (Exit)</p>
@@ -3237,8 +3401,8 @@ def main():
 
             with col_price_info:
                  m1, m2 = st.columns(2)
-                 m1.metric(f"Interval ({time_opt})", f"{curr_price:.2f} {info.get('currency', '')}", f"{diff_val:.2f} ({diff_pct:.2f}%)")
-                 m2.metric("Evoluție Azi", f"{curr_price:.2f}", f"{day_val:.2f} ({day_pct:.2f}%)")
+                 m1.metric(f"Interval ({time_opt})", f"{ro(curr_price):.2f} {info.get('currency', '')}", f"{ro(diff_val):.2f} ({ro(diff_pct):.2f}%)")
+                 m2.metric("Evoluție Azi", f"{ro(curr_price):.2f}", f"{ro(day_val):.2f} ({ro(day_pct):.2f}%)")
 
             rows_needed = 1 + (1 if show_rsi else 0) + (1 if show_macd else 0)
             row_heights = [0.6] + ([0.2] if show_rsi else []) + ([0.2] if show_macd else [])
@@ -3279,7 +3443,7 @@ def main():
                 fig.add_trace(go.Bar(x=subset.index, y=subset['MACD']-subset['Signal'], name='Hist'), row=current_row, col=1)
 
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
-            st.plotly_chart(fig, width='stretch')
+            plot_ro(fig, width='stretch')
 
             # --- SEPARATORUL SOLICITAT (ADAUGĂ ACEASTĂ LINIE) ---
             st.markdown("---")
@@ -3289,9 +3453,11 @@ def main():
             beta_val, alpha_val = risk_stats["beta"], risk_stats["alpha"]
 
             # 2b. Decizie BVB în doi pași (doar .RO cu fișier în „Analiză companii”)
-            render_bvb_decision(real_sym, hist)
-            # 2c. Scor fundamental pentru acțiunile din afara BVB (praguri netestate)
-            render_global_decision(real_sym, info, hist, risk_stats)
+            bvb_decision = render_bvb_decision(real_sym, hist)
+            # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
+            global_decision = render_global_decision(real_sym, info, hist, risk_stats)
+            # Sinteza „Decizie Master AI” refolosește exact acest rezultat (nu recalculează)
+            score_decision = bvb_decision or global_decision
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
@@ -3323,7 +3489,7 @@ def main():
                     st.caption("Valorile companiei sunt cele din foaie, la prețul actualizării ei. Media e coloana A a foii; mediana e calculată "
                                "din aceleași companii și nu e trasă de extreme (un singur P/E foarte mare ridică media, nu și mediana).")
             de_ratio = info.get('debtToEquity')
-            de_display = f"{de_ratio:.2f}%" if de_ratio is not None else "N/A"
+            de_display = f"{ro(de_ratio):.2f}%" if de_ratio is not None else "N/A"
 
             with st.container():
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
@@ -3332,11 +3498,11 @@ def main():
                     st.metric("P/E Ratio", format_num(info.get('trailingPE')))
                     st.metric("Forward P/E", format_num(info.get('forwardPE')))
                     div_rate = info.get('dividendRate')
-                    div_display = f"{div_rate} ({ (div_rate/curr_price*100):.2f}%)" if (div_rate and curr_price) else "N/A"
+                    div_display = f"{ro(div_rate):.2f} ({ro((div_rate/curr_price*100)):.2f}%)" if (div_rate and curr_price) else "N/A"
                     st.metric("Dividend (Randament)", div_display)
                     st.metric("P/BV", format_num(info.get('priceToBook')))
                     gn_calc = (info.get('trailingPE', 0) or 0) * (info.get('priceToBook', 0) or 0)
-                    st.metric("GN (Graham)", f"{gn_calc:.2f}" if gn_calc > 0 else "N/A")
+                    st.metric("GN (Graham)", f"{ro(gn_calc):.2f}" if gn_calc > 0 else "N/A")
                     st.metric("EPS", format_num(info.get('trailingEps')))
                     st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')))
                 with c_prof:
@@ -3423,7 +3589,7 @@ def main():
                                 name='Marja Netă (%)', mode='lines+markers+text',
                                 line=dict(color='#FFAB00', width=3),
                                 marker=dict(size=10, symbol='diamond', color='#FFAB00', line=dict(width=1, color='white')),
-                                text=df_plot['Net Margin'].apply(lambda x: f"{x:.1f}%"),
+                                text=df_plot['Net Margin'].apply(lambda x: f"{ro(x):.1f}%"),
                                 textposition='top center',
                                 textfont=dict(color='#FFAB00', weight='bold')
                             ), secondary_y=True)
@@ -3444,7 +3610,7 @@ def main():
                             fig.update_yaxes(title_text="", showgrid=True, gridcolor='#30363D', secondary_y=False)
                             fig.update_yaxes(title_text="Marjă (%)", showgrid=False, ticksuffix="%", color="#FFAB00", secondary_y=True)
                             
-                            st.plotly_chart(fig, width='stretch')
+                            plot_ro(fig, width='stretch')
 
                         with tab_anual:
                             draw_financial_chart(df_ann, "Evoluție Anuală")
@@ -3524,10 +3690,10 @@ def main():
                 if p_own is None:
                     p_col.metric(p_title, "N/A")
                 elif p_diff is None:
-                    p_col.metric(p_title, p_fmt.format(p_own), "fără mediană de comparație", delta_color="off")
+                    p_col.metric(p_title, p_fmt.format(ro(p_own)), "fără mediană de comparație", delta_color="off")
                 else:
-                    p_col.metric(p_title, p_fmt.format(p_own),
-                                 f"{p_diff * 100:+.0f}% față de mediana {p_fmt.format(p_med)} (n={p_n})", delta_color="off")
+                    p_col.metric(p_title, p_fmt.format(ro(p_own)),
+                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})", delta_color="off")
 
             st.write("")
 
@@ -3615,7 +3781,7 @@ def main():
                 if rec_mean:
                     pos_p = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
                     st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left:{pos_p}%;"></div></div>""", unsafe_allow_html=True)
-                st.metric("Preț Țintă (Mediu)", f"{target} {info.get('currency','USD')}" if target else "N/A")
+                st.metric("Preț Țintă (Mediu)", f"{ro(target):,.2f} {info.get('currency','USD')}" if target else "N/A")
 
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
@@ -3625,7 +3791,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
-                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': '{:.2f}', 'Realizat': '{:.2f}', 'Diferență': '{:.2f}', 'Surpriză %': '{:.2%}'}), width='stretch')
+                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
                 else: st.info("Date earnings indisponibile.")
             
             # --- MODUL NOU: ANALIZA VOLUMULUI INSTITUȚIONAL ---
@@ -3646,7 +3812,7 @@ def main():
                     st.markdown(f"""
                         <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {v_color}; text-align:center;">
                             <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Volum Relativ (RVOL)</p>
-                            <h1 style="color:{v_color}; margin:10px 0;">{rvol:.2f}x</h1>
+                            <h1 style="color:{v_color}; margin:10px 0;">{ro(rvol):.2f}x</h1>
                         </div>
                     """, unsafe_allow_html=True)
 
@@ -3661,7 +3827,7 @@ def main():
 
                     # Afișăm și prețul pentru context
                     day_change = ((hist['Close'].iloc[-1] / hist['Close'].iloc[-2]) - 1) * 100
-                    st.write(f"Variație Preț: **{day_change:+.2f}%**")
+                    st.write(f"Variație Preț: **{ro(day_change):+.2f}%**")
                     if rvol > 1.3 and day_change > 1.5:
                         st.markdown("🚀 **CONCLUZIE:** Achiziție agresivă detectată (Bullish Breakout).")
                     elif rvol > 1.3 and day_change < -1.5:
@@ -3697,7 +3863,7 @@ def main():
                     st.markdown(f"""
                     <div style='background:#161B22; padding:20px; border-radius:15px; border-top: 4px solid {i_col}; text-align:center; height:130px;'>
                         <p style='color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;'>Dețineri Instituționale Totale</p>
-                        <h2 style='margin:10px 0; color:{i_col};'>{inst_percent:.2f}%</h2>
+                        <h2 style='margin:10px 0; color:{i_col};'>{ro(inst_percent):.2f}%</h2>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -3711,15 +3877,15 @@ def main():
                         textinfo='none'
                     )])
                     fig_mini.update_layout(height=130, margin=dict(t=0, b=0, l=0, r=0), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_mini, width='stretch')
+                    plot_ro(fig_mini, width='stretch')
 
                 # Rândul 2: Tabelul Nominal (Balenele)
                 st.markdown("#### 🏛️ Top 10 Deținători Instituționali")
                 if not df_inst_list.empty:
                     st.dataframe(
                         df_inst_list.style.format({
-                            'Deținere (%)': '{:.2f}%',
-                            'Valoare ($)': '${:,.0f}'
+                            'Deținere (%)': ro_spec('.2f', '%'),
+                            'Valoare ($)': ro_spec(',.0f', ' USD')
                         }), 
                         hide_index=True, 
                         width='stretch'
@@ -3797,7 +3963,7 @@ def main():
             )
             if dcf_in["fcf_cagr"] is not None and len(dcf_in["fcf_history"]) >= 2:
                 ctrl1.caption(
-                    f"Reper: FCF a crescut cu {dcf_in['fcf_cagr'] * 100:.1f}% pe an între "
+                    f"Reper: FCF a crescut cu {ro(dcf_in['fcf_cagr'] * 100):.1f}% pe an între "
                     f"{dcf_in['fcf_history'].index[0]:%Y} și {dcf_in['fcf_history'].index[-1]:%Y} "
                     f"({len(dcf_in['fcf_history'])} ani raportați)."
                 )
@@ -3805,7 +3971,7 @@ def main():
             use_wacc = False
             if wacc_res is not None:
                 use_wacc = ctrl2.toggle(
-                    f"Folosește WACC calculat ({wacc_res['wacc'] * 100:.1f}%)",
+                    f"Folosește WACC calculat ({ro(wacc_res['wacc'] * 100):.1f}%)",
                     value=True, key="v_final_use_wacc"
                 )
             else:
@@ -3849,13 +4015,13 @@ def main():
             graham_calc = fund.graham_revised(num(info, 'trailingEps'), growth_val, graham_y)
             graham_num = fund.graham_number(num(info, 'trailingEps'), num(info, 'bookValue'))
             if graham_calc is not None:
-                graham_note = (f"Y = {graham_y:.2f}%" + (f" · creștere plafonată la {fund.GRAHAM_MAX_GROWTH:.0f}%"
+                graham_note = (f"Y = {ro(graham_y):.2f}%" + (f" · creștere plafonată la {ro(fund.GRAHAM_MAX_GROWTH):.0f}%"
                                                          if growth_val > fund.GRAHAM_MAX_GROWTH else ""))
             elif (num(info, 'trailingEps') or 0) <= 0:
                 graham_note = "EPS lipsă sau negativ"
             else:
                 graham_note = graham_y_label
-            graham_num_txt = f"Nr. Graham: {graham_num:.2f}" if graham_num is not None else "Nr. Graham: N/A"
+            graham_num_txt = f"Nr. Graham: {ro(graham_num):.2f}" if graham_num is not None else "Nr. Graham: N/A"
             
             # 2. DCF pe free cash flow (analytics/fundamentals.py). None = modelul nu se aplică.
             dcf_res = fund.dcf_fcf(fcf_base, growth_val / 100, discount_rate, gterm_val / 100,
@@ -3886,14 +4052,14 @@ def main():
                 # Verde / galben / roșu; galben = în banda neutră de ±10% (fund.VALUATION_NEUTRAL_BAND).
                 VERDICT_COLORS = {"under": "#3FB950", "fair": "#D29922", "over": "#F85149"}
                 with cv1:
-                    st.markdown(_value_card("Preț curent", f"{price_f:.2f}", "#30363D", unit=t_curr), unsafe_allow_html=True)
+                    st.markdown(_value_card("Preț curent", f"{ro(price_f):.2f}", "#30363D", unit=t_curr), unsafe_allow_html=True)
 
                 with cv2:
                     g_verdict, g_zone, _ = fund.valuation_verdict(price_f, graham_calc)
                     if graham_calc is not None and g_verdict is not None:
                         g_col = VERDICT_COLORS[g_zone]
                         st.markdown(_value_card(
-                            "Graham (formula revizuită)", f"{graham_calc:.2f}", g_col,
+                            "Graham (formula revizuită)", f"{ro(graham_calc):.2f}", g_col,
                             verdict=g_verdict,
                             note=f"{graham_note} · {graham_num_txt}"), unsafe_allow_html=True)
                     else:
@@ -3905,16 +4071,16 @@ def main():
                     if dcf_calc is not None and d_zone == "none":
                         # FCF curent deformat: valoarea rămâne afișată, dar cardul e gri și fără etichetă.
                         st.markdown(_value_card(
-                            "Valoare justă (DCF pe FCF)", f"{dcf_calc:.2f}", "#30363D",
+                            "Valoare justă (DCF pe FCF)", f"{ro(dcf_calc):.2f}", "#30363D",
                             verdict=d_verdict,
                             note=(f"Vezi varianta „{avg_label}”." if avg_label
                                   else "Media anilor fiscali lipsește: fără bază de comparație.")), unsafe_allow_html=True)
                     elif dcf_calc is not None and d_verdict is not None:
                         d_col = VERDICT_COLORS[d_zone]
                         st.markdown(_value_card(
-                            "Valoare justă (DCF pe FCF)", f"{dcf_calc:.2f}", d_col,
+                            "Valoare justă (DCF pe FCF)", f"{ro(dcf_calc):.2f}", d_col,
                             verdict=d_verdict,
-                            note=f"scont {discount_rate * 100:.1f}% · g terminal {gterm_val:.1f}%"), unsafe_allow_html=True)
+                            note=f"scont {ro(discount_rate * 100):.1f}% · g terminal {ro(gterm_val):.1f}%"), unsafe_allow_html=True)
                     else:
                         st.markdown(_value_card("Valoare justă (DCF pe FCF)", "N/A", "#30363D",
                                                 note=dcf_res["reason"] or "Date insuficiente."), unsafe_allow_html=True)
@@ -3929,17 +4095,17 @@ def main():
                 r_grid = [discount_rate + d for d in (-0.02, -0.01, 0.0, 0.01, 0.02)]
                 g_grid = [0.01, 0.015, 0.02, 0.025, 0.03]
                 sens = fund.dcf_sensitivity(fcf_base, growth_val / 100, dcf_in["net_debt"], dcf_in["shares"], r_grid, g_grid)
-                sens.index = [f"scont {r * 100:.1f}%" for r in r_grid]
-                sens.columns = [f"g {g * 100:.1f}%" for g in g_grid]
+                sens.index = [f"scont {ro(r * 100):.1f}%" for r in r_grid]
+                sens.columns = [f"g {ro(g * 100):.1f}%" for g in g_grid]
 
                 def _sens_color(v):
                     if pd.isna(v) or not price_f:
                         return "color: #8B949E"
                     return "color: #3FB950" if v > price_f else "color: #F85149"
 
-                st.dataframe(sens.style.format("{:.2f}", na_rep="N/A").map(_sens_color), width='stretch')
+                st.dataframe(sens.style.format(ro_spec(",.2f")).map(_sens_color), width='stretch')
                 st.caption(
-                    f"Verde = peste prețul curent ({price_f:.2f} {t_curr}), roșu = sub. Rândul din mijloc e rata de scont folosită. "
+                    f"Verde = peste prețul curent ({ro(price_f):.2f} {t_curr}), roșu = sub. Rândul din mijloc e rata de scont folosită. "
                     "Dacă verdictul se schimbă între celule vecine, modelul nu susține o concluzie fermă."
                 )
 
@@ -3966,29 +4132,29 @@ def main():
 
                 st.markdown("**Rata de scont**")
                 if wacc_res is not None:
-                    kd_txt = f"{wacc_res['kd'] * 100:.2f}%" if wacc_res['kd'] is not None else "N/A"
-                    tax_txt = f"{wacc_res['tax'] * 100:.1f}%" if wacc_res['tax'] is not None else "N/A"
+                    kd_txt = f"{ro(wacc_res['kd'] * 100):.2f}%" if wacc_res['kd'] is not None else "N/A"
+                    tax_txt = f"{ro(wacc_res['tax'] * 100):.1f}%" if wacc_res['tax'] is not None else "N/A"
                     st.write(
-                        f"WACC = **{wacc_res['wacc'] * 100:.2f}%** "
-                        f"= {wacc_res['w_e'] * 100:.0f}% × cost capital propriu {wacc_res['ke'] * 100:.2f}% "
-                        f"+ {wacc_res['w_d'] * 100:.0f}% × cost datorie {kd_txt} × (1 − impozit {tax_txt})"
+                        f"WACC = **{ro(wacc_res['wacc'] * 100):.2f}%** "
+                        f"= {ro(wacc_res['w_e'] * 100):.0f}% × cost capital propriu {ro(wacc_res['ke'] * 100):.2f}% "
+                        f"+ {ro(wacc_res['w_d'] * 100):.0f}% × cost datorie {kd_txt} × (1 − impozit {tax_txt})"
                     )
                     st.write(
-                        f"Cost capital propriu (CAPM) = rată fără risc {wacc_res['rf'] * 100:.2f}% [{rf_label}] "
-                        f"+ beta {wacc_res['beta']:.2f} ({beta_label}) × primă de risc {wacc_res['erp'] * 100:.1f}% (ipoteză fixă)"
+                        f"Cost capital propriu (CAPM) = rată fără risc {ro(wacc_res['rf'] * 100):.2f}% [{rf_label}] "
+                        f"+ beta {ro(wacc_res['beta']):.2f} ({beta_label}) × primă de risc {ro(wacc_res['erp'] * 100):.1f}% (ipoteză fixă)"
                     )
                     for wacc_note in wacc_res["notes"]:
                         st.caption(f"Aproximare: {wacc_note}")
                 else:
-                    st.write(f"WACC indisponibil. Rata fără risc: {rf_label if rf_val is None else f'{rf_val * 100:.2f}% [{rf_label}]'}")
-                st.write(f"Rata de scont folosită în calcul: **{discount_rate * 100:.2f}%** ({'WACC calculat' if use_wacc else 'aleasă manual'}).")
+                    st.write(f"WACC indisponibil. Rata fără risc: {rf_label if rf_val is None else f'{ro(rf_val * 100):.2f}% [{rf_label}]'}")
+                st.write(f"Rata de scont folosită în calcul: **{ro(discount_rate * 100):.2f}%** ({'WACC calculat' if use_wacc else 'aleasă manual'}).")
 
                 if dcf_res["flows"]:
                     st.markdown("**Proiecția pe 5 ani**")
                     df_flows = pd.DataFrame(dcf_res["flows"])
                     df_flows = pd.DataFrame({
                         "An": df_flows["year"],
-                        "Creștere": df_flows["growth"].map(lambda v: f"{v * 100:.1f}%"),
+                        "Creștere": df_flows["growth"].map(lambda v: f"{ro(v * 100):.1f}%"),
                         "FCF proiectat": df_flows["fcf"].map(format_amount),
                         "Valoare actualizată": df_flows["pv"].map(format_amount),
                     })
@@ -3997,7 +4163,7 @@ def main():
                         f"Valoarea întreprinderii {format_amount(dcf_res['enterprise_value'])} "
                         f"= fluxuri actualizate {format_amount(dcf_res['pv_fcf'])} "
                         f"+ valoare terminală actualizată {format_amount(dcf_res['pv_terminal'])} "
-                        f"({dcf_res['terminal_share'] * 100:.0f}% din total). "
+                        f"({ro(dcf_res['terminal_share'] * 100):.0f}% din total). "
                         f"Minus datoria netă {format_amount(dcf_in['net_debt'])} "
                         f"= valoarea capitalului {format_amount(dcf_res['equity_value'])}."
                     )
@@ -4018,7 +4184,7 @@ def main():
             altman_res = calculate_altman_z(info, real_sym, fin)
             az_left, az_right = st.columns([1, 2])
             with az_left:
-                az_value = f"{altman_res['value']:.2f}" if altman_res["value"] is not None else "N/A"
+                az_value = f"{ro(altman_res['value']):.2f}" if altman_res["value"] is not None else "N/A"
                 az_title = f"Altman {altman_res['variant']}" if altman_res["variant"] else "Altman Z"
                 st.markdown(f"""
                 <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {altman_res['color']}; text-align:center;">
@@ -4043,11 +4209,11 @@ def main():
                             "X5": "X5 = venituri / active (în Z)",
                         }
                         st.dataframe(pd.DataFrame(
-                            [(az_names[k], "N/A" if v is None else f"{v:.3f}") for k, v in az_detail["components"].items()],
+                            [(az_names[k], "N/A" if v is None else f"{ro(v):.3f}") for k, v in az_detail["components"].items()],
                             columns=["Componentă", "Valoare"]), hide_index=True, width='stretch')
                         az_date = f"{az_detail['balance_date']:%d.%m.%Y}" if az_detail["balance_date"] is not None else "N/A"
-                        z_txt = f"{az_detail['z']:.2f}" if az_detail["z"] is not None else "N/A"
-                        z2_txt = f"{az_detail['z2']:.2f}" if az_detail["z2"] is not None else "N/A"
+                        z_txt = f"{ro(az_detail['z']):.2f}" if az_detail["z"] is not None else "N/A"
+                        z2_txt = f"{ro(az_detail['z2']):.2f}" if az_detail["z2"] is not None else "N/A"
                         st.caption(f"Bilanț: {az_date} · Z = {z_txt} · Z'' = {z2_txt}. Model statistic din 1968/1995: "
                                    "un semnal de avertizare, nu o predicție.")
                         if az_detail["retained_is_proxy"]:
@@ -4084,11 +4250,11 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 nd_ebitda = lev["net_debt_to_ebitda"]
-                st.metric("Datorie netă / EBITDA", "N/A" if nd_ebitda is None else f"{nd_ebitda:.2f}x",
+                st.metric("Datorie netă / EBITDA", "N/A" if nd_ebitda is None else f"{ro(nd_ebitda):.2f}x",
                           help="Câți ani de EBITDA ar acoperi datoria netă. Negativ = numerar net. N/A când EBITDA e negativ sau lipsește. "
                                f"Datorie netă {format_amount(lev['net_debt'])}, EBITDA {format_amount(lev['ebitda'])}.")
                 int_cov = lev["interest_coverage"]
-                st.metric("Acoperirea dobânzii", "N/A" if int_cov is None else f"{int_cov:.1f}x",
+                st.metric("Acoperirea dobânzii", "N/A" if int_cov is None else f"{ro(int_cov):.1f}x",
                           help="EBIT împărțit la cheltuielile cu dobânzile raportate. Sub 1,5x profitul operațional abia acoperă dobânda. "
                                f"EBIT {format_amount(lev['ebit'])}, dobânzi {format_amount(lev['interest_expense'])}. "
                                + ("N/A aici: dobânzile raportate depășesc 25% din datorie, deci rândul include și alte costuri financiare."
@@ -4117,8 +4283,8 @@ def main():
             audit_report = generate_advanced_audit_v2(info, alpha_val, beta_val, h_score)
             
             # 2. PREGĂTIM DATELE PENTRU AFIȘARE (Plasa de siguranță anti-crash)
-            display_beta = f"{beta_val:.2f}" if beta_val is not None else "N/A"
-            display_alpha = f"{alpha_val*100:.1f}%" if alpha_val is not None else "N/A"
+            display_beta = f"{ro(beta_val):.2f}" if beta_val is not None else "N/A"
+            display_alpha = f"{ro(alpha_val*100):.1f}%" if alpha_val is not None else "N/A"
 
             # 3. STABILIM CULOAREA SCORULUI
             if h_score is None:
@@ -4183,7 +4349,7 @@ def main():
                     st.markdown(f"""
                     <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {mos_color}; text-align:center;">
                         <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Margin of Safety</p>
-                        <h1 style="color:{mos_color}; margin:10px 0; font-size:40px;">{mos_val:.1f}%</h1>
+                        <h1 style="color:{mos_color}; margin:10px 0; font-size:40px;">{ro(mos_val):.1f}%</h1>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -4196,7 +4362,7 @@ def main():
                     else:
                         st.info(mos_verdict)
                     
-                    st.write(f"💵 **Preț Actual:** {current_p:.2f} | 🎯 **Fair Value:** {target_val:.2f}")
+                    st.write(f"💵 **Preț Actual:** {ro(current_p):.2f} | 🎯 **Fair Value:** {ro(target_val):.2f}")
                     st.progress(max(0.0, min(mos_val / 100.0, 1.0)))
             else:
                 st.warning(f"⚠️ Marja de siguranță indisponibilă: {dcf_res['reason'] or 'lipsește prețul curent.'}")
@@ -4206,8 +4372,8 @@ def main():
             st.subheader("🧬 Sustenabilitate și Calitatea Profitului")
             
             div_verdicts, q_ratio, p_ratio = analyze_dividend_quality(info)
-            q_display = f"{q_ratio:.2f}x" if q_ratio is not None else "N/A"
-            p_display = f"{p_ratio:.1f}%" if p_ratio is not None else "N/A"
+            q_display = f"{ro(q_ratio):.2f}x" if q_ratio is not None else "N/A"
+            p_display = f"{ro(p_ratio):.1f}%" if p_ratio is not None else "N/A"
             if q_ratio is None:
                 q_color = "#8B949E"
             else:
@@ -4268,7 +4434,7 @@ def main():
                     
                     # Extragem valoarea și verificăm dacă este număr
                     emp = info.get('fullTimeEmployees')
-                    emp_display = f"{emp:,}" if isinstance(emp, (int, float)) else "N/A"
+                    emp_display = f"{ro(emp):,}" if isinstance(emp, (int, float)) else "N/A"
                     
                     st.write(f"**Angajați:** {emp_display}")
                     st.write(f"**Sediu:** {info.get('city', 'N/A')}, {info.get('country', 'N/A')}")
@@ -4376,7 +4542,7 @@ def main():
                         
                         st.markdown(f"""
                         <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {c_ai}; text-align:center;'>
-                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{s_score:.2f}</h1>
+                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{ro(s_score):.2f}</h1>
                             <div style='color:{c_ai}; font-weight:bold; font-size:18px; margin-top:5px;'>{status_text}</div>
                             <p style='color:#8B949E; font-size:11px; margin-top:10px;'>Încredere Model: {confidence} ({len(c_news_ai)} surse)</p>
                         </div>
@@ -4384,11 +4550,11 @@ def main():
                         <div style='margin-top: 15px; padding: 15px; background: #21262D; border-radius: 10px; border-left: 3px solid #58A6FF;'>
                             <p style='color:#8B949E; font-size: 11px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Ghid Intervale (Scală -1 la +1)</p>
                             <div style='color:#C9D1D9; font-size: 13px; line-height: 1.8;'>
-                                <div><span style='color:#3FB950;'>■</span> <b>+0.25 la +1.00:</b> Euforie media</div>
-                                <div><span style='color:#3FB950; opacity:0.7;'>■</span> <b>+0.05 la +0.24:</b> Optimism moderat</div>
-                                <div><span style='color:#8B949E;'>■</span> <b>-0.05 la +0.05:</b> Zgomot neutru</div>
-                                <div><span style='color:#F85149; opacity:0.7;'>■</span> <b>-0.24 la -0.06:</b> Îngrijorare / Pesimism</div>
-                                <div><span style='color:#F85149;'>■</span> <b>-1.00 la -0.25:</b> Panică extremă</div>
+                                <div><span style='color:#3FB950;'>■</span> <b>+0,25 la +1,00:</b> Euforie media</div>
+                                <div><span style='color:#3FB950; opacity:0.7;'>■</span> <b>+0,05 la +0,24:</b> Optimism moderat</div>
+                                <div><span style='color:#8B949E;'>■</span> <b>-0,05 la +0,05:</b> Zgomot neutru</div>
+                                <div><span style='color:#F85149; opacity:0.7;'>■</span> <b>-0,24 la -0,06:</b> Îngrijorare / Pesimism</div>
+                                <div><span style='color:#F85149;'>■</span> <b>-1,00 la -0,25:</b> Panică extremă</div>
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
@@ -4407,57 +4573,7 @@ def main():
                     else:
                         st.warning("Modelul AI nu a putut genera predicția.")
             
-            # ==================================================
-            # CALCUL RATING FINAL (CONCLUZIA)
-            # ==================================================
-            st.markdown("---")
-            st.subheader("🎯 Verdict Final: Rating de Investiție")
-
-            # Pregătim variabilele (inițializare explicită — nu mai depindem de locals())
-            try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                curr_spread = t_10y - t_3m
-            except:
-                curr_spread = 0.5
-
-            s_inst = inst_percent  # None = acționariat indisponibil
-            s_mos = mos_val
-            s_rvol = rvol if 'rvol' in dir() or rvol is not None else 1.0
-            
-            # Apelăm funcția PRO folosind noul spread 10Y-3M
-            final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos)
-            
-            r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
-            r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
-            # Fără acționariat, DCF, ROE și datorii, scorul ar fi doar 50 + macro: nu e un verdict.
-            if s_inst is None and s_mos is None and num(info, 'returnOnEquity') is None and num(info, 'debtToEquity') is None:
-                r_color, r_label = "#8B949E", "DATE INSUFICIENTE"
-
-            # Afișare UI
-            c_res1, c_res2 = st.columns([1, 2])
-            with c_res1:
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {r_color}; text-align:center;">
-                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Investiție</p>
-                        <h1 style="color:{r_color}; margin:15px 0; font-size:54px;">{final_score}</h1>
-                        <div style="background:{r_color}22; color:{r_color}; padding:5px; border-radius:5px; font-weight:bold;">{r_label}</div>
-                    </div>
-                """, unsafe_allow_html=True)
-
-            with c_res2:
-                st.markdown("#### 🔍 Argumente pentru acest Scor:")
-                for item in highlights:
-                    st.write(item)
-
-                # --- AFISARE SCOR SĂNĂTATE FINANCIARĂ UNIFORMIZAT ---
-                # Stabilim pictograma în funcție de nota de sănătate (h_score)
-                if h_score is None:
-                    st.write("⚪ **Sănătate Financiară:** indisponibilă (lipsesc datoriile, ROE și lichiditatea).")
-                else:
-                    h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
-                    st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
-
+            # Verdict Final (rating vechi): mutat în arhiva de la „Decizie Master AI”.
             st.markdown("---")
             
             # ==================================================
@@ -4472,7 +4588,7 @@ def main():
                 if fig_season is not None:
                     s_col1, s_col2 = st.columns([2, 1])
                     with s_col1:
-                        st.plotly_chart(fig_season, width='stretch')
+                        plot_ro(fig_season, width='stretch')
                     
                     with s_col2:
                         # Extragem extremele pentru a oferi un verdict clar utilizatorului
@@ -4485,9 +4601,9 @@ def main():
                         best_n, worst_n = int(best_m['Ani']), int(worst_m['Ani'])
                         best_wins = round(best_m['Win Rate (%)'] * best_n / 100)
                         worst_wins = round(worst_m['Win Rate (%)'] * worst_n / 100)
-                        st.success(f"**🌟 Cea mai bună lună: {best_m['Luna']}**\n\nIstoric, prețul a crescut în **{best_wins} din {best_n} ani** ({best_m['Win Rate (%)']:.0f}%), cu un randament mediu de **{best_m['Randament Mediu (%)']:+.2f}%**.")
+                        st.success(f"**🌟 Cea mai bună lună: {best_m['Luna']}**\n\nIstoric, prețul a crescut în **{best_wins} din {best_n} ani** ({ro(best_m['Win Rate (%)']):.0f}%), cu un randament mediu de **{ro(best_m['Randament Mediu (%)']):+.2f}%**.")
                         
-                        st.error(f"**🚨 Cea mai slabă lună: {worst_m['Luna']}**\n\nIstoric, prețul a crescut în doar **{worst_wins} din {worst_n} ani** ({worst_m['Win Rate (%)']:.0f}%), cu un randament mediu de **{worst_m['Randament Mediu (%)']:+.2f}%**.")
+                        st.error(f"**🚨 Cea mai slabă lună: {worst_m['Luna']}**\n\nIstoric, prețul a crescut în doar **{worst_wins} din {worst_n} ani** ({ro(worst_m['Win Rate (%)']):.0f}%), cu un randament mediu de **{ro(worst_m['Randament Mediu (%)']):+.2f}%**.")
                         
                         st.info("📉 **Cum folosești acest modul:** Elimină ghicitul și emoția. Dacă dorești să cumperi această acțiune, dar te afli într-o lună cu Win Rate sub 40%, șansele matematice sunt împotriva ta. Așteaptă luna verde pentru a deschide o poziție la un preț statistic favorabil.")
                 else:
@@ -4501,206 +4617,375 @@ def main():
             st.subheader("🕵️‍♂️ Raze X: Fluxul de Bani din Opțiuni (Pro)")
 
             from ai_engine import get_options_analysis_ai
-            with st.spinner("Se decodează contractele Market Makerilor..."):
-                # Folosim simbolul real identificat anterior
-                opt_data, opt_msg = get_options_analysis_ai(real_sym)
+            with st.spinner("Se citește lanțul de opțiuni..."):
+                # Folosim simbolul real identificat anterior; dividendul anual pentru q (Black-Scholes)
+                opt_data, opt_msg = get_options_analysis_ai(real_sym, num(info, 'dividendRate'))
             if opt_data:
-                # Afișăm ora la care au fost preluate datele din Yahoo
-                st.caption(f"⏱️ Date opțiuni actualizate la ora: {opt_data.get('timestamp', 'N/A')}")
-                
-                # ... restul codului de afișare GEX, IV, etc.    
-            if opt_data:
-                # FIX DEFINIȚIE PREȚ: Luăm prețul curent din variabila 'hist' deja existentă
-                current_market_price = hist['Close'].iloc[-1] if not hist.empty else 0
+                def _f(v, fmt, na="N/A"):
+                    return na if v is None else format(ro(v), fmt)
 
-                # --- 1. CARD GEX (NOUA FUNCȚIONALITATE) ---
-                st.markdown(f"""
+                spot_opt = opt_data['spot']
+                q_txt = ("q = 0 presupus (Yahoo nu dă dividendul anual)" if opt_data['q_assumed']
+                         else f"dividend continuu q = {ro(opt_data['q']*100):.2f}%")
+                r_txt = (f"r = {ro(opt_data['r']*100):.2f}% din {opt_data['r_src']} (proxy)" if opt_data['r'] is not None
+                         else "r indisponibil → greeks și GEX N/A")
+                st.caption(f"⏱️ Date opțiuni la ora {opt_data.get('timestamp', 'N/A')} · expirarea **{opt_data['expiration']}** "
+                           f"({opt_data['days']} zile; aleasă din 20–45, cea mai apropiată de 30) · preț {ro(spot_opt):.2f} · {r_txt} · {q_txt}")
+                if opt_data['missing']:
+                    st.caption("Lipsesc: " + "; ".join(opt_data['missing']) + ".")
+
+                # --- 1. CARD GEX (estimare cu gamma Black-Scholes) ---
+                gex_val = opt_data['net_gex']
+                gex_txt = f"{ro(gex_val):,.0f} USD / 1%" if gex_val is not None else "N/A"
+                gex_head, _, gex_body = opt_data['gex_verdict'].partition(': ')
+                st.markdown(compact_html(f"""
                     <div style="background:{opt_data['gex_color']}22; padding:25px; border-radius:15px; border-left: 10px solid {opt_data['gex_color']}; margin-bottom:25px; border: 1px solid {opt_data['gex_color']}44;">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:bold;">Expunere Netă la Radiații Gamma (Proxy)</p>
-                                <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{opt_data['net_gex']:,.0f} unități</h1>
+                                <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:bold;">Expunere netă la gamma (GEX, estimare) · {opt_data['gex_n']} contracte</p>
+                                <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{gex_txt}</h1>
                             </div>
                             <div style="text-align:right;">
                                 <span style="background:{opt_data['gex_color']}; color:white; padding:8px 16px; border-radius:25px; font-weight:bold; font-size:13px;">
-                                    {opt_data['gex_verdict'].split(':')[0]}
+                                    {gex_head}
                                 </span>
                             </div>
                         </div>
-                        <p style="margin:10px 0 0 0; font-size:15px; color:#C9D1D9;">{opt_data['gex_verdict'].split(': ')[1]}</p>
+                        <p style="margin:10px 0 0 0; font-size:15px; color:#C9D1D9;">{gex_body}</p>
                     </div>
-                """, unsafe_allow_html=True)
+                """), unsafe_allow_html=True)
+                st.caption("GEX = Σ gamma Black-Scholes × open interest × 100 × preț² × 1%, call cu +, put cu −, pe expirarea aleasă. "
+                           "Arată cu cât s-ar schimba delta totală a dealerilor (în USD) la o mișcare de 1% a prețului. "
+                           "Semnul presupune că dealerii sunt long call și short put: e o convenție, nu poziția lor reală.")
 
                 # --- RÂNDUL 1: VITEZOMETRU ȘI METRICE ---
                 col_gau, col_met = st.columns([1.5, 2])
 
                 with col_gau:
-                    # Preluăm culoarea din opt_data calculată mai sus
-                    iv_display_color = opt_data.get('iv_color', '#FFFFFF')
-                    
-                    fig_iv = go.Figure(go.Indicator(
-                        mode = "gauge+number",
-                        value = opt_data['iv'],
-                        domain = {'x': [0, 1], 'y': [0, 1]},
-                        title = {'text': "Termometru IV", 'font': {'size': 18, 'color': '#8B949E'}},
-                        # --- AICI COLORĂM NUMĂRUL (Procentul) ---
-                        number = {
-                            'suffix': "%", 
-                            'font': {'color': iv_display_color, 'size': 50} 
-                        },
-                        gauge = {
-                            'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
-                            'bar': {'color': iv_display_color}, # Bara urmărește culoarea textului
-                            'bgcolor': "rgba(0,0,0,0)",
-                            'borderwidth': 2,
-                            'bordercolor': "#30363D",
-                            'steps': [
-                                {'range': [0, 25], 'color': 'rgba(63, 185, 80, 0.1)'},
-                                {'range': [25, 50], 'color': 'rgba(210, 153, 34, 0.1)'},
-                                {'range': [50, 100], 'color': 'rgba(248, 81, 73, 0.1)'}
-                            ]
-                        }
-                    ))
-                    fig_iv.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_iv, width='stretch')
+                    iv_display_color = opt_data.get('iv_color', '#8B949E')
+                    if opt_data['iv'] is not None:
+                        fig_iv = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = opt_data['iv'],
+                            domain = {'x': [0, 1], 'y': [0, 1]},
+                            title = {'text': f"IV la bani · {opt_data['days']} zile", 'font': {'size': 18, 'color': '#8B949E'}},
+                            number = {
+                                'suffix': "%",
+                                'font': {'color': iv_display_color, 'size': 50}
+                            },
+                            gauge = {
+                                'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                                'bar': {'color': iv_display_color},
+                                'bgcolor': "rgba(0,0,0,0)",
+                                'borderwidth': 2,
+                                'bordercolor': "#30363D",
+                                'steps': [
+                                    {'range': [0, 25], 'color': 'rgba(63, 185, 80, 0.1)'},
+                                    {'range': [25, 50], 'color': 'rgba(210, 153, 34, 0.1)'},
+                                    {'range': [50, 100], 'color': 'rgba(248, 81, 73, 0.1)'}
+                                ]
+                            }
+                        ))
+                        fig_iv.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)')
+                        plot_ro(fig_iv, width='stretch')
+                        st.caption(f"IV la bani = media IV call și put interpolate la preț ({opt_data['iv_sides']} din 2 părți cu cotații). "
+                                   "Culorile folosesc praguri absolute 25% / 50% · netestat.")
+                    else:
+                        st.metric("IV la bani", "N/A", help="Nu există cotații cu bid > 0 care să încadreze prețul curent pe expirarea aleasă.")
 
                 with col_met:
+                    oi_pc, vol_pc = opt_data['oi_pc_ratio'], opt_data['vol_pc_ratio']
                     m1, m2 = st.columns(2)
-                    m1.metric("Put/Call Ratio (OI)", f"{opt_data['oi_pc_ratio']:.2f}",
-                              help="Open Interest (Banii blocați): Raportul total al pariurilor pe scădere (Puts) vs creștere (Calls). Sub 0.7 = Optimism (Bullish); Peste 1.0 = Pesimism/Frică (Bearish).")
-                    m2.metric("Put/Call Ratio (Volum)", f"{opt_data['vol_pc_ratio']:.2f}",
-                              help="Volum (Banii de azi): Indică panica sau entuziasmul intraday. Se mișcă mai rapid decât OI. Valori mari bruste indică vânzări de panică.")
-                    
+                    m1.metric("Put/Call (open interest)", _f(oi_pc, ".2f"),
+                              help="Σ open interest put / Σ open interest call, pe expirarea aleasă. Poziții deschise acumulate. "
+                                   "Pragurile <0,7 optimism / >1,1 pesimism sunt convenții de piață, netestate aici. N/A = fără open interest la call-uri.")
+                    m2.metric("Put/Call (volum)", _f(vol_pc, ".2f"),
+                              help="Σ volum put / Σ volum call, pe expirarea aleasă, în ședința curentă. Se mișcă mai repede decât open interest-ul. N/A = fără volum la call-uri.")
+
                     m3, m4 = st.columns(2)
                     mp = opt_data['max_pain']
-                    mp_display = f"${mp:.1f}" if mp is not None else "N/A"
-                    if mp is not None and current_market_price > 0:
-                        diff_mp = ((mp / current_market_price) - 1) * 100
-                        m3.metric("Preț Max Pain", mp_display, f"{diff_mp:.1f}% față de preț",
-                                  help="Strike-ul la care opțiunile acestei expirări ar valora cel mai puțin, calculat din open interest. Este un reper, nu o țintă de preț.")
+                    mp_display = f"{ro(mp):.2f} USD" if mp is not None else "N/A"
+                    mp_help = ("Strike-ul la care opțiunile acestei expirări ar valora cel mai puțin la expirare, "
+                               "calculat din open interest. Este un reper, nu o țintă de preț.")
+                    if mp is not None:
+                        diff_mp = ((mp / spot_opt) - 1) * 100
+                        m3.metric("Preț Max Pain", mp_display, f"{ro(diff_mp):.1f}% față de preț", help=mp_help)
                     else:
-                        m3.metric("Preț Max Pain", mp_display)
-                    m4.metric("Data Expirării", opt_data['expiration'])
-                # --- INTEGRARE IV RANK & PERCENTILE ---
+                        m3.metric("Preț Max Pain", mp_display, help=mp_help)
+                    m4.metric("Expirare", opt_data['expiration'], f"{opt_data['days']} zile", delta_color="off",
+                              help="Expirarea cu 20–45 de zile rămase cea mai apropiată de 30. Expirările de câteva zile au IV deformat de timpul scurt.")
+
+                # --- IV RANK, PERCENTILE ȘI IV / VOLATILITATE REALIZATĂ ---
                 with col_met:
-                    # Obținem datele din motorul AI
-                    from ai_engine import calculate_iv_rank_percentile
-                    iv_rank, iv_pct = calculate_iv_rank_percentile(real_sym, opt_data['iv'])
-                    
-                    st.write("") # Spațiu vizual
-                    c_rank1, c_rank2 = st.columns(2)
-                    
-                    # Interpretare culori
-                    rank_col = "#F85149" if iv_rank > 70 else ("#3FB950" if iv_rank < 30 else "#D29922")
-                    
-                    c_rank1.metric("IV Rank", f"{iv_rank:.1f}%", 
-                                help="Unde se află IV-ul de azi între minimul și maximul din ultimul an.")
-                    c_rank2.metric("IV Percentile", f"{iv_pct:.1f}%",
-                                help="Câte zile din ultimul an au avut un IV mai mic decât cel de azi.")
+                    st.write("")
+                    hv30 = opt_calc.realized_vol(hist['Close']) if hist is not None and not hist.empty else None
+                    iv_hv = (opt_data['iv'] / (hv30 * 100)) if (opt_data['iv'] is not None and hv30) else None
+                    # IV Rank din istoricul IV la bani (foaia IV_istoric), salvat zilnic în timpul ședinței SUA.
+                    iv_store = update_iv_history(real_sym, opt_data['iv'])
+                    rk = iv_store["rank"]
+                    iv_rank = rk["rank"]
+                    iv_days = rk["n"]
+                    obs_txt = f"{rk['n']} zile de istoric" + ("" if rk["n"] >= opt_calc.MIN_IV_OBS else f" (minimum {opt_calc.MIN_IV_OBS})")
+                    c_rank1, c_rank2, c_rank3 = st.columns(3)
+                    c_rank1.metric("IV Rank", _f(iv_rank, ".1f") + ("%" if iv_rank is not None else ""), obs_txt, delta_color="off",
+                                   help="(IV de azi − minim) / (maxim − minim) pe ultimul an, din istoricul IV la bani salvat zilnic în foaia IV_istoric. "
+                                        f"Sub {opt_calc.MIN_IV_OBS} de zile de istoric nu se calculează (N/A).")
+                    c_rank2.metric("IV Percentile", _f(rk["percentile"], ".1f") + ("%" if rk["percentile"] is not None else ""),
+                                   obs_txt, delta_color="off",
+                                   help="Procentul zilelor din ultimul an cu IV la bani mai mic decât azi. Cere același istoric ca IV Rank.")
+                    c_rank3.metric("IV / volatilitate realizată 30z", _f(iv_hv, ".2f"),
+                                   f"realizată {ro(hv30*100):.1f}%" if hv30 else None, delta_color="off",
+                                   help="IV la bani / volatilitatea realizată pe ultimele 30 de zile calendaristice (randamente log, √252). "
+                                        "Peste 1: piața plătește pentru mai multă mișcare decât a avut acțiunea recent. Nu este IV Rank.")
 
-                # --- VERDICT FINAL OPȚIUNI (ACTUALIZAT) ---
-                if iv_rank > 80:
-                    st.warning(f"💎 **STRATEGIE SHORT VOL:** Opțiunile sunt la extreme istorice. Este un moment excelent pentru a VINDE volatilitate (ex: Covered Calls), nu pentru a cumpăra.")
-                elif iv_rank < 20:
-                    st.success(f"🛒 **STRATEGIE LONG VOL:** Opțiunile sunt neobișnuit de ieftine față de istoric. Moment ideal pentru achiziție de protecție (Puts) sau speculă (Calls).")    
+                st.caption(iv_store["note"])
 
-                # --- RÂNDUL 2: VERDICTUL INTELIGENT (RESTABILIT) ---
-                oi_pc = opt_data['oi_pc_ratio']
-                vol_pc = opt_data['vol_pc_ratio']
-                iv_val = opt_data['iv']
+                # --- VERDICT IV RANK (praguri netestate; activ doar când există istoric IV) ---
+                if iv_rank is not None and iv_rank > 80:
+                    st.warning("💎 **IV Rank peste 80 (netestat):** opțiunile sunt scumpe față de propriul istoric pe un an; vânzarea de volatilitate (ex. covered calls) e în avantaj față de cumpărare.")
+                elif iv_rank is not None and iv_rank < 20:
+                    st.success("🛒 **IV Rank sub 20 (netestat):** opțiunile sunt ieftine față de propriul istoric pe un an; cumpărarea de protecție (put) sau de call-uri costă mai puțin.")
 
-                if oi_pc < 0.7 and vol_pc < 0.7:
-                    v_text, v_col = "🚀 **BULLISH CONVINCED:** Instituțiile cumpără masiv. Trend ascendent solid.", "#3FB950"
-                elif oi_pc < 0.7 and vol_pc > 1.1:
-                    v_text, v_col = "🔄 **DIVERGENȚĂ:** Optimism pe termen lung, dar azi apare frică (Puts). Posibilă corecție!", "#D29922"
-                elif oi_pc > 1.1:
-                    v_text, v_col = "🐻 **BEARISH DOMINANT:** Piața pariază pe scădere. Opțiunile Put domină peisajul.", "#F85149"
+                # --- GREEKS LA BANI ȘI MIȘCAREA AȘTEPTATĂ ---
+                st.markdown(f"#### 📐 Greeks la bani (strike {_f(opt_data['atm_strike'], '.2f')}, Black-Scholes)")
+                gc, gp = opt_data['greeks_call'], opt_data['greeks_put']
+                if gc and gp:
+                    g1, g2, g3, g4 = st.columns(4)
+                    g1.metric("Delta call / put", f"{ro(gc['delta']):.2f} / {ro(gp['delta']):.2f}",
+                              help="Variația prețului opțiunii la +1 USD în prețul acțiunii. Black-Scholes cu IV la bani, r și q din antet.")
+                    g2.metric("Gamma", f"{ro(gc['gamma']):.4f}",
+                              help="Variația deltei la +1 USD în prețul acțiunii; aceeași pentru call și put.")
+                    g3.metric("Theta call / put (pe zi)", f"{ro(gc['theta_day']):.3f} / {ro(gp['theta_day']):.3f}",
+                              help="Pierderea de valoare într-o zi calendaristică, pe o acțiune suport (un contract = 100). Theta anual / 365.")
+                    g4.metric("Vega (la 1 pp de IV)", f"{ro(gc['vega_pt']):.3f}",
+                              help="Variația prețului opțiunii la +1 punct procentual de volatilitate implicită; aceeași pentru call și put.")
                 else:
-                    v_text, v_col = "⚖️ **NEUTRU:** Echilibru între cumpărători și vânzători.", "#8B949E"
+                    st.info("Greeks N/A: lipsesc IV la bani sau rata fără risc (vezi antetul secțiunii).")
+                em = opt_data['expected_move']
+                if em is not None:
+                    st.metric("Mișcare așteptată până la expirare (±1σ)", f"±{ro(em):.2f} ({ro(em / spot_opt * 100):.1f}%)",
+                              help="Preț × IV la bani × √(zile/365). Intervalul de ±1 abatere standard implicat de opțiuni "
+                                   "(~68% probabilitate sub ipoteza de normalitate, care subestimează cozile).")
 
-                st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_text}</div>", unsafe_allow_html=True)
+                # --- RÂNDUL 2: VERDICTUL PUT/CALL (praguri netestate) ---
+                iv_val = opt_data['iv']
+                if oi_pc is None or vol_pc is None:
+                    v_text, v_col = "⚖️ **PUT/CALL INCOMPLET:** lipsește open interest-ul sau volumul la call-uri; fără verdict.", "#8B949E"
+                elif oi_pc < 0.7 and vol_pc < 0.7:
+                    v_text, v_col = "🚀 **OPTIMISM ÎN OPȚIUNI (netestat):** call-urile domină și în pozițiile deschise, și în volumul de azi.", "#3FB950"
+                elif oi_pc < 0.7 and vol_pc > 1.1:
+                    v_text, v_col = "🔄 **DIVERGENȚĂ (netestat):** pozițiile deschise sunt optimiste, dar azi volumul e dominat de put-uri.", "#D29922"
+                elif oi_pc > 1.1:
+                    v_text, v_col = "🐻 **PESIMISM ÎN OPȚIUNI (netestat):** put-urile domină pozițiile deschise (pot fi și acoperiri, nu doar pariuri pe scădere).", "#F85149"
+                else:
+                    v_text, v_col = "⚖️ **NEUTRU (netestat):** echilibru între put-uri și call-uri.", "#8B949E"
 
-                # --- RÂNDUL 3: STRATEGIA IV (RESTABILIT) ---
-                if iv_val > 45:
-                    st.warning(f"⚠️ **ALERTA IV:** Deși direcția pare {v_text.split(':')[0][2:]}, opțiunile sunt **prea scumpe** ({iv_val:.1f}%). Riscul de scădere a valorii prin volatilitate este uriaș.")
-                elif iv_val < 20:
-                    st.success(f"💎 **OPORTUNITATE IV:** Opțiunile sunt foarte ieftine ({iv_val:.1f}%). Moment ideal pentru a paria pe direcția identificată.")
+                # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
+                v_html = md_bold_html(v_text)
+                st.markdown(f"<div style='background:{v_col}22; padding:20px; border-radius:12px; border-left: 5px solid {v_col}; margin-bottom:20px;'>{v_html}</div>", unsafe_allow_html=True)
 
-                # --- RÂNDUL 4: DETALIEREA INDICATORILOR (RESTABILIT) ---
+                # --- RÂNDUL 3: NIVELUL IV (praguri absolute netestate) ---
+                if iv_val is not None and iv_val > 45:
+                    st.warning(f"⚠️ **IV ridicat (prag absolut 45%, netestat):** opțiunile la bani sunt scumpe ({ro(iv_val):.1f}%). Pragul absolut nu ține cont de volatilitatea obișnuită a acestei acțiuni.")
+                elif iv_val is not None and iv_val < 20:
+                    st.success(f"💎 **IV scăzut (prag absolut 20%, netestat):** opțiunile la bani sunt ieftine ({ro(iv_val):.1f}%).")
+
+                # --- RÂNDUL 4: DETALIEREA INDICATORILOR ---
                 st.markdown("#### 🔍 Detalierea Indicatorilor")
+                def _interp(v, low, high, t_low, t_high, t_mid):
+                    if v is None:
+                        return "N/A"
+                    return (t_low if v < low else t_high if v > high else t_mid) + " (netestat)"
                 interpretare_data = [
-                    {"Indicator": "📉 Put/Call (OI)", "Valoare": f"{oi_pc:.2f}", "Interpretare": "Bullish" if oi_pc < 0.7 else "Bearish" if oi_pc > 1.1 else "Neutru"},
-                    {"Indicator": "⚡ Put/Call (Volum)", "Valoare": f"{vol_pc:.2f}", "Interpretare": "Sentiment Bullish" if vol_pc < 0.7 else "Panică" if vol_pc > 1.1 else "Normal"},
+                    {"Indicator": "📉 Put/Call (OI)", "Valoare": _f(oi_pc, ".2f"), "Interpretare": _interp(oi_pc, 0.7, 1.1, "Optimism", "Pesimism", "Neutru")},
+                    {"Indicator": "⚡ Put/Call (Volum)", "Valoare": _f(vol_pc, ".2f"), "Interpretare": _interp(vol_pc, 0.7, 1.1, "Optimism azi", "Presiune put azi", "Normal")},
                     {"Indicator": "🧲 Max Pain Price", "Valoare": mp_display, "Interpretare": f"Reper la expirarea din {opt_data['expiration']}, nu țintă de preț"},
-                    {"Indicator": "🌡️ Volatilitate (IV)", "Valoare": f"{iv_val:.1f}%", "Interpretare": "EVITĂ derivate (Scump)" if iv_val > 40 else "OK de cumpărat (Ieftin)"}
+                    {"Indicator": "🌡️ IV la bani", "Valoare": _f(iv_val, ".1f") + ("%" if iv_val is not None else ""), "Interpretare": _interp(iv_val, 20, 40, "Ieftin", "Scump", "Mediu")},
+                    {"Indicator": "📏 IV / realizată 30z", "Valoare": _f(iv_hv, ".2f"), "Interpretare": "N/A" if iv_hv is None else ("IV peste mișcarea recentă" if iv_hv > 1 else "IV sub mișcarea recentă")},
                 ]
                 st.table(interpretare_data)
             else:
                 st.info(opt_msg)
                         
             # =================================================================
-            # 👑 VERDICT FINAL MASTER AI: DECIZIA DE INVESTIȚIE (RADIOGRAFIE)
+            # 👑 DECIZIE MASTER AI: SINTEZA ÎN TREI PAȘI (fundamental, moment, context)
+            # Pașii nu se adună. Fundamentalul și momentul vin neschimbate din secțiunea de scor de sus;
+            # contextul e o listă de alerte fără puncte. Metoda veche rămâne în arhivă, neschimbată.
             # =================================================================
             st.markdown("---")
             st.subheader("👑 Decizie Master AI")
-            
-            # --- PROTECȚIE VARIABILE (inițializare explicită — fără locals()) ---
-            s_inst = inst_percent  # None = acționariat indisponibil
-            s_mos = mos_val
-            s_rvol = rvol if 'rvol' in dir() else 1.0
-            s_score_final = s_score_val if 's_score_val' in dir() else 0
-            opt_final = opt_data if 'opt_data' in dir() else None
-            
-            # Extragem datele specifice modulelor adiacente
-            z_score_val = z_val_swot if 'z_val_swot' in dir() else None
-            cash_ratio = q_ratio if 'q_ratio' in dir() else 1.0
-            ai_regime = regime_msg if 'regime_msg' in dir() else "Neutru"
+            from analytics.decision import characterize, context_flags, count_alerts
+            rsi_now = hist["RSI"].iloc[-1] if "RSI" in hist.columns else None
+            opt_ok = bool(opt_data) and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None
+            is_bvb_sym = str(real_sym).upper().endswith(".RO")
+            is_fin = (score_decision["financial"] if score_decision
+                      else (info.get('sector') or "") == "Financial Services")
+            ctx_flags = context_flags(
+                is_bvb=is_bvb_sym, is_financial=is_fin, altman_zone=z_val_swot,
+                spread=spread, spread_label=spread_label, regime_msg=regime_msg,
+                opt_pc=opt_data.get('oi_pc_ratio') if opt_ok else None,
+                opt_iv=opt_data.get('iv') if opt_ok else None,
+                iv_rank=iv_rank, iv_days=iv_days, min_iv_days=opt_calc.MIN_IV_OBS,
+                sentiment=s_score_val if c_news_ai else None, n_news=len(c_news_ai or []),
+                inst_pct=inst_percent, q_ratio=q_ratio, rsi=rsi_now, rvol=rvol)
+            n_alerts = count_alerts(ctx_flags)
 
-            # Extragem Spread-ul Macro la cald
-            try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                curr_spread = t_10y - t_3m
-            except: curr_spread = 0.5
-
-            # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
-            from ai_engine import calculate_master_ai_score
-            m_score, m_action, m_col, m_advice, m_reasons = calculate_master_ai_score(
-                info, hist, h_score, s_mos, s_inst, s_rvol, s_score_final, opt_final, 
-                curr_spread, z_score_val, cash_ratio, ai_regime
-            )
-
-            # --- AFIȘARE VIZUALĂ DE IMPACT (Dashboard Bloomberg-style) ---
-            col_m1, col_m2 = st.columns([1, 1.8])
-            
-            with col_m1:
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:30px; border-radius:15px; border:3px solid {m_col}; text-align:center; height: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-                        <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing: 1px;">Scor Algoritmic Integrat</p>
-                        <h1 style="color:{m_col}; margin:15px 0; font-size:80px; text-shadow: 0 0 10px {m_col}44;">{int(m_score)}<span style="font-size: 20px; color:#8B949E; text-shadow: none;">/100</span></h1>
-                        <div style="background:{m_col}; color:white; padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
-                            {m_action}
+            if score_decision is None:
+                st.info("Fără scor fundamental pentru acest simbol (ETF, fond, indice sau emitent .RO fără fișier în "
+                        f"„{COMPANY_FOLDER_NAME}”). Sinteza arată doar contextul; metoda veche e în arhivă.")
+            else:
+                d = score_decision
+                alert_color = "#F85149" if any(f["level"] == "alerta" for f in ctx_flags) else (
+                    "#D29922" if n_alerts else "#3FB950")
+                phrase = characterize(is_bvb=d["is_bvb"], fund_label=d["fund_label"], fund_score=d["fund_score"],
+                                      moment_score=d["moment"], pillars=d["pillars"], n_alerts=n_alerts,
+                                      history_text=d["history_text"])
+                st.markdown(compact_html(f"""
+                    <div style="background:#161B22; border:1px solid #30363D; border-radius:12px; padding:16px; margin:8px 0 12px 0;">
+                        <div style="display:flex; flex-wrap:wrap; gap:32px; align-items:baseline;">
+                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 1 · Fundamental</span><br>
+                                <span style="color:{d['fund_color']}; font-weight:bold; font-size:22px;">{html.escape(d['fund_label'])}</span>
+                                <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(d['fund_detail'])}</span><br>
+                                <span style="color:#8B949E; font-size:12px;">{html.escape(d['fund_basis'])}</span></div>
+                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 2 · Moment</span><br>
+                                <span style="color:{d['moment_color']}; font-weight:bold; font-size:22px;">{html.escape(d['moment_label'])}</span>
+                                <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(d['moment_detail'])}</span><br>
+                                <span style="color:#8B949E; font-size:12px;">{html.escape(d['moment_basis'])}</span></div>
+                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 3 · Context</span><br>
+                                <span style="color:{alert_color}; font-weight:bold; font-size:22px;">{n_alerts} {'alertă' if n_alerts == 1 else 'alerte'}</span><br>
+                                <span style="color:#8B949E; font-size:12px;">fără puncte</span></div>
                         </div>
-                        <p style="color:#8B949E; font-size:13px; margin-top:15px; line-height:1.4;">
-                            {m_advice}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
+                        <div style="color:#C9D1D9; font-size:14px; margin-top:12px; line-height:1.5;">{html.escape(phrase)}</div>
+                    </div>"""), unsafe_allow_html=True)
+                if d["pillars"]:
+                    p_cols = st.columns(len(d["pillars"]))
+                    for col, (p_name, p_score) in zip(p_cols, d["pillars"]):
+                        col.metric(p_name, "N/A" if p_score is None else f"{ro(p_score):.0f}/100",
+                                   help="Pilonul scorului fundamental din secțiunea „Scor fundamental” de sus; aceeași valoare.")
 
-            with col_m2:
-                st.markdown("#### 🧠 Radiografia Deciziei (De ce să faci asta?)")
-                st.markdown("<p style='color:#8B949E; font-size:13px; margin-bottom:15px;'>Algoritmul a scanat toți cei 10 piloni (DCF, Tehnic, Opțiuni, Macro, Sentiment, Instituții, Bilanț, Cash-Flow, Faliment, Volum) și a identificat următoarele:</p>", unsafe_allow_html=True)
-                
-                # Afișăm lista curățată și sortată (Roșu sus, Verde jos)
-                for reason in m_reasons:
-                    if "🚨" in reason:
-                        st.markdown(f"<div style='background:rgba(248, 81, 73, 0.15); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #F85149; color:#FFD8D8;'>{reason}</div>", unsafe_allow_html=True)
-                    elif "⚠️" in reason:
-                        st.markdown(f"<div style='background:rgba(210, 153, 34, 0.1); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #D29922;'>{reason}</div>", unsafe_allow_html=True)
-                    elif "✅" in reason:
-                        st.markdown(f"<div style='background:rgba(63, 185, 80, 0.05); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3FB950;'>{reason}</div>", unsafe_allow_html=True)
+            st.markdown("#### 🧭 Context (alerte fără puncte)")
+            flag_style = {"alerta": ("rgba(248, 81, 73, 0.15)", "#F85149", "🚨"),
+                          "atentie": ("rgba(210, 153, 34, 0.1)", "#D29922", "⚠️"),
+                          "pozitiv": ("rgba(63, 185, 80, 0.05)", "#3FB950", "✅"),
+                          "info": ("#21262D", "#8B949E", "ℹ️")}
+            for f in ctx_flags:
+                bg, border, icon = flag_style[f["level"]]
+                st.markdown(f"<div style='background:{bg}; padding:10px 12px; border-radius:8px; margin-bottom:6px; "
+                            f"border-left:4px solid {border};'>{icon} <b>{html.escape(f['title'])}:</b> {html.escape(f['text'])}</div>",
+                            unsafe_allow_html=True)
+            st.caption("Pașii nu se adună într-un scor total. Contextul nu modifică scorurile: opțiunile și știrile nu au istoric "
+                       "pentru un test, iar curba randamentelor e un semnal al pieței, nu al companiei.")
+
+            with st.expander("🗄️ Metoda veche (arhivă, netestată): Verdict Final și Master AI pe 10 piloni"):
+                st.caption("Calculele vechi, păstrate neschimbate pentru comparație. Adună tehnicul cu fundamentalul, "
+                           "folosesc praguri netestate și pot contrazice sinteza de mai sus.")
+                # ==================================================
+                # CALCUL RATING FINAL (CONCLUZIA)
+                # ==================================================
+                st.markdown("##### 🎯 Verdict Final: Rating de Investiție (arhivă)")
+
+                # Pregătim variabilele (inițializare explicită — nu mai depindem de locals())
+
+                s_inst = inst_percent  # None = acționariat indisponibil
+                s_mos = mos_val
+                s_rvol = rvol if rvol is not None else 1.0
+            
+                # Apelăm funcția PRO folosind noul spread 10Y-3M
+                final_score, highlights = calculate_investment_rating_pro(info, s_inst, s_rvol, spread, s_mos, spread_label)
+            
+                r_color = "#3FB950" if final_score > 70 else ("#D29922" if final_score > 40 else "#F85149")
+                r_label = "STRONG BUY" if final_score > 80 else ("ACCUMULATE" if final_score > 60 else "AVOID/WATCH")
+                # Fără acționariat, DCF, ROE și datorii, scorul ar fi doar 50 + macro: nu e un verdict.
+                if s_inst is None and s_mos is None and num(info, 'returnOnEquity') is None and num(info, 'debtToEquity') is None:
+                    r_color, r_label = "#8B949E", "DATE INSUFICIENTE"
+
+                # Afișare UI
+                c_res1, c_res2 = st.columns([1, 2])
+                with c_res1:
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {r_color}; text-align:center;">
+                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Investiție</p>
+                            <h1 style="color:{r_color}; margin:15px 0; font-size:54px;">{final_score}</h1>
+                            <div style="background:{r_color}22; color:{r_color}; padding:5px; border-radius:5px; font-weight:bold;">{r_label}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with c_res2:
+                    st.markdown("#### 🔍 Argumente pentru acest Scor:")
+                    for item in highlights:
+                        st.write(item)
+
+                    # --- AFISARE SCOR SĂNĂTATE FINANCIARĂ UNIFORMIZAT ---
+                    # Stabilim pictograma în funcție de nota de sănătate (h_score)
+                    if h_score is None:
+                        st.write("⚪ **Sănătate Financiară:** indisponibilă (lipsesc datoriile, ROE și lichiditatea).")
                     else:
-                        st.markdown(f"<div style='background:#21262D; padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #8B949E;'>{reason}</div>", unsafe_allow_html=True)
+                        h_icon = "🟢" if h_score >= 8 else ("🟡" if h_score >= 5 else "🔴")
+                        st.write(f"{h_icon} **Sănătate Financiară:** Scorul de stabilitate al bilanțului este **{h_score}/10**.")
+
+
+                # =================================================================
+                # 👑 VERDICT FINAL MASTER AI: DECIZIA DE INVESTIȚIE (RADIOGRAFIE)
+                # =================================================================
+                st.markdown("##### 👑 Decizie Master AI (arhivă)")
+            
+                # --- PROTECȚIE VARIABILE (inițializare explicită — fără locals()) ---
+                s_inst = inst_percent  # None = acționariat indisponibil
+                s_mos = mos_val
+                s_rvol = rvol if rvol is not None else 1.0
+                s_score_final = s_score_val if s_score_val is not None else 0
+                # Pilonul de opțiuni intră în Master AI doar cu P/C pe open interest și IV la bani calculate; altfel lipsește (fără puncte)
+                opt_final = opt_data if (opt_data and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None) else None
+            
+                # Extragem datele specifice modulelor adiacente
+                z_score_val = z_val_swot
+                cash_ratio = q_ratio
+                ai_regime = regime_msg or "Neutru"
+
+                # Curba pieței acțiunii, aceeași ca în rating (None = indisponibilă, fără puncte)
+                curr_spread = spread
+
+                # --- RULĂM MOTORUL DE SINTEZĂ GLOBALĂ ---
+                from ai_engine import calculate_master_ai_score
+                m_score, m_action, m_col, m_advice, m_reasons = calculate_master_ai_score(
+                    info, hist, h_score, s_mos, s_inst, s_rvol, s_score_final, opt_final, 
+                    curr_spread, z_score_val, cash_ratio, ai_regime
+                )
+
+                # --- AFIȘARE VIZUALĂ DE IMPACT (Dashboard Bloomberg-style) ---
+                col_m1, col_m2 = st.columns([1, 1.8])
+            
+                with col_m1:
+                    st.markdown(f"""
+                        <div style="background:#161B22; padding:30px; border-radius:15px; border:3px solid {m_col}; text-align:center; height: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                            <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing: 1px;">Scor Algoritmic Integrat</p>
+                            <h1 style="color:{m_col}; margin:15px 0; font-size:80px; text-shadow: 0 0 10px {m_col}44;">{int(m_score)}<span style="font-size: 20px; color:#8B949E; text-shadow: none;">/100</span></h1>
+                            <div style="background:{m_col}; color:white; padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
+                                {m_action}
+                            </div>
+                            <p style="color:#8B949E; font-size:13px; margin-top:15px; line-height:1.4;">
+                                {m_advice}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col_m2:
+                    st.markdown("#### 🧠 Radiografia Deciziei (De ce să faci asta?)")
+                    st.markdown("<p style='color:#8B949E; font-size:13px; margin-bottom:15px;'>Algoritmul a scanat toți cei 10 piloni (DCF, Tehnic, Opțiuni, Macro, Sentiment, Instituții, Bilanț, Cash-Flow, Faliment, Volum) și a identificat următoarele:</p>", unsafe_allow_html=True)
+                
+                    # Afișăm lista curățată și sortată (Roșu sus, Verde jos)
+                    for reason in m_reasons:
+                        # caseta e HTML: **text** din Markdown nu se interpretează acolo, deci devine <b>text</b>
+                        reason = md_bold_html(reason)
+                        if "🚨" in reason:
+                            st.markdown(f"<div style='background:rgba(248, 81, 73, 0.15); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #F85149; color:#FFD8D8;'>{reason}</div>", unsafe_allow_html=True)
+                        elif "⚠️" in reason:
+                            st.markdown(f"<div style='background:rgba(210, 153, 34, 0.1); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #D29922;'>{reason}</div>", unsafe_allow_html=True)
+                        elif "✅" in reason:
+                            st.markdown(f"<div style='background:rgba(63, 185, 80, 0.05); padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #3FB950;'>{reason}</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"<div style='background:#21262D; padding:12px; border-radius:8px; margin-bottom:8px; border-left:4px solid #8B949E;'>{reason}</div>", unsafe_allow_html=True)
+            
             
             # ==================================================
             # MODUL NOU: PREZENTARE GENERALĂ AI (CLONA XTB PERPLEXITY)
@@ -4720,13 +5005,13 @@ def main():
                 # --- BULLET 1: Profitabilitate & Venituri ---
                 if margins > 0:
                     if margins > 15:
-                        text_fin = f"Compania raportează rezultate fundamentale puternice, cu o marjă netă de profit de {margins:.2f}%. Această eficiență operațională ridicată consolidează încrederea investitorilor pe termen lung."
+                        text_fin = f"Compania raportează rezultate fundamentale puternice, cu o marjă netă de profit de {ro(margins):.2f}%. Această eficiență operațională ridicată consolidează încrederea investitorilor pe termen lung."
                         bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_fin})
                     else:
-                        text_fin = f"Compania menține o profitabilitate moderată, operând cu o marjă netă de {margins:.2f}%, o valoare standard pentru dinamica actuală a sectorului său."
+                        text_fin = f"Compania menține o profitabilitate moderată, operând cu o marjă netă de {ro(margins):.2f}%, o valoare standard pentru dinamica actuală a sectorului său."
                         bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_fin})
                 elif margins < 0:
-                    text_fin = f"Rezultatele recente indică presiuni operaționale, compania raportând pierderi cu o marjă netă negativă de {margins:.2f}%, un factor de risc major pentru acționari."
+                    text_fin = f"Rezultatele recente indică presiuni operaționale, compania raportând pierderi cu o marjă netă negativă de {ro(margins):.2f}%, un factor de risc major pentru acționari."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_fin})
 
                 # --- BULLET 2: Sentimentul Știrilor (Context) ---
@@ -4748,18 +5033,18 @@ def main():
 
                 # --- BULLET 3: Volatilitate / Risc (Analiză Beta) ---
                 if beta > 1.3:
-                    text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața de referință (Beta de {beta:.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
+                    text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața de referință (Beta de {ro(beta):.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_vol})
                 elif beta < 0.8:
-                    text_vol = f"Acțiunea prezintă o volatilitate redusă față de piața generală (Beta de {beta:.2f}), comportându-se ca un activ defensiv în perioadele de incertitudine."
+                    text_vol = f"Acțiunea prezintă o volatilitate redusă față de piața generală (Beta de {ro(beta):.2f}), comportându-se ca un activ defensiv în perioadele de incertitudine."
                     bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_vol})
 
                 # --- BULLET 4: Evaluare Multipli ---
                 if pe_ratio > 30:
-                    text_val = f"Multipli de evaluare ridicați, inclusiv un raport P/E de {pe_ratio:.2f} și P/B de {pb_ratio:.2f}, sugerează că acțiunea ar putea fi supraevaluată în raport cu fundamentele contabile curente."
+                    text_val = f"Multipli de evaluare ridicați, inclusiv un raport P/E de {ro(pe_ratio):.2f} și P/B de {ro(pb_ratio):.2f}, sugerează că acțiunea ar putea fi supraevaluată în raport cu fundamentele contabile curente."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_val})
                 elif 0 < pe_ratio < 15:
-                    text_val = f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {pe_ratio:.2f}), indicând o potențială subevaluare din partea pieței raportat la capacitatea sa de generare a profitului."
+                    text_val = f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {ro(pe_ratio):.2f}), indicând o potențială subevaluare din partea pieței raportat la capacitatea sa de generare a profitului."
                     bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_val})
 
                 # --- RANDARE UI PREMIUM ---
@@ -4848,6 +5133,8 @@ def main():
         st.title("💼 Portofoliu Personal")
         
         with st.expander("➕ Adaugă Tranzacție Nouă"):
+            st.caption("Scrie un rând în foaia `Portofoliu`, care nu mai alimentează această pagină: pozițiile vin din "
+                       "registrul `Tranzactii`. Pentru tranzacții noi folosește importul exportului de la broker, de mai jos.")
             with st.form("add_pf"):
                 c1, c2, c3, c4 = st.columns(4)
                 s = c1.text_input("Simbol (ex: AAPL, EUNL.DE, TLV.RO)").upper()
@@ -4862,14 +5149,14 @@ def main():
                     st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
 
-        render_ledger_results()
+        # Toată pagina folosește pozițiile din registrul `Tranzactii` (exporturile brokerilor);
+        # foaia Portofoliu nu mai alimentează pagina.
+        ledger_positions = render_ledger_results()
+        df_pf = ledger_calc.tab_frame(ledger_positions)
         st.markdown("---")
 
-        # Încărcăm datele din Google Sheets
-        df_pf = load_portfolio()
-
         if df_pf.empty:
-            st.info("Portofoliul este gol sau nu s-a putut conecta la Google Sheets.")
+            st.info("Nu există acțiuni sau ETF-uri deschise în registrul `Tranzactii` (sau registrul nu a putut fi citit).")
         else:
             st.markdown("### Perioadă Analiză")
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
@@ -4900,9 +5187,9 @@ def main():
                     st.caption(f"ℹ️ Preț live indisponibil pentru {', '.join(pf_notes['price_from_close'])}: s-a folosit ultima închidere.")
 
                 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{total_invested:,.2f} {currency_symbol}")
-                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{total_current:,.2f} {currency_symbol}")
-                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{total_profit_val:,.2f} {currency_symbol}", f"{total_profit_pct:.2f}%")
+                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{format_ro(total_invested)} {currency_symbol}")
+                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{format_ro(total_current)} {currency_symbol}")
+                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{format_ro(total_profit_val)} {currency_symbol}", f"{format_ro(total_profit_pct)}%")
 
                 if pf_notes.get('curve_start') is not None:
                     st.caption(
@@ -4944,25 +5231,25 @@ def main():
                                         xaxis_title="Zile de tranzacționare de azi înainte",
                                         yaxis_title=f"Valoare Portofoliu ({currency_symbol})",
                                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                    st.plotly_chart(fig_mc, width='stretch')
+                    plot_ro(fig_mc, width='stretch')
 
                     c_mc1, c_mc2, c_mc3 = st.columns(3)
-                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{mc['p5']:,.2f} {currency_symbol}",
+                    c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{format_ro(mc['p5'])} {currency_symbol}",
                                 help="**Cum se calculează:** percentila 5 a valorii finale din cele 1000 de scenarii, fiecare construit din randamente zilnice "
                                      "trase la întâmplare din istoricul portofoliului.\n\n**Ce înseamnă:** în 95% din scenarii portofoliul a terminat anul peste această valoare.")
-                    c_mc2.metric("Variația în scenariul pesimist", f"{mc['change_p5_pct']:+.2f}%",
+                    c_mc2.metric("Variația în scenariul pesimist", f"{ro(mc['change_p5_pct']):+.2f}%",
                                 help="**Cum se calculează:** (valoarea din scenariul pesimist ÷ valoarea de azi − 1) × 100.\n\n"
                                      "**Ce înseamnă:** cât ai pierde (minus) sau câștiga (plus) într-un an slab, de felul celor care apar o dată la 20. "
                                      "Poate fi pozitivă dacă perioada aleasă a fost foarte bună.")
-                    c_mc3.metric("Probabilitatea de profit", f"{mc['prob_profit']:.1f}%",
+                    c_mc3.metric("Probabilitatea de profit", f"{ro(mc['prob_profit']):.1f}%",
                                 help="**Cum se calculează:** câte scenarii din 1000 au terminat peste valoarea de azi.\n\n"
                                      "**Ce înseamnă:** depinde direct de randamentul mediu al perioadei alese. Comparați cu varianta „fără tendință” de mai jos: "
                                      "acolo iese puțin sub 50%, pentru că volatilitatea singură trage valoarea mediană în jos.")
                     st.caption(
                         f"Din {mc['simulations']} scenarii pe {mc['days']} de zile, construite prin reeșantionarea randamentelor zilnice din perioada aleasă mai sus "
                         f"({len(hist_curve) - 1} zile). Simularea presupune că randamentul mediu din această perioadă continuă. "
-                        f"Fără această presupunere (doar volatilitatea, tendință zero): scenariu pesimist {mc_flat['change_p5_pct']:+.1f}%, "
-                        f"median {mc_flat['change_p50_pct']:+.1f}%, probabilitate de profit {mc_flat['prob_profit']:.0f}%. "
+                        f"Fără această presupunere (doar volatilitatea, tendință zero): scenariu pesimist {ro(mc_flat['change_p5_pct']):+.1f}%, "
+                        f"median {ro(mc_flat['change_p50_pct']):+.1f}%, probabilitate de profit {ro(mc_flat['prob_profit']):.0f}%. "
                         "Curba folosită aplică deținerile de azi pe trecut; nu e o prognoză."
                     )
                 
@@ -4973,7 +5260,7 @@ def main():
                         fill='tozeroy', line=dict(color='#238636'), name=f'Valoare {currency_symbol}'
                     ))
                     fig_hist.update_layout(height=350, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='rgba(0,0,0,0)')
-                    st.plotly_chart(fig_hist, width='stretch')
+                    plot_ro(fig_hist, width='stretch')
                     # --- NOU: COMPARAȚIE BENCHMARK ---
                 st.markdown("---")
                 st.subheader("🏁 Performanță Relativă (Benchmark)")
@@ -5019,10 +5306,10 @@ def main():
                 
                 # Rândul 1: Riscul Intern al activelor tale
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
-                c_r1.metric("Max Drawdown", f"{max_dd*100:.2f}%", help="Cea mai mare scădere istorică.")
-                c_r2.metric("Sharpe Ratio", f"{sharpe:.2f}", help="Eficiența profitului vs risc (Ideal > 1).")
-                c_r3.metric("VaR (95%)", f"{currency_symbol} {abs(var_abs):,.2f}", help="Pierderea maximă probabilă într-o singură zi.")
-                c_r4.metric("Volatilitate Anualizată", f"{vol_ann*100:.2f}%", help="Agitația generală a prețurilor portofoliului.")
+                c_r1.metric("Max Drawdown", f"{ro(max_dd*100):.2f}%", help="Cea mai mare scădere istorică.")
+                c_r2.metric("Sharpe Ratio", f"{ro(sharpe):.2f}", help="Eficiența profitului vs risc (Ideal > 1).")
+                c_r3.metric("VaR (95%)", f"{currency_symbol} {format_ro(abs(var_abs))}", help="Pierderea maximă probabilă într-o singură zi.")
+                c_r4.metric("Volatilitate Anualizată", f"{ro(vol_ann*100):.2f}%", help="Agitația generală a prețurilor portofoliului.")
 
                 # Rândul 2: Relația Strategică cu Piața (Benchmark-ul)
                 st.write("") # Mic spațiu vizual între rânduri
@@ -5030,15 +5317,15 @@ def main():
                 
                 c_b1.metric("Benchmark", bench_name)
                 
-                c_b2.metric("Corelație cu Piața", f"{global_corr:.2f}", 
-                           help=f"Scorul de {global_corr:.2f} arată cât de mult imiți indexul {bench_name}. 1.00 = Copie fidelă.")
+                c_b2.metric("Corelație cu Piața", f"{ro(global_corr):.2f}", 
+                           help=f"Scorul de {ro(global_corr):.2f} arată cât de mult imiți indexul {bench_name}. 1,00 = Copie fidelă.")
                 
-                c_b3.metric("Beta Portofoliu", f"{portfolio_beta:.2f}", 
-                           help=f"Sensibilitatea la piață. Un Beta de {portfolio_beta:.2f} înseamnă că ești {'mai agresiv' if portfolio_beta > 1 else 'mai stabil'} decât media.")
+                c_b3.metric("Beta Portofoliu", f"{ro(portfolio_beta):.2f}", 
+                           help=f"Sensibilitatea la piață. Un Beta de {ro(portfolio_beta):.2f} înseamnă că ești {'mai agresiv' if portfolio_beta > 1 else 'mai stabil'} decât media.")
 
                 # Scorul de Diversificare Strategică
                 div_score = (1 - abs(global_corr)) * 100
-                c_b4.metric("Scor Diversificare", f"{div_score:.1f}%", 
+                c_b4.metric("Scor Diversificare", f"{ro(div_score):.1f}%", 
                            help="Indică cât de independentă este strategia ta față de restul pieței.")
                 
                 sortino_val = calculate_sortino_ratio(hist_curve)
@@ -5048,7 +5335,7 @@ def main():
 
                 with c_s1:
                     s_color = "#3FB950" if sortino_val > 2 else ("#D29922" if sortino_val > 1 else "#F85149")
-                    st.metric("Sortino Ratio (Calitate Profit)", f"{sortino_val:.2f}", 
+                    st.metric("Sortino Ratio (Calitate Profit)", f"{ro(sortino_val):.2f}", 
                             help="Ideal > 2. Arată cât de mult câștigi pentru fiecare unitate de risc la scădere.")
 
                 with c_s2:
@@ -5077,7 +5364,7 @@ def main():
                         )])
                         fig_sym.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_sym, width='stretch', key=f"pie_sym_{currency_symbol}")
+                        plot_ro(fig_sym, width='stretch', key=f"pie_sym_{currency_symbol}")
 
                 # 4. Detaliu Poziții
                 st.subheader("Detaliu Poziții")
@@ -5092,10 +5379,10 @@ def main():
                     st.dataframe(
                         df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
                         .format({
-                            # până la 4 zecimale, fără zerouri inutile (0.31 nu mai apare ca 0.3)
-                            'Quantity': lambda q: f"{q:,.4f}".rstrip('0').rstrip('.'),
-                            'AvgPrice': '{:.4f}', 'CurrentPrice': '{:.4f}',
-                            'MarketValue': '{:,.2f}', 'Profit': '{:,.2f}', 'Profit %': '{:.2f}%'
+                            # format românesc; cantitatea până la 4 zecimale, fără zerouri inutile (1.250, 0,3048)
+                            'Quantity': lambda q: format_ro(q, 4, trim=True),
+                            'AvgPrice': lambda v: format_ro(v, 4), 'CurrentPrice': lambda v: format_ro(v, 4),
+                            'MarketValue': lambda v: format_ro(v), 'Profit': lambda v: format_ro(v), 'Profit %': lambda v: format_ro(v, 2, "%")
                         }, na_rep="N/A"),
                         width='stretch'
                     )        
@@ -5116,7 +5403,7 @@ def main():
                         )])
                         fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_sec, width='stretch', key=f"pie_sec_{currency_symbol}")
+                        plot_ro(fig_sec, width='stretch', key=f"pie_sec_{currency_symbol}")
 
                         # VERDICT DIVERSIFICARE
                         # 'Nedefinit' = Yahoo nu a trimis sectorul (sau ETF): nu e un sector real și nu se evaluează.
@@ -5127,11 +5414,11 @@ def main():
                         else:
                             max_sector = known.iloc[0]
                             if max_sector['Pondere %'] > 40:
-                                st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {max_sector['Pondere %']:.1f}% din portofoliu. Riști mult dacă acest sector scade.")
+                                st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {ro(max_sector['Pondere %']):.1f}% din portofoliu. Riști mult dacă acest sector scade.")
                             else:
                                 st.success(f"✅ **Diversificare bună:** Niciun sector cunoscut nu depășește 40%.")
                             if undefined_pct > 0:
-                                st.caption(f"ℹ️ {undefined_pct:.1f}% din portofoliu are sector necunoscut și nu intră în această evaluare.")
+                                st.caption(f"ℹ️ {ro(undefined_pct):.1f}% din portofoliu are sector necunoscut și nu intră în această evaluare.")
                     else:
                         st.info("Nu există date sectoriale.")
 
@@ -5234,22 +5521,22 @@ def main():
                                 yaxis=dict(ticksuffix="%"),    # Adaugă % pe axa verticală (Y)
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                             )
-                            st.plotly_chart(fig_opt, width='stretch', key=f"opt_bar_{currency_symbol}")
+                            plot_ro(fig_opt, width='stretch', key=f"opt_bar_{currency_symbol}")
 
                             # 4. Indicatorii alocării de Sharpe maxim, pe tot istoricul (în eșantion)
                             st.markdown("##### Alocarea de Sharpe maxim, pe tot istoricul")
                             c_op1, c_opt2, c_opt3 = st.columns(3)
                             
-                            c_op1.metric("Randament Anual Istoric", f"{opt_res['expected_return']:.2f}%",
+                            c_op1.metric("Randament Anual Istoric", f"{ro(opt_res['expected_return']):.2f}%",
                                         help="**Cum se calculează:** media randamentelor zilnice ale alocării × 252, pe tot istoricul comun.\n\n"
                                              "**Ce înseamnă:** cât ar fi adus această alocare în trecut. E calculat pe aceleași date pe care a fost aleasă, "
                                              "deci e optimist prin construcție; nu e o estimare pentru viitor.")
                             
-                            c_opt2.metric("Volatilitate (Risc)", f"{opt_res['expected_volatility']:.2f}%",
+                            c_opt2.metric("Volatilitate (Risc)", f"{ro(opt_res['expected_volatility']):.2f}%",
                                         help="**Cum se calculează:** deviația standard a randamentelor zilnice ale alocării × √252.\n\n"
                                              "**Ce înseamnă:** cât de mult ar fi fluctuat alocarea într-un an obișnuit.")
                             
-                            c_opt3.metric("Sharpe Ratio", "N/A" if opt_res['sharpe_ratio'] is None else f"{opt_res['sharpe_ratio']:.2f}",
+                            c_opt3.metric("Sharpe Ratio", "N/A" if opt_res['sharpe_ratio'] is None else f"{ro(opt_res['sharpe_ratio']):.2f}",
                                         help="**Cum se calculează:** (randament anual − rata fără risc) ÷ volatilitate.\n\n"
                                              "**Ce înseamnă:** randamentul peste titlurile de stat pentru fiecare unitate de risc. E valoarea maximă posibilă pe aceste date, "
                                              "cu plafonul pe poziție; în practică iese mai mic.")
@@ -5259,15 +5546,15 @@ def main():
                                 st.markdown(f"##### Verificare pe date nevăzute ({opt_res['test_days']} zile, din {opt_res['test_start']:%d.%m.%Y})")
                                 st.dataframe(pd.DataFrame({
                                     "Alocare": [r["label"] for r in oos],
-                                    "Randament anualizat": [f"{r['return']:.1f}%" for r in oos],
-                                    "Volatilitate": [f"{r['volatility']:.1f}%" for r in oos],
-                                    "Sharpe": ["N/A" if r["sharpe"] is None else f"{r['sharpe']:.2f}" for r in oos],
+                                    "Randament anualizat": [f"{ro(r['return']):.1f}%" for r in oos],
+                                    "Volatilitate": [f"{ro(r['volatility']):.1f}%" for r in oos],
+                                    "Sharpe": ["N/A" if r["sharpe"] is None else f"{ro(r['sharpe']):.2f}" for r in oos],
                                 }), hide_index=True, width='stretch')
                             st.caption(
                                 f"Din {opt_res['n_days']} zile comune de tranzacționare, {opt_res['start']:%d.%m.%Y} – {opt_res['end']:%d.%m.%Y}. "
-                                f"Plafon pe poziție: {opt_res['cap']:.0f}%. Covarianță Ledoit-Wolf (shrinkage {opt_res['shrinkage']:.2f}). "
+                                f"Plafon pe poziție: {ro(opt_res['cap']):.0f}%. Covarianță Ledoit-Wolf (shrinkage {ro(opt_res['shrinkage']):.2f}). "
                                 + (f"Excluse pentru istoric prea scurt: {', '.join(opt_res['excluded'])}. " if opt_res.get('excluded') else "")
-                                + (f"Rata fără risc: {rf_opt * 100:.2f}% ({rf_opt_label}). " if rf_opt is not None else "Rata fără risc indisponibilă: Sharpe calculat cu 0%. ")
+                                + (f"Rata fără risc: {ro(rf_opt * 100):.2f}% ({rf_opt_label}). " if rf_opt is not None else "Rata fără risc indisponibilă: Sharpe calculat cu 0%. ")
                                 + ("Tabelul de verificare: ponderile au fost calculate pe primele 70% din zile și evaluate pe ultimele 30%. "
                                    "Dacă acolo nu bat ponderile egale, „optimul” e în mare parte potrivire pe trecut. " if oos else "")
                                 + "Varianța minimă nu depinde de estimarea randamentelor, deci e mai stabilă decât Sharpe maxim."
@@ -5455,16 +5742,16 @@ def main():
                 st.markdown(f"""
                     <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {spread_color}; text-align:center;">
                         <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">{label_spread}</p>
-                        <h1 style="color:{spread_color}; margin:10px 0;">{spread:.3f}</h1>
+                        <h1 style="color:{spread_color}; margin:10px 0;">{ro(spread):.3f}</h1>
                     </div>
                 """, unsafe_allow_html=True)
             
             with y_col2:
                 if spread < 0:
-                    st.error(f"⚠️ **INVERSIUNE CONFIRMATĂ:** Spread-ul de {spread:.3f} indică o curbă a randamentelor inversată. Istoric, acest semnal a precedat fiecare recesiune majoră..")
+                    st.error(f"⚠️ **INVERSIUNE CONFIRMATĂ:** Spread-ul de {ro(spread):.3f} indică o curbă a randamentelor inversată. Istoric, acest semnal a precedat fiecare recesiune majoră..")
                     st.write("👉 **Strategie:** Protejează capitalul. Redu expunerea pe acțiuni ciclice și crește ponderea în Cash/Aur.")
                 else:
-                    st.success(f"✅ **SĂNĂTATE MACRO:** Spread-ul de {spread:.3f} indică o curbă a randamentelor normală. Indică expansiune economică")
+                    st.success(f"✅ **SĂNĂTATE MACRO:** Spread-ul de {ro(spread):.3f} indică o curbă a randamentelor normală. Indică expansiune economică")
                     st.write("👉 **Strategie:** Poți menține o strategie de creștere (Growth). Mediul economic susține expansiunea bursieră.")
 
         except Exception as e:
@@ -5542,7 +5829,7 @@ def main():
                 
                 # --- FORMATARE TEXT ---
                 suffix = "%" if "Yield" in selected_macro_name else ""
-                val_fmt = f"{curr_val:.4f}{suffix}"
+                val_fmt = f"{ro(curr_val):.4f}{suffix}"
                 
                 # --- AFIȘARE DUALĂ (2 Metric Carduri) ---
                 m1, m2 = st.columns(2)
@@ -5550,13 +5837,13 @@ def main():
                 m1.metric(
                     f"Interval ({time_frame})", 
                     val_fmt, 
-                    f"{diff_interval:.4f} ({pct_interval:.2f}%)"
+                    f"{ro(diff_interval):.4f} ({ro(pct_interval):.2f}%)"
                 )
                 
                 m2.metric(
                     "Evoluție Azi", 
                     val_fmt, 
-                    f"{diff_day:.4f} ({pct_day:.2f}%)"
+                    f"{ro(diff_day):.4f} ({ro(pct_day):.2f}%)"
                 )
                 
                 # --- 3. GRAFIC PLOTLY ---
@@ -5593,7 +5880,7 @@ def main():
                     )
                 )
                 
-                st.plotly_chart(fig_macro, width='stretch')
+                plot_ro(fig_macro, width='stretch')
                 # --- NOU: MODUL INTERPRETARE DINAMICĂ MACRO ---
                 st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
                 
@@ -5708,7 +5995,7 @@ def main():
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
                     # Afișăm graficul întâi
-                    st.plotly_chart(fig_rot, width='stretch')
+                    plot_ro(fig_rot, width='stretch')
 
                     # --- PASUL B: METRICILE ȘI EXPLICAȚIA (JOS) ---
                     st.write("") # Mic spațiu între grafic și text
@@ -5730,10 +6017,10 @@ def main():
                                 </div>
                                 <div style="display: flex; align-items: center; justify-content: space-between;">
                                     <div style="background: {delta_color}22; color: {delta_color}; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; border: 1px solid {delta_color}44;">
-                                        {rot_change:+.2f}%
+                                        {ro(rot_change):+.2f}%
                                     </div>
                                     <div style="color: #8B949E; font-size: 13px;">
-                                        Scor real: <span style="color: #FFFFFF; font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{current_ratio:.4f}</span>
+                                        Scor real: <span style="color: #FFFFFF; font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{ro(current_ratio):.4f}</span>
                                     </div>
                                 </div>
                             </div>
@@ -5777,7 +6064,7 @@ def main():
                             st.markdown(f"""
                             <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {s_col}; text-align:center;">
                                 <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sentiment Media</p>
-                                <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{global_sentiment_score:.2f}</h1>
+                                <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{ro(global_sentiment_score):.2f}</h1>
                             </div>
                             """, unsafe_allow_html=True)
                         
@@ -5820,7 +6107,7 @@ def main():
                     y=df_sectors['Sector'],
                     orientation='h',
                     marker_color=bar_colors,
-                    text=[f"{val:+.2f}%" for val in df_sectors['Variație %']],
+                    text=[f"{ro(val):+.2f}%" for val in df_sectors['Variație %']],
                     textposition='auto',
                     textfont=dict(color='white', weight='bold')
                 ))
@@ -5837,7 +6124,7 @@ def main():
                 
                 c_heat1, c_heat2 = st.columns([2, 1.2])
                 with c_heat1:
-                    st.plotly_chart(fig_sec_heat, width='stretch')
+                    plot_ro(fig_sec_heat, width='stretch')
                 
                 # --- INTERPRETAREA AI (RISK-ON vs RISK-OFF) ---
                 with c_heat2:
@@ -5890,7 +6177,7 @@ def main():
                     # Afișare Lideri cu procente
                     st.write("**🏆 Liderii Zilei (Top 3):**")
                     for _, row in top_3.iterrows():
-                        st.write(f"<span style='color:#3FB950;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({row['Variație %']:+.2f}%)</span>", unsafe_allow_html=True)
+                        st.write(f"<span style='color:#3FB950;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
                         
                     st.markdown("<br>", unsafe_allow_html=True)
                     
@@ -5899,10 +6186,10 @@ def main():
                     for _, row in bottom_3.iterrows():
                         if row['Variație %'] < 0:
                             # E pe minus -> Săgeată roșie
-                            st.write(f"<span style='color:#F85149;'>▼</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({row['Variație %']:+.2f}%)</span>", unsafe_allow_html=True)
+                            st.write(f"<span style='color:#F85149;'>▼</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
                         else:
                             # E "codaș", dar e pe plus -> Săgeată galbenă (neutră)
-                            st.write(f"<span style='color:#D29922;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({row['Variație %']:+.2f}%)</span>", unsafe_allow_html=True)
+                            st.write(f"<span style='color:#D29922;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
         st.markdown("---")
         # =================================================================
         # MODUL NOU: RADAR DE RISC SISTEMIC (CU SELECTOR ȘI ZOOM)
@@ -5967,11 +6254,11 @@ def main():
                         xaxis=dict(showgrid=False),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-                    st.plotly_chart(fig_bonds, width='stretch')
+                    plot_ro(fig_bonds, width='stretch')
                     
                 with c_bond2:
                     st.markdown("#### 🌡️ Termometrul Creditării")
-                    st.metric(f"Raport ({selected_period_label})", f"{current_ratio:.3f}", f"{total_change:+.2f}%")
+                    st.metric(f"Raport ({selected_period_label})", f"{ro(current_ratio):.3f}", f"{ro(total_change):+.2f}%")
                     
                     # Logica de interpretare adaptată
                     if current_ratio < sma_20:
@@ -5979,7 +6266,7 @@ def main():
                     else:
                         st.success("✅ **STABILITATE:** Piața de credit susține încă evaluările acțiunilor.")
                         
-                    st.info(f"💡 **Interpretare:** În intervalul de **{selected_period_label}**, linia s-a mișcat cu **{total_change:+.2f}%**. Orice pantă bruscă în jos pe grafic indică faptul că băncile devin nervoase.")
+                    st.info(f"💡 **Interpretare:** În intervalul de **{selected_period_label}**, linia s-a mișcat cu **{ro(total_change):+.2f}%**. Orice pantă bruscă în jos pe grafic indică faptul că băncile devin nervoase.")
             else:
                 st.info("Sincronizare date obligațiuni...")
         
@@ -6003,7 +6290,7 @@ def main():
                         row_text = []
                         for j in range(len(corr_matrix)):
                             val = corr_matrix.iloc[i, j]
-                            row_text.append(f"{val:.2f}")
+                            row_text.append(f"{ro(val):.2f}")
                         text_matrix.append(row_text)
 
                     # Desenăm Heatmap-ul (Verde = merg împreună, Roșu = opuse)
@@ -6024,7 +6311,7 @@ def main():
                         margin=dict(l=0, r=0, t=10, b=0),
                         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
                     )
-                    st.plotly_chart(fig_corr, width='stretch')
+                    plot_ro(fig_corr, width='stretch')
                     
                 with c_cross2:
                     st.markdown("#### 🧠 Radiografia Fluxului Global")
@@ -6037,27 +6324,27 @@ def main():
                         
                         # Regula 1: Risc vs Siguranță (SPY vs TLT)
                         if spy_tlt > 0.4:
-                            st.error(f"🚨 **Șoc Inflaționist:** Acțiunile și Obligațiunile se mișcă împreună (Corelație +{spy_tlt:.2f}). Diversificarea clasică (60/40) nu te protejează. Cash-ul este rege.")
+                            st.error(f"🚨 **Șoc Inflaționist:** Acțiunile și Obligațiunile se mișcă împreună (Corelație +{ro(spy_tlt):.2f}). Diversificarea clasică (60/40) nu te protejează. Cash-ul este rege.")
                         elif spy_tlt < -0.4:
-                            st.success(f"✅ **Piață Normală:** Corelația Acțiuni/Bonduri este negativă ({spy_tlt:.2f}). Banii se mută ordonat între Risc și Siguranță.")
+                            st.success(f"✅ **Piață Normală:** Corelația Acțiuni/Bonduri este negativă ({ro(spy_tlt):.2f}). Banii se mută ordonat între Risc și Siguranță.")
                         else:
-                            st.warning(f"⚖️ **Tranziție:** Fără direcție clară între Acțiuni și Bonduri ({spy_tlt:.2f}).")
+                            st.warning(f"⚖️ **Tranziție:** Fără direcție clară între Acțiuni și Bonduri ({ro(spy_tlt):.2f}).")
                         
                         # Regula 2: Dolarul (Wrecking Ball)
                         if spy_uup < -0.5:
-                            st.info(f"💵 **Dolarul dictează:** Dolarul puternic lovește acțiunile (Corelație {spy_uup:.2f}). Urmărește moneda americană; dacă ea scade, bursa explodează.")
+                            st.info(f"💵 **Dolarul dictează:** Dolarul puternic lovește acțiunile (Corelație {ro(spy_uup):.2f}). Urmărește moneda americană; dacă ea scade, bursa explodează.")
                             
                         # Regula 3: Aurul ca panică pură
                         if gld_uup > 0.3:
-                            st.warning(f"🥇 **Frică Extremă:** Aurul crește ÎMPREUNĂ cu Dolarul (Corelație {gld_uup:.2f}). Marile fonduri cumpără masiv orice activ de refugiu, ignorând matematica standard.")
+                            st.warning(f"🥇 **Frică Extremă:** Aurul crește ÎMPREUNĂ cu Dolarul (Corelație {ro(gld_uup):.2f}). Marile fonduri cumpără masiv orice activ de refugiu, ignorând matematica standard.")
                     except:
                         st.write("Date insuficiente pentru diagnoza automată.")
                         
                     with st.expander("📖 Cum citești matricea?"):
                         st.write("""
-                        * **Pătrate Verzi (+0.5 la +1.0):** Activele sunt "prietene". Dacă unul crește, crește și celălalt.
-                        * **Pătrate Roșii (-0.5 la -1.0):** Activele sunt "inamice". Când unul urcă, celălalt scade (Corelație Inversă). Aceasta este cheia hedging-ului perfect.
-                        * **Pătrate Negre (în jur de 0.0):** Activele se ignoră complet reciproc.
+                        * **Pătrate Verzi (+0,5 la +1,0):** Activele sunt "prietene". Dacă unul crește, crește și celălalt.
+                        * **Pătrate Roșii (-0,5 la -1,0):** Activele sunt "inamice". Când unul urcă, celălalt scade (Corelație Inversă). Aceasta este cheia hedging-ului perfect.
+                        * **Pătrate Negre (în jur de 0,0):** Activele se ignoră complet reciproc.
                         """)
             else:
                 st.info("Sincronizare date Cross-Asset...")
@@ -6086,8 +6373,8 @@ def main():
                         df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)', 'Evoluție (An/An)']].style
                         .map(color_macro_trend, subset=['Evoluție (MoM)'])
                         .format({
-                            'Valoare Curentă': '{:.2f}',
-                            'Lună Precedentă': '{:.2f}'
+                            'Valoare Curentă': ro_spec('.2f'),
+                            'Lună Precedentă': ro_spec('.2f')
                         }),
                         width='stretch', hide_index=True
                     )
@@ -6128,7 +6415,7 @@ def main():
             st.subheader("📊 Indici Principali")
             st.dataframe(
                 df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                 width='stretch', hide_index=True
             )
             
@@ -6136,7 +6423,7 @@ def main():
             st.subheader("🛢️ Mărfuri (Commodities)")
             st.dataframe(
                 df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': '{:.2f}', 'Variație': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                 width='stretch', hide_index=True
             )
 
@@ -6151,7 +6438,7 @@ def main():
                 st.dataframe(
                     us_gain[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                     width='stretch', hide_index=True
                 )
         
@@ -6161,7 +6448,7 @@ def main():
                 st.dataframe(
                     us_lose[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                     width='stretch', hide_index=True
                 )
 
@@ -6176,7 +6463,7 @@ def main():
                 st.dataframe(
                     eu_gain[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                     width='stretch', hide_index=True
                 )
         
@@ -6186,7 +6473,7 @@ def main():
                 st.dataframe(
                     eu_lose[['Instrument', 'Preț', 'Variație %']].style
                     .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': '{:.2f}', 'Variație %': '{:.2f}%'}),
+                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                     width='stretch', hide_index=True
                 )
 
@@ -6249,35 +6536,29 @@ def main():
                         if col_clean in cols_numeric or "%" in col_clean or "Ron" in col_clean or "lei" in col_clean:
                             final_df[col] = final_df[col].apply(smart_to_float)
 
+                    # format românesc (punct la mii, virgulă la zecimale); Styler păstrează valorile numerice pentru sortare.
+                    # Coloanele nelistate: numerele cu 2 zecimale, textul rămâne neschimbat (ro_spec nu atinge șirurile)
+                    bvb_formats = {
+                        "Rentabilitate active (ROA)": ro_spec(".2f", "%"),
+                        "Rentabilitate capital (ROE)": ro_spec(".2f", "%"),
+                        "Marjă netă TTM": ro_spec(".2f", "%"),
+                        "Marjă operațională": ro_spec(".2f", "%"),
+                        "Div Yield": ro_spec(".2f", "%"),
+                        "Dividend Yield": ro_spec(".2f", "%"),
+                        "Câștig pe acțiune (EPS)": ro_spec(".4f"),
+                        "EPS TTM": ro_spec(".4f"),
+                        "Lichiditate curentă": ro_spec(".2f"),
+                        "Lichiditatea imediată": ro_spec(".2f"),
+                        "Levier financiar": ro_spec(".2f"),
+                        "Net Debt/EBITDA": ro_spec(".2f"),
+                        "Debt/EBITDA": ro_spec(".2f"),
+                        "Rata de îndatorare globală": ro_spec(".2f", "%"),
+                        "Rata de cash din capitalizare": ro_spec(".2f", "%"),
+                        "Rata de cash din activ net": ro_spec(".2f", "%"),
+                    }
                     st.dataframe(
-                        final_df, height=600, width='stretch',
-                        column_config={
-                            # Rentabilitate & Marje
-                            "Rentabilitate active (ROA)": st.column_config.NumberColumn(format="%.2f%%"),
-                            "Rentabilitate capital (ROE)": st.column_config.NumberColumn(format="%.2f%%"),
-                            "Marjă netă TTM": st.column_config.NumberColumn(format="%.2f%%"),
-                            "Marjă operațională": st.column_config.NumberColumn(format="%.2f%%"),
-                            
-                            # Dividende
-                            "Div Yield": st.column_config.NumberColumn(format="%.2f%%"),
-                            "Dividend Yield": st.column_config.NumberColumn(format="%.2f%%"),
-                            
-                            # EPS
-                            "Câștig pe acțiune (EPS)": st.column_config.NumberColumn(format="%.4f"),
-                            "EPS TTM": st.column_config.NumberColumn(format="%.4f"),
-                            
-                            # Lichiditate & Datorii
-                            "Lichiditate curentă": st.column_config.NumberColumn(format="%.2f"),
-                            "Lichiditatea imediată": st.column_config.NumberColumn(format="%.2f"),
-                            "Levier financiar": st.column_config.NumberColumn(format="%.2f"),
-                            "Net Debt/EBITDA": st.column_config.NumberColumn(format="%.2f"),
-                            "Debt/EBITDA": st.column_config.NumberColumn(format="%.2f"),
-                            "Rata de îndatorare globală": st.column_config.NumberColumn(format="%.2f%%"),
-                            
-                            # Cash Rates
-                            "Rata de cash din capitalizare": st.column_config.NumberColumn(format="%.2f%%"),
-                            "Rata de cash din activ net": st.column_config.NumberColumn(format="%.2f%%"),
-                        }
+                        final_df.style.format({c: bvb_formats.get(c.strip(), ro_spec(",.2f")) for c in final_df.columns}),
+                        height=600, width='stretch'
                     )
                 except Exception as e:
                     st.error(f"Eroare structură BVB: {e}")
@@ -6309,23 +6590,23 @@ def main():
                     if "Val. intrinsecă" in display_df.columns:
                         display_df["Val. intrinsecă"] = display_df["Val. intrinsecă"].apply(format_large_currency)
 
+                    # format românesc; moneda după număr, ca în restul aplicației
+                    global_formats = {
+                        "Preț acțiune": ro_spec(".2f", " USD"),
+                        "Preț țintă": ro_spec(".2f", " USD"),
+                        "Dividend": ro_spec(".2f", " USD"),
+                        "Datorii/Ac. Net": ro_spec(".2f", "%"),
+                        "Abatere": ro_spec(".2f", "%"),
+                        "Marjă P. Net": ro_spec(".2f", "%"),
+                        "ROA": ro_spec(".2f", "%"),
+                        "ROE": ro_spec(".2f", "%"),
+                    }
                     st.dataframe(
-                        display_df, height=600, width='stretch',
+                        display_df.style.format({c: global_formats.get(c, ro_spec(",.2f")) for c in display_df.columns}),
+                        height=600, width='stretch',
                         column_config={
                             "Capitalizare": st.column_config.TextColumn("Capitalizare", help="Valoare formatată"),
-                            
-                            # AICI E FIX-UL PENTRU PREȚ ($)
-                            "Preț acțiune": st.column_config.NumberColumn("Preț acțiune", format="$ %.2f"),
-                            "Preț țintă": st.column_config.NumberColumn("Preț țintă", format="$ %.2f"),
-                            "Dividend": st.column_config.NumberColumn("Dividend", format="$ %.2f"),
                             "Val. intrinsecă": st.column_config.TextColumn("Val. intrinsecă"),
-                            
-                            # AICI E FIX-UL PENTRU DATORII (%)
-                            "Datorii/Ac. Net": st.column_config.NumberColumn("Datorii/Ac. Net", format="%.2f%%"),
-                            "Abatere": st.column_config.NumberColumn(format="%.2f%%"),
-                            "Marjă P. Net": st.column_config.NumberColumn(format="%.2f%%"),
-                            "ROA": st.column_config.NumberColumn(format="%.2f%%"),
-                            "ROE": st.column_config.NumberColumn(format="%.2f%%"),
                             "Recomandare": st.column_config.TextColumn("Recomandare"),
                         }
                     )
@@ -6368,7 +6649,7 @@ def main():
             <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {c_bet}; margin-bottom: 20px;">
                 <h4 style="margin-top:0;">🇷🇴 Evoluția Pieței Locale</h4>
                 <p style="margin:5px 0; font-size:18px;">
-                    📉 <b>BET (TVBETETF):</b> {bet_price:,.2f} RON <span style="color:{c_bet}; font-weight:bold;">({bet_change:+.2f}%)</span>
+                    📉 <b>BET (TVBETETF):</b> {ro(bet_price):,.2f} RON <span style="color:{c_bet}; font-weight:bold;">({ro(bet_change):+.2f}%)</span>
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -6414,9 +6695,9 @@ def main():
             if (adv_b + dec_b + flat_b) > 0:
                 st.markdown(f"""
                 <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
-                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_b} ({adv_pb:.1f}%)</span>
+                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_b} ({ro(adv_pb):.1f}%)</span>
                     <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_b}</span>
-                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_b} ({dec_pb:.1f}%)</span>
+                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_b} ({ro(dec_pb):.1f}%)</span>
                 </div>
                 <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
                     <div style="width: {adv_pb}%; background-color: #3FB950;"></div>
@@ -6460,13 +6741,13 @@ def main():
                 <div style="display:flex; gap:15px; margin-bottom: 10px;">
                     <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
                         <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c50};">{tech_bvb['dist50']:+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_bvb['sma50']:.2f}</b></div>
+                        <div style="font-size:24px; font-weight:bold; color:{c50};">{ro(tech_bvb['dist50']):+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_bvb['sma50']):.2f}</b></div>
                     </div>
                     <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
                         <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c200};">{tech_bvb['dist200']:+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_bvb['sma200']:.2f}</b></div>
+                        <div style="font-size:24px; font-weight:bold; color:{c200};">{ro(tech_bvb['dist200']):+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_bvb['sma200']):.2f}</b></div>
                     </div>
                 </div>
                 <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_bvb['dist200'] > 0 else '#F85149'};">
@@ -6495,7 +6776,7 @@ def main():
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div>
                             <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volum vs Media 20z</div>
-                            <div style="font-size:28px; font-weight:bold; color:white;">{v_int:.2f}x</div>
+                            <div style="font-size:28px; font-weight:bold; color:white;">{ro(v_int):.2f}x</div>
                         </div>
                         <div style="text-align:right;">
                             <span style="background:{v_color}22; color:{v_color}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
@@ -6524,7 +6805,7 @@ def main():
                 if not gainers.empty:
                     st.dataframe(
                         gainers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
+                        .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
                         .map(lambda x: 'color: #3FB950', subset=['Variație']),
                         width='stretch', hide_index=True
                     )
@@ -6535,7 +6816,7 @@ def main():
                 if not losers.empty:
                     st.dataframe(
                         losers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
+                        .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
                         .map(lambda x: 'color: #F85149', subset=['Variație']),
                         width='stretch', hide_index=True
                     )
@@ -6547,16 +6828,16 @@ def main():
             st.subheader("📊 Top Lichiditate (Volume Tranzacționate)")
             if not vol_leaders.empty:
                 def format_vol(x):
-                    if x > 1e6: return f"{x/1e6:.2f} M"
-                    if x > 1e3: return f"{x/1e3:.2f} K"
-                    return f"{x:.0f}"
+                    if x > 1e6: return f"{ro(x/1e6):.2f} M"
+                    if x > 1e3: return f"{ro(x/1e3):.2f} K"
+                    return f"{ro(x):.0f}"
                 
                 vol_display = vol_leaders.copy()
                 vol_display['Volum'] = vol_display['Volum'].apply(format_vol)
                 
                 st.dataframe(
                     vol_display[['Simbol', 'Preț', 'Volum', 'Variație']].style
-                    .format({'Preț': '{:.2f}', 'Variație': '{:+.2f}%'})
+                    .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
                     .applymap(lambda x: 'color: #3FB950' if x > 0 else 'color: #F85149', subset=['Variație']),
                     width='stretch', hide_index=True
                 )
@@ -6627,13 +6908,13 @@ def main():
                 st.markdown(f"""
                 <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {us_border};">
                     <p style="margin:5px 0; font-size:16px;">
-                        🇺🇸 <b>S&P 500:</b> {sp500_price:,.2f} <span style="color:{c_sp}; font-weight:bold;">({sp500_chg:+.2f}%)</span>
+                        🇺🇸 <b>S&P 500:</b> {ro(sp500_price):,.2f} <span style="color:{c_sp}; font-weight:bold;">({ro(sp500_chg):+.2f}%)</span>
                     </p>
                     <p style="margin:5px 0; font-size:16px;">
-                        💻 <b>Nasdaq:</b> {nasdaq_price:,.2f} <span style="color:{c_nq}; font-weight:bold;">({nasdaq_chg:+.2f}%)</span>
+                        💻 <b>Nasdaq:</b> {ro(nasdaq_price):,.2f} <span style="color:{c_nq}; font-weight:bold;">({ro(nasdaq_chg):+.2f}%)</span>
                     </p>
                     <p style="margin:5px 0; font-size:16px;">
-                        🏭 <b>Dow Jones:</b> {dow_price:,.2f} <span style="color:{c_dj}; font-weight:bold;">({dow_chg:+.2f}%)</span>
+                        🏭 <b>Dow Jones:</b> {ro(dow_price):,.2f} <span style="color:{c_dj}; font-weight:bold;">({ro(dow_chg):+.2f}%)</span>
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -6650,7 +6931,7 @@ def main():
                     <small style="color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Sentimentul Wall Street</small>
                     <h1 style="color: {fg_color}; margin: 10px 0; font-size: 42px;">{int(fg_score)}</h1>
                     <div style="font-weight:bold; color: #FFFFFF; font-size: 18px; margin-bottom: 5px;">{fg_label}</div>
-                    <div style="font-size: 12px; color: #8B949E;">VIX (Volatilitate): {vix_val:.2f}</div>
+                    <div style="font-size: 12px; color: #8B949E;">VIX (Volatilitate): {ro(vix_val):.2f}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -6686,9 +6967,9 @@ def main():
             if (adv_u + dec_u + flat_u) > 0:
                 st.markdown(f"""
                 <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
-                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_u} ({adv_pu:.1f}%)</span>
+                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_u} ({ro(adv_pu):.1f}%)</span>
                     <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_u}</span>
-                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_u} ({dec_pu:.1f}%)</span>
+                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_u} ({ro(dec_pu):.1f}%)</span>
                 </div>
                 <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
                     <div style="width: {adv_pu}%; background-color: #3FB950;"></div>
@@ -6733,13 +7014,13 @@ def main():
                 <div style="display:flex; gap:15px; margin-bottom: 10px;">
                     <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
                         <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c50_u};">{tech_us['dist50']:+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_us['sma50']:,.2f}</b></div>
+                        <div style="font-size:24px; font-weight:bold; color:{c50_u};">{ro(tech_us['dist50']):+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_us['sma50']):,.2f}</b></div>
                     </div>
                     <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
                         <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c200_u};">{tech_us['dist200']:+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{tech_us['sma200']:,.2f}</b></div>
+                        <div style="font-size:24px; font-weight:bold; color:{c200_u};">{ro(tech_us['dist200']):+.2f}%</div>
+                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_us['sma200']):,.2f}</b></div>
                     </div>
                 </div>
                 <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_us['dist200'] > 0 else '#F85149'};">
@@ -6766,7 +7047,7 @@ def main():
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div>
                             <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volume Intensity Index</div>
-                            <div style="font-size:28px; font-weight:bold; color:white;">{v_int_u:.2f}x</div>
+                            <div style="font-size:28px; font-weight:bold; color:white;">{ro(v_int_u):.2f}x</div>
                         </div>
                         <div style="text-align:right;">
                             <span style="background:{v_color_u}22; color:{v_color_u}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
@@ -6795,7 +7076,7 @@ def main():
                 if not us_gainers.empty:
                     st.dataframe(
                         us_gainers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': '${:.2f}', 'Variație': '{:+.2f}%'})
+                        .format({'Preț': ro_spec('.2f', ' USD'), 'Variație': ro_spec('+.2f', '%')})
                         .map(lambda x: 'color: #3FB950', subset=['Variație']),
                         width='stretch', hide_index=True
                     )
@@ -6805,7 +7086,7 @@ def main():
                 if not us_losers.empty:
                     st.dataframe(
                         us_losers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': '${:.2f}', 'Variație': '{:+.2f}%'})
+                        .format({'Preț': ro_spec('.2f', ' USD'), 'Variație': ro_spec('+.2f', '%')})
                         .map(lambda x: 'color: #F85149', subset=['Variație']),
                         width='stretch', hide_index=True
                     )
@@ -6852,7 +7133,7 @@ def main():
         st.title("📡 Scanner Volum Relativ (RVOL)")
         st.markdown("""
         Acest modul identifică **anomaliile de volum**. 
-        Un RVOL (Relative Volume) mai mare de **1.5** indică un interes instituțional sau o știre importantă.
+        Un RVOL (Relative Volume) mai mare de **1,5** indică un interes instituțional sau o știre importantă.
         """)
         
         # Slider pentru sensibilitate (Default 1.5)
@@ -7005,11 +7286,11 @@ def main():
                         
                         st.dataframe(
                             df_filtered.style.apply(style_scanner_rows, axis=1).format({
-                                "Preț": "{:.2f}",
-                                "Variație %": "{:+.2f}%",
-                                "Volum Azi": "{:,.0f}",
-                                "Volum Mediu (20z)": "{:,.0f}",
-                                "RVOL": "{:.2f}x"
+                                "Preț": ro_spec('.2f'),
+                                "Variație %": ro_spec('+.2f', '%'),
+                                "Volum Azi": ro_spec(',.0f'),
+                                "Volum Mediu (20z)": ro_spec(',.0f'),
+                                "RVOL": ro_spec('.2f', 'x')
                             }),
                             width='stretch', 
                             height=600,
@@ -7119,7 +7400,7 @@ def main():
 
             st.dataframe(
                 df_res.style.apply(highlight_buy, axis=1)
-                .format({"Preț Curent": "{:.2f}", "Preț Țintă 🎯": "{:.2f}", "Distanță (%)": "{:+.2f}%"}, na_rep="N/A"),
+                .format({"Preț Curent": ro_spec('.2f'), "Preț Țintă 🎯": ro_spec('.2f'), "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={

@@ -8,6 +8,8 @@ pentru că multiplii diferă structural între SUA și Europa.
 import math
 import statistics
 
+from data.helpers import ro
+
 PEERS = {
     "US": {
         "Technology": ["MSFT", "AAPL", "NVDA", "AVGO", "ORCL", "CRM", "ADBE", "AMD", "INTC", "QCOM", "TXN", "CSCO", "IBM", "MU"],
@@ -196,7 +198,7 @@ def format_peer_value(label, value):
     """Textul unei celule din tabelul de comparabili; valoarea lipsă (None, NaN) devine „N/A".
     Formatarea se face aici pentru că `st.dataframe` afișează „None" la celulele goale."""
     value = _clean(value)
-    return "N/A" if value is None else PEER_FORMATS[label].format(value)
+    return "N/A" if value is None else PEER_FORMATS[label].format(ro(value))
 
 
 FINANCIAL_SECTOR = "Financial Services"

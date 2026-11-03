@@ -1,0 +1,11 @@
+# Luni–vineri la 15:30 ora New York (cu o oră înainte de închidere), indiferent de ora de vară/iarnă.
+[Unit]
+Description=IV_istoric: luni-vineri 15:30 New York
+
+[Timer]
+OnCalendar=Mon..Fri 15:30 America/New_York
+RandomizedDelaySec=120
+Persistent=false
+
+[Install]
+WantedBy=timers.target

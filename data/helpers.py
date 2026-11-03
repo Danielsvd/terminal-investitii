@@ -1,6 +1,7 @@
 """Utilitare de citire sigură a datelor. Fără Streamlit, fără rețea."""
 import calendar
 import csv
+import html
 import io
 import re
 from datetime import datetime
@@ -198,6 +199,54 @@ def parse_ecb_csv(text):
     return max(valid, key=lambda item: item[0])
 
 
+def parse_ecb_series(text):
+    """Toate observațiile dintr-un răspuns CSV al BCE, ca serie indexată pe perioadă (text, ex. "2026-08"
+    sau "2026-08-14"), sortată crescător. Serie goală dacă răspunsul nu are forma așteptată."""
+    if not text or not isinstance(text, str):
+        return pd.Series(dtype=float)
+    try:
+        rows = list(csv.DictReader(io.StringIO(text)))
+    except csv.Error:
+        return pd.Series(dtype=float)
+    out = {}
+    for row in rows:
+        period = (row.get("TIME_PERIOD") or "").strip()
+        try:
+            value = float(row.get("OBS_VALUE"))
+        except (TypeError, ValueError):
+            continue
+        if period and value == value:
+            out[period] = value
+    return pd.Series(out, dtype=float).sort_index()
+
+
+# --- Eurostat (API de diseminare, JSON-stat 2.0) -----------------------------
+
+def parse_eurostat_monthly(obj):
+    """Seria lunară dintr-un răspuns JSON-stat Eurostat filtrat pe o singură combinație (o țară, un indicator):
+    indexată pe perioada "AAAA-LL", sortată crescător. Toate dimensiunile în afară de `time` trebuie să aibă
+    un singur element; altfel (sau la orice formă neașteptată) serie goală, nu o valoare ghicită."""
+    try:
+        ids, sizes = list(obj["id"]), list(obj["size"])
+        if any(size != 1 for dim, size in zip(ids, sizes) if dim != "time"):
+            return pd.Series(dtype=float)
+        times = obj["dimension"]["time"]["category"]["index"]
+        values = obj["value"]
+    except (KeyError, TypeError):
+        return pd.Series(dtype=float)
+    out = {}
+    for label, pos in times.items():
+        raw = values.get(str(pos)) if isinstance(values, dict) else (values[pos] if pos < len(values) else None)
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        m = re.fullmatch(r"(\d{4})-?M?(\d{2})", str(label))
+        if m and v == v:
+            out[f"{m.group(1)}-{m.group(2)}"] = v
+    return pd.Series(out, dtype=float).sort_index()
+
+
 def positive_or_none(value):
     """Prețul țintă dintr-o celulă de foaie: număr strict pozitiv sau None.
 
@@ -220,10 +269,10 @@ def entry_target_view(price, target):
     if target is None or target != target or target <= 0:
         return "N/A", "Fără preț țintă în watchlist", "#8B949E"
     if price <= target:
-        return f"{target:.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
+        return f"{ro(target):.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
     dist_pct = (price - target) / target * 100
     color = "#D29922" if dist_pct < 5 else "#8B949E"
-    return f"{target:.2f}", f"⏳ +{dist_pct:.1f}% peste țintă", color
+    return f"{ro(target):.2f}", f"⏳ +{ro(dist_pct):.1f}% peste țintă", color
 
 
 def scale_number(value):
@@ -232,12 +281,12 @@ def scale_number(value):
     să fie scalate la fel ca cele pozitive, cu semnul păstrat."""
     size = abs(value)
     if size >= 1e12:
-        return f"{value / 1e12:.2f} T"
+        return f"{ro(value / 1e12):.2f} T"
     if size >= 1e9:
-        return f"{value / 1e9:.2f} B"
+        return f"{ro(value / 1e9):.2f} B"
     if size >= 1e6:
-        return f"{value / 1e6:.2f} M"
-    return f"{value:,.2f}"
+        return f"{ro(value / 1e6):.2f} M"
+    return f"{ro(value):,.2f}"
 
 
 def watchlist_status(price, target):
@@ -252,3 +301,71 @@ def watchlist_status(price, target):
     if price is None or target is None:
         return price, target, None, False
     return price, target, (price - target) / target * 100, price <= target
+
+
+def md_bold_html(text):
+    """Text pentru o casetă HTML (st.markdown cu unsafe_allow_html): caracterele HTML se escapează,
+    iar **bold** din Markdown, care nu se interpretează în interiorul unui <div>, devine <b>bold</b>."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(str(text), quote=False))
+
+
+def ro_separators(text):
+    """Separatorii unui număr formatat american, schimbați în cei românești: „1,234.5” → „1.234,5”."""
+    return text.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+class ro:
+    """Număr afișat în format românesc direct dintr-un f-string, cu specificația obișnuită.
+
+    f"{ro(x):,.2f}" → „1.234,56”; f"{ro(x):+.1%}" → „+12,3%”; f"{ro(n):,}" → „12.345”.
+    Schimbă doar afișarea: valoarea nu se modifică. O valoare nenumerică (None, text) dă
+    aceeași eroare ca f"{x:.2f}", ca să nu ascundă o lipsă tratată greșit în apelant.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __format__(self, spec):
+        return ro_separators(format(self.value, spec))
+
+
+def ro_spec(spec, suffix=""):
+    """Formatter pentru pandas Styler / map: ro_spec(",.2f")(1234.5) → „1.234,50”; lipsă → „N/A”.
+
+    În Styler păstrează valorile numerice dedesubt, deci sortarea pe coloană rămâne numerică.
+    `suffix` se adaugă doar la numere („ USD”, „%”), nu și la „N/A”.
+    """
+    def _fmt(v):
+        if v is None or isinstance(v, str):
+            return "N/A" if v is None else v
+        try:
+            if pd.isna(v):
+                return "N/A"
+        except (TypeError, ValueError):
+            pass
+        return format(ro(v), spec) + suffix
+    return _fmt
+
+
+def format_ro(value, decimals=2, suffix="", trim=False):
+    """Număr în format românesc: punct la mii, virgulă la zecimale („1.250”, „4.562,50”).
+
+    trim=True scoate zerourile de la final („1.250,0000” → „1.250”, „0,3048” rămâne).
+    Lipsă, NaN sau text nenumeric → „N/A”, niciodată 0.
+    """
+    if value is None or isinstance(value, bool):
+        return "N/A"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v != v or v in (float("inf"), float("-inf")):
+        return "N/A"
+    text = f"{v:,.{decimals}f}"
+    if trim and "." in text:
+        text = text.rstrip("0").rstrip(".")
+    text = ro_separators(text)
+    if text in ("-0", "-0,00") or (text.startswith("-") and set(text[1:]) <= set("0,.")):
+        text = text[1:]
+    return text + suffix

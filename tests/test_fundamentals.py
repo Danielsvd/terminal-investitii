@@ -211,7 +211,7 @@ def test_wacc_cost_al_datoriei_nerealist_trece_pe_proxy():
     # -> kd = 4% + 1,5 pp = 5,5%; WACC = 0,8 × 10% + 0,2 × 5,5% × 0,8 = 8,88%
     w = F.wacc(0.04, 1.2, 800.0, 200.0, interest_expense=75.0, tax_rate=0.20, erp=0.05)
     assert w["kd"] == pytest.approx(0.055) and w["wacc"] == pytest.approx(0.0888)
-    assert any("37.5%" in n for n in w["notes"])
+    assert any("37,5%" in n for n in w["notes"])
     # prea mic: 1 la 200 = 0,5% < jumătate din rf
     assert F.wacc(0.04, 1.2, 800.0, 200.0, interest_expense=1.0, tax_rate=0.20)["kd"] == pytest.approx(0.055)
 
@@ -475,7 +475,7 @@ def test_piotroski_criterii_picate():
     r = F.piotroski(income, balance, cashflow)
     assert [c["passed"] for c in r["criteria"]] == [True, True, False, False, True, True, False, True, True]
     assert r["passed"] == 6 and r["evaluable"] == 9
-    assert r["criteria"][3]["detail"] == "CFO 50.00 față de profit net 60.00"   # sumele, nu un raport rotunjit la 1,00
+    assert r["criteria"][3]["detail"] == "CFO 50,00 față de profit net 60,00"   # sumele, nu un raport rotunjit la 1,00
 
 
 def test_piotroski_date_lipsa_sunt_na_nu_picate():
@@ -556,17 +556,17 @@ def test_piotroski_emitent_financiar_fara_criteriile_de_flux():
 def test_valuation_verdict_banda_neutra():
     # SAP.DE pe aplicația de test: preț 191,50 față de DCF 190,22 -> +0,7%, în bandă
     text, zone, diff = F.valuation_verdict(191.50, 190.22)
-    assert zone == "fair" and text == "ÎN ZONA VALORII ESTIMATE (+0.7%)" and diff == pytest.approx(0.673, abs=0.01)
+    assert zone == "fair" and text == "ÎN ZONA VALORII ESTIMATE (+0,7%)" and diff == pytest.approx(0.673, abs=0.01)
     # TLV.RO: 35,28 față de Graham 64,53 -> (35,28 − 64,53) / 64,53 = −45,3%
-    assert F.valuation_verdict(35.28, 64.53)[:2] == ("SUBEVALUAT (45.3%)", "under")
-    assert F.valuation_verdict(130.0, 100.0)[:2] == ("SUPRAEVALUAT (30.0%)", "over")
+    assert F.valuation_verdict(35.28, 64.53)[:2] == ("SUBEVALUAT (45,3%)", "under")
+    assert F.valuation_verdict(130.0, 100.0)[:2] == ("SUPRAEVALUAT (30,0%)", "over")
     # marginile benzii: exact ±10% e încă neutru, imediat dincolo nu mai e
     assert F.VALUATION_NEUTRAL_BAND == 0.10
     assert F.valuation_verdict(110.0, 100.0)[1] == "fair" and F.valuation_verdict(90.0, 100.0)[1] == "fair"
     assert F.valuation_verdict(110.2, 100.0)[1] == "over" and F.valuation_verdict(89.8, 100.0)[1] == "under"
     # SAP.DE, Graham: 191,62 față de 207,06 -> −7,5%, în bandă la 10%, în afara ei la 5%
-    assert F.valuation_verdict(191.62, 207.06)[:2] == ("ÎN ZONA VALORII ESTIMATE (-7.5%)", "fair")
-    assert F.valuation_verdict(191.62, 207.06, band=0.05)[:2] == ("SUBEVALUAT (7.5%)", "under")
+    assert F.valuation_verdict(191.62, 207.06)[:2] == ("ÎN ZONA VALORII ESTIMATE (-7,5%)", "fair")
+    assert F.valuation_verdict(191.62, 207.06, band=0.05)[:2] == ("SUBEVALUAT (7,5%)", "under")
     assert F.valuation_verdict(100.0, 100.0, band=0.0)[1] == "fair"
     for bad in ((None, 100.0), (100.0, None), (100.0, 0.0), (100.0, -5.0), (float("nan"), 100.0)):
         assert F.valuation_verdict(*bad) == (None, None, None)
@@ -578,7 +578,7 @@ def test_dcf_verdict_fara_verdict_pe_fcf_deformat():
     assert (text, zone) == (F.DCF_NO_VERDICT, "none")
     assert diff == pytest.approx(485.714, abs=0.001)
     # aceeași companie, pe media anilor fiscali: verdictul se dă normal
-    assert F.dcf_verdict(1.23, 1.00, True, True)[:2] == ("SUPRAEVALUAT (23.0%)", "over")
+    assert F.dcf_verdict(1.23, 1.00, True, True)[:2] == ("SUPRAEVALUAT (23,0%)", "over")
     # fără avertisment: identic cu valuation_verdict, pe ambele baze
     for on_avg in (False, True):
         assert F.dcf_verdict(35.28, 64.53, False, on_avg) == F.valuation_verdict(35.28, 64.53)

@@ -11,6 +11,8 @@ import math
 
 import pandas as pd
 
+from data.helpers import ro
+
 # --- Nume de rânduri (yfinance le schimbă între companii și versiuni) --------
 
 CFO_ROWS = ("Operating Cash Flow", "Cash Flow From Continuing Operating Activities",
@@ -183,12 +185,12 @@ def fcf_distortion_warning(cfo, capex, fcf, average):
     investiții), sau FCF-ul curent e sub jumătate / peste dublul mediei multianuale.
     """
     if _is_num(cfo) and _is_num(capex) and cfo > 0 and abs(capex) / cfo > 0.75:
-        return (f"Capex-ul consumă {abs(capex) / cfo * 100:.0f}% din fluxul de numerar din exploatare: "
+        return (f"Capex-ul consumă {ro(abs(capex) / cfo * 100):.0f}% din fluxul de numerar din exploatare: "
                 "compania e într-un ciclu de investiții, iar FCF-ul curent subestimează capacitatea ei normală.")
     if _is_num(fcf) and _is_num(average) and average > 0 and fcf > 0:
         ratio = fcf / average
         if ratio < 0.5 or ratio > 2.0:
-            return (f"FCF-ul curent este {ratio * 100:.0f}% din media ultimilor ani: "
+            return (f"FCF-ul curent este {ro(ratio * 100):.0f}% din media ultimilor ani: "
                     "un an atipic proiectat la nesfârșit deformează valoarea.")
     return None
 
@@ -310,7 +312,7 @@ def wacc(risk_free, beta, market_cap, debt, interest_expense=None, tax_rate=None
         if 0.5 * risk_free <= implied <= risk_free + MAX_DEBT_SPREAD:
             kd = implied
         else:
-            notes.append(f"Dobânda raportată / datorie = {implied * 100:.1f}%, nerealist "
+            notes.append(f"Dobânda raportată / datorie = {ro(implied * 100):.1f}%, nerealist "
                          "(include probabil alte costuri financiare): costul datoriei = rf + 1,5 pp (proxy).")
     else:
         notes.append("Cheltuiala cu dobânzile nu e raportată: costul datoriei = rf + 1,5 pp (proxy).")
@@ -398,7 +400,7 @@ def dcf_fcf(fcf0, growth, discount_rate, terminal_growth, net_debt_value, shares
         result["warnings"].append("Diferența dintre rata de scont și g terminal e sub 2 pp: rezultatul e instabil.")
     if result["terminal_share"] > 0.75:
         result["warnings"].append(
-            f"Valoarea terminală reprezintă {result['terminal_share'] * 100:.0f}% din valoarea întreprinderii: "
+            f"Valoarea terminală reprezintă {ro(result['terminal_share'] * 100):.0f}% din valoarea întreprinderii: "
             "rezultatul depinde aproape în întregime de ipotezele pe termen lung.")
     if equity <= 0:
         result["reason"] = "Datoria netă depășește valoarea întreprinderii: capital propriu negativ în model."
@@ -705,8 +707,8 @@ def _short(value):
     a = abs(value)
     for limit, unit in ((1e9, "mld"), (1e6, "mil")):
         if a >= limit:
-            return f"{value / limit:,.2f} {unit}"
-    return f"{value:,.2f}"
+            return f"{ro(value / limit):,.2f} {unit}"
+    return f"{ro(value):,.2f}"
 
 
 GROSS_PROFIT_ROWS = ("Gross Profit",)
@@ -733,10 +735,10 @@ def piotroski(annual_income, annual_balance, annual_cashflow, financial=False):
         return stmt_value(df, rows, col)
 
     def pct(v):
-        return "N/A" if v is None else f"{v * 100:.1f}%"
+        return "N/A" if v is None else f"{ro(v * 100):.1f}%"
 
     def num2(v):
-        return "N/A" if v is None else f"{v:.2f}"
+        return "N/A" if v is None else f"{ro(v):.2f}"
 
     def compare(now, before, better, fmt):
         if now is None or before is None:
@@ -782,7 +784,7 @@ def piotroski(annual_income, annual_balance, annual_cashflow, financial=False):
     # Toleranță de 0,1% pentru rotunjiri; orice emisiune reală de acțiuni pică criteriul.
     add("7. Fără emisiune de acțiuni noi",
         (None if shares[0] is None or shares[1] is None else shares[0] <= shares[1] * 1.001,
-         "N/A" if shares[0] is None or shares[1] is None else f"{(shares[0] / shares[1] - 1) * 100:+.1f}% acțiuni"))
+         "N/A" if shares[0] is None or shares[1] is None else f"{ro((shares[0] / shares[1] - 1) * 100):+.1f}% acțiuni"))
     add("8. Marjă brută în creștere", compare(margin[0], margin[1], lambda a, b: a > b, pct))
     add("9. Rotația activelor în creștere", compare(turnover[0], turnover[1], lambda a, b: a > b, num2))
 
@@ -838,10 +840,10 @@ def valuation_verdict(price, value, band=VALUATION_NEUTRAL_BAND):
         return None, None, None
     diff = (price - value) / value
     if abs(diff) <= band:
-        return f"ÎN ZONA VALORII ESTIMATE ({diff * 100:+.1f}%)", "fair", diff * 100
+        return f"ÎN ZONA VALORII ESTIMATE ({ro(diff * 100):+.1f}%)", "fair", diff * 100
     if diff < 0:
-        return f"SUBEVALUAT ({abs(diff) * 100:.1f}%)", "under", diff * 100
-    return f"SUPRAEVALUAT ({abs(diff) * 100:.1f}%)", "over", diff * 100
+        return f"SUBEVALUAT ({ro(abs(diff) * 100):.1f}%)", "under", diff * 100
+    return f"SUPRAEVALUAT ({ro(abs(diff) * 100):.1f}%)", "over", diff * 100
 
 
 DCF_NO_VERDICT = "FĂRĂ VERDICT: FCF CURENT DEFORMAT"

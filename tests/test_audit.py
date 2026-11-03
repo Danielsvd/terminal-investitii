@@ -27,7 +27,7 @@ def test_subevaluata_cand_roe_peste_tinta():
     info = {"sector": "Technology", "trailingPE": 10, "returnOnEquity": 0.30, "debtToEquity": 50, "currentRatio": 2}
     audit = generate_advanced_audit_v2(info, 0.0, 1.0, 8)
     assert "Subevaluată" in _lines(audit, "EVALUARE")[0]
-    assert "30.0%" in _lines(audit, "PROFITABILITATE")[0]
+    assert "30,0%" in _lines(audit, "PROFITABILITATE")[0]
 
 
 def test_scumpa_peste_1_3_din_prag():
@@ -55,13 +55,13 @@ def test_alpha_lipsa_nu_devine_zero_si_nu_apare_pilonul():
     assert not _lines(audit, "PERFORMANȚĂ")
     assert "alpha" in _lines(audit, "DATE LIPSĂ")[0]
     audit = generate_advanced_audit_v2(info, 0.05, 1.0, 6)
-    assert "5.0%" in _lines(audit, "PERFORMANȚĂ")[0]
+    assert "5,0%" in _lines(audit, "PERFORMANȚĂ")[0]
 
 
 def test_lichiditate_lipsa_si_critica():
     baza = {"sector": "Technology", "trailingPE": 30, "returnOnEquity": 0.18, "debtToEquity": 50}
     assert not _lines(generate_advanced_audit_v2(dict(baza, currentRatio=None), 0.0, 1.0, 6), "LICHIDITATE")
-    assert "Critică (0.50)" in _lines(generate_advanced_audit_v2(dict(baza, currentRatio=0.5), 0.0, 1.0, 6), "LICHIDITATE")[0]
+    assert "Critică (0,50)" in _lines(generate_advanced_audit_v2(dict(baza, currentRatio=0.5), 0.0, 1.0, 6), "LICHIDITATE")[0]
 
 
 def test_pe_negativ_nu_se_compara_cu_sectorul():

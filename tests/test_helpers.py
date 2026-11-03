@@ -195,9 +195,9 @@ def test_entry_target_view_fara_tinta_nu_afiseaza_zero():
 
 def test_entry_target_view_cu_tinta():
     # AAPL din aplicația de test: 340,65 față de 243 -> (340,65 - 243) / 243 = 40,2%
-    assert entry_target_view(340.65, 243.0) == ("243.00", "⏳ +40.2% peste țintă", "#8B949E")
+    assert entry_target_view(340.65, 243.0) == ("243,00", "⏳ +40,2% peste țintă", "#8B949E")
     # 102 față de 100 -> 2% peste, sub pragul de 5% -> galben
-    assert entry_target_view(102.0, 100.0) == ("100.00", "⏳ +2.0% peste țintă", "#D29922")
+    assert entry_target_view(102.0, 100.0) == ("100,00", "⏳ +2,0% peste țintă", "#D29922")
     # la țintă sau sub ea -> zonă de achiziție
     assert entry_target_view(100.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
     assert entry_target_view(95.0, 100.0)[1:] == ("🚀 ZONĂ ACHIZIȚIE", "#3FB950")
@@ -207,12 +207,12 @@ from data.helpers import scale_number  # noqa: E402
 
 
 def test_scale_number_pozitive_si_negative():
-    assert scale_number(4.97e12) == "4.97 T" and scale_number(76.89e9) == "76.89 B"
-    assert scale_number(57.07e6) == "57.07 M" and scale_number(1234.5) == "1,234.50"
+    assert scale_number(4.97e12) == "4,97 T" and scale_number(76.89e9) == "76,89 B"
+    assert scale_number(57.07e6) == "57,07 M" and scale_number(1234.5) == "1.234,50"
     # INTC pe aplicația de test: profit net -11.288.999.936 apărea nescalat
-    assert scale_number(-11_288_999_936.0) == "-11.29 B"
-    assert scale_number(-2.5e6) == "-2.50 M" and scale_number(-950.0) == "-950.00"
-    assert scale_number(0) == "0.00"
+    assert scale_number(-11_288_999_936.0) == "-11,29 B"
+    assert scale_number(-2.5e6) == "-2,50 M" and scale_number(-950.0) == "-950,00"
+    assert scale_number(0) == "0,00"
 
 
 def test_watchlist_status_fara_zero_inventat():
@@ -229,3 +229,65 @@ def test_watchlist_status_fara_zero_inventat():
     # țintă goală în foaie (smart_to_float dă 0): fără distanță, fără semnal
     assert watchlist_status(50.0, 0.0) == (50.0, None, None, False)
     assert watchlist_status(float("nan"), float("nan")) == (None, None, None, False)
+
+
+def test_serie_bce_si_eurostat():
+    from data.helpers import parse_ecb_series, parse_eurostat_monthly
+    s = parse_ecb_series("KEY,TIME_PERIOD,OBS_VALUE\nX,2026-08,7.12\nX,2026-07,7.25\nX,2026-09,\n")
+    assert list(s.index) == ["2026-07", "2026-08"] and s["2026-08"] == 7.12
+    assert parse_ecb_series("<html>eroare</html>").empty and parse_ecb_series(None).empty
+    obj = {"id": ["freq", "int_rt", "geo", "time"], "size": [1, 1, 1, 3],
+           "dimension": {"time": {"category": {"index": {"2026M06": 0, "2026M07": 1, "2026M08": 2}}}},
+           "value": {"0": 6.1, "1": 6.02}}                               # august fără valoare
+    r = parse_eurostat_monthly(obj)
+    assert list(r.index) == ["2026-06", "2026-07"] and r["2026-07"] == 6.02
+    # Mai multe țări în răspuns: nu se ghicește care e România
+    obj2 = dict(obj, size=[1, 1, 2, 3])
+    assert parse_eurostat_monthly(obj2).empty
+    assert parse_eurostat_monthly({"eroare": 1}).empty
+
+
+def test_format_ro():
+    from data.helpers import format_ro
+    assert format_ro(1250, 4, trim=True) == "1.250"
+    assert format_ro(1250, 4) == "1.250,0000"
+    assert format_ro(4562.5) == "4.562,50"
+    assert format_ro(0.3048, 4, trim=True) == "0,3048"
+    assert format_ro(-264.47) == "-264,47"
+    assert format_ro(1234567.891, 2) == "1.234.567,89"
+    assert format_ro(106.2, 1, "%") == "106,2%"
+    assert format_ro(-0.001) == "0,00"
+    assert format_ro(None) == "N/A" and format_ro(float("nan")) == "N/A" and format_ro("x") == "N/A"
+
+
+def test_ro_format_spec():
+    from data.helpers import ro, ro_spec, ro_separators
+    assert f"{ro(1234.567):,.2f}" == "1.234,57"
+    assert f"{ro(0.1234):+.1%}" == "+12,3%"
+    assert f"{ro(-5818738.4):,.0f}" == "-5.818.738"
+    assert f"{ro(12345):,}" == "12.345"
+    assert f"{ro(2026):.0f}" == "2026"                  # anii rămân fără punct
+    assert f"{ro(0.52):.2f} / {ro(-0.48):.2f}" == "0,52 / -0,48"
+    assert f"{ro(float('nan')):.2f}" == "nan"           # aceeași afișare ca înainte
+    import pytest
+    with pytest.raises(TypeError):
+        f"{ro(None):.2f}"                               # lipsa nu devine număr
+    assert ro_spec(",.2f")(1234.5) == "1.234,50"
+    assert ro_spec(".1f")(None) == "N/A" and ro_spec(".1f")(float("nan")) == "N/A"
+    assert ro_spec(".1f")("N/A") == "N/A"
+    assert ro_separators("1,234.5") == "1.234,5"
+
+
+def test_ro_spec_sufix_doar_la_numere():
+    from data.helpers import ro_spec
+    assert ro_spec(",.0f", " USD")(2e11) == "200.000.000.000 USD"
+    assert ro_spec(".2f", "%")(8.0) == "8,00%" and ro_spec(".2f", "%")(None) == "N/A"
+    assert ro_spec(".2%")(-0.0909) == "-9,09%"
+
+
+def test_md_bold_html():
+    from data.helpers import md_bold_html
+    assert md_bold_html("✅ **Cash Machine:** text") == "✅ <b>Cash Machine:</b> text"
+    assert md_bold_html("**A** și **B**") == "<b>A</b> și <b>B</b>"
+    assert md_bold_html("P/E < 15 & **ok**") == "P/E &lt; 15 &amp; <b>ok</b>"
+    assert md_bold_html("fără bold") == "fără bold"

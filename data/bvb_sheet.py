@@ -11,7 +11,7 @@ import re
 import statistics
 import unicodedata
 
-from data.helpers import smart_to_float
+from data.helpers import ro, smart_to_float
 
 
 def normalize_label(text):
@@ -112,11 +112,11 @@ def parse_bvb_sheet(values):
 def _format_like(value, sample):
     """Formatează un număr ca celulele din foaie: „3,17%", „0,8699 lei" sau „24,49"."""
     if "%" in sample:
-        text = f"{value:.2f}%"
+        text = f"{ro(value):.2f}%"
     elif "lei" in sample.lower():
-        text = f"{value:.4f} lei"
+        text = f"{ro(value):.4f} lei"
     else:
-        text = f"{value:.2f}"
+        text = f"{ro(value):.2f}"
     return text.replace(".", ",")
 
 

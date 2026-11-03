@@ -16,7 +16,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from data.helpers import smart_to_float
+from data.helpers import ro, smart_to_float
 
 COLUMNS = ["Date", "Symbol", "Class", "Type", "Quantity", "Price", "Currency", "Fees", "Amount", "Broker", "ID", "Notes"]
 NUMERIC = ["Quantity", "Price", "Fees", "Amount"]
@@ -146,7 +146,7 @@ def build_positions(ledger):
         elif typ == "SELL":
             held = st["Quantity"]
             if qty > held + 1e-6:
-                problems.append(f"{sym}: vânzare de {qty:g} la {rec.Date:%Y-%m-%d}, dar în registru sunt doar {held:g} "
+                problems.append(f"{sym}: vânzare de {ro(qty):g} la {rec.Date:%Y-%m-%d}, dar în registru sunt doar {ro(held):g} "
                                 "(lipsește istoric). Profitul realizat pe acest simbol nu e de încredere.")
                 sold_cost = st["CostBasis"]
                 st["Quantity"], st["CostBasis"] = 0.0, 0.0
@@ -489,7 +489,7 @@ def external_flows(ledger, fx_history, base="RON"):
             continue
         rate = fx_on(fx_history, rec.Currency, rec.Date, base)
         if rate is None:
-            problems.append(f"{rec.Date:%Y-%m-%d}: fără curs {rec.Currency}/{base} pentru {rec.Type} de {amount:,.2f} {rec.Currency}.")
+            problems.append(f"{rec.Date:%Y-%m-%d}: fără curs {rec.Currency}/{base} pentru {rec.Type} de {ro(amount):,.2f} {rec.Currency}.")
         rows.append({"Date": rec.Date, "Currency": rec.Currency, "Amount": float(amount),
                      "Rate": np.nan if rate is None else rate,
                      "AmountBase": np.nan if rate is None else float(amount) * rate})
@@ -708,3 +708,27 @@ def flows_on_index(ext_flows, index):
         if i < len(index) and not pd.isna(amount):
             out.iloc[i] += float(amount)
     return out
+
+
+TAB_COLUMNS = ["Symbol", "Date", "Quantity", "AvgPrice", "Currency"]
+
+
+def tab_frame(positions):
+    """Pozițiile deschise din registru, în formatul taburilor pe monedă (Monte Carlo, benchmark, optimizator).
+
+    Coloane: Symbol, Date (goală: registrul are mai multe cumpărări), Quantity, AvgPrice, Currency.
+    - Doar cantitățile > 0; fără `NOMINAL_CLASSES` (titlurile de stat nu intră în Monte Carlo și optimizator).
+    - AvgPrice = costul mediu din registru (CostBasis / Quantity): include comisioanele de cumpărare,
+      iar acțiunile gratuite au cost 0, deci costul mediu scade (aceeași regulă ca în `build_positions`).
+    """
+    if positions is None or len(positions) == 0:
+        return pd.DataFrame(columns=TAB_COLUMNS)
+    open_ = positions[(positions["Quantity"] > QTY_EPS) & ~positions["Class"].isin(NOMINAL_CLASSES)]
+    out = pd.DataFrame({
+        "Symbol": open_["Symbol"].astype(str),
+        "Date": "",
+        "Quantity": open_["Quantity"].astype(float),
+        "AvgPrice": (open_["CostBasis"] / open_["Quantity"]).astype(float),
+        "Currency": open_["Currency"].astype(str).str.upper(),
+    })
+    return out[TAB_COLUMNS].sort_values(["Currency", "Symbol"]).reset_index(drop=True)

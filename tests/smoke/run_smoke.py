@@ -126,6 +126,8 @@ class FakeTicker:
         df = _ohlcv(self.ticker, _n_rows(period), tz="America/New_York").dropna(how="all")
         if self.ticker == "^TNX":      # randament în procente, ca la Yahoo (4,2 = 4,2%)
             df = df.assign(Close=4.2)
+        if self.ticker == "^IRX":      # titluri SUA 3 luni, în procente
+            df = df.assign(Close=3.9)
         df.index.name = "Date"
         return df
 
@@ -215,7 +217,8 @@ class FakeTicker:
             return pd.DataFrame({"strike": strikes,
                                  "openInterest": rng.integers(0, 5000, len(strikes)).astype(float),
                                  "volume": rng.integers(0, 2000, len(strikes)).astype(float),
-                                 "impliedVolatility": rng.uniform(0.15, 0.6, len(strikes))})
+                                 "impliedVolatility": rng.uniform(0.15, 0.6, len(strikes)),
+                                 "bid": np.full(len(strikes), 1.0)})
         calls, puts = side(), side()
         calls.loc[0, "openInterest"] = np.nan   # Yahoo trimite uneori NaN
         return types.SimpleNamespace(calls=calls, puts=puts)
@@ -315,6 +318,10 @@ SHEETS = {
     # preț manual pentru obligațiunea din registrul fals; data de azi, ca să nu apară avertismentul de preț vechi
     "Preturi_manuale": [["Symbol", "Price", "Date"], ["R9901AE", "101,25", __import__("datetime").date.today().isoformat()],
                         ["R9902AE", "", ""]],
+    # istoric IV la bani sintetic pentru AAPL: 25 de zile, IV 0,20 … 0,44
+    "IV_istoric": [["Date", "Symbol", "IV_ATM"]] + [
+        [(__import__("datetime").date.today() - __import__("datetime").timedelta(days=40 - i)).isoformat(), "AAPL", (20 + i) / 100]
+        for i in range(25)],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
                ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
 }
@@ -462,9 +469,17 @@ def install_fakes():
     # BCE: randamentul titlurilor de stat RO pe 10 ani (rata fără risc pentru RON)
     import requests
 
+    EUROSTAT_ROBOR = {"id": ["freq", "int_rt", "geo", "time"], "size": [1, 1, 1, 2],
+                      "dimension": {"time": {"category": {"index": {"2026-07": 0, "2026-08": 1}}}},
+                      "value": {"0": 6.02, "1": 5.87}}
+
     def fake_requests_get(url, *a, **k):
+        if "ec.europa.eu/eurostat" in url:      # ROBOR 3M (Eurostat irt_st_m)
+            return types.SimpleNamespace(status_code=200, text="", json=lambda: EUROSTAT_ROBOR)
         if "data-api.ecb.europa.eu" not in url:
             raise requests.ConnectionError("fără rețea în testul de fum")
+        if "/YC/" in url:                       # curba AAA a zonei euro, 10 ani − 3 luni, zilnic
+            return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-10-20,0.61\nX,2026-10-21,0.64\n")
         return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-07,7.25\nX,2026-08,7.12\n")
 
     requests.get = fake_requests_get
@@ -503,6 +518,9 @@ def install_fakes():
 # Rularea
 # --------------------------------------------------------------------------
 EXPECTED_MESSAGES = (
+    "(prag absolut 45%, netestat)", "(prag absolut 20%, netestat)",   # nivelul IV la bani pe lanțul sintetic
+    "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
+    "Fără opțiuni listate în Yahoo", "Yahoo nu a trimis lista de expirări", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
     "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
@@ -558,7 +576,7 @@ def main():
 
     radio().set_value("2. Analiză Companie").run()
     check(at, "2. Companie AAPL (date complete)")
-    has_global = lambda: any("Scor fundamental (praguri netestate)" in str(h.value) for h in at.subheader)
+    has_global = lambda: any("Scor fundamental (descriptiv" in str(h.value) for h in at.subheader)
     assert has_global(), "lipsește secțiunea Scor fundamental la AAPL"
     comp_df = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
     assert comp_df is not None, "lipsește tabelul cu componentele scorului fundamental la AAPL"
@@ -566,11 +584,45 @@ def main():
     assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
     assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
     print(f"AAPL componente: {by_comp}")
+    page_text = lambda: " ".join(str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.success) + list(at.error) + list(at.warning))
+    curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4,20% − 3 luni 3,90%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
+                    "SNP.RO": "România, titluri de stat 10 ani 7,12% (BCE) − ROBOR 3M 5,87% (Eurostat), 2026-08"}
+    assert curve_expect["AAPL"] in page_text(), "lipsește curba SUA în ratingul AAPL"
+    metric_labels = [str(m.label) for m in at.metric]
+    assert "Delta call / put" in metric_labels, f"lipsesc greeks la AAPL: {metric_labels}"
+    rank_metric = next((m for m in at.metric if str(m.label) == "IV Rank"), None)
+    assert rank_metric is not None and str(rank_metric.value) != "N/A", f"IV Rank lipsește la AAPL: {rank_metric and rank_metric.value}"
+    assert "25 zile de istoric" in str(rank_metric.delta), f"numărul de zile din IV_istoric: {rank_metric.delta}"
+    raw_bold = [str(m.value)[-120:] for m in at.markdown if "<div" in str(m.value) and "(netestat):" in str(m.value) and "**" in str(m.value)]
+    assert not raw_bold, f"casete HTML cu ** neinterpretat: {raw_bold}"
+    assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
+
+    def master_matches_top(sym):
+        """Sinteza „Decizie Master AI”: pasul 1 are exact eticheta și scorul din secțiunea de scor de sus;
+        metoda veche e doar în arhivă (expander)."""
+        texts = [str(m.value) for m in at.markdown]
+        master = [t for t in texts if "Pasul 1 · Fundamental" in t and "Pasul 3 · Context" in t]
+        assert master, f"lipsește sinteza Master AI în trei pași la {sym}"
+        m = re.search(r"Pasul 1 · Fundamental</span><br>\s*<span[^>]*>([^<]+)</span>\s*<span[^>]*>&nbsp;([^<]+)</span>", master[0])
+        assert m, f"pasul 1 necitibil la {sym}: {master[0][:200]!r}"
+        label, detail = m.group(1), m.group(2)
+        top = [t for t in texts if "Pasul 3 · Context" not in t and label in t and detail in t]
+        assert top, f"pasul 1 din Master AI ({label} {detail}) diferă de secțiunea de scor la {sym}"
+        assert "Pasul 3 · Context" in master[0] and "fără puncte" in master[0], f"lipsește pasul 3 la {sym}"
+        assert any("Metoda veche" in str(e.label) for e in at.expander), f"lipsește arhiva metodei vechi la {sym}"
+        print(f"{sym} Master AI pasul 1: {label} {detail}")
+
+    master_matches_top("AAPL")
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
         if sym in ("SAP.DE", "EURO.PA", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
             assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym == "EURO.PA":     # alpha UE: față de Euro Stoxx 50, nu față de SPY
+            alpha_m = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
+            alpha_help = alpha_m.proto.help if alpha_m is not None else ""
+            assert "Euro Stoxx 50" in alpha_help and "SPY" not in alpha_help, f"alpha EURO.PA: {alpha_help!r}"
+            print(f"EURO.PA alpha: {alpha_help}")
         if sym == "EURO.PA":     # EUR: AAA = Bund + marja AAA − GS10 din SUA, pe aceeași lună
             df_c = next((d.value for d in at.dataframe if "Componentă" in getattr(d.value, "columns", [])), None)
             ep_txt = dict(zip(df_c["Componentă"], df_c["Explicație"])).get("E/P față de AAA", "") if df_c is not None else ""
@@ -578,6 +630,10 @@ def main():
             print(f"EURO.PA E/P: {ep_txt}")
         if sym in ("TLV.RO", "SNP.RO"):
             assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
+        if sym in curve_expect:
+            assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
+        if sym in ("SAP.DE", "SNP.RO"):
+            master_matches_top(sym)
         if sym == "SNP.RO":
             assert any("Decizie BVB" in str(h.value) for h in at.subheader), "lipsește secțiunea Decizie BVB"
             at.button(key="bvb_files_reload").click().run()
@@ -592,6 +648,15 @@ def main():
         radio().set_value(section).run()
         check(at, section)
         if section == "3. Portofoliu":
+            pos_df = next((d.value for d in at.dataframe if {"Simbol", "Cantitate", "Sursă preț"} <= set(getattr(d.value, "columns", []))), None)
+            assert pos_df is not None, "lipsește tabelul pozițiilor deschise"
+            qty = dict(zip(pos_df["Simbol"], pos_df["Cantitate"]))
+            # registrul fals are 100 + 10 − 30 = 80 TLV.RO; foaia Portofoliu are 367 (doar comparată)
+            assert qty.get("TLV.RO") == "80", f"pozițiile nu vin din registrul Tranzactii: {qty}"
+            # titlul de stat nu e în foaie: rămâne din registru
+            assert qty.get("R9901AE") == "3", f"titlul de stat lipsește din poziții: {qty}"
+            # taburile pe monedă folosesc tot registrul: tabul RON are poziții (nu mesajul de portofoliu gol)
+            assert not any("Nu există acțiuni sau ETF-uri deschise" in str(e.value) for e in at.info), "taburile nu primesc pozițiile din registru"
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")

@@ -89,7 +89,7 @@ def test_sub_6_companii_fara_treapta():
 
 def test_verdict_doi_pasi():
     lab, _, text = final_verdict(2, 85)
-    assert lab == "CANDIDAT, MOMENT FAVORABIL" and "+9.2%" in text and "N = 386" in text
+    assert lab == "CANDIDAT, MOMENT FAVORABIL" and "+9,2%" in text and "N = 386" in text
     assert final_verdict(2, 60)[0] == "CANDIDAT, FĂRĂ SEMNAL DE MOMENT"
     assert final_verdict(2, 39.9)[0] == "CANDIDAT, TREND NEGATIV"
     assert final_verdict(0, 95)[0] == "NEFAVORABIL (MOMENTUL NU COMPENSEAZĂ)"
@@ -105,7 +105,7 @@ def test_banda_cu_scoruri_separate():
     b = verdict_banner(1, 54.2, 14, 31, 100)
     assert b["fund_label"] == "NEUTRU" and b["fund_detail"] == "54/100 · locul 14 din 31"
     assert b["moment_label"] == "FAVORABIL" and b["moment_detail"] == "100/100"
-    assert "+4.6%" in b["text"] and "N = 340" in b["text"]
+    assert "+4,6%" in b["text"] and "N = 340" in b["text"]
     b = verdict_banner(np.nan, np.nan, None, 31, None)
     assert b["fund_label"] == "DATE INSUFICIENTE" and b["fund_detail"] == "N/A" and b["moment_label"] == "N/A"
     assert verdict_banner(0, 20, 30, 31, 39.9)["moment_label"] == "NEFAVORABIL"
@@ -120,12 +120,12 @@ def test_explicatia_fundamentalului():
                         {"criteriu": "ROA TTM pozitiv", "valoare": 0.046, "trece": True}]}
     strong, middle, weak, notes = explain_fundamental(me, cs, "G")
     # G: EP cel mai mare → mai ieftin decât 100%; BP cel mai mic → mai scump decât 100%; Piotroski egal → mijloc 0%/0%
-    assert "P/E 0.14 — mai ieftin raportat la profit decât 100% din celelalte 6 companii." in strong
-    assert "P/BV 7.00 — mai scump raportat la capitalul propriu decât 100% din celelalte 6 companii." in weak
+    assert "P/E 0,14 — mai ieftin raportat la profit decât 100% din celelalte 6 companii." in strong
+    assert "P/BV 7,00 — mai scump raportat la capitalul propriu decât 100% din celelalte 6 companii." in weak
     # Piotroski egal la toți: rang mediu 50% → la mijloc, cu egalitatea menționată
-    assert "Piotroski simplificat 3.0/6 — s-a îmbunătățit mai mult decât 0% din celelalte 6 companii, la egalitate cu 100%." in middle
-    assert "Piotroski, ce s-a deteriorat față de acum un an: ROA a scăzut (6.3% → 4.6%)." in notes
-    assert any(n.startswith("GN 30.0 > 22,5") for n in notes)
+    assert "Piotroski simplificat 3,0/6 — s-a îmbunătățit mai mult decât 0% din celelalte 6 companii, la egalitate cu 100%." in middle
+    assert "Piotroski, ce s-a deteriorat față de acum un an: ROA a scăzut (6,3% → 4,6%)." in notes
+    assert any(n.startswith("GN 30,0 > 22,5") for n in notes)
 
 
 def test_explicatia_momentului():
@@ -137,3 +137,15 @@ def test_explicatia_momentului():
     assert lines[1].startswith("Momentum: +")
     assert "nu intră în scor" in lines[2]
     assert explain_moment(up.iloc[:20])[0].startswith("Istoric de preț insuficient")
+
+
+def test_piotroski_valori_in_procente_unde_e_cazul():
+    from analytics.bvb_fundamental import piotroski_value_text
+    assert piotroski_value_text({"criteriu": "ROA în creștere", "valoare": (0.063, 0.046)}) == "6,3% → 4,6%"
+    assert piotroski_value_text({"criteriu": "ROA TTM pozitiv", "valoare": 0.046}) == "4,6%"
+    assert piotroski_value_text({"criteriu": "Datorii pe termen lung / active în scădere",
+                                 "valoare": (0.184, 0.219)}) == "18,4% → 21,9%"
+    assert piotroski_value_text({"criteriu": "Lichiditate curentă în creștere", "valoare": (1.9, 1.34)}) == "1,90 → 1,34"
+    assert piotroski_value_text({"criteriu": "Rotația activelor în creștere", "valoare": (0.61, 0.62)}) == "0,61 → 0,62"
+    assert piotroski_value_text({"criteriu": "ROA în creștere", "valoare": (None, 0.05)}) == "N/A → 5,0%"
+    assert piotroski_value_text({"criteriu": "ROA TTM pozitiv", "valoare": float("nan")}) == "N/A"

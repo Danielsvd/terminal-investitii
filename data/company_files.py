@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from data.bvb_sheet import normalize_label, sheet_number
+from data.helpers import ro
 
 # Rândurile cu cifre brute: eticheta din fișier (normalizată) -> cheia internă
 RAW_ROWS = {
@@ -162,15 +163,15 @@ def validate(df):
         if pd.notna(e) and e == 0:
             df.at[i, "ebitda"] = np.nan
         elif pd.notna(e) and pd.notna(b) and e < b - abs(b) * 0.005:
-            flag(i, "ebitda", f"EBITDA {e:,.0f} < rezultat operațional {b:,.0f}", True)
+            flag(i, "ebitda", f"EBITDA {ro(e):,.0f} < rezultat operațional {ro(b):,.0f}", True)
             df.at[i, "ebitda"] = np.nan
         a, eq, li = df.at[i, "assets"], df.at[i, "equity"], df.at[i, "liab"]
         if all(pd.notna(x) for x in (a, eq, li)) and a > 0 and abs(eq + li - a) / a > 0.10:
-            flag(i, "bilant", f"capital {eq:,.0f} + datorii {li:,.0f} ≠ active {a:,.0f} "
-                              f"(abatere {abs(eq + li - a) / a:.0%})", False)
+            flag(i, "bilant", f"capital {ro(eq):,.0f} + datorii {ro(li):,.0f} ≠ active {ro(a):,.0f} "
+                              f"(abatere {ro(abs(eq + li - a) / a):.0%})", False)
         fx, cu = df.at[i, "assets_fixed"], df.at[i, "assets_cur"]
         if all(pd.notna(x) for x in (a, fx, cu)) and a > 0 and abs(fx + cu - a) / a > 0.10:
-            flag(i, "active", f"imobilizate {fx:,.0f} + circulante {cu:,.0f} ≠ active totale {a:,.0f}", False)
+            flag(i, "active", f"imobilizate {ro(fx):,.0f} + circulante {ro(cu):,.0f} ≠ active totale {ro(a):,.0f}", False)
 
     for _, g in df.groupby("year"):
         prev, prev_i = None, None
@@ -179,7 +180,7 @@ def validate(df):
             if prev is not None and pd.notna(r) and r < prev * 0.99:
                 # Cifre verificate de Daniel cu rapoartele (13 oct.): o scădere a cumulatului apare la
                 # reclasificări sau retratări între rapoarte. Rămân în calcul, doar semnalate.
-                flag(i, "rev", f"cifra de afaceri cumulată scade: {prev:,.0f} → {r:,.0f} "
+                flag(i, "rev", f"cifra de afaceri cumulată scade: {ro(prev):,.0f} → {ro(r):,.0f} "
                                "(trimestrul implicit e negativ: reclasificare sau retratare între rapoarte)", False)
             if pd.notna(r):
                 prev, prev_i = r, i
@@ -203,7 +204,7 @@ def validate(df):
             if outlier:
                 i = df.index[pos]
                 excluded = key != "cash"
-                flag(i, key, f"valoare izolată {v:,.0f} (anterior {last_ok:,.0f}, următor {nxt:,.0f})", excluded)
+                flag(i, key, f"valoare izolată {ro(v):,.0f} (anterior {ro(last_ok):,.0f}, următor {ro(nxt):,.0f})", excluded)
                 if excluded:
                     df.at[i, key] = np.nan
             else:
