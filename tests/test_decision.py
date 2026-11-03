@@ -15,7 +15,7 @@ def test_moment_band(score, band):
 def test_characterize_bvb_neutru_moment_favorabil():
     txt = characterize(is_bvb=True, fund_label="NEUTRU", fund_score=54, moment_score=100,
                        history_text="Istoric, combinația aceasta: +4,6% față de media BVB la 6 luni.")
-    assert txt.startswith("Fundamental, compania e la mijloc față de celelalte companii BVB din fișierele tale (54/100)")
+    assert txt.startswith("Fundamental, compania e la mijloc față de celelalte companii BVB din fișierele tale (54/100)")  # BVB: întreg
     assert "trendul și momentumul sunt pozitive (100/100)" in txt
     assert "Tehnicul e mai bun decât fundamentalul." in txt
     assert txt.endswith("+4,6% față de media BVB la 6 luni.")
@@ -26,7 +26,7 @@ def test_characterize_global_pillars_and_untested():
     pillars = [("Evaluare", 12), ("Calitate", 89), ("Sănătate", 100), ("Rentabilitate", None)]
     txt = characterize(is_bvb=False, fund_label="NEUTRU", fund_score=66.8, moment_score=30,
                        pillars=pillars, n_alerts=2)
-    assert "pe pilonii cu date (67/100)" in txt
+    assert "pe pilonii cu date (66,8/100)" in txt
     assert "; trendul e negativ (30/100)." in txt
     assert "Punct tare: Sănătate 100/100; punct slab: Evaluare 12/100." in txt
     assert "2 alerte de context" in txt
@@ -70,7 +70,8 @@ def test_context_flags_order_and_levels():
                           regime_msg="🚨 REGIM PANICĂ (Volatilitate Extremă)", opt_pc=1.3, opt_iv=55.0,
                           iv_rank=None, iv_days=3, sentiment=0.4, n_news=8, inst_pct=72, q_ratio=0.5, rsi=78, rvol=2.0)
     lv = _levels(flags)
-    assert lv["Altman Z"] == "alerta" and lv["Curba randamentelor"] == "alerta" and lv["Regim K-Means"] == "alerta"
+    assert lv["Altman Z"] == "alerta" and lv["Curba randamentelor"] == "alerta"
+    assert lv["Regim K-Means"] == "atentie"   # model netestat: cel mult galben
     assert lv["Opțiuni P/C"] == "atentie" and lv["Calitatea profitului"] == "atentie"
     assert lv["Știri"] == "pozitiv"
     assert lv["IV la bani"] == "info" and "IV Rank N/A (3 din 20 zile" in [f for f in flags if f["title"] == "IV la bani"][0]["text"]
