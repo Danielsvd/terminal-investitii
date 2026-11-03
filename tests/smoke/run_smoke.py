@@ -651,8 +651,8 @@ def main():
             pos_df = next((d.value for d in at.dataframe if {"Simbol", "Cantitate", "Sursă preț"} <= set(getattr(d.value, "columns", []))), None)
             assert pos_df is not None, "lipsește tabelul pozițiilor deschise"
             qty = dict(zip(pos_df["Simbol"], pos_df["Cantitate"]))
-            # foaia Portofoliu are 367 TLV.RO; registrul fals are 100 + 10 − 30 = 80
-            assert qty.get("TLV.RO") == "367", f"pozițiile nu vin din foaia Portofoliu: {qty}"
+            # registrul fals are 100 + 10 − 30 = 80 TLV.RO; foaia Portofoliu are 367 (doar comparată)
+            assert qty.get("TLV.RO") == "80", f"pozițiile nu vin din registrul Tranzactii: {qty}"
             # titlul de stat nu e în foaie: rămâne din registru
             assert qty.get("R9901AE") == "3", f"titlul de stat lipsește din poziții: {qty}"
             assert any("diferă de registru" in str(e.value) for e in at.info), "lipsește nota cu diferențele foaie / registru"

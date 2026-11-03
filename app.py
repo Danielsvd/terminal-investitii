@@ -2664,20 +2664,14 @@ def render_ledger_results(df_pf=None):
     positions, position_problems = ledger_calc.build_positions(ledger_df)
     problems = problems + position_problems
 
-    # Pozițiile deschise vin din foaia Portofoliu (actualizată manual); registrul dă istoricul
-    # (realizat, dividende, numerar, XIRR) și titlurile de stat, care nu se trec în foaie.
-    ledger_positions = positions
-    sheet_diffs, inferred = [], []
+    # Pozițiile deschise vin din registrul `Tranzactii` (exporturile brokerilor), ca toate celelalte
+    # rezultate. Foaia Portofoliu (taburile pe monedă de mai jos) e doar comparată cu registrul.
+    sheet_diffs = []
     if df_pf is not None and not df_pf.empty:
-        positions, sheet_diffs, inferred = portfolio_sheet.merge_positions(df_pf, ledger_positions)
-        problems = problems + list(df_pf.attrs.get("problems", []))
-    else:
-        st.warning("⚠️ Foaia `Portofoliu` nu a putut fi citită sau e goală: pozițiile de mai jos vin din registrul `Tranzactii`.")
+        _, sheet_diffs, _ = portfolio_sheet.merge_positions(df_pf, positions)
 
-    def _traded(frame):
-        held_part = frame[frame["Quantity"] > ledger_calc.QTY_EPS]
-        return held_part.loc[~held_part["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"].tolist()
-    live_symbols = sorted(set(_traded(positions)) | set(_traded(ledger_positions)))
+    held = positions[positions["Quantity"] > ledger_calc.QTY_EPS]
+    live_symbols = held.loc[~held["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"].tolist()
     with st.spinner("Citim prețurile pentru pozițiile din registru..."):
         prices = get_fast_live_prices(live_symbols + list(LEDGER_FX_SYMBOLS.values()))
         # Prețul live poate lipsi (Yahoo refuză des cererile de pe server): completăm cu ultima închidere.
@@ -2688,20 +2682,10 @@ def render_ledger_results(df_pf=None):
     valued = ledger_calc.value_open_positions(positions, prices, closes_last, manual_prices=manual_prices)
     asof = now_ro().replace(tzinfo=None)
     results = ledger_calc.class_results(ledger_df, positions, valued, asof)
-    # XIRR pe clasă = fluxurile registrului + valoarea de azi. Unde foaia are alte cantități decât
-    # registrul, valoarea include acțiuni fără fluxul lor de cumpărare: XIRR ar fi greșit, deci N/A.
-    diff_classes = portfolio_sheet.classes_with_diffs(positions, sheet_diffs)
-    if diff_classes:
-        diff_mask = [(c, cur) in diff_classes for c, cur in zip(results["Class"], results["Currency"])]
-        results.loc[diff_mask, "XIRR"] = np.nan
     cash = ledger_calc.cash_balances(ledger_df)
     fx_rates = {cur: prices.get(sym) or closes_last.get(sym) for cur, sym in LEDGER_FX_SYMBOLS.items()}
     fx_from_close = [cur for cur, sym in LEDGER_FX_SYMBOLS.items() if not prices.get(sym) and closes_last.get(sym)]
     by_currency, total_ron, missing_fx = ledger_calc.consolidate(results, cash, fx_rates)
-    # Totalul consecvent cu registrul (poziții, numerar și depuneri din aceeași sursă), pentru profitul total, XIRR și TWR.
-    valued_ledger = ledger_calc.value_open_positions(ledger_positions, prices, closes_last, manual_prices=manual_prices)
-    results_ledger = ledger_calc.class_results(ledger_df, ledger_positions, valued_ledger, asof)
-    _, total_ron_ledger, _ = ledger_calc.consolidate(results_ledger, cash, fx_rates)
     last_trade = ledger_df["Date"].max()
 
     positions_ron = (by_currency["Positions"] * by_currency["Rate"]).sum(min_count=1) if total_ron is not None else None
@@ -2711,21 +2695,18 @@ def render_ledger_results(df_pf=None):
     k2.metric("Poziții (RON)", _ledger_num(positions_ron), help=LEDGER_HELP["positions"])
     k3.metric("Numerar la brokeri (RON)", _ledger_num(cash_ron), help=LEDGER_HELP["cash"])
     st.caption(
-        "Pozițiile deschise (cantitate, cost mediu, valoare, nerealizat) vin din foaia `Portofoliu`; titlurile de stat, din registru. "
-        f"Numerarul, realizatul, dividendele, impozitele, comisioanele și XIRR vin din registrul `Tranzactii` "
-        f"({len(ledger_df)} tranzacții, {ledger_df['Date'].min():%d.%m.%Y} – {last_trade:%d.%m.%Y}). "
+        f"Totul vine din registrul `Tranzactii`, completat din exporturile brokerilor ({len(ledger_df)} tranzacții, "
+        f"{ledger_df['Date'].min():%d.%m.%Y} – {last_trade:%d.%m.%Y}): poziții, numerar, realizat, dividende, "
+        "impozite, comisioane și XIRR. Tranzacțiile de după ultima dată apar după importul unui export nou. "
         "Totalul în RON e la cursul de azi."
     )
     if sheet_diffs:
         st.info(
-            f"ℹ️ Foaia `Portofoliu` diferă de registru (actualizat până la {last_trade:%d.%m.%Y}) la: "
+            f"ℹ️ Foaia `Portofoliu` (folosită de taburile pe monedă de mai jos) diferă de registru, actualizat până la "
+            f"{last_trade:%d.%m.%Y}, la: "
             + "; ".join(f"**{sym}** foaie {_ledger_num(sq, 4)}, registru {_ledger_num(lq, 4)}" for sym, sq, lq in sheet_diffs)
-            + ". Pozițiile și valoarea folosesc foaia. Numerarul vine din registru, deci nu include tranzacțiile neimportate. "
-            "XIRR nu se afișează pentru clasele acestor simboluri. Profitul total, XIRR-ul total și curba de mai jos "
-            f"sunt calculate doar din registru, până la {last_trade:%d.%m.%Y}."
+            + ". Pozițiile de aici folosesc registrul. Importă exportul nou de la broker sau corectează foaia."
         )
-    if inferred:
-        st.caption("ℹ️ Clasă dedusă din simbol și monedă (simbolul nu e în registru): " + ", ".join(inferred) + ".")
     from_close = sorted(valued.loc[valued["PriceSource"] == ledger_calc.PRICE_CLOSE, "Symbol"])
     if from_close or fx_from_close:
         st.caption("ℹ️ Preț live indisponibil, s-a folosit ultima închidere pentru: "
@@ -2779,9 +2760,9 @@ def render_ledger_results(df_pf=None):
         "Impozite 0 la Tradeville nu înseamnă fără impozit: brokerul raportează dividendele nete, cu impozitul deja reținut."
     )
 
-    render_ledger_total(ledger_df, ledger_positions, total_ron_ledger, asof)
+    render_ledger_total(ledger_df, positions, total_ron, asof)
 
-    with st.expander("Poziții deschise (foaia Portofoliu; titlurile de stat din registru)"):
+    with st.expander("Poziții deschise din registru"):
         st.dataframe(pd.DataFrame({
             "Simbol": valued["Symbol"], "Clasă": valued["Class"], "Monedă": valued["Currency"],
             "Cantitate": valued["Quantity"].map(lambda v: format_ro(v, 4, trim=True)),
@@ -5175,7 +5156,7 @@ def main():
                     st.success(f"Adăugat {s} în Google Sheets!")
                     st.rerun()
 
-        # Foaia Portofoliu e sursa pozițiilor, atât în secțiunea de sus, cât și în taburile pe monedă
+        # Secțiunea de sus: pozițiile din registrul `Tranzactii`. Taburile pe monedă: foaia Portofoliu.
         df_pf = load_portfolio()
         render_ledger_results(df_pf)
         st.markdown("---")
