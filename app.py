@@ -5046,27 +5046,31 @@ def main():
                 bullets = []
                 
                 # Extragem datele vitale la cald
-                pe_ratio = info.get('trailingPE', 0) or 0
-                pb_ratio = info.get('priceToBook', 0) or 0
-                margins = (info.get('profitMargins', 0) or 0) * 100
-                beta = beta_val or 1
+                # Lipsă = None: bulletul respectiv nu se afișează (nu se presupune 0 sau beta 1).
+                pe_ratio = num(info, 'trailingPE')
+                pb_ratio = num(info, 'priceToBook')
+                margins = num(info, 'profitMargins')
+                margins = margins * 100 if margins is not None else None
+                beta = beta_val
+                pe_src = ("foaia BVB, la prețul curent" if 'trailingPE' in (info.get('_bvb_repriced') or [])
+                          else "Yahoo")
                 
                 # --- BULLET 1: Profitabilitate & Venituri ---
-                if margins > 0:
+                if margins is not None and margins > 0:
                     if margins > 15:
                         text_fin = f"Compania raportează rezultate fundamentale puternice, cu o marjă netă de profit de {ro(margins):.2f}%. Această eficiență operațională ridicată consolidează încrederea investitorilor pe termen lung."
                         bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_fin})
                     else:
                         text_fin = f"Compania menține o profitabilitate moderată, operând cu o marjă netă de {ro(margins):.2f}%, o valoare standard pentru dinamica actuală a sectorului său."
                         bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_fin})
-                elif margins < 0:
+                elif margins is not None and margins < 0:
                     text_fin = f"Rezultatele recente indică presiuni operaționale, compania raportând pierderi cu o marjă netă negativă de {ro(margins):.2f}%, un factor de risc major pentru acționari."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_fin})
 
                 # --- BULLET 2: Sentimentul Știrilor (Context) ---
                 c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
                 if c_news_ai:
-                    top_news = c_news_ai[0]['title']
+                    top_news = html.escape(str(c_news_ai[0]['title']))   # text extern în HTML
                     from ai_engine import analyze_sentiment_ai
                     s_score = analyze_sentiment_ai(c_news_ai)
                     
@@ -5081,19 +5085,22 @@ def main():
                         bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_news})
 
                 # --- BULLET 3: Volatilitate / Risc (Analiză Beta) ---
-                if beta > 1.3:
+                if beta is not None and beta > 1.3:
                     text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața de referință (Beta de {ro(beta):.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_vol})
-                elif beta < 0.8:
+                elif beta is not None and beta < 0.8:
                     text_vol = f"Acțiunea prezintă o volatilitate redusă față de piața generală (Beta de {ro(beta):.2f}), comportându-se ca un activ defensiv în perioadele de incertitudine."
                     bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_vol})
 
                 # --- BULLET 4: Evaluare Multipli ---
-                if pe_ratio > 30:
-                    text_val = f"Multipli de evaluare ridicați, inclusiv un raport P/E de {ro(pe_ratio):.2f} și P/B de {ro(pb_ratio):.2f}, sugerează că acțiunea ar putea fi supraevaluată în raport cu fundamentele contabile curente."
+                pb_txt = f" și P/B de {ro(pb_ratio):.2f}" if pb_ratio is not None else ""
+                if pe_ratio is not None and pe_ratio > 30:
+                    text_val = (f"Multipli de evaluare ridicați, inclusiv un raport P/E de {ro(pe_ratio):.2f}{pb_txt} ({pe_src}), sugerează că acțiunea "
+                                f"ar putea fi supraevaluată în raport cu fundamentele contabile curente (prag fix P/E 30, netestat).")
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_val})
-                elif 0 < pe_ratio < 15:
-                    text_val = f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {ro(pe_ratio):.2f}), indicând o potențială subevaluare din partea pieței raportat la capacitatea sa de generare a profitului."
+                elif pe_ratio is not None and 0 < pe_ratio < 15:
+                    text_val = (f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {ro(pe_ratio):.2f}, {pe_src}), indicând o potențială "
+                                f"subevaluare din partea pieței raportat la capacitatea sa de generare a profitului (prag fix P/E 15, netestat).")
                     bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_val})
 
                 # --- RANDARE UI PREMIUM ---
