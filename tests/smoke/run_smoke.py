@@ -767,6 +767,11 @@ def main():
             print("Dobânzi:", rt[["Indicator", "Valoare (%)", "Perioadă", "Sursă"]].values.tolist())
             for _, r_ in rt.iterrows():
                 assert pd.isna(r_["Valoare (%)"]) == r_["Sursă"].endswith("indisponibil"), r_.to_dict()
+            # lățimea pieței SUA: 2 perechi, diferența = randament A − randament B
+            br = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Diferență 12 luni" in
+                       getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert br is not None and len(br) == 2, "lipsește tabelul lățimii pieței"
+            print("Lățime:", br[["Pereche", "Diferență 3 luni", "Detaliu 3 luni"]].values.tolist())
             # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
             stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
             print("Stres:", stress_m)

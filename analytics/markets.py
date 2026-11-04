@@ -107,3 +107,30 @@ def ron_return(close, fx_ron=None, horizon="1 an"):
     if out["fx"] is not None:
         out["ron"] = float((1.0 + out["local"]) * (1.0 + out["fx"]) - 1.0)
     return out
+
+
+# Lățimea pieței SUA: cât de larg e participată creșterea. ETF-uri pe aceleași 500 de companii cu ponderi egale (RSP)
+# și pe companii mici (IWM), comparate cu S&P 500 ponderat cu capitalizarea (SPY). Total return (ajustate).
+BREADTH_PAIRS = [
+    ("RSP", "SPY", "S&P 500 ponderi egale vs ponderat cu capitalizarea"),
+    ("IWM", "SPY", "Companii mici (Russell 2000) vs S&P 500"),
+]
+BREADTH_MONTHS = (3, 12)
+
+
+def relative_return(a_close, b_close, months):
+    """Randamentul lui A, al lui B pe ultimele `months` luni calendaristice și diferența A − B (fracții).
+    Ambele se măsoară până la ultima zi comună. None unde istoricul nu acoperă perioada."""
+    a, b = _clean(a_close), _clean(b_close)
+    common = a.index.intersection(b.index)
+    out = {"a": None, "b": None, "diff": None, "end": None}
+    if len(common) < 2:
+        return out
+    end = common[-1]
+    start = end - pd.DateOffset(months=months)
+    if a.index[0] > start or b.index[0] > start:
+        return out
+    ra = float(a.loc[end] / _on_or_before(a, start) - 1.0)
+    rb = float(b.loc[end] / _on_or_before(b, start) - 1.0)
+    out.update({"a": ra, "b": rb, "diff": ra - rb, "end": end})
+    return out
