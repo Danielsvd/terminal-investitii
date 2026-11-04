@@ -260,7 +260,7 @@ class FakeTickers:
         self.tickers = {s: FakeTicker(s) for s in symbols}
 
 
-FRED_DAILY = {"DFF": 4.33, "DGS3MO": 4.20, "DGS2": 3.90, "DGS10": 4.40}
+FRED_DAILY = {"DFF": 4.33, "DGS3MO": 4.20, "DGS2": 3.90, "DGS10": 4.40, "BAMLH0A0HYM2": 3.10, "BAMLC0A0CM": 0.85}
 
 
 def fake_fred(code, source, start, end):
@@ -767,6 +767,10 @@ def main():
             print("Dobânzi:", rt[["Indicator", "Valoare (%)", "Perioadă", "Sursă"]].values.tolist())
             for _, r_ in rt.iterrows():
                 assert pd.isna(r_["Valoare (%)"]) == r_["Sursă"].endswith("indisponibil"), r_.to_dict()
+            # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
+            stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
+            print("Stres:", stress_m)
+            assert len(stress_m) == 3 and all(v != "N/A" for v in stress_m.values()), stress_m
             # cursul valutar față de leu: BNR + live; anul trecut lipsește → 1 an / de la 1 ian. N/A, cu nota
             fx = next((d.value for d in at.dataframe if {"Curs BNR", "Live (Yahoo)", "1 an %"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
