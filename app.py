@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
 from data.news import filter_company_news
+from ui.card_help import fund_help
 import os
 import time
 from datetime import datetime, timedelta
@@ -3541,27 +3542,28 @@ def main():
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
                 with c_eval:
                     st.markdown("**Evaluare & Dividende**")
-                    st.metric("P/E Ratio", format_num(info.get('trailingPE')))
-                    st.metric("Forward P/E", format_num(info.get('forwardPE')))
+                    st.metric("P/E Ratio", format_num(info.get('trailingPE')), help=fund_help(info, "trailingPE"))
+                    st.metric("Forward P/E", format_num(info.get('forwardPE')), help=fund_help(info, "forwardPE"))
                     div_rate = info.get('dividendRate')
                     div_display = f"{ro(div_rate):.2f} ({ro((div_rate/curr_price*100)):.2f}%)" if (div_rate and curr_price) else "N/A"
-                    st.metric("Dividend (Randament)", div_display)
-                    st.metric("P/BV", format_num(info.get('priceToBook')))
-                    gn_calc = (info.get('trailingPE', 0) or 0) * (info.get('priceToBook', 0) or 0)
-                    st.metric("GN (Graham)", f"{ro(gn_calc):.2f}" if gn_calc > 0 else "N/A")
-                    st.metric("EPS", format_num(info.get('trailingEps')))
-                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')))
+                    st.metric("Dividend (Randament)", div_display, help=fund_help(info, "dividendRate"))
+                    st.metric("P/BV", format_num(info.get('priceToBook')), help=fund_help(info, "priceToBook"))
+                    gn_pe, gn_pb = num(info, 'trailingPE'), num(info, 'priceToBook')
+                    gn_calc = gn_pe * gn_pb if (gn_pe is not None and gn_pb is not None) else None   # lipsă = N/A, nu 0
+                    st.metric("GN (Graham)", f"{ro(gn_calc):.2f}" if (gn_calc is not None and gn_calc > 0) else "N/A", help=fund_help(info, "gn"))
+                    st.metric("EPS", format_num(info.get('trailingEps')), help=fund_help(info, "trailingEps"))
+                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help=fund_help(info, "bookValue"))
                 with c_prof:
                     st.markdown("**Profitabilitate**")
-                    st.metric("ROA", format_num(info.get('returnOnAssets'), True))
-                    st.metric("ROE", format_num(info.get('returnOnEquity'), True))
-                    st.metric("Marjă Netă", format_num(info.get('profitMargins'), True))
-                    st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True))
+                    st.metric("ROA", format_num(info.get('returnOnAssets'), True), help=fund_help(info, "returnOnAssets"))
+                    st.metric("ROE", format_num(info.get('returnOnEquity'), True), help=fund_help(info, "returnOnEquity"))
+                    st.metric("Marjă Netă", format_num(info.get('profitMargins'), True), help=fund_help(info, "profitMargins"))
+                    st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True), help=fund_help(info, "operatingMargins"))
                 with c_indat:
                     st.markdown("**Îndatorare**")
-                    st.metric("Datorii/Capital", de_display)
-                    st.metric("Current Ratio", format_num(info.get('currentRatio')))
-                    st.metric("Quick Ratio", format_num(info.get('quickRatio')))
+                    st.metric("Datorii/Capital", de_display, help=fund_help(info, "debtToEquity"))
+                    st.metric("Current Ratio", format_num(info.get('currentRatio')), help=fund_help(info, "currentRatio"))
+                    st.metric("Quick Ratio", format_num(info.get('quickRatio')), help=fund_help(info, "quickRatio"))
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", format_num(beta_val), help=f"Sursă: {risk_stats['beta_label']}")
