@@ -1873,8 +1873,9 @@ def calculate_technical_indicators(df):
     df['MACD'], df['Signal'] = macd_lines(df['Close'])
     return df
 
-def plot_correlation_matrix(tickers):
-    """Generează matricea de corelație și un raport vizual premium."""
+def plot_correlation_matrix(tickers, show_cards=True):
+    """Matricea de corelație (heatmap). Cu `show_cards=False` cardurile pe perechi nu se afișează aici:
+    se întoarce matricea, iar apelantul le afișează unde vrea cu `render_diversification_cards`."""
     if len(tickers) < 2: return None
     try:
         # 1. Descărcare și calcul
@@ -1921,55 +1922,60 @@ def plot_correlation_matrix(tickers):
 
         plot_ro(fig, width='stretch')
         
-        # 4. RAPORT VIZUAL STILIZAT (Cards)
-        st.markdown("### 📋 Analiză Strategica a Diversificării")
-        
-        cols = st.columns(len(corr_matrix.columns) - 1 if len(corr_matrix.columns) <= 3 else 2)
-        col_idx = 0
-
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i + 1, len(corr_matrix.columns)):
-                score = corr_matrix.iloc[i, j]
-                t1, t2 = corr_matrix.columns[i], corr_matrix.columns[j]
-                
-                # Logică Culori și Iconițe
-                if score > 0.75:
-                    color, icon, label = "#F85149", "🚫", "Diversificare Slabă"
-                    bg_light = "rgba(248, 81, 73, 0.1)"
-                elif score > 0.40:
-                    color, icon, label = "#DBAB09", "⚠️", "Diversificare Moderată"
-                    bg_light = "rgba(219, 171, 9, 0.1)"
-                else:
-                    color, icon, label = "#3FB950", "🛡️", "Diversificare Optimă"
-                    bg_light = "rgba(63, 185, 80, 0.1)"
-
-                # Randare Card HTML/CSS
-                with cols[col_idx % len(cols)]:
-                    st.markdown(f"""
-                        <div style="
-                            background-color: #161B22; 
-                            border-left: 5px solid {color}; 
-                            padding: 15px; 
-                            border-radius: 10px; 
-                            margin-bottom: 10px;
-                            box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span style="color: #8B949E; font-size: 12px; font-weight: bold; text-transform: uppercase;">{label}</span>
-                                <span style="font-size: 20px;">{icon}</span>
-                            </div>
-                            <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
-                            <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
-                                <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{ro(score):.2f}</span>
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                col_idx += 1
-
-        return True
+        if show_cards:
+            render_diversification_cards(corr_matrix)
+        return corr_matrix
     except Exception as e:
         st.error(f"Eroare Matrice: {e}")
         return None
     
+def render_diversification_cards(corr_matrix):
+    """Cardurile „Analiză Strategică a Diversificării”: o pereche de simboluri pe card, cu corelația ei."""
+    # 4. RAPORT VIZUAL STILIZAT (Cards)
+    st.markdown("### 📋 Analiză Strategică a Diversificării")
+    
+    cols = st.columns(len(corr_matrix.columns) - 1 if len(corr_matrix.columns) <= 3 else 2)
+    col_idx = 0
+
+    for i in range(len(corr_matrix.columns)):
+        for j in range(i + 1, len(corr_matrix.columns)):
+            score = corr_matrix.iloc[i, j]
+            t1, t2 = corr_matrix.columns[i], corr_matrix.columns[j]
+            
+            # Logică Culori și Iconițe
+            if score > 0.75:
+                color, icon, label = "#F85149", "🚫", "Diversificare Slabă"
+                bg_light = "rgba(248, 81, 73, 0.1)"
+            elif score > 0.40:
+                color, icon, label = "#DBAB09", "⚠️", "Diversificare Moderată"
+                bg_light = "rgba(219, 171, 9, 0.1)"
+            else:
+                color, icon, label = "#3FB950", "🛡️", "Diversificare Optimă"
+                bg_light = "rgba(63, 185, 80, 0.1)"
+
+            # Randare Card HTML/CSS
+            with cols[col_idx % len(cols)]:
+                st.markdown(f"""
+                    <div style="
+                        background-color: #161B22; 
+                        border-left: 5px solid {color}; 
+                        padding: 15px; 
+                        border-radius: 10px; 
+                        margin-bottom: 10px;
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: #8B949E; font-size: 12px; font-weight: bold; text-transform: uppercase;">{label}</span>
+                            <span style="font-size: 20px;">{icon}</span>
+                        </div>
+                        <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
+                        <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
+                            <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{ro(score):.2f}</span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            col_idx += 1
+
+
 def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name="S&P 500"):
     """Compară performanța portofoliului cu benchmark-ul folosind procente în tooltip."""
     if portfolio_curve is None or portfolio_curve.empty:
@@ -5477,10 +5483,10 @@ def main():
                 st.markdown("---")
                 st.subheader("🧩 Analiză Diversificare (Corelare)")
                 current_tickers = df_subset['Symbol'].unique().tolist()
+                corr_for_cards = None   # cardurile pe perechi se afișează la finalul tabului (cerința lui Daniel)
                 if len(current_tickers) > 1:
                     with st.spinner("Analizăm suprapunerea riscului..."):
-                        # Acum doar apelăm funcția, ea face totul
-                        plot_correlation_matrix(current_tickers)
+                        corr_for_cards = plot_correlation_matrix(current_tickers, show_cards=False)
                 else:
                     st.info("Adaugă cel puțin 2 active pentru analiză.")
                 
@@ -5614,6 +5620,11 @@ def main():
                             st.warning(opt_msg)
                 else:
                     st.info("Adaugă cel puțin 2 acțiuni în portofoliu pentru ca AI-ul să poată calcula diversificarea optimă.") 
+
+                # Ultima secțiune a tabului: cardurile pe perechi, după optimizator
+                if corr_for_cards is not None:
+                    st.markdown("---")
+                    render_diversification_cards(corr_for_cards)
 
             with tab_usd:
                 df_usd = df_pf[df_pf['Currency'] == 'USD']
