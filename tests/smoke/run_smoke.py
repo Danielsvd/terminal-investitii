@@ -612,6 +612,10 @@ def main():
         assert any("Metoda veche" in str(e.label) for e in at.expander), f"lipsește arhiva metodei vechi la {sym}"
         print(f"{sym} Master AI pasul 1: {label} {detail}")
 
+    alpha_aapl = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
+    alpha_help = alpha_aapl.proto.help if alpha_aapl is not None else ""
+    assert "SPY" in alpha_help and "rată fără risc" in alpha_help, f"alpha AAPL: {alpha_help!r}"
+    print(f"AAPL alpha: {alpha_help}")
     master_matches_top("AAPL")
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
