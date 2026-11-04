@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
+from data.news import filter_company_news
 import os
 import time
 from datetime import datetime, timedelta
@@ -1120,24 +1121,30 @@ def filter_news(all_news, category):
             
     return filtered
 
-def get_company_news_rss(symbol):
+def get_company_news_rss(symbol, names=None, limit=7):
+    """Știrile Yahoo (RSS) pe simbol. Cu `names` (numele companiei din `info`), se păstrează doar
+    știrile care menționează emitentul (data/news.py): fluxul pe simbol aduce des știri despre alte
+    companii. Fără `names` (indici: ^GSPC, ^IXIC) lista rămâne nefiltrată."""
     rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
     news_list = []
     try:
         feed = feedparser.parse(rss_url)
         if not feed.entries: return []
-        for entry in feed.entries[:7]:
+        for entry in feed.entries[:30]:
             dt = parse_date(entry)
             news_list.append({
                 "title": entry.title,
                 "link": entry.link,
+                "summary": getattr(entry, "summary", ""),
                 "publisher": "Yahoo Finance",
                 "date_str": dt.strftime("%Y-%m-%d %H:%M")
             })
     except Exception as exc:  # înainte: except: gol
         logger.warning("get_company_news_rss: %s", exc)
         return []
-    return news_list
+    if names is not None:
+        news_list = filter_company_news(news_list, symbol, names)
+    return news_list[:limit]
 
 # --- FUNCȚII ANALIZĂ (Professional Update) ---
 @st.cache_data(ttl=3600)
@@ -4508,7 +4515,7 @@ def main():
                 from ai_engine import analyze_sentiment_ai, generate_ai_swot_analysis
                 
                 # Colectare date necesare pentru SWOT
-                c_news_ai = get_company_news_rss(real_sym)
+                c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
                 s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
                 mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if (dcf_calc is not None and dcf_calc > 0) else None
                 z_val_swot = altman_res["zone"]   # zona, nu scorul: pragul depinde de variantă
@@ -4554,7 +4561,7 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                        
-            c_news_ai = get_company_news_rss(real_sym)
+            c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
             cai1, cai2 = st.columns([1, 2])
             
             # --- PARTEA ACTUALIZATĂ (Scorul FinBERT cu Legendă) ---
@@ -4597,6 +4604,9 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
+                else:
+                    st.caption("Sentiment N/A: în fluxul Yahoo nu există știri recente care să menționeze compania "
+                               "(știrile despre alte companii sunt excluse).")
             
             # --- PREDICȚIE AI CU CACHING ---
             with cai2:
@@ -5054,7 +5064,7 @@ def main():
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_fin})
 
                 # --- BULLET 2: Sentimentul Știrilor (Context) ---
-                c_news_ai = get_company_news_rss(real_sym)
+                c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
                 if c_news_ai:
                     top_news = c_news_ai[0]['title']
                     from ai_engine import analyze_sentiment_ai
