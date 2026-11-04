@@ -1575,8 +1575,13 @@ def get_market_curve(market):
     return None, "nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)"
 
 
+class RiskFreeUnavailable(Exception):
+    """Rata fără risc nu a putut fi citită. Excepțiile nu intră în cache-ul Streamlit, deci un eșec
+    temporar (timeout BCE/FRED/Yahoo) se reîncearcă la următoarea afișare, nu rămâne 6 ore."""
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_risk_free_for_currency(currency):
+def _risk_free_cached(currency):
     """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
 
     USD: randamentul titlurilor SUA pe 10 ani (^TNX, Yahoo). EUR: Bund 10 ani (FRED, lunar).
@@ -1597,7 +1602,7 @@ def get_risk_free_for_currency(currency):
                 return float(closes.iloc[-1]) / 100, f"titluri SUA 10 ani (^TNX, {closes.index[-1]:%d.%m.%Y})"
         except Exception as e:
             print(f"DEBUG: ^TNX indisponibil: {e}")
-        return None, "Randamentul titlurilor SUA pe 10 ani (^TNX) nu a putut fi citit."
+        raise RiskFreeUnavailable("Randamentul titlurilor SUA pe 10 ani (^TNX) nu a putut fi citit.")
     if cur == "EUR":
         try:
             end = datetime.today()
@@ -1606,7 +1611,7 @@ def get_risk_free_for_currency(currency):
                 return float(serie.iloc[-1]) / 100, f"Bund 10 ani (FRED IRLTLT01DEM156N, {serie.index[-1]:%m.%Y})"
         except Exception as e:
             print(f"DEBUG: Bund 10 ani (FRED) indisponibil: {e}")
-        return None, "Randamentul Bund pe 10 ani (FRED) nu a putut fi citit."
+        raise RiskFreeUnavailable("Randamentul Bund pe 10 ani (FRED) nu a putut fi citit.")
     if cur == "RON":
         try:
             resp = requests.get(
@@ -1621,8 +1626,17 @@ def get_risk_free_for_currency(currency):
                 print(f"DEBUG: BCE (randament RO 10 ani): HTTP {resp.status_code}")
         except requests.RequestException as e:
             print(f"DEBUG: BCE (randament RO 10 ani) indisponibil: {e}")
-        return None, "Randamentul titlurilor de stat românești pe 10 ani (BCE) nu a putut fi citit."
-    return None, f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}."
+        raise RiskFreeUnavailable("Randamentul titlurilor de stat românești pe 10 ani (BCE) nu a putut fi citit.")
+    raise RiskFreeUnavailable(f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}.")
+
+
+def get_risk_free_for_currency(currency):
+    """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
+    Doar valorile citite cu succes stau în cache (6 ore); vezi `_risk_free_cached`."""
+    try:
+        return _risk_free_cached(currency)
+    except RiskFreeUnavailable as exc:
+        return None, str(exc)
 
 # --- Pune acest bloc sus, lângă celelalte funcții (calculate_alpha, etc.) ---
 
