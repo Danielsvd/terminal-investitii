@@ -477,7 +477,20 @@ def install_fakes():
                       "dimension": {"time": {"category": {"index": {"2026-07": 0, "2026-08": 1}}}},
                       "value": {"0": 6.02, "1": 5.87}}
 
+    def _bnr_xml(days):
+        cubes = "".join(f'<Cube date="{d:%Y-%m-%d}"><Rate currency="EUR">{5.0 + i * 0.01:.4f}</Rate>'
+                        f'<Rate currency="USD">{4.4 + i * 0.01:.4f}</Rate><Rate currency="HUF" multiplier="100">1.3{i}</Rate></Cube>'
+                        for i, d in enumerate(days))
+        return ('<?xml version="1.0" encoding="utf-8"?><DataSet xmlns="http://www.bnr.ro/xsd"><Body>'
+                f'<OrigCurrency>RON</OrigCurrency>{cubes}</Body></DataSet>').encode()
+
     def fake_requests_get(url, *a, **k):
+        if "bnr.ro" in url:                     # cursurile BNR: anul trecut indisponibil (ramura de eroare)
+            if f"nbrfxrates{TODAY.year - 1}" in url:
+                raise requests.ConnectionError("BNR anul trecut indisponibil în testul de fum")
+            days = ([pd.Timestamp(TODAY) - pd.Timedelta(days=d) for d in (3, 2, 1)] if "10days" in url
+                    else [pd.Timestamp(TODAY) - pd.DateOffset(months=2), pd.Timestamp(TODAY) - pd.Timedelta(days=4)])
+            return types.SimpleNamespace(status_code=200, content=_bnr_xml(sorted(days)), raise_for_status=lambda: None)
         if "ec.europa.eu/eurostat" in url:      # ROBOR 3M (Eurostat irt_st_m)
             return types.SimpleNamespace(status_code=200, text="", json=lambda: EUROSTAT_ROBOR)
         if "data-api.ecb.europa.eu" not in url:
@@ -708,6 +721,16 @@ def main():
             assert len(pil_df) == 6 and float(pil_df["Pondere %"].sum()) == 100.0, pil_df
             print("Piloni macro:", list(zip(pil_df["Pilon"], pil_df["Scor"])))
             assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
+            # cursul valutar față de leu: BNR + live; anul trecut lipsește → 1 an / de la 1 ian. N/A, cu nota
+            fx = next((d.value for d in at.dataframe if {"Curs BNR", "Live (Yahoo)", "1 an %"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert fx is not None, "lipsește tabelul cursului valutar"
+            fx_df = getattr(fx, "data", fx).set_index("Valută")
+            print("Curs BNR:", fx_df[["Curs BNR", "Zi %", "1 lună %", "1 an %"]].head(3).to_dict("index"))
+            assert abs(float(fx_df.loc["Euro", "Curs BNR"]) - 5.02) < 1e-9, fx_df.loc["Euro"]
+            assert pd.isna(fx_df.loc["Euro", "1 an %"]), "1 an fără istoric trebuie N/A"
+            assert pd.isna(fx_df.loc["Liră sterlină", "Curs BNR"]), "valută absentă la BNR trebuie N/A"
+            assert any(f"nbrfxrates{TODAY.year - 1}.xml" in str(c.value) for c in at.caption), "lipsește nota fișierului BNR necitit"
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")
