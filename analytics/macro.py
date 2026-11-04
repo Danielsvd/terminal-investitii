@@ -2,6 +2,8 @@
 import numpy as np
 import pandas as pd
 
+from data.helpers import ro
+
 
 def yoy_pct(series, max_gap_days=45):
     """Variația procentuală an/an a unei serii lunare (ex. indicele CPI).
@@ -136,7 +138,7 @@ def pillar_credit(ratio):
     sma = float(s.iloc[-CREDIT_SMA_DAYS:].mean())
     dev = float(s.iloc[-1]) / sma - 1.0
     score = 100.0 if dev > CREDIT_BAND else 0.0 if dev < -CREDIT_BAND else 50.0
-    return _pillar(score, dev, f"HYG/IEF la {dev * 100:+.2f}% față de media pe {CREDIT_SMA_DAYS} de ședințe")
+    return _pillar(score, dev, f"HYG/IEF la {ro(dev * 100):+.2f}% față de media pe {CREDIT_SMA_DAYS} de ședințe")
 
 
 def pillar_vix(vix):
@@ -145,7 +147,7 @@ def pillar_vix(vix):
     if v is None or v <= 0:
         return _pillar(None, None, "VIX indisponibil")
     score = (VIX_PANIC - v) / (VIX_PANIC - VIX_CALM) * 100.0
-    return _pillar(score, v, f"VIX {v:.1f}")
+    return _pillar(score, v, f"VIX {ro(v):.1f}")
 
 
 def pillar_dollar(corr):
@@ -154,7 +156,7 @@ def pillar_dollar(corr):
     if c is None:
         return _pillar(None, None, "corelația SPY/UUP indisponibilă")
     score = (c - DOLLAR_CORR_SEVERE) / (0.0 - DOLLAR_CORR_SEVERE) * 100.0
-    return _pillar(score, c, f"corelație {c:+.2f}")
+    return _pillar(score, c, f"corelație {ro(c):+.2f}")
 
 
 def pillar_sectors(month_returns):
@@ -181,7 +183,7 @@ def pillar_curve(spread):
     if s is None:
         return _pillar(None, None, "spread 10A − 3L indisponibil")
     score = 0.0 if s < 0 else 50.0 if s < 0.5 else 100.0
-    return _pillar(score, s, f"spread {s:+.2f} pp")
+    return _pillar(score, s, f"spread {ro(s):+.2f} pp")
 
 
 def pillar_sentiment(sentiment):
@@ -190,7 +192,7 @@ def pillar_sentiment(sentiment):
     if s is None:
         return _pillar(None, None, "fără știri analizate")
     score = 100.0 if s > SENTIMENT_BAND else 0.0 if s < -SENTIMENT_BAND else 50.0
-    return _pillar(score, s, f"sentiment mediu {s:+.2f}")
+    return _pillar(score, s, f"sentiment mediu {ro(s):+.2f}")
 
 
 def macro_verdict(pillars):
@@ -285,3 +287,77 @@ def daily_cross_asset_signals(pct, tnx_pp=None, vix_pct=None):
     if gold is not None and usd is not None and vix is not None and gold > 1.0 and usd > 0.5 and vix > 10.0:
         out.append("fuga_siguranta")
     return out
+
+
+# Barometrul FED din Piață Globală
+def interpret_fred(df_macro):
+    """Interpretarea Barometrului FED: reguli pe variațiile lunare din `get_fred_macro_data`.
+    Un indicator lipsă nu mai e 0: regulile care au nevoie de el se sar (înainte, șomajul lipsă = 0 declanșa „Goldilocks”).
+    Pragurile sunt orientative, netestate."""
+    if df_macro.empty: return []
+    
+    bullets = []
+    m = {row['_simbol']: row for _, row in df_macro.iterrows()}
+
+    def _f(x):
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return None
+        return v if np.isfinite(v) else None
+
+    def gv(sym): return _f(m[sym].get('Valoare Curentă')) if sym in m else None
+    def gc(sym): return _f(m[sym].get('_change_raw')) if sym in m else None
+    def has(*vals): return all(v is not None for v in vals)
+
+    # 1. INFLAȚIA (variația lunară a indicilor de bază) și dobânda reală (Fed − CPI an/an)
+    pce, cpi_core, fed_rate = gc('PCEPILFE'), gc('CPILFESL'), gv('FEDFUNDS')
+    cpi_yoy = _f(m['CPIAUCSL'].get('_yoy')) if 'CPIAUCSL' in m else None
+    real_rate_pct = real_rate(fed_rate, cpi_yoy) if has(fed_rate, cpi_yoy) else None
+
+    if (pce is not None and pce > 0.2) or (cpi_core is not None and cpi_core > 0.3):
+        bullets.append("🔥 **INFLAȚIE REZISTENTĂ:** Core PCE (peste +0,2% pe lună) sau Core CPI (peste +0,3%) indică prețuri „lipicioase”. "
+                       "Fed-ul nu poate tăia dobânzile fără riscul unui al doilea val inflaționar.")
+    elif pce is not None and pce <= 0.15 and real_rate_pct is not None and real_rate_pct > 2:
+        bullets.append(f"❄️ **DEZINFLAȚIE CU DOBÂNZI REALE MARI:** inflația de bază încetinește, iar dobânda reală e {ro(real_rate_pct):.1f}%. "
+                       "Context în care Fed-ul are spațiu să taie dobânzile.")
+
+    # 2. PIAȚA MUNCII
+    nfp, adp, unrate, unrate_chg, jolts_chg = gc('PAYEMS'), gc('ADPCHGS'), gv('UNRATE'), gc('UNRATE'), gc('JTSJOL')
+    if has(nfp, adp) and nfp > 200 and adp < 100:
+        bullets.append("🔄 **DIVERGENȚĂ PRIVAT-STAT:** Angajările oficiale (NFP) sunt susținute de sectorul public, în timp ce sectorul privat (ADP) frânează. Semnal de ciclu târziu.")
+    if has(unrate, unrate_chg) and unrate_chg > 0.1 and unrate > 4.0:
+        bullets.append("🚨 **ȘOMAJ ÎN CREȘTERE:** Rata șomajului a urcat peste 4% și crește de la o lună la alta. "
+                       "Regula Sahm (media pe 3 luni cu 0,5 pp peste minimul din ultimele 12 luni) a semnalat istoric începutul recesiunilor; "
+                       "aici nu e calculată, e doar o atenționare.")
+    if jolts_chg is not None and jolts_chg < -400:
+        bullets.append("📉 **SCĂDERE A LOCURILOR DE MUNCĂ VACANTE:** Peste 400 de mii de posturi vacante mai puțin (JOLTS) într-o lună: firmele își taie planurile de angajare. "
+                       "Presiunea pe salarii scade (ajută inflația), dar consumul poate încetini.")
+
+    # 3. CONSUMUL ȘI SENTIMENTUL
+    retail, sentiment = gc('RSAFS'), gc('UMCSENT')
+    if has(retail, sentiment) and retail < 0 and sentiment < 0:
+        bullets.append("⚠️ **STAGNARE CONSUM:** Vânzările de retail și încrederea consumatorilor scad în aceeași lună. Consumul e ~70% din PIB-ul SUA.")
+    elif has(retail, sentiment) and retail > 0.5 and sentiment < -2.0:
+        bullets.append("💸 **CHELTUIELI DE NECESITATE:** Vânzările cresc, dar încrederea scade: o parte din creștere poate fi doar efectul prețurilor.")
+
+    # 4. INDICATORI AVANSAȚI
+    housing, ind_prod = gc('HOUST'), gc('INDPRO')
+    if has(housing, ind_prod) and housing < -3.0 and ind_prod < -0.3:
+        bullets.append("🏗️ **FRÂNĂ INDUSTRIALĂ ȘI IMOBILIARĂ:** Construcțiile noi și producția industrială scad în aceeași lună; sunt sectoarele cele mai sensibile la dobânzi.")
+    elif housing is not None and housing > 2.0:
+        bullets.append("🏠 **REZILIENȚĂ IMOBILIARĂ:** Construcțiile noi cresc cu peste 2% într-o lună, în ciuda dobânzilor.")
+
+    # 5. SINTEZA (doar cu toate datele necesare)
+    if has(unrate, pce, retail) and unrate < 4.0 and pce < 0.2 and retail > 0:
+        bullets.append("🌟 **REGIM GOLDILOCKS:** Șomaj sub 4%, inflație de bază sub +0,2% pe lună, consum în creștere.")
+    elif has(unrate, pce) and unrate > 4.2 and pce > 0.25:
+        bullets.append("🌪️ **RISC DE STAGFLAȚIE:** Șomaj peste 4,2% și inflație de bază peste +0,25% pe lună. Mediul în care și acțiunile, și obligațiunile suferă.")
+
+    missing = [n for n, v in (("Core PCE", pce), ("Core CPI", cpi_core), ("șomaj", unrate), ("NFP", nfp), ("ADP", adp),
+                               ("JOLTS", jolts_chg), ("retail", retail), ("sentiment", sentiment), ("construcții", housing),
+                               ("producție industrială", ind_prod)) if v is None]
+    if bullets or missing:
+        bullets.append("ℹ️ Reguli orientative, netestate, pe ultima lună publicată."
+                       + (f" Fără date: {', '.join(missing)} (regulile lor nu s-au evaluat)." if missing else ""))
+    return bullets

@@ -3475,84 +3475,15 @@ def get_fred_macro_data():
                     "_change_raw": change,
                     "_yoy": yoy
                 })
-        except Exception:
-            continue # Dacă un simbol are probleme, trecem la următorul fără să oprim aplicația
+        except Exception as exc:  # un indicator picat nu oprește tabelul; rândul lui lipsește
+            logger.warning("get_fred_macro_data %s: %s", code, exc)
+            continue
             
     return pd.DataFrame(results)
 
 def interpret_macro_data_ai(df_macro):
-    """
-    Analiză Macro de nivel Senior Fund Manager.
-    Sintetizează 12 indicatori FRED pentru a detecta schimbările de paradigmă economică.
-    """
-    if df_macro.empty: return []
-    
-    bullets = []
-    m = {row['_simbol']: row for _, row in df_macro.iterrows()}
-    
-    # --- HELPER: Extragere Valori ---
-    def gv(sym): return m.get(sym, {}).get('Valoare Curentă', 0)
-    def gc(sym): return m.get(sym, {}).get('_change_raw', 0)
-
-    # 1. ANALIZA INFLAȚIEI (Cea mai mare frică a pieței)
-    pce = gc('PCEPILFE') # Core PCE MoM
-    cpi_core = gc('CPILFESL') # Core CPI MoM
-    fed_rate = gv('FEDFUNDS')
-    
-    # Calculăm Rata Reală (Dobânda Fed - Inflația an/an)
-    # Dacă e pozitivă și mare, Fed-ul "strânge de gât" economia.
-    # CPIAUCSL este un INDICE (nivel ~320), nu o rată: inflația e variația lui an/an.
-    cpi_yoy = m.get('CPIAUCSL', {}).get('_yoy')
-    cpi_yoy = float(cpi_yoy) if cpi_yoy is not None and pd.notna(cpi_yoy) else None
-    real_rate_pct = real_rate(fed_rate if 'FEDFUNDS' in m else None, cpi_yoy)
-
-    if pce > 0.2 or cpi_core > 0.3:
-        bullets.append("🔥 **INFLAȚIE REZISTENTĂ:** Datele Core PCE și CPI indică prețuri 'lipicioase'. Fed-ul nu poate tăia dobânzile fără riscul unui al doilea val inflaționar. Rămâneți prudenți pe sectorul imobiliar și Tech cu evaluări mari.")
-    elif pce <= 0.15 and real_rate_pct is not None and real_rate_pct > 2:
-        bullets.append("❄️ **DEZINFLAȚIE CU DOBÂNZI REALE MARI:** Inflația scade, dar dobânzile rămân sus. Aceasta este o rețetă pentru 'Pivot' – momentul în care Fed va trebui să taie rapid pentru a nu strivi economia.")
-
-    # 2. RADIOGRAFIA PIEȚEI MUNCII (Motorul consumului)
-    nfp = gc('PAYEMS')
-    adp = gc('ADPCHGS')
-    unrate = gv('UNRATE')
-    jolts_chg = gc('JTSJOL')
-
-    # Corelația ADP vs NFP
-    if nfp > 200 and adp < 100:
-        bullets.append("🔄 **DIVERGENȚĂ PRIVAT-STAT:** Angajările oficiale (NFP) sunt susținute de sectorul public, în timp ce sectorul privat (ADP) frânează. Este un semnal 'Late Cycle' – economia reală încetinește sub suprafață.")
-    
-    # Regula Sahm & Tightness
-    if gc('UNRATE') > 0.1 and unrate > 4.0:
-        bullets.append("🚨 **RECESIUNEA 'BATE LA UȘĂ':** Șomajul crește constant. Istoric, o creștere de 0.5% a ratei șomajului de la minimul anului declanșează Regula Sahm (recesiune inevitabilă).")
-    
-    if jolts_chg < -400:
-        bullets.append("📉 **CAPITULAREA ANGAJATORILOR:** Scăderea masivă a joburilor vacante (JOLTS) arată că firmele au tăiat bugetele de expansiune. Presiunea pe creșterea salariilor va scădea, ajutând inflația, dar lovind consumul.")
-
-    # 3. CONSUMUL ȘI SENTIMENTUL (Inima PIB-ului)
-    retail = gc('RSAFS')
-    sentiment = gc('UMCSENT')
-
-    if retail < 0 and sentiment < 0:
-        bullets.append("⚠️ **STAGNARE CONSUM:** Americanii nu mai au încredere în viitor și au tăiat cheltuielile de retail. Deoarece consumul este 70% din PIB, acesta este un semnal de alarmă pentru profiturile companiilor din S&P 500.")
-    elif retail > 0.5 and sentiment < -2.0:
-        bullets.append("💸 **SPENDING DE NECESITATE:** Vânzările cresc, dar încrederea scade. Oamenii cheltuie mai mult pe aceleași bunuri (din cauza inflației), nu pentru că au surplus. Este un semnal negativ pentru marjele de profit.")
-
-    # 4. INDICATORI AVANSAȚI (Leading Indicators)
-    housing = gc('HOUST')
-    ind_prod = gc('INDPRO')
-
-    if housing < -3.0 and ind_prod < -0.3:
-        bullets.append("🏗️ **FRÂNĂ INDUSTRIALĂ ȘI IMOBILIARĂ:** Cele mai sensibile sectoare la dobânzi sunt în contracție. Acest duo anticipează de obicei o scădere a PIB-ului în următoarele 2-3 trimestre.")
-    elif housing > 2.0:
-        bullets.append("🏠 **RELIENȚĂ IMOBILIARĂ:** Sectorul construcțiilor sfidează dobânzile mari. Acest lucru oferă un suport solid economiei și sugerează că o recesiune 'hard' este puțin probabilă acum.")
-
-    # 5. VERDICTUL MASTER (SINTEZA)
-    if unrate < 4.0 and pce < 0.2 and retail > 0:
-        bullets.append("🌟 **REGIM GOLDILOCKS:** Nici prea cald, nici prea rece. Joburi sunt, inflația e stabilă, consumul merge. Este mediul ideal pentru investiții în acțiuni (Equity Bull Market).")
-    elif unrate > 4.2 and pce > 0.25:
-        bullets.append("🌪️ **SCENARIU DE COȘMAR (STAGFLAȚIE):** Șomaj în creștere + Inflație persistentă. Este singurul mediu în care portofoliile diversificate eșuează. Cash-ul și Aurul sunt singurele refugii.")
-
-    return bullets
+    """Interpretarea Barometrului FED (analytics/macro.py: interpret_fred, testată)."""
+    return macro_calc.interpret_fred(df_macro)
 
 # --- MAIN APP ---
 def main():
@@ -6769,8 +6700,9 @@ def main():
             
             if not ratio_series.empty:
                 current_ratio = ratio_series.iloc[-1]
-                # Calculăm media pe 20 de zile pentru context
-                sma_20 = ratio_series.rolling(20).mean().iloc[-1] if len(ratio_series) >= 20 else ratio_series.mean()
+                # Interpretarea folosește aceeași regulă ca pilonul „Piața de credit” din verdict (SMA 50, bandă ±1%),
+                # pe seria de un an, indiferent de intervalul ales pentru grafic.
+                credit_pillar = macro_calc.pillar_credit(macro_risk_ratio)
                 
                 # Calculăm variația procentuală pe intervalul selectat
                 start_ratio = ratio_series.iloc[0]
@@ -6792,8 +6724,8 @@ def main():
                     
                     # Adăugăm media mobilă pentru a vedea trendul
                     fig_bonds.add_trace(go.Scatter(
-                        x=ratio_series.index, y=ratio_series.rolling(20).mean(), 
-                        mode='lines', name='Trend (SMA 20)', 
+                        x=ratio_series.index, y=ratio_series.rolling(macro_calc.CREDIT_SMA_DAYS).mean(), 
+                        mode='lines', name=f'Trend (SMA {macro_calc.CREDIT_SMA_DAYS})', 
                         line=dict(color='rgba(255, 255, 255, 0.3)', dash='dot')
                     ))
 
@@ -6818,11 +6750,17 @@ def main():
                     st.markdown("#### 🌡️ Termometrul Creditării")
                     st.metric(f"Raport ({selected_period_label})", f"{ro(current_ratio):.3f}", f"{ro(total_change):+.2f}%")
                     
-                    # Logica de interpretare adaptată
-                    if current_ratio < sma_20:
-                        st.error("🚨 **SCĂDERE DETECTATĂ:** Pofta de risc scade. Banii ies din obligațiunile firmelor și intră în titluri de stat.")
+                    # Aceeași regulă ca pilonul din verdict: sub −1% față de SMA 50 = retragere; peste +1% = apetit; între = neutru
+                    if credit_pillar["score"] is None:
+                        st.info(f"ℹ️ Interpretarea cere {macro_calc.CREDIT_SMA_DAYS} de ședințe de istoric HYG/IEF: N/A.")
+                    elif credit_pillar["score"] == 0:
+                        st.warning(f"🚨 **RETRAGERE DIN RISC:** {credit_pillar['detail']}. Banii ies din obligațiunile firmelor și intră în titluri de stat.")
+                    elif credit_pillar["score"] == 100:
+                        st.success(f"✅ **APETIT PENTRU RISC:** {credit_pillar['detail']}. Piața de credit susține evaluările acțiunilor.")
                     else:
-                        st.success("✅ **STABILITATE:** Piața de credit susține încă evaluările acțiunilor.")
+                        st.info(f"⚖️ **NEUTRU:** {credit_pillar['detail']} (în banda ±1%).")
+                    st.caption("Aceeași regulă ca pilonul „Piața de credit” din verdictul de sus (prag orientativ, netestat). "
+                               "HYG/IEF e un proxy; spread-ul de credit măsurat direct e în „Stresul pieței”.")
                         
                     st.info(f"💡 **Interpretare:** În intervalul de **{selected_period_label}**, linia s-a mișcat cu **{ro(total_change):+.2f}%**. Orice pantă bruscă în jos pe grafic indică faptul că băncile devin nervoase.")
             else:
@@ -6856,11 +6794,12 @@ def main():
                         z=corr_matrix.values,
                         x=corr_matrix.columns,
                         y=corr_matrix.columns,
-                        colorscale=[[0.0, '#F85149'], [0.5, '#161B22'], [1.0, '#3FB950']], 
-                        zmin=-1, zmax=1,
+                        colorscale=[[0.0, '#3987e5'], [0.5, '#383835'], [1.0, '#d95926']], 
+                        zmin=-1, zmax=1, xgap=2, ygap=2,
                         text=text_matrix,
                         texttemplate="%{text}",
-                        hoverinfo="text"
+                        textfont=dict(color='#ffffff'),
+                        hovertemplate="%{y} ↔ %{x}<br>Corelație: %{z:.2f}<extra></extra>"
                     ))
                     
                     fig_corr.update_layout(
@@ -6901,9 +6840,10 @@ def main():
                         
                     with st.expander("📖 Cum citești matricea?"):
                         st.write("""
-                        * **Pătrate Verzi (+0,5 la +1,0):** Activele sunt "prietene". Dacă unul crește, crește și celălalt.
-                        * **Pătrate Roșii (-0,5 la -1,0):** Activele sunt "inamice". Când unul urcă, celălalt scade (Corelație Inversă). Aceasta este cheia hedging-ului perfect.
-                        * **Pătrate Negre (în jur de 0,0):** Activele se ignoră complet reciproc.
+                        * **Pătrate portocalii (+0,5 la +1,0):** activele se mișcă împreună. Dacă unul crește, crește și celălalt.
+                        * **Pătrate albastre (−0,5 la −1,0):** corelație inversă: când unul urcă, celălalt scade. Aceasta e baza acoperirii riscului (hedging).
+                        * **Pătrate gri (în jur de 0):** activele se mișcă independent.
+                        * Randamente zilnice pe ultimele 3 luni, doar zilele comune (minimum 30). Pragurile regulilor (±0,4, −0,5, +0,3) sunt orientative, netestate.
                         """)
             else:
                 st.info("Sincronizare date Cross-Asset...")
