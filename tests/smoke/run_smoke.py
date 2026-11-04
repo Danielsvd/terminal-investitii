@@ -794,6 +794,9 @@ def main():
             check(at, "4. Piață Globală harta sectoarelor azi")
             assert any("Liderii zilei" in str(e.value) for e in at.markdown), "harta sectoarelor pe azi"
             at.radio(key="sec_heat_hz").set_value("1 lună").run()
+            # sinteza AI: fără zerouri inventate, nota „netestate” la final
+            md_all = " ".join(str(e.value) for e in at.markdown)
+            assert "Reguli orientative, netestate; mărfurile și dolarul pe o lună" in md_all, "sinteza macro fără nota de bază"
             # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
             stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
             print("Stres:", stress_m)
