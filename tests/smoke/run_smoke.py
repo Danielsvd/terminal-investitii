@@ -699,6 +699,15 @@ def main():
             check(at, "3. Portofoliu după reîncărcarea prețurilor manuale")
             at.toggle(key="ledger_curve").set_value(True).run()
             check(at, "3. Portofoliu cu curba reală din registru")
+        if section == "4. Piață Globală":
+            # verdictul macro pe piloni: 6 piloni, fiecare cu pondere, scor (sau N/A) și bază; ponderile dau 100
+            pil = next((d.value for d in at.dataframe if {"Pilon", "Pondere %", "Scor", "Bază"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert pil is not None, "lipsește tabelul pilonilor verdictului macro"
+            pil_df = getattr(pil, "data", pil)
+            assert len(pil_df) == 6 and float(pil_df["Pondere %"].sum()) == 100.0, pil_df
+            print("Piloni macro:", list(zip(pil_df["Pilon"], pil_df["Scor"])))
+            assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")

@@ -30,6 +30,7 @@ from threading import Lock
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
+from analytics import macro as macro_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -3055,7 +3056,7 @@ def get_credit_risk_data(period="1y"):
     Descarcă datele pentru piața de credit pe o perioadă specificată.
     """
     try:
-        data = yf.download(['HYG', 'IEF'], period=period, progress=False)['Close']
+        data = yf.download(['HYG', 'IEF'], period=period, progress=False, auto_adjust=True)['Close']  # randament total (cu cupoane)
         if 'HYG' in data.columns and 'IEF' in data.columns:
             ratio = data['HYG'] / data['IEF']
             return ratio.dropna()
@@ -3063,6 +3064,37 @@ def get_credit_risk_data(period="1y"):
     except Exception as e:
         print(f"Eroare date bonduri: {e}")
         return pd.Series()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_sector_month_returns():
+    """Randamentul pe o lună calendaristică al celor 11 ETF-uri sectoriale SUA (XLK…XLC), pentru pilonul
+    „Rotația sectorială” din verdictul macro. dict sector -> randament (fracție); sectoarele fără istoric lipsesc.
+    O eroare de rețea nu se salvează în cache (excepția iese din funcție)."""
+    sectors_map = {
+        'XLK': 'Tehnologie', 'XLF': 'Financiar', 'XLE': 'Energie',
+        'XLV': 'Sănătate', 'XLY': 'Consum Discreționar',
+        'XLP': 'Consum de Bază', 'XLI': 'Industrial',
+        'XLU': 'Utilități', 'XLB': 'Materiale',
+        'XLRE': 'Imobiliare', 'XLC': 'Comunicații'
+    }
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(list(sectors_map), period="3mo", progress=False, auto_adjust=True), list(sectors_map))
+    out = {}
+    for tk, name in sectors_map.items():
+        if tk in closes.columns:
+            r = macro_calc.period_return(closes[tk], months=1)
+            if r is not None:
+                out[name] = r
+    return out
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_vix_last():
+    """Ultima închidere ^VIX și data ei; o eroare sau lipsa datelor ridică excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    h = yf.Ticker("^VIX").history(period="10d", auto_adjust=False)['Close'].dropna()
+    if h.empty:
+        raise ValueError("^VIX fără date")
+    return float(h.iloc[-1]), h.index[-1]
 
 @st.cache_data(ttl=3600)
 def get_cross_asset_correlation():
@@ -5730,53 +5762,96 @@ def main():
             # --- NOU: Descărcăm datele FRED aici sus pentru a le da motorului AI ---
             df_fred = get_fred_macro_data()
             
-            try: vix_val = yf.Ticker("^VIX").fast_info.last_price
-            except Exception as exc:  # înainte: except: gol
-                logger.warning("main: %s", exc)
-                vix_val = 20.0
-            
+            # Lipsă = None (N/A), niciodată o valoare de rezervă (înainte: VIX 20, spread 0,5).
             try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                curr_yield_spread = t_10y - t_3m
-            except Exception as exc:  # înainte: except: gol
-                logger.warning("main: %s", exc)
-                curr_yield_spread = 0.5
+                vix_val, vix_date = get_vix_last()
+            except Exception as exc:  # yfinance: rețea, JSON, date lipsă
+                logger.warning("Piață Globală VIX: %s", exc)
+                vix_val, vix_date = None, None
+            curr_yield_spread, curve_desc = get_market_curve("US")
+            try:
+                sector_month = get_sector_month_returns()
+            except Exception as exc:
+                logger.warning("Piață Globală sectoare 1 lună: %s", exc)
+                sector_month = {}
 
             news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
             from ai_engine import analyze_sentiment_ai
-            macro_sentiment = analyze_sentiment_ai(news_samples) if news_samples else 0
+            macro_sentiment = analyze_sentiment_ai(news_samples) if news_samples else None
 
-            # --- 2. CALCULĂM SCORUL GLOBAL ---
-            from ai_engine import calculate_master_macro_verdict
-            m_score, m_label, m_col, m_desc, m_reasons = calculate_master_macro_verdict(
-                macro_sectors, macro_risk_ratio, macro_corr, macro_sentiment, curr_yield_spread, vix_val
-            )
+            # --- 2. CALCULĂM SCORUL GLOBAL (analytics/macro.py: piloni 0–100, media ponderată pe pilonii cu date) ---
+            try:
+                spy_uup = float(macro_corr.loc['Acțiuni (SPY)', 'Dolar (UUP)'])
+            except (KeyError, TypeError, ValueError, AttributeError):
+                spy_uup = None
+            macro_pillars = {
+                "credit": macro_calc.pillar_credit(macro_risk_ratio),
+                "vix": macro_calc.pillar_vix(vix_val),
+                "dolar": macro_calc.pillar_dollar(spy_uup),
+                "sectoare": macro_calc.pillar_sectors(sector_month),
+                "curba": macro_calc.pillar_curve(curr_yield_spread),
+                "sentiment": macro_calc.pillar_sentiment(macro_sentiment),
+            }
+            mv = macro_calc.macro_verdict(macro_pillars)
 
-        # --- 3. AFIȘARE BANNER SUPREM ---
+        m_score = mv["score"]
+        m_label = mv["label"] or "N/A"
+        m_col = {"FAVORABIL": "#3FB950", "MIXT": "#D29922", "DEFAVORABIL": "#F85149"}.get(mv["label"], "#8B949E")
+        m_desc = {
+            "FAVORABIL": "Majoritatea pilonilor ponderați (credit, volatilitate, dolar, sectoare, curbă, sentiment) indică un mediu de piață favorabil.",
+            "MIXT": "Pilonii dau semnale contradictorii; mediul de piață nu înclină clar într-o parte.",
+            "DEFAVORABIL": "Majoritatea pilonilor ponderați indică stres: credit în retragere, volatilitate mare sau rotație defensivă.",
+        }.get(mv["label"], f"Prea puține date: doar {mv['weight_used']}% din ponderi au valori (minimum {macro_calc.MACRO_MIN_WEIGHT}%).")
+        m_score_txt = "N/A" if m_score is None else f"{m_score:.0f}"
+
+        # --- 3. AFIȘARE BANNER ---
         st.markdown(f"""
             <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:30px; border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Verdict Sănătate Piață Globală</h4>
+                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Mediul de piață SUA (verdict macro, netestat)</h4>
                         <h1 style="color:{m_col}; margin:10px 0; font-size:38px;">{m_label}</h1>
                         <p style="color:#C9D1D9; font-size:16px;">{m_desc}</p>
                     </div>
                     <div style="text-align:center; min-width: 120px;">
-                        <div style="font-size:12px; color:#8B949E;">SCOR MACRO AI</div>
-                        <div style="font-size:56px; font-weight:bold; color:{m_col};">{int(m_score)}</div>
+                        <div style="font-size:12px; color:#8B949E;">SCOR MACRO</div>
+                        <div style="font-size:56px; font-weight:bold; color:{m_col};">{m_score_txt}</div>
                         <div style="font-size:14px; color:#8B949E;">/ 100</div>
                     </div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
 
-        # --- 4. RESTAURAREA ARGUMENTELOR VECHI ---
-        st.markdown("#### 🔍 Argumentele Modelului:")
-        c_re1, c_re2 = st.columns(2)
-        for i, reason in enumerate(m_reasons):
-            if i % 2 == 0: c_re1.markdown(f"{reason}")
-            else: c_re2.markdown(f"{reason}")
+        # --- 4. PILONII, FIECARE CU SCORUL LUI ---
+        st.markdown("#### 🔍 Pilonii verdictului")
+        pillar_rows = []
+        for key, weight in macro_calc.MACRO_WEIGHTS.items():
+            pp = macro_pillars[key]
+            pillar_rows.append({"Pilon": macro_calc.MACRO_NAMES[key], "Pondere %": weight,
+                                "Scor": pp["score"], "Bază": pp["detail"]})
+        st.dataframe(
+            pd.DataFrame(pillar_rows).style.format({"Pondere %": lambda v: f"{v:.0f}%",
+                                                    "Scor": lambda v: f"{ro(v):.0f}"}, na_rep="N/A"),
+            hide_index=True, width='stretch',
+            column_config={
+                "Pondere %": st.column_config.Column(help="Ponderea pilonului în scor. Pilonii fără date ies din calcul, "
+                                                          "iar ponderile celorlalți se reîmpart (nu contează ca neutri)."),
+                "Scor": st.column_config.Column(help="0 = nefavorabil, 50 = neutru, 100 = favorabil. Regulile pe pilon:\n\n"
+                    f"**Credit:** HYG/IEF față de media pe {macro_calc.CREDIT_SMA_DAYS} de ședințe: peste +1% = 100, sub −1% = 0, între = 50.\n\n"
+                    f"**VIX:** ≤ {macro_calc.VIX_CALM:.0f} = 100, ≥ {macro_calc.VIX_PANIC:.0f} = 0, liniar între.\n\n"
+                    "**Dolar:** corelația SPY/UUP pe 3 luni: ≤ −0,70 = 0, ≥ 0 = 100, liniar între.\n\n"
+                    "**Sectoare:** primele 3 ETF-uri sectoriale SUA pe o lună: ≥ 2 ciclice (tehnologie, consum discreționar, financiar, comunicații) = 100; "
+                    "altfel, utilități sau consum de bază printre ele = 0; altfel 50.\n\n"
+                    "**Curba:** 10 ani − 3 luni: inversată = 0, 0–0,5 pp = 50, ≥ 0,5 pp = 100.\n\n"
+                    "**Sentiment:** media FinBERT pe titlurile S&P 500 și Nasdaq: > 0,15 = 100, < −0,15 = 0, între = 50."),
+                "Bază": st.column_config.Column(help="Valoarea din care s-a calculat scorul pilonului, sau motivul pentru care lipsește."),
+            })
+        st.caption(
+            f"Scor = media ponderată a pilonilor cu date ({mv['weight_used']}% din ponderi). "
+            f"FAVORABIL ≥ {macro_calc.MACRO_FAVORABLE:.0f}, DEFAVORABIL < {macro_calc.MACRO_ADVERSE:.0f}, altfel MIXT; "
+            f"fără verdict sub {macro_calc.MACRO_MIN_WEIGHT}% din ponderi. Pragurile și ponderile sunt orientative, netestate istoric. "
+            + (f"VIX: {vix_date:%d.%m.%Y}. " if vix_date is not None else "")
+            + f"Curba: {curve_desc}.")
 
         # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
@@ -5805,38 +5880,27 @@ def main():
 
         st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-3M)")
         
-        try:
-            # Preluăm datele pentru 10 ani și 3 luni (standardul FED)
-            t_10y = yf.Ticker("^TNX").fast_info.last_price
-            t_3m = yf.Ticker("^IRX").fast_info.last_price 
-            
-            if t_10y > 0 and t_3m > 0:
-                spread = t_10y - t_3m
-                label_spread = "SPREAD 10Y - 3M (SĂNĂTATE MACRO)"
+        # Același spread ca în verdict (get_market_curve: ^TNX − ^IRX din aceeași zi); lipsă = N/A, fără valoare de rezervă.
+        spread = curr_yield_spread
+        y_col1, y_col2 = st.columns([1, 2])
+        with y_col1:
+            spread_color = "#8B949E" if spread is None else ("#F85149" if spread < 0 else "#3FB950")
+            spread_txt = "N/A" if spread is None else f"{ro(spread):.3f}"
+            st.markdown(f"""
+                <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {spread_color}; text-align:center;">
+                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">SPREAD 10Y − 3M (puncte procentuale)</p>
+                    <h1 style="color:{spread_color}; margin:10px 0;">{spread_txt}</h1>
+                </div>
+            """, unsafe_allow_html=True)
+        with y_col2:
+            if spread is None:
+                st.info(f"ℹ️ Spread-ul nu poate fi calculat acum: {curve_desc}.")
+            elif spread < 0:
+                st.error(f"⚠️ **CURBĂ INVERSATĂ:** spread {ro(spread):.3f} pp. În SUA, inversarea 10Y − 3M a precedat recesiunile din 1969 încoace, "
+                         "cu un decalaj de 6–24 de luni și cu cel puțin un semnal fals; nu dă momentul.")
             else:
-                spread = 0.5
-                label_spread = "Spread indisponibil (Data Delay)"
-
-            y_col1, y_col2 = st.columns([1, 2])
-            with y_col1:
-                spread_color = "#F85149" if spread < 0 else "#3FB950"
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {spread_color}; text-align:center;">
-                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">{label_spread}</p>
-                        <h1 style="color:{spread_color}; margin:10px 0;">{ro(spread):.3f}</h1>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with y_col2:
-                if spread < 0:
-                    st.error(f"⚠️ **INVERSIUNE CONFIRMATĂ:** Spread-ul de {ro(spread):.3f} indică o curbă a randamentelor inversată. Istoric, acest semnal a precedat fiecare recesiune majoră..")
-                    st.write("👉 **Strategie:** Protejează capitalul. Redu expunerea pe acțiuni ciclice și crește ponderea în Cash/Aur.")
-                else:
-                    st.success(f"✅ **SĂNĂTATE MACRO:** Spread-ul de {ro(spread):.3f} indică o curbă a randamentelor normală. Indică expansiune economică")
-                    st.write("👉 **Strategie:** Poți menține o strategie de creștere (Growth). Mediul economic susține expansiunea bursieră.")
-
-        except Exception as e:
-            st.info("Sistemul de monitorizare a curbei randamentelor se recalibrează...")
+                st.success(f"✅ **CURBĂ NORMALĂ:** spread {ro(spread):.3f} pp. Randamentul pe termen lung e peste cel pe termen scurt.")
+            st.caption(f"Sursa: {curve_desc}.")
 
         # --- AICI CONTINUĂ RESTUL CODULUI TĂU (HARTA, RADAR, MATRICE, TABELE) ---
         st.markdown("---")    
