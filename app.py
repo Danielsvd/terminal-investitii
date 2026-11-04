@@ -31,6 +31,7 @@ from threading import Lock
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
+from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
 from analytics import simulation
@@ -2903,41 +2904,37 @@ def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
         logger.warning("calculate_risk_metrics: %s", exc)
         return 0.0, 0.0, 0.0, 0.0
 
-@st.cache_data(ttl=3600)
-def get_portfolio_sectors(df_current):
-    """
-    ARHITECTURĂ #5: Versiune batch optimizată.
-    ÎNAINTE: N apeluri seriale yf.Ticker(sym).info = 30-60 secunde
-    ACUM: 1 apel yf.Tickers() pentru toate = 3-5 secunde
-    """
-    if df_current.empty: return pd.DataFrame()
-
-    tickers_list = df_current['Symbol'].unique().tolist()
-    total_mkt_val = df_current['MarketValue'].sum()
-
-    # UN SINGUR apel pentru TOATE simbolurile
+@st.cache_data(ttl=86400, show_spinner=False)
+def _yahoo_sector(sym):
+    """(sector, quoteType) din Yahoo pentru un simbol, în cache 24 de ore.
+    O eroare de rețea nu se salvează în cache (excepția iese din funcție), deci se reîncearcă la următoarea deschidere."""
     _yf_limiter.wait_if_needed()
-    try:
-        bulk_data = yf.Tickers(" ".join(tickers_list))
-    except Exception:
-        bulk_data = None
+    info = yf.Ticker(sym).info or {}
+    return info.get('sector') or None, info.get('quoteType') or None
 
-    sector_map = {}
-    for sym in tickers_list:
+def get_portfolio_sectors(df_current):
+    """Expunerea pe sectoare a pozițiilor din tab: (tabel Sector/Valoare/Pondere %/Simboluri, fără preț, surse).
+
+    Sectorul: la BVB din harta proprie (analytics/peers.py; Yahoo nu îl trimite), altfel din Yahoo `info`.
+    ETF-urile și fondurile sunt „ETF / fond”, nu „Nedefinit”. Calculul e în analytics/portfolio.py (testat).
+    """
+    if df_current.empty:
+        return pd.DataFrame(), [], {}
+    values = df_current.groupby('Symbol', sort=False)['MarketValue'].sum(min_count=1).to_dict()
+    labels, sources = {}, {}
+    for sym in values:
+        bvb_sec = bvb_sector(sym) if str(sym).upper().endswith('.RO') else None
+        if bvb_sec:
+            labels[sym], sources[sym] = pf_calc.sector_label(bvb_sec), "harta BVB"
+            continue
         try:
-            sec = "Nedefinit"
-            if bulk_data and sym in bulk_data.tickers:
-                sec = bulk_data.tickers[sym].info.get('sector', 'Nedefinit') or 'Nedefinit'
-            val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
-            sector_map[sec] = sector_map.get(sec, 0) + val
-        except Exception as exc:  # înainte: except: gol
-            logger.warning("get_portfolio_sectors: %s", exc)
-            val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
-            sector_map['Nedefinit'] = sector_map.get('Nedefinit', 0) + val
-
-    df_sec = pd.DataFrame(list(sector_map.items()), columns=['Sector', 'MarketValue'])
-    df_sec['Pondere %'] = (df_sec['MarketValue'] / total_mkt_val) * 100
-    return df_sec.sort_values(by='Pondere %', ascending=False)
+            sec, qtype = _yahoo_sector(sym)
+            labels[sym], sources[sym] = pf_calc.sector_label(sec, qtype), "Yahoo"
+        except Exception as exc:  # yfinance aruncă tipuri diferite (rețea, JSON, HTTP)
+            logger.warning("get_portfolio_sectors %s: %s", sym, exc)
+            labels[sym], sources[sym] = pf_calc.SECTOR_UNKNOWN, "eroare Yahoo"
+    df_sec, unpriced = pf_calc.sector_weights(values, labels)
+    return df_sec, unpriced, sources
 
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
@@ -5475,37 +5472,70 @@ def main():
                 with col_pie2:
                     st.caption("**După Sector Economic (%)**")
                     with st.spinner("Analizăm expunerea..."):
-                        df_sectors = get_portfolio_sectors(df_calc)
-                    
+                        df_sectors, sec_unpriced, sec_sources = get_portfolio_sectors(df_calc)
+
                     if not df_sectors.empty:
-                        # Grafic Plăcintă cu Procente
+                        # Culorile urmează sectorul în ordinea ponderii (paleta categorică, temă închisă); ETF/fond și
+                        # „Nedefinit” în gri, ca să nu pară sectoare. Peste 7 sectoare reale, restul intră la „Altele”.
+                        cat_colors = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9']
+                        neutral = {pf_calc.SECTOR_FUND: '#8b949e', pf_calc.SECTOR_UNKNOWN: '#484f58'}
+                        real = df_sectors[~df_sectors['Sector'].isin(list(neutral))]
+                        pie_df = pd.concat([real.head(7), df_sectors[df_sectors['Sector'].isin(list(neutral))]])
+                        rest = real.iloc[7:]
+                        if not rest.empty:
+                            pie_df = pd.concat([pie_df, pd.DataFrame([{"Sector": "Altele", "Valoare": rest['Valoare'].sum(),
+                                                                        "Pondere %": rest['Pondere %'].sum(),
+                                                                        "Simboluri": ", ".join(rest['Simboluri'])}])])
+                        colors, k = [], 0
+                        for sec_name in pie_df['Sector']:
+                            if sec_name in neutral:
+                                colors.append(neutral[sec_name])
+                            elif sec_name == "Altele":
+                                colors.append('#6e7681')
+                            else:
+                                colors.append(cat_colors[k]); k += 1
                         fig_sec = go.Figure(data=[go.Pie(
-                            labels=df_sectors['Sector'], 
-                            values=df_sectors['Pondere %'], 
-                            hole=.4,
+                            labels=pie_df['Sector'],
+                            values=pie_df['Valoare'],
+                            customdata=pie_df['Simboluri'],
+                            hole=.4, sort=False,
                             textinfo='label+percent',
-                            marker=dict(colors=['#1f6feb', '#238636', '#da3633', '#d29922'])
+                            marker=dict(colors=colors, line=dict(color='#0e1117', width=2)),
+                            hovertemplate="<b>%{label}</b><br>Valoare: %{value:,.2f} " + currency_symbol
+                                          + "<br>Pondere: %{percent}<br>%{customdata}<extra></extra>"
                         )])
-                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
+                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), showlegend=True,
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
                         plot_ro(fig_sec, width='stretch', key=f"pie_sec_{currency_symbol}")
 
-                        # VERDICT DIVERSIFICARE
-                        # 'Nedefinit' = Yahoo nu a trimis sectorul (sau ETF): nu e un sector real și nu se evaluează.
-                        known = df_sectors[df_sectors['Sector'] != 'Nedefinit']
-                        undefined_pct = df_sectors.loc[df_sectors['Sector'] == 'Nedefinit', 'Pondere %'].sum()
-                        if known.empty:
-                            st.info("ℹ️ Sectoarele nu sunt disponibile de la Yahoo pentru aceste poziții, deci concentrarea pe sectoare nu se poate evalua.")
+                        # VERDICT DIVERSIFICARE (pe sectoarele reale; ETF/fond și „Nedefinit” nu sunt sectoare)
+                        sv = pf_calc.sector_verdict(df_sectors)
+                        lim = f"{ro(pf_calc.SECTOR_CONCENTRATION_PCT):.0f}%"
+                        if sv['status'] == 'na':
+                            st.info("ℹ️ Nicio poziție din acest tab nu are un sector cunoscut (doar ETF-uri/fonduri sau sector lipsă), "
+                                    "deci concentrarea pe sectoare nu se poate evalua.")
+                        elif sv['status'] == 'concentrat':
+                            st.warning(f"⚠️ **Concentrare mare:** sectorul „{sv['top']['Sector']}” ({sv['top']['Simboluri']}) are "
+                                       f"{ro(sv['top']['Pondere %']):.1f}% din valoarea tabului, peste pragul de {lim} (prag orientativ, netestat).")
                         else:
-                            max_sector = known.iloc[0]
-                            if max_sector['Pondere %'] > 40:
-                                st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {ro(max_sector['Pondere %']):.1f}% din portofoliu. Riști mult dacă acest sector scade.")
-                            else:
-                                st.success(f"✅ **Diversificare bună:** Niciun sector cunoscut nu depășește 40%.")
-                            if undefined_pct > 0:
-                                st.caption(f"ℹ️ {ro(undefined_pct):.1f}% din portofoliu are sector necunoscut și nu intră în această evaluare.")
+                            st.success(f"✅ Niciun sector nu depășește {lim} din valoarea tabului; cel mai mare: „{sv['top']['Sector']}”, "
+                                       f"{ro(sv['top']['Pondere %']):.1f}% (prag orientativ, netestat).")
+                        notes_sec = []
+                        if sv['fund_pct'] > 0:
+                            notes_sec.append(f"{ro(sv['fund_pct']):.1f}% e în ETF-uri/fonduri: sunt diversificate în interior, "
+                                             "dar compoziția lor pe sectoare nu e citită, deci nu intră în evaluare")
+                        if sv['unknown_pct'] > 0:
+                            notes_sec.append(f"{ro(sv['unknown_pct']):.1f}% are sector necunoscut (Yahoo nu l-a trimis sau citirea a eșuat) "
+                                             "și nu intră în evaluare")
+                        if sec_unpriced:
+                            notes_sec.append(f"fără preț, deci în afara graficului: {', '.join(sec_unpriced)}")
+                        bvb_src = sorted(s_ for s_, src in sec_sources.items() if src == "harta BVB")
+                        if bvb_src:
+                            notes_sec.append(f"sector din harta proprie BVB: {', '.join(bvb_src)}")
+                        if notes_sec:
+                            st.caption("ℹ️ " + "; ".join(notes_sec) + ".")
                     else:
-                        st.info("Nu există date sectoriale.")
+                        st.info("Nu există date sectoriale (nicio poziție cu preț).")
 
                 # 3. Matrice Corelare
                 st.markdown("---")
