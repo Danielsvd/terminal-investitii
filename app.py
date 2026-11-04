@@ -32,6 +32,7 @@ from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_line
 from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
 from analytics import macro as macro_calc
 from analytics import markets as markets_calc
+from analytics import rates as rates_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -2996,6 +2997,92 @@ def get_market_closes():
     if closes is None or closes.empty:
         raise ValueError("Yahoo: nicio închidere pentru indici")
     return closes
+
+# --- DOBÂNZI COMPARATE (FRED, BCE, Eurostat) ---
+ECB_DATA_URL = "https://data-api.ecb.europa.eu/service/data/{key}"
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _ecb_rate_series(key, n_obs):
+    """O serie BCE (procente) ca serie indexată pe perioadă. Eroare sau serie goală → excepție (nu se salvează în cache)."""
+    resp = requests.get(ECB_DATA_URL.format(key=key), params={"lastNObservations": n_obs, "format": "csvdata"}, timeout=15)
+    resp.raise_for_status()
+    ser = parse_ecb_series(resp.text)
+    if ser.empty:
+        raise ValueError(f"BCE {key}: fără observații")
+    return ser
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fred_rate_series(code, days=800):
+    """O serie FRED pe ultimele `days` zile. Eroare sau serie goală → excepție (nu se salvează în cache)."""
+    end = datetime.today()
+    ser = web.DataReader(code, 'fred', end - timedelta(days=days), end).iloc[:, 0].dropna()
+    if ser.empty:
+        raise ValueError(f"FRED {code}: fără observații")
+    return ser
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _robor3m_series(n_months=30):
+    """ROBOR 3M lunar (Eurostat irt_st_m, RO, IRT_M3). Eroare sau serie goală → excepție."""
+    resp = requests.get(EUROSTAT_MONEY_MARKET_URL, params={"geo": "RO", "int_rt": "IRT_M3", "freq": "M",
+                                                         "lastTimePeriod": n_months}, timeout=15)
+    resp.raise_for_status()
+    ser = parse_eurostat_monthly(resp.json())
+    if ser.empty:
+        raise ValueError("Eurostat ROBOR 3M: fără observații")
+    return ser
+
+def get_rates_dashboard():
+    """Rândurile tabelului „Dobânzi și risc de țară”: (Piață, Indicator, statistici rates_calc.rate_stats, sursă).
+    O serie care nu poate fi citită dă un rând N/A cu sursa marcată „indisponibil”, nu o valoare presupusă."""
+    def load(fn, *args):
+        try:
+            return fn(*args)
+        except Exception as exc:  # rețea / format: rândul rămâne N/A
+            logger.warning("dobânzi %s %s: %s", getattr(fn, "__name__", fn), args, exc)
+            return None
+    d = rates_calc.to_daily
+    m = rates_calc.to_monthly
+    us = {c: load(_fred_rate_series, c) for c in ("DFF", "DGS3MO", "DGS2", "DGS10")}
+    cpi = load(_fred_rate_series, "CPIAUCSL", 900)
+    us_cpi = rates_calc.yoy_monthly(cpi) if cpi is not None else None
+    dfr = load(_ecb_rate_series, "FM/B.U2.EUR.4F.KR.DFR.LEV", 600)
+    bund = load(_ecb_rate_series, "IRS/M.DE.L.L40.CI.0000.EUR.N.Z", 30)
+    de_hicp = load(_ecb_rate_series, "ICP/M.DE.N.000000.4.ANR", 30)
+    ro10 = load(_ecb_rate_series, "IRS/M.RO.L.L40.CI.0000.RON.N.Z", 30)
+    ro_hicp = load(_ecb_rate_series, "ICP/M.RO.N.000000.4.ANR", 30)
+    robor = load(_robor3m_series)
+
+    def row(market, label, ser, source, inputs):
+        ok = ser is not None and len(ser) > 0 and all(x is not None for x in inputs)
+        st_ = rates_calc.rate_stats(ser) if ok else rates_calc.rate_stats(None)
+        return {"Piață": market, "Indicator": label, **st_, "Sursă": source if ok else f"{source} — indisponibil"}
+
+    rows = [
+        row("SUA", "Dobânda Fed (efectivă)", d(us["DFF"]), "FRED DFF, zilnic", [us["DFF"]]),
+        row("SUA", "Titluri de stat 3 luni", d(us["DGS3MO"]), "FRED DGS3MO, zilnic", [us["DGS3MO"]]),
+        row("SUA", "Titluri de stat 2 ani", d(us["DGS2"]), "FRED DGS2, zilnic", [us["DGS2"]]),
+        row("SUA", "Titluri de stat 10 ani", d(us["DGS10"]), "FRED DGS10, zilnic", [us["DGS10"]]),
+        row("SUA", "Inflația CPI, an/an", us_cpi, "FRED CPIAUCSL, lunar", [cpi]),
+        row("SUA", "Panta 10 ani − 2 ani", rates_calc.daily_diff(us["DGS10"], us["DGS2"]) if us["DGS10"] is not None and us["DGS2"] is not None else None,
+            "FRED, aceeași zi", [us["DGS10"], us["DGS2"]]),
+        row("SUA", "Dobânda reală 10 ani (10 ani − CPI)", rates_calc.monthly_diff(us["DGS10"], us_cpi) if us["DGS10"] is not None and us_cpi is not None else None,
+            "FRED, aceeași lună", [us["DGS10"], us_cpi]),
+        row("Zona euro", "Dobânda de depozit BCE", d(dfr) if dfr is not None else None, "BCE FM DFR", [dfr]),
+        row("Germania", "Bund 10 ani", m(bund) if bund is not None else None, "BCE IRS, lunar", [bund]),
+        row("Germania", "Inflația HICP, an/an", m(de_hicp) if de_hicp is not None else None, "BCE ICP, lunar", [de_hicp]),
+        row("Germania", "Dobânda reală Bund (10 ani − HICP)", rates_calc.monthly_diff(bund, de_hicp) if bund is not None and de_hicp is not None else None,
+            "BCE, aceeași lună", [bund, de_hicp]),
+        row("România", "ROBOR 3 luni", m(robor) if robor is not None else None, "Eurostat irt_st_m, lunar", [robor]),
+        row("România", "Titluri de stat 10 ani", m(ro10) if ro10 is not None else None, "BCE IRS, lunar", [ro10]),
+        row("România", "Inflația HICP, an/an", m(ro_hicp) if ro_hicp is not None else None, "BCE ICP, lunar", [ro_hicp]),
+        row("România", "Dobânda reală 10 ani (10 ani − HICP)", rates_calc.monthly_diff(ro10, ro_hicp) if ro10 is not None and ro_hicp is not None else None,
+            "BCE, aceeași lună", [ro10, ro_hicp]),
+        row("România", "Prima de risc de țară (RO 10 ani − Bund 10 ani)", rates_calc.monthly_diff(ro10, bund) if ro10 is not None and bund is not None else None,
+            "BCE, aceeași lună", [ro10, bund]),
+        row("România", "Panta 10 ani − ROBOR 3M", rates_calc.monthly_diff(ro10, robor) if ro10 is not None and robor is not None else None,
+            "BCE + Eurostat, aceeași lună", [ro10, robor]),
+    ]
+    return rows
 
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
@@ -5962,6 +6049,35 @@ def main():
                 })
             st.caption("ℹ️ Indici de la Yahoo (ajustați), cursuri BNR. Indicii de preț nu includ dividendele (S&P 500, Nasdaq, STOXX 600); "
                        "DAX le include. BET e aproximat prin ETF-ul TVBETETF.")
+
+        # --- DOBÂNZI ȘI RISC DE ȚARĂ ---
+        st.markdown("---")
+        st.subheader("🏦 Dobânzi și risc de țară")
+        with st.spinner("Citim dobânzile (FRED, BCE, Eurostat)..."):
+            rate_rows = get_rates_dashboard()
+        pp = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}"
+        df_rates = pd.DataFrame([{"Piață": r["Piață"], "Indicator": r["Indicator"], "Valoare (%)": r["value"],
+                                  "Perioadă": rates_calc.period_label(r["period"]), "Δ 3 luni (pp)": r["d3m"],
+                                  "Δ 1 an (pp)": r["d1y"], "Sursă": r["Sursă"]} for r in rate_rows])
+        st.dataframe(
+            df_rates.style.format({"Valoare (%)": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.2f}",
+                                   "Δ 3 luni (pp)": pp, "Δ 1 an (pp)": pp}, na_rep="N/A"),
+            hide_index=True, width='stretch',
+            column_config={
+                "Valoare (%)": st.column_config.Column(help="Ultima valoare publicată, în procente pe an (inflația: variația prețurilor față de aceeași lună de anul trecut)."),
+                "Perioadă": st.column_config.Column(help="Ziua (serii zilnice) sau luna (serii lunare) a ultimei valori. Seriile lunare BCE/Eurostat apar cu 1–2 luni întârziere."),
+                "Δ 3 luni (pp)": st.column_config.Column(help="Variația în puncte procentuale față de acum 3 luni (aceeași lună, la seriile lunare)."),
+                "Δ 1 an (pp)": st.column_config.Column(help="Variația în puncte procentuale față de acum un an."),
+                "Indicator": st.column_config.Column(help=(
+                    "**Dobânda reală** = randamentul pe 10 ani − inflația an/an din aceeași lună (ex-post, proxy: inflația așteptată nu e publicată). "
+                    "Pozitivă = titlurile de stat bat inflația.\n\n"
+                    "**Prima de risc de țară** = randamentul titlurilor românești pe 10 ani − Bund 10 ani, aceeași lună: cât cer investitorii în plus "
+                    "pentru riscul României (fiscal, rating, curs). Când crește, titlurile de stat existente pierd din preț și evaluările BET scad; "
+                    "când scade, invers.\n\n"
+                    "**Panta** 10 ani − scurt: negativă = curbă inversată.")),
+            })
+        st.caption("ℹ️ Dobânda de politică monetară a BNR nu are o sursă automată: nu e în tabel. Randamentele RO și DE pe 10 ani sunt seriile lunare "
+                   "de convergență (criteriile Maastricht) publicate de BCE.")
 
         # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
