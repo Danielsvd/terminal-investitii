@@ -270,10 +270,14 @@ def fake_fred(code, source, start, end):
 
 
 def fake_feed(url):
+    # Pe fluxul unui simbol, știrile pare îl menționează (rămân după filtrul pe emitent), cele impare nu.
+    sym = url.split("s=", 1)[1].split("&", 1)[0].split(".")[0] if "s=" in url else ""
+
     def entry(i):
         ts = time.gmtime(time.time() - i * 3600)
+        about = f"{sym} " if sym and i % 2 == 0 else ""
         return types.SimpleNamespace(
-            title=f"Știre <b>test</b> {i}: banca centrală și tehnologia AI", link="https://example.com/a",
+            title=f"Știre <b>test</b> {i}: {about}banca centrală și tehnologia AI", link="https://example.com/a",
             summary="<p>Rezumat cu <a href='x'>HTML</a> netăiat corect " + "text " * 80,
             published_parsed=ts, updated_parsed=ts, published="x")
     feed = types.SimpleNamespace(get=lambda k, d=None: "Ziarul Financiar Test" if k == "title" else d)
