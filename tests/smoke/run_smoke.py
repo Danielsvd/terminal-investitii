@@ -772,6 +772,14 @@ def main():
                        getattr(getattr(d.value, "data", d.value), "columns", [])), None)
             assert br is not None and len(br) == 2, "lipsește tabelul lățimii pieței"
             print("Lățime:", br[["Pereche", "Diferență 3 luni", "Detaliu 3 luni"]].values.tolist())
+            # prima de risc a acțiunilor: BVB (mediana E/P din foaie − RO 10 ani) și S&P 500 (1/P/E SPY − DGS10)
+            erp = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Prima de risc (pp)" in
+                        getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert erp is not None and list(erp["Piață"]) == ["BVB", "S&P 500"], "lipsește tabelul primei de risc"
+            print("Prima de risc:", erp[["Piață", "Randamentul profiturilor (E/P)", "Titluri de stat 10 ani", "Prima de risc (pp)"]].values.tolist())
+            for _, e_ in erp.iterrows():
+                if not pd.isna(e_["Prima de risc (pp)"]):
+                    assert abs(e_["Randamentul profiturilor (E/P)"] - e_["Titluri de stat 10 ani"] - e_["Prima de risc (pp)"]) < 1e-9
             # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
             stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
             print("Stres:", stress_m)

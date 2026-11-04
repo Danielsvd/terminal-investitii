@@ -134,3 +134,30 @@ def relative_return(a_close, b_close, months):
     rb = float(b.loc[end] / _on_or_before(b, start) - 1.0)
     out.update({"a": ra, "b": rb, "diff": ra - rb, "end": end})
     return out
+
+
+def earnings_yield(eps, price):
+    """EPS ÷ preț (fracție). Profitul negativ dă randament negativ (compania intră în mediană, nu e exclusă).
+    None fără preț pozitiv sau fără EPS."""
+    try:
+        e, p = float(eps), float(price)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(e) and np.isfinite(p)) or p <= 0:
+        return None
+    return e / p
+
+
+def equity_risk_gap(yields, bond_yield_pct):
+    """Prima de risc a acțiunilor (proxy): mediana randamentelor profiturilor − randamentul titlurilor de stat pe 10 ani.
+
+    `yields`: randamentele profiturilor (fracții) ale companiilor; `bond_yield_pct`: randamentul pe 10 ani, în procente.
+    Întoarce dict ep (mediana, %), n (companii), bond (%), gap (puncte procentuale) — None unde lipsesc datele."""
+    ys = [float(y) for y in (yields or []) if y is not None and np.isfinite(y)]
+    ep = float(np.median(ys)) * 100.0 if ys else None
+    try:
+        bond = float(bond_yield_pct) if bond_yield_pct is not None and np.isfinite(float(bond_yield_pct)) else None
+    except (TypeError, ValueError):
+        bond = None
+    gap = ep - bond if (ep is not None and bond is not None) else None
+    return {"ep": ep, "n": len(ys), "bond": bond, "gap": gap}

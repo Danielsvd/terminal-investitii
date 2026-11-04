@@ -88,3 +88,15 @@ def test_randament_relativ_pana_la_ziua_comuna():
     r3 = relative_return(a, b, 3)
     assert r3["a"] == pytest.approx(110 / 105 - 1) and r3["b"] == pytest.approx(240 / 230 - 1)
     assert relative_return(a.iloc[2:], b, 12)["diff"] is None
+
+
+def test_randament_profituri_si_prima_de_risc():
+    from analytics.markets import earnings_yield, equity_risk_gap
+    assert earnings_yield(2.0, 25.0) == pytest.approx(0.08)
+    assert earnings_yield(-1.0, 20.0) == pytest.approx(-0.05)          # pierderea intră, nu e exclusă
+    assert earnings_yield(1.0, 0) is None and earnings_yield(None, 10) is None
+    g = equity_risk_gap([0.08, 0.10, -0.05, 0.12, None], 7.0)
+    # mediana lui (−0,05; 0,08; 0,10; 0,12) = 0,09 → 9% − 7% = 2 pp
+    assert g["n"] == 4 and g["ep"] == pytest.approx(9.0) and g["gap"] == pytest.approx(2.0)
+    assert equity_risk_gap([0.08], None)["gap"] is None
+    assert equity_risk_gap([], 4.0)["ep"] is None
