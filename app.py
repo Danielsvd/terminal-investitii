@@ -3018,10 +3018,11 @@ def get_global_market_data():
                 info = t.fast_info
                 price = info.last_price
                 prev = info.previous_close
-                if prev:
+                # Fără închiderea precedentă variația e necunoscută (N/A), nu 0.
+                if prev and price is not None:
                     change = price - prev
                     pct = (change / prev) * 100
-                else: change = 0; pct = 0
+                else: change = None; pct = None
                 
                 data.append({
                     'Instrument': name, 'Simbol': sym, 'Preț': price, 'Variație': change, 'Variație %': pct
@@ -6595,6 +6596,7 @@ def main():
             df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
 
         def color_change_val(val):
+            if val is None or pd.isna(val): return ''
             color = '#3FB950' if val >= 0 else '#F85149'
             return f'color: {color}'
 
