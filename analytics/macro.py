@@ -1,4 +1,5 @@
 """Calcule macroeconomice. Funcții pure."""
+import numpy as np
 import pandas as pd
 
 
@@ -95,3 +96,128 @@ def same_day_spread(long_close, short_close):
     d = both.index.max()
     lv, sv = float(both.loc[d, "l"]), float(both.loc[d, "s"])
     return {"spread": lv - sv, "long": lv, "short": sv, "date": d}
+
+
+# ---------------------------------------------------------------------------
+# Verdictul macro din „Piață Globală”: piloni cu scor 0–100, ponderi fixe, lipsă = exclus.
+# Pragurile pilonilor și ale verdictului sunt orientative, netestate (nu există încă un test istoric).
+# ---------------------------------------------------------------------------
+MACRO_WEIGHTS = {"credit": 30, "vix": 20, "dolar": 15, "sectoare": 15, "curba": 10, "sentiment": 10}
+MACRO_NAMES = {"credit": "Piața de credit (HYG/IEF)", "vix": "Volatilitate (VIX)",
+               "dolar": "Dolar vs acțiuni (corelație SPY/UUP)", "sectoare": "Rotația sectorială (1 lună)",
+               "curba": "Curba randamentelor (10A − 3L)", "sentiment": "Sentimentul știrilor"}
+MACRO_MIN_WEIGHT = 50          # sub atâta pondere cu date, fără verdict
+MACRO_FAVORABLE, MACRO_ADVERSE = 60.0, 40.0
+CREDIT_SMA_DAYS, CREDIT_BAND = 50, 0.01
+VIX_CALM, VIX_PANIC = 15.0, 25.0
+DOLLAR_CORR_SEVERE = -0.70
+SECTOR_CYCLICAL = ("Tehnologie", "Consum Discreționar", "Financiar", "Comunicații")
+SECTOR_DEFENSIVE = ("Utilități", "Consum de Bază")
+SENTIMENT_BAND = 0.15
+
+
+def _finite(x):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if np.isfinite(v) else None
+
+
+def _pillar(score, value, detail):
+    return {"score": None if score is None else float(np.clip(score, 0.0, 100.0)), "value": value, "detail": detail}
+
+
+def pillar_credit(ratio):
+    """HYG/IEF față de media lui pe 50 de ședințe: > +1% = 100, < −1% = 0, între = 50."""
+    s = pd.to_numeric(pd.Series(ratio, dtype="float64"), errors="coerce").dropna() if ratio is not None else pd.Series(dtype="float64")
+    if len(s) < CREDIT_SMA_DAYS:
+        return _pillar(None, None, f"sub {CREDIT_SMA_DAYS} de ședințe de istoric HYG/IEF")
+    sma = float(s.iloc[-CREDIT_SMA_DAYS:].mean())
+    dev = float(s.iloc[-1]) / sma - 1.0
+    score = 100.0 if dev > CREDIT_BAND else 0.0 if dev < -CREDIT_BAND else 50.0
+    return _pillar(score, dev, f"HYG/IEF la {dev * 100:+.2f}% față de media pe {CREDIT_SMA_DAYS} de ședințe")
+
+
+def pillar_vix(vix):
+    """VIX ≤ 15 = 100, ≥ 25 = 0, liniar între (20 = 50)."""
+    v = _finite(vix)
+    if v is None or v <= 0:
+        return _pillar(None, None, "VIX indisponibil")
+    score = (VIX_PANIC - v) / (VIX_PANIC - VIX_CALM) * 100.0
+    return _pillar(score, v, f"VIX {v:.1f}")
+
+
+def pillar_dollar(corr):
+    """Corelația SPY/UUP pe 3 luni: ≤ −0,70 = 0, ≥ 0 = 100, liniar între."""
+    c = _finite(corr)
+    if c is None:
+        return _pillar(None, None, "corelația SPY/UUP indisponibilă")
+    score = (c - DOLLAR_CORR_SEVERE) / (0.0 - DOLLAR_CORR_SEVERE) * 100.0
+    return _pillar(score, c, f"corelație {c:+.2f}")
+
+
+def pillar_sectors(month_returns):
+    """Primele 3 sectoare SUA după randamentul pe o lună: ≥ 2 ciclice = 100; altfel, un defensiv
+    printre ele = 0; altfel 50. `month_returns`: dict sector -> randament (fracție)."""
+    clean = {k: _finite(v) for k, v in (month_returns or {}).items()}
+    clean = {k: v for k, v in clean.items() if v is not None}
+    if len(clean) < 6:
+        return _pillar(None, None, "sub 6 sectoare cu randament pe o lună")
+    top = [k for k, _ in sorted(clean.items(), key=lambda kv: kv[1], reverse=True)[:3]]
+    n_cyc = sum(1 for k in top if k in SECTOR_CYCLICAL)
+    if n_cyc >= 2:
+        score = 100.0
+    elif any(k in SECTOR_DEFENSIVE for k in top):
+        score = 0.0
+    else:
+        score = 50.0
+    return _pillar(score, top, "primele 3 pe o lună: " + ", ".join(top))
+
+
+def pillar_curve(spread):
+    """10A − 3L, aceeași zi: < 0 (inversată) = 0; 0–0,5 pp = 50; ≥ 0,5 pp = 100."""
+    s = _finite(spread)
+    if s is None:
+        return _pillar(None, None, "spread 10A − 3L indisponibil")
+    score = 0.0 if s < 0 else 50.0 if s < 0.5 else 100.0
+    return _pillar(score, s, f"spread {s:+.2f} pp")
+
+
+def pillar_sentiment(sentiment):
+    """Media FinBERT pe titluri (−1…+1): > 0,15 = 100, < −0,15 = 0, între = 50."""
+    s = _finite(sentiment)
+    if s is None:
+        return _pillar(None, None, "fără știri analizate")
+    score = 100.0 if s > SENTIMENT_BAND else 0.0 if s < -SENTIMENT_BAND else 50.0
+    return _pillar(score, s, f"sentiment mediu {s:+.2f}")
+
+
+def macro_verdict(pillars):
+    """Scorul agregat = media ponderată a pilonilor cu date (`MACRO_WEIGHTS`), renormalizată pe ponderea
+    disponibilă. Fără verdict dacă ponderea cu date e sub `MACRO_MIN_WEIGHT`.
+
+    `pillars`: dict cheie -> rezultatul `pillar_*`. Întoarce dict: score (None = N/A), label
+    ('FAVORABIL'/'MIXT'/'DEFAVORABIL'/None), weight_used, missing (chei fără date)."""
+    used = {k: p for k, p in pillars.items() if k in MACRO_WEIGHTS and p and p.get("score") is not None}
+    missing = [k for k in MACRO_WEIGHTS if k not in used]
+    w = sum(MACRO_WEIGHTS[k] for k in used)
+    if w < MACRO_MIN_WEIGHT:
+        return {"score": None, "label": None, "weight_used": w, "missing": missing}
+    score = sum(MACRO_WEIGHTS[k] * used[k]["score"] for k in used) / w
+    label = "FAVORABIL" if score >= MACRO_FAVORABLE else "DEFAVORABIL" if score < MACRO_ADVERSE else "MIXT"
+    return {"score": score, "label": label, "weight_used": w, "missing": missing}
+
+
+def period_return(close, months=1):
+    """Randamentul pe ultimele `months` luni calendaristice: ultima închidere ÷ ultima închidere
+    de la sau înainte de (ultima dată − months) − 1. None dacă istoricul nu acoperă perioada."""
+    s = pd.to_numeric(pd.Series(close, dtype="float64"), errors="coerce").dropna() if close is not None else pd.Series(dtype="float64")
+    if len(s) < 2:
+        return None
+    s = s.sort_index()
+    cutoff = s.index[-1] - pd.DateOffset(months=months)
+    before = s[s.index <= cutoff]
+    if before.empty or before.iloc[-1] <= 0:
+        return None
+    return float(s.iloc[-1] / before.iloc[-1] - 1.0)

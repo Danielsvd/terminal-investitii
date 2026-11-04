@@ -1038,12 +1038,16 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
             "text": f"PETROL: Preț stabil ({ro(oil_trend*100):+.1f}%). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
         })
 
-    if yield_spread < 0:
+    if yield_spread is None:
+        pass  # curba indisponibilă: fără bullet (nu o valoare inventată)
+    elif yield_spread < 0:
         bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({ro(yield_spread):.2f}). Semnalul istoric de recesiune este în continuare aprins."})
     else:
         bullets.append({"icon": "📈", "color": "#3FB950", "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({ro(yield_spread):.2f}). Creditarea corporativă este sănătoasă."})
 
-    if vix_val > 22:
+    if vix_val is None:
+        pass  # VIX indisponibil: fără bullet
+    elif vix_val > 22:
         bullets.append({"icon": "⚡", "color": "#F85149", "text": f"VIX (OPȚIUNI): Panică ({ro(vix_val):.1f}). Cererea pentru contracte Put explodează. Volatilitatea e la putere."})
     elif vix_val < 14:
         bullets.append({"icon": "🧘", "color": "#3FB950", "text": f"VIX (OPȚIUNI): Liniște absolută ({ro(vix_val):.1f}). Piața e calmă, dar favorizează apariția unor „Black Swans”."})
