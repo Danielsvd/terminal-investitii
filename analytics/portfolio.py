@@ -95,3 +95,27 @@ def portfolio_curve(positions, closes):
     curve = px.mul(held[cols], axis=1).sum(axis=1)
     notes["curve_start"] = curve.index[0]
     return curve, notes
+
+
+# Tabelul „Detaliu Poziții” din taburile pe monedă: coloanele în română, în ordinea afișată.
+DETAIL_COLUMNS = {
+    "Symbol": "Simbol", "Quantity": "Cantitate", "AvgPrice": "Cost mediu", "CurrentPrice": "Preț curent",
+    "MarketValue": "Valoare", "Pondere %": "Pondere %", "Profit": "Profit", "Profit %": "Profit %",
+}
+
+
+def positions_detail(table):
+    """Tabelul din `value_positions`, cu ponderea fiecărei poziții și coloanele în română.
+
+    Pondere % = valoarea poziției ÷ valoarea tuturor pozițiilor cu preț × 100. O poziție fără preț
+    are valoare, pondere și profit NaN („N/A”), nu 0, și nu intră la numitor (aceeași regulă ca
+    „Valoare Curentă” de deasupra tabelului). Ordinea rândurilor: după valoare, descrescător;
+    pozițiile fără preț la final.
+    """
+    if table is None or len(table) == 0:
+        return pd.DataFrame(columns=list(DETAIL_COLUMNS.values()))
+    out = table.copy()
+    total = float(np.nansum(out["MarketValue"]))
+    out["Pondere %"] = out["MarketValue"] / total * 100 if total > 0 else np.nan
+    out = out.sort_values("MarketValue", ascending=False, na_position="last")
+    return out[list(DETAIL_COLUMNS)].rename(columns=DETAIL_COLUMNS).reset_index(drop=True)
