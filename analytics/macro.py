@@ -221,3 +221,67 @@ def period_return(close, months=1):
     if before.empty or before.iloc[-1] <= 0:
         return None
     return float(s.iloc[-1] / before.iloc[-1] - 1.0)
+
+
+# ---------------------------------------------------------------------------
+# „Indicatori Macroeconomici” și „Ghidul macro” din Piață Globală: variații pe ultimele două ședințe valide
+# ale fiecărei serii (piețele au calendare diferite), randamentele în puncte procentuale, lipsă = None.
+# Pragurile sunt orientative, netestate.
+# ---------------------------------------------------------------------------
+YIELD_MOVE_PP = 0.25          # variația randamentului pe 10 ani într-o lună care contează (25 de puncte de bază)
+
+
+def last_change(close):
+    """Ultima valoare și variația față de ședința precedentă cu valoare: dict last, prev, abs, pct (%), date.
+    None pe serie cu mai puțin de două valori."""
+    s = pd.to_numeric(pd.Series(close, dtype="float64"), errors="coerce").dropna() if close is not None else pd.Series(dtype="float64")
+    if len(s) < 2:
+        return None
+    last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+    return {"last": last, "prev": prev, "abs": last - prev, "pct": (last / prev - 1.0) * 100.0 if prev != 0 else None,
+            "date": s.index[-1]}
+
+
+def change_over(close, months):
+    """Variația absolută față de ultima valoare de la sau înainte de aceeași zi de acum `months` luni; None dacă seria nu acoperă."""
+    s = pd.to_numeric(pd.Series(close, dtype="float64"), errors="coerce").dropna() if close is not None else pd.Series(dtype="float64")
+    if len(s) < 2:
+        return None
+    cutoff = s.index[-1] - pd.DateOffset(months=months)
+    before = s[s.index <= cutoff]
+    if before.empty:
+        return None
+    return float(s.iloc[-1] - before.iloc[-1])
+
+
+def yield_trend(month_change_pp):
+    """'creste' / 'scade' / 'stabil' după variația randamentului pe 10 ani într-o lună (± 0,25 pp), sau None."""
+    v = _finite(month_change_pp)
+    if v is None:
+        return None
+    return "creste" if v > YIELD_MOVE_PP else "scade" if v < -YIELD_MOVE_PP else "stabil"
+
+
+def daily_cross_asset_signals(pct, tnx_pp=None, vix_pct=None):
+    """Semnalele zilei din „Ghidul macro”, pe variațiile de azi (procente; randamentul 10 ani în puncte procentuale).
+
+    `pct`: dict cheie -> variația % a zilei pentru 'usd' (DX-Y.NYB), 'gold', 'oil', 'copper'; lipsă = None (regula se sare).
+    Întoarce lista de chei de semnal (texte în interfață). Pragurile (0,3%, 0,5%, 1%, 10 pb, VIX +10%) sunt cele vechi,
+    exprimate corect, netestate."""
+    g = lambda k: _finite((pct or {}).get(k))
+    usd, gold, oil, copper = g("usd"), g("gold"), g("oil"), g("copper")
+    tnx, vix = _finite(tnx_pp), _finite(vix_pct)
+    out = []
+    if usd is not None and gold is not None and usd < -0.3 and gold > 0.3:
+        out.append("aur_refugiu")
+    if usd is not None and oil is not None and usd > 0.3 and oil < -0.5:
+        out.append("petrol_dolar")
+    if copper is not None and copper > 1.0:
+        out.append("cupru_expansiune")
+    if tnx is not None and tnx > 0.10:
+        out.append("dobanzi_cresc")
+    elif tnx is not None and tnx < -0.10:
+        out.append("dobanzi_scad")
+    if gold is not None and usd is not None and vix is not None and gold > 1.0 and usd > 0.5 and vix > 10.0:
+        out.append("fuga_siguranta")
+    return out
