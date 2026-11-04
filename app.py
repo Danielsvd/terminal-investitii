@@ -31,6 +31,7 @@ from threading import Lock
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
 from analytics import macro as macro_calc
+from analytics import markets as markets_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -2985,6 +2986,17 @@ def get_fx_live():
         raise ValueError("Yahoo: niciun curs valutar live")
     return out
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_market_closes():
+    """Închiderile zilnice pe 2 ani pentru piețele din analytics/markets.py (MARKETS). Fără niciun simbol → excepție
+    (nu se salvează în cache)."""
+    syms = [m[2] for m in markets_calc.MARKETS]
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(syms, period="2y", progress=False, auto_adjust=True), syms)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru indici")
+    return closes
+
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
@@ -5892,6 +5904,64 @@ def main():
             f"fără verdict sub {macro_calc.MACRO_MIN_WEIGHT}% din ponderi. Pragurile și ponderile sunt orientative, netestate istoric. "
             + (f"VIX: {vix_date:%d.%m.%Y}. " if vix_date is not None else "")
             + f"Curba: {curve_desc}.")
+
+        # --- PIEȚELE ÎN CARE INVESTEȘTI: regim tehnic + randament în lei ---
+        st.markdown("---")
+        st.subheader("🌍 Piețele în care investești")
+        with st.spinner("Citim indicii..."):
+            try:
+                mk_closes = get_market_closes()
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("piețe: %s", exc)
+                mk_closes = pd.DataFrame()
+            mk_fx, _mk_fx_failed = get_bnr_fx_history()
+        if mk_closes.empty:
+            st.info("Indicii nu au putut fi citiți acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
+        else:
+            pct1 = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v * 100):+.1f}%"
+            reg_rows = []
+            for key, name, sym, cur, note in markets_calc.MARKETS:
+                r = markets_calc.market_regime(mk_closes[sym] if sym in mk_closes.columns else None)
+                reg_rows.append({"Piață": name, "Ultima închidere": r["last"],
+                                 "Data": r["date"], "Trend": None if r["trend_n"] is None else f"{r['trend_n']}/3",
+                                 "Momentum 12-1": r["momentum"], "Scor moment": r["score"], "De la maximul pe 52 săpt.": r["from_high"]})
+            st.markdown("**Regimul tehnic** (aceeași regulă ca eticheta „Moment” din Analiză Companie)")
+            st.dataframe(
+                pd.DataFrame(reg_rows).style.format({
+                    "Ultima închidere": lambda v: format_ro(v, 2), "Data": lambda d: "N/A" if d is None or pd.isna(d) else f"{d:%d.%m.%Y}",
+                    "Momentum 12-1": pct1, "Scor moment": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.0f}",
+                    "De la maximul pe 52 săpt.": pct1}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={
+                    "Trend": st.column_config.Column(help="Câte din 3 condiții sunt îndeplinite: închiderea peste media pe 50 de ședințe, "
+                                                          "peste media pe 200, media pe 50 peste cea pe 200. 3/3 = trend ascendent complet."),
+                    "Momentum 12-1": st.column_config.Column(help="Randamentul de acum 12 luni până acum o lună (fără ultima lună), pe date calendaristice."),
+                    "Scor moment": st.column_config.Column(help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
+                                                                "Pragurile 80/40 sunt testate pe acțiuni BVB, nu pe indici: aici valoarea e descriptivă, fără verdict."),
+                    "De la maximul pe 52 săpt.": st.column_config.Column(help="Ultima închidere ÷ cea mai mare închidere din ultimele 52 de săptămâni − 1. "
+                                                                                "0% = pe maxim; −10% = corecție; −20% = piață în scădere (bear market, convenția uzuală)."),
+                })
+
+            hz = st.radio("Orizont", list(markets_calc.HORIZONS), index=2, horizontal=True, key="mk_horizon")
+            ret_rows = []
+            for key, name, sym, cur, note in markets_calc.MARKETS:
+                fx = None if cur == "RON" else (mk_fx[cur] if (not mk_fx.empty and cur in mk_fx.columns) else pd.Series(dtype=float))
+                rr = markets_calc.ron_return(mk_closes[sym] if sym in mk_closes.columns else None, fx, hz)
+                ret_rows.append({"Piață": name, "Valută": cur, "Randament local": rr["local"],
+                                 "Efect curs față de leu": rr["fx"], "Randament în lei": rr["ron"], "Notă": note})
+            st.markdown(f"**Randamentul în lei** ({hz})")
+            st.dataframe(
+                pd.DataFrame(ret_rows).style.format({"Randament local": pct1, "Efect curs față de leu": pct1, "Randament în lei": pct1}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={
+                    "Randament local": st.column_config.Column(help="Variația indicelui în valuta lui, de la ultima închidere de la sau înainte de începutul orizontului."),
+                    "Efect curs față de leu": st.column_config.Column(help="Variația cursului BNR al valutei față de leu pe aceeași perioadă "
+                                                                            "(cursul din ultima zi de tranzacționare a indicelui, nu cel de azi). 0% la BET."),
+                    "Randament în lei": st.column_config.Column(help="(1 + randament local) × (1 + efect curs) − 1: cât a câștigat un investitor în lei, "
+                                                                     "fără dividende la indicii de preț și fără comisioane."),
+                })
+            st.caption("ℹ️ Indici de la Yahoo (ajustați), cursuri BNR. Indicii de preț nu includ dividendele (S&P 500, Nasdaq, STOXX 600); "
+                       "DAX le include. BET e aproximat prin ETF-ul TVBETETF.")
 
         # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
