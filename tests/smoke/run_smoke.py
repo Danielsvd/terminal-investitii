@@ -63,7 +63,7 @@ def _ohlcv(sym, n, tz=None):
 def _n_rows(period=None, start=None):
     if start is not None:
         return max(len(pd.bdate_range(pd.Timestamp(start).tz_localize(None), TODAY)), 2)
-    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "3y": 756, "5y": 1260}.get(period, 252)
+    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "2y": 504, "3y": 756, "5y": 1260}.get(period, 252)
 
 
 RICH_INFO = dict(
@@ -721,6 +721,26 @@ def main():
             assert len(pil_df) == 6 and float(pil_df["Pondere %"].sum()) == 100.0, pil_df
             print("Piloni macro:", list(zip(pil_df["Pilon"], pil_df["Scor"])))
             assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
+            # piețele în care investește: regim tehnic + randament în lei (curs BNR)
+            reg = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Trend", "Scor moment"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert reg is not None and len(reg) == 6, "lipsește tabelul regimului piețelor"
+            rr = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Randament local", "Randament în lei"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert rr is not None, "lipsește tabelul randamentului în lei"
+            print("Regim:", reg[["Piață", "Trend", "Scor moment"]].values.tolist())
+            print("Randament în lei:", rr[["Piață", "Randament local", "Efect curs față de leu", "Randament în lei"]].values.tolist())
+            bet = rr.set_index("Piață").loc["BET (prin ETF TVBETETF)"]
+            assert bet["Efect curs față de leu"] == 0.0 or pd.isna(bet["Randament local"]), "BET are efect valutar"
+            for hz in ("1 lună", "De la 1 ian."):
+                at.radio(key="mk_horizon").set_value(hz).run()
+                check(at, f"4. Piață Globală orizont {hz}")
+                if hz == "1 lună":
+                    rr1 = next(getattr(d.value, "data", d.value) for d in at.dataframe if "Randament în lei" in
+                               getattr(getattr(d.value, "data", d.value), "columns", [])).set_index("Piață")
+                    print("Randament 1 lună:", rr1[["Randament local", "Efect curs față de leu", "Randament în lei"]].to_dict("index"))
+                    sp = rr1.loc["S&P 500"]
+                    assert abs((1 + sp["Randament local"]) * (1 + sp["Efect curs față de leu"]) - 1 - sp["Randament în lei"]) < 1e-12
             # cursul valutar față de leu: BNR + live; anul trecut lipsește → 1 an / de la 1 ian. N/A, cu nota
             fx = next((d.value for d in at.dataframe if {"Curs BNR", "Live (Yahoo)", "1 an %"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
