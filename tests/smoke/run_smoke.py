@@ -679,6 +679,14 @@ def main():
             print("Sharpe pe taburi:", [str(m.value) for m in sharpe_tabs])
             assert sharpe_tabs and all("Rata fără risc" in m.proto.help for m in sharpe_tabs), "Sharpe fără rata monedei"
             assert any(str(m.value) != "N/A" for m in sharpe_tabs), "Sharpe N/A pe toate taburile"
+            # „Detaliu Poziții” din taburi: coloanele în română, cu pondere; ponderile unui tab dau 100%
+            detail_dfs = [d.value for d in at.dataframe
+                          if {"Cost mediu", "Pondere %"} <= set(getattr(d.value, "columns", []))]
+            assert detail_dfs, "lipsește tabelul Detaliu Poziții cu coloanele în română"
+            for dd in detail_dfs:
+                w = dd.data["Pondere %"] if hasattr(dd, "data") else dd["Pondere %"]
+                assert abs(float(w.sum()) - 100.0) < 1e-6 or w.isna().all(), f"ponderile nu dau 100%: {list(w)}"
+            print("Detaliu Poziții:", [list(dd.data["Simbol"]) if hasattr(dd, "data") else list(dd["Simbol"]) for dd in detail_dfs])
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")

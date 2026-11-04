@@ -30,7 +30,7 @@ from threading import Lock
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
 from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
-from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
+from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
 from analytics import simulation
@@ -5438,25 +5438,39 @@ def main():
                         plot_ro(fig_sym, width='stretch', key=f"pie_sym_{currency_symbol}")
 
                 # 4. Detaliu Poziții
-                st.subheader("Detaliu Poziții")
+                st.subheader("📋 Detaliu Poziții")
                 if not df_calc.empty:
-                    display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
-                    
+                    df_detail = positions_detail(df_calc)
+
                     def color_profit(val):
                         if pd.isna(val): return ''
                         color = '#3FB950' if val >= 0 else '#F85149'
                         return f'color: {color}'
 
                     st.dataframe(
-                        df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
+                        df_detail.style.map(color_profit, subset=['Profit', 'Profit %'])
                         .format({
                             # format românesc; cantitatea până la 4 zecimale, fără zerouri inutile (1.250, 0,3048)
-                            'Quantity': lambda q: format_ro(q, 4, trim=True),
-                            'AvgPrice': lambda v: format_ro(v, 4), 'CurrentPrice': lambda v: format_ro(v, 4),
-                            'MarketValue': lambda v: format_ro(v), 'Profit': lambda v: format_ro(v), 'Profit %': lambda v: format_ro(v, 2, "%")
+                            'Cantitate': lambda q: format_ro(q, 4, trim=True),
+                            'Cost mediu': lambda v: format_ro(v, 4), 'Preț curent': lambda v: format_ro(v, 4),
+                            'Valoare': lambda v: format_ro(v), 'Pondere %': lambda v: format_ro(v, 2, "%"),
+                            'Profit': lambda v: format_ro(v), 'Profit %': lambda v: format_ro(v, 2, "%")
                         }, na_rep="N/A"),
-                        width='stretch'
-                    )        
+                        width='stretch', hide_index=True,
+                        column_config={
+                            "Simbol": st.column_config.Column(help="Simbolul Yahoo al poziției deschise din registrul `Tranzactii`."),
+                            "Cantitate": st.column_config.Column(help="Cantitatea deținută azi: cumpărări − vânzări din registru, plus acțiunile gratuite."),
+                            "Cost mediu": st.column_config.Column(help=f"Cost mediu ponderat pe unitate, în {currency_symbol}: costul deschis (cu comisioanele de cumpărare) ÷ cantitate. "
+                                                                         "Acțiunile gratuite intră la cost 0, deci îl scad; la o vânzare parțială costul mediu nu se schimbă."),
+                            "Preț curent": st.column_config.Column(help="Prețul live de la Yahoo; dacă lipsește, ultima închidere (vezi nota de deasupra). Fără niciunul: N/A."),
+                            "Valoare": st.column_config.Column(help=f"Cantitate × preț curent, în {currency_symbol}. N/A dacă lipsește prețul."),
+                            "Pondere %": st.column_config.Column(help="Valoarea poziției ÷ valoarea tuturor pozițiilor cu preț din acest tab × 100. "
+                                                                     "Pozițiile fără preț nu intră la numitor."),
+                            "Profit": st.column_config.Column(help=f"Valoare − cantitate × cost mediu, în {currency_symbol}. Profitul pe hârtie, "
+                                                                  "fără dividende, impozite și profitul deja realizat la vânzări (acelea sunt în tabelul pe clase de sus)."),
+                            "Profit %": st.column_config.Column(help="Profit ÷ (cantitate × cost mediu) × 100. N/A la cost 0 (doar acțiuni gratuite)."),
+                        }
+                    )
 
                 with col_pie2:
                     st.caption("**După Sector Economic (%)**")
