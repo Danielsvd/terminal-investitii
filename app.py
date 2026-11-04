@@ -1341,7 +1341,8 @@ def resolve_beta_alpha(symbol, info, hist):
     deci se calculează față de BET (prin TVBETETF.RO, proxy), pe randamente săptămânale.
     La celelalte piețe rămâne beta Yahoo; dacă lipsește, se calculează față de indicele pieței.
     Alpha: când beta e calculat aici, alpha folosește același benchmark și rata fără risc a
-    valutei. Cu beta din Yahoo: acțiunile în USD rămân pe calculul existent (față de SPY); cele în EUR
+    valutei. Cu beta din Yahoo: acțiunile în USD se compară cu SPY (fereastră calendaristică de un an,
+    rata fără risc din ^TNX, fără valoare de rezervă); cele în EUR
     se compară cu DAX (.DE) sau Euro Stoxx 50, cu beta calculat față de același indice; alte valute: N/A.
     Întoarce un dict: beta, beta_label, alpha, alpha_label. Valorile lipsă sunt None.
     """
@@ -1408,8 +1409,20 @@ def resolve_beta_alpha(symbol, info, hist):
     if cur != "USD":
         out["alpha_label"] = f"indisponibil: nu există încă un indice de referință în {cur} (doar SUA, zona euro, BVB)"
         return out
-    out["alpha"] = calculate_alpha(hist, out["beta"])
-    out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
+    # USD: beta Yahoo (față de S&P 500), benchmark SPY. Fereastra pe date calendaristice (jensen_alpha),
+    # nu pe număr de rânduri; rata fără risc citită din ^TNX, fără valoarea de rezervă de 4% (lipsă → N/A).
+    # calculate_alpha / get_risk_free_rate rămân în cod, nefolosite (curățare în Etapa 5, cu acord).
+    rf_val, rf_label = get_risk_free_for_currency("USD")
+    if rf_val is None:
+        out["alpha_label"] = f"indisponibil: {rf_label}"
+        return out
+    alpha = jensen_alpha(hist['Close'], get_benchmark_close("SPY"), out["beta"], rf_val)
+    if alpha is None:
+        out["alpha_label"] = "indisponibil: sub un an de ședințe comune cu S&P 500 (SPY)"
+        return out
+    out["alpha"] = alpha["alpha"]
+    out["alpha_label"] = (f"față de S&P 500 (SPY), {alpha['start']:%d.%m.%Y}–{alpha['end']:%d.%m.%Y}; "
+                          f"beta Yahoo {ro(out['beta']):.2f}; rată fără risc {ro(rf_val * 100):.2f}% [{rf_label}]")
     return out
 
 
