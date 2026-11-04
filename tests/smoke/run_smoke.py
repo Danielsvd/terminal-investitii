@@ -626,6 +626,12 @@ def main():
         check(at, f"2. Companie {sym}")
         if sym in ("SAP.DE", "EURO.PA", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
             assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym in ("TLV.RO", "SNP.RO"):   # dividendul BVB din fișierul companiei, nu din Yahoo
+            div_m = next((m for m in at.metric if m.label == "Dividend (Randament)"), None)
+            print(f"{sym} dividend: {div_m and div_m.value} | {div_m and div_m.proto.help[-160:]}")
+            if sym == "SNP.RO":
+                assert div_m is not None and "Analiză companii" in div_m.proto.help and div_m.value != "N/A", \
+                    f"dividend SNP.RO: {div_m and div_m.value}"
         if sym == "EURO.PA":     # alpha UE: față de Euro Stoxx 50, nu față de SPY
             alpha_m = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
             alpha_help = alpha_m.proto.help if alpha_m is not None else ""
