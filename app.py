@@ -41,6 +41,7 @@ from data import iv_history
 from data import broker_import
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, beta_corr_weekly, jensen_alpha, performance_risk, common_day_correlation
+from analytics.risk import CORR_HIGH, CORR_MID, CORR_BANDS, correlation_band
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
 from analytics import global_fundamental as gfund
@@ -1901,31 +1902,36 @@ def plot_correlation_matrix(tickers, show_cards=True):
             st.info(f"Corelațiile nu pot fi calculate: doar {corr_days} zile comune de tranzacționare (minimum 60) "
                     "sau mai puțin de două simboluri cu istoric.")
             return None
-        st.caption(f"Corelații pe {corr_days} zile comune de tranzacționare din ultimul an.")
+        st.caption(f"Corelații pe {corr_days} zile comune de tranzacționare din ultimul an (randamente zilnice). "
+                   f"Peste {ro(CORR_HIGH):.2f}: diversificare slabă; {ro(CORR_MID):.2f}–{ro(CORR_HIGH):.2f}: moderată; "
+                   f"sub {ro(CORR_MID):.2f}: bună. Praguri orientative, netestate, aceleași pe carduri.")
         
-        # 2. Text Heatmap
+        # 2. Text Heatmap (clasele din analytics/risk.py: aceleași praguri ca pe carduri)
+        band_short = {"slaba": "⚠️ Slabă", "moderata": "Moderată", "buna": "✅ Bună"}
         text_matrix = []
         for i in range(len(corr_matrix)):
             row_text = []
             for j in range(len(corr_matrix)):
                 val = corr_matrix.iloc[i, j]
-                if i == j: label = "1.00"
-                elif val > 0.8: label = f"{ro(val):.2f}<br>⚠️ Risc"
-                elif val > 0.5: label = f"{ro(val):.2f}<br>Moderat"
-                else: label = f"{ro(val):.2f}<br>✅ OK"
+                band = correlation_band(val)
+                if i == j: label = f"{ro(1.0):.2f}"
+                elif band is None: label = "N/A"
+                else: label = f"{ro(val):.2f}<br>{band_short[band]}"
                 row_text.append(label)
             text_matrix.append(row_text)
 
-        # 3. Grafic Plotly optimizat
+        # 3. Grafic Plotly: scală divergentă, albastru (negativ: pozițiile se compensează) – gri (0) – portocaliu (pozitiv)
         fig = go.Figure(data=go.Heatmap(
             z=corr_matrix.values,
             x=corr_matrix.columns,
             y=corr_matrix.columns,
-            colorscale=[[0.0, '#00FF00'], [0.5, '#ffffff'], [1.0, '#01464D']],
-            zmin=-1, zmax=1,
+            colorscale=[[0.0, '#3987e5'], [0.5, '#383835'], [1.0, '#d95926']],
+            zmin=-1, zmax=1, xgap=2, ygap=2,
             text=text_matrix,
             texttemplate="%{text}",
-            hovertemplate="Corelație: %{z:.2f}<extra></extra>"
+            textfont=dict(color='#ffffff'),
+            colorbar=dict(title="Corelație"),
+            hovertemplate="%{y} ↔ %{x}<br>Corelație: %{z:.2f}<extra></extra>"
         ))
         
         fig.update_layout(
@@ -1957,16 +1963,17 @@ def render_diversification_cards(corr_matrix):
             score = corr_matrix.iloc[i, j]
             t1, t2 = corr_matrix.columns[i], corr_matrix.columns[j]
             
-            # Logică Culori și Iconițe
-            if score > 0.75:
-                color, icon, label = "#F85149", "🚫", "Diversificare Slabă"
-                bg_light = "rgba(248, 81, 73, 0.1)"
-            elif score > 0.40:
-                color, icon, label = "#DBAB09", "⚠️", "Diversificare Moderată"
-                bg_light = "rgba(219, 171, 9, 0.1)"
+            # Clasa perechii: aceleași praguri ca în heatmap (analytics/risk.py, orientative, netestate)
+            band = correlation_band(score)
+            if band is None:
+                continue
+            label = CORR_BANDS[band]
+            if band == "slaba":
+                color, icon, bg_light = "#F85149", "🚫", "rgba(248, 81, 73, 0.1)"
+            elif band == "moderata":
+                color, icon, bg_light = "#DBAB09", "⚠️", "rgba(219, 171, 9, 0.1)"
             else:
-                color, icon, label = "#3FB950", "🛡️", "Diversificare Optimă"
-                bg_light = "rgba(63, 185, 80, 0.1)"
+                color, icon, bg_light = "#3FB950", "🛡️", "rgba(63, 185, 80, 0.1)"
 
             # Randare Card HTML/CSS
             with cols[col_idx % len(cols)]:
@@ -1989,6 +1996,8 @@ def render_diversification_cards(corr_matrix):
                     </div>
                 """, unsafe_allow_html=True)
             col_idx += 1
+    st.caption(f"Corelația randamentelor zilnice pe perechi. Peste {ro(CORR_HIGH):.2f}: slabă; {ro(CORR_MID):.2f}–{ro(CORR_HIGH):.2f}: moderată; "
+               f"sub {ro(CORR_MID):.2f} (inclusiv negativă): bună. Praguri orientative, netestate.")
 
 
 def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name="S&P 500"):
