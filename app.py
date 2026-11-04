@@ -51,6 +51,7 @@ from data.company_files import load_company, is_bank_template, ticker_from_title
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
+from data import bnr as bnr_data
 from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html
 
 # =============================================================================
@@ -2945,6 +2946,44 @@ def get_portfolio_sectors(df_current):
             labels[sym], sources[sym] = pf_calc.SECTOR_UNKNOWN, "eroare Yahoo"
     df_sec, unpriced = pf_calc.sector_weights(values, labels)
     return df_sec, unpriced, sources
+
+# --- CURS VALUTAR FAȚĂ DE LEU (BNR + Yahoo live) ---
+FX_LIVE_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X", "GBP": "GBPRON=X", "CHF": "CHFRON=X"}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _bnr_xml_frame(url):
+    """Un fișier XML BNR → DataFrame (data_bnr.parse_bnr_xml). Eroare HTTP sau fișier fără cursuri → excepție,
+    deci un eșec nu se salvează în cache și se reîncearcă la următoarea deschidere."""
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    frame = bnr_data.parse_bnr_xml(resp.content)
+    if frame.empty:
+        raise ValueError(f"BNR: fișier fără cursuri ({url})")
+    return frame
+
+def get_bnr_fx_history():
+    """Istoricul cursurilor BNR: anul trecut + anul curent + ultimele 10 zile (pentru variația pe un an și de la 1 ianuarie).
+    Întoarce (istoric, fișiere care n-au putut fi citite). Istoricul e gol doar dacă n-a mers niciun fișier."""
+    year = now_ro().year
+    urls = [bnr_data.BNR_YEAR_URL.format(year=year - 1), bnr_data.BNR_YEAR_URL.format(year=year), bnr_data.BNR_10DAYS_URL]
+    frames, failed = [], []
+    for url in urls:
+        try:
+            frames.append(_bnr_xml_frame(url))
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("BNR %s: %s", url, exc)
+            failed.append(url.rsplit("/", 1)[-1])
+    return bnr_data.merge_histories(*frames), failed
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_fx_live():
+    """Cursul de piață (Yahoo, întârziat câteva minute) pentru valutele principale: dict cod -> lei/unitate.
+    Fără niciun curs → excepție (nu se salvează în cache)."""
+    prices = get_fast_live_prices(list(FX_LIVE_SYMBOLS.values()))
+    out = {code: prices.get(sym) for code, sym in FX_LIVE_SYMBOLS.items()}
+    if not any(v for v in out.values()):
+        raise ValueError("Yahoo: niciun curs valutar live")
+    return out
 
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
@@ -6576,6 +6615,48 @@ def main():
                 .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
                 width='stretch', hide_index=True
             )
+
+        # --- CURS VALUTAR FAȚĂ DE LEU ---
+        st.markdown("---")
+        st.subheader("💱 Curs valutar față de leu")
+        with st.spinner("Citim cursurile BNR..."):
+            fx_hist, fx_failed = get_bnr_fx_history()
+            try:
+                fx_live = get_fx_live()
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("curs live: %s", exc)
+                fx_live = {}
+        if fx_hist.empty:
+            st.info("Cursurile BNR nu au putut fi citite acum (bnr.ro indisponibil). Se reîncearcă la următoarea deschidere a paginii.")
+        else:
+            df_fx = bnr_data.fx_table(fx_hist)
+            df_fx.insert(4, "Live (Yahoo)", [
+                (fx_live.get(c) * u) if (fx_live.get(c) and u == 1) else None
+                for c, u in zip(df_fx["Cod"], df_fx["Unitate"])])
+            df_fx["Unitate"] = [f"{u} {c}" if c != "XAU" else "1 g" for u, c in zip(df_fx["Unitate"], df_fx["Cod"])]
+            pct_fmt = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}%"
+            st.dataframe(
+                df_fx.drop(columns=["Cod"]).style.format({
+                    "Curs BNR": lambda v: format_ro(v, 4), "Live (Yahoo)": lambda v: format_ro(v, 4),
+                    "Data": lambda d: "N/A" if d is None or pd.isna(d) else f"{d:%d.%m.%Y}",
+                    "Zi %": pct_fmt, "1 lună %": pct_fmt, "De la 1 ian. %": pct_fmt, "1 an %": pct_fmt,
+                }, na_rep="N/A"),
+                width='stretch', hide_index=True,
+                column_config={
+                    "Unitate": st.column_config.Column(help="Câți lei costă această cantitate de valută (cum publică BNR: 100 de unități la yen și forint)."),
+                    "Curs BNR": st.column_config.Column(help="Cursul oficial de referință BNR, publicat în zilele bancare puțin după ora 13:00. "
+                                                             "E cursul folosit în contabilitate, la declarații fiscale și de bănci ca reper."),
+                    "Live (Yahoo)": st.column_config.Column(help="Cursul de piață interbancar de la Yahoo, întârziat câteva minute; doar pentru valutele principale. "
+                                                                 "Diferă de BNR prin moment (BNR e fixat o dată pe zi) și sursă."),
+                    "Data": st.column_config.Column(help="Ziua bancară a ultimului curs BNR."),
+                    "Zi %": st.column_config.Column(help="Față de cursul BNR din ziua bancară precedentă."),
+                    "1 lună %": st.column_config.Column(help="Față de ultimul curs BNR de la sau înainte de aceeași zi de acum o lună."),
+                    "De la 1 ian. %": st.column_config.Column(help="Față de ultimul curs BNR din anul precedent."),
+                    "1 an %": st.column_config.Column(help="Față de ultimul curs BNR de la sau înainte de aceeași zi de acum un an."),
+                })
+            st.caption("ℹ️ Variație pozitivă = valuta s-a apreciat față de leu (costă mai mulți lei): pozițiile tale în acea valută valorează mai mult în RON. "
+                       "Sursa: BNR (bnr.ro, fișierele XML oficiale)."
+                       + (f" Nu s-au putut citi: {', '.join(fx_failed)}; orizonturile neacoperite apar N/A." if fx_failed else ""))
 
         st.markdown("---")
         
