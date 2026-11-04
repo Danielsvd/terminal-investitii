@@ -75,3 +75,16 @@ def test_orizont_neacoperit_sau_curs_lipsa():
 def test_piete_unice():
     keys = [m[0] for m in MARKETS]
     assert len(keys) == len(set(keys)) and {m[3] for m in MARKETS} <= {"USD", "EUR", "RON"}
+
+
+def test_randament_relativ_pana_la_ziua_comuna():
+    from analytics.markets import relative_return
+    a = _series([("2025-11-03", 100.0), ("2026-08-03", 105.0), ("2026-11-03", 110.0), ("2026-11-04", 120.0)])
+    b = _series([("2025-11-03", 200.0), ("2026-08-03", 230.0), ("2026-11-03", 240.0)])
+    r12 = relative_return(a, b, 12)
+    assert r12["end"] == pd.Timestamp("2026-11-03")                 # 04.11 lipsește la B
+    assert r12["a"] == pytest.approx(0.10) and r12["b"] == pytest.approx(0.20)
+    assert r12["diff"] == pytest.approx(-0.10)
+    r3 = relative_return(a, b, 3)
+    assert r3["a"] == pytest.approx(110 / 105 - 1) and r3["b"] == pytest.approx(240 / 230 - 1)
+    assert relative_return(a.iloc[2:], b, 12)["diff"] is None

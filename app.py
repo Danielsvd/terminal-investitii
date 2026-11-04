@@ -3094,6 +3094,16 @@ def get_vix_curve_closes():
         raise ValueError("Yahoo: VIX / VIX3M fără date")
     return closes
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_breadth_closes():
+    """Închiderile ajustate RSP, IWM, SPY pe 2 ani (Yahoo). Fără niciuna → excepție (nu se salvează în cache)."""
+    syms = sorted({x for a, b, _ in markets_calc.BREADTH_PAIRS for x in (a, b)})
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(syms, period="2y", progress=False, auto_adjust=True), syms)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: RSP/IWM/SPY fără date")
+    return closes
+
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
@@ -6059,6 +6069,34 @@ def main():
                 })
             st.caption("ℹ️ Indici de la Yahoo (ajustați), cursuri BNR. Indicii de preț nu includ dividendele (S&P 500, Nasdaq, STOXX 600); "
                        "DAX le include. BET e aproximat prin ETF-ul TVBETETF.")
+
+        # --- LĂȚIMEA PIEȚEI SUA ---
+        st.markdown("**Lățimea pieței SUA** (cât de larg participă companiile la creștere)")
+        try:
+            br_closes = get_breadth_closes()
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("lățime: %s", exc)
+            br_closes = pd.DataFrame()
+        if br_closes.empty:
+            st.info("RSP / IWM / SPY nu au putut fi citite acum de la Yahoo.")
+        else:
+            br_rows = []
+            for a_sym, b_sym, label in markets_calc.BREADTH_PAIRS:
+                row_b = {"Comparație": label, "Pereche": f"{a_sym} / {b_sym}"}
+                for mths in markets_calc.BREADTH_MONTHS:
+                    rr_b = markets_calc.relative_return(br_closes.get(a_sym), br_closes.get(b_sym), mths)
+                    row_b[f"Diferență {mths} luni"] = rr_b["diff"]
+                    row_b[f"Detaliu {mths} luni"] = (None if rr_b["diff"] is None else
+                                                    f"{a_sym} {ro(rr_b['a'] * 100):+.1f}% vs {b_sym} {ro(rr_b['b'] * 100):+.1f}%")
+                br_rows.append(row_b)
+            pct_b = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v * 100):+.1f} pp"
+            st.dataframe(
+                pd.DataFrame(br_rows).style.format({f"Diferență {m_} luni": pct_b for m_ in markets_calc.BREADTH_MONTHS}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={f"Diferență {m_} luni": st.column_config.Column(
+                    help=f"Randamentul primului ETF − al doilea pe {m_} luni (total return, până la ultima zi comună). "
+                         "Negativ la RSP/SPY: creșterea S&P 500 vine din câteva companii mari (piață îngustă, mai fragilă). "
+                         "Pozitiv: participare largă.") for m_ in markets_calc.BREADTH_MONTHS})
 
         # --- DOBÂNZI ȘI RISC DE ȚARĂ ---
         st.markdown("---")
