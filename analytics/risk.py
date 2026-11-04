@@ -56,6 +56,19 @@ def beta_weekly(asset_close, bench_close, min_obs=52):
             "start": joined.index[0], "end": joined.index[-1]}
 
 
+def beta_corr_weekly(asset_close, bench_close, min_obs=52):
+    """Beta și corelația față de benchmark, pe aceleași randamente săptămânale (vezi `beta_weekly`).
+
+    Întoarce {"beta", "corr", "n", "start", "end"} sau None sub `min_obs` săptămâni comune.
+    """
+    base = beta_weekly(asset_close, bench_close, min_obs=min_obs)
+    if base is None:
+        return None
+    joined = pd.concat([_weekly_returns(asset_close), _weekly_returns(bench_close)], axis=1, join="inner").dropna()
+    corr = joined.iloc[:, 0].corr(joined.iloc[:, 1])
+    return dict(base, corr=None if corr != corr else float(corr))
+
+
 def _daily_close(close):
     series = pd.Series(close).dropna()
     if series.empty:

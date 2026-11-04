@@ -39,7 +39,7 @@ from data import portfolio_sheet
 from data import iv_history
 from data import broker_import
 import zipfile
-from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
+from analytics.risk import beta_benchmark, beta_weekly, beta_corr_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
 from analytics import global_fundamental as gfund
@@ -2343,6 +2343,8 @@ def calculate_portfolio_performance(df, history_range="1A"):
 
 # --- REGISTRUL DE TRANZACȚII (foaia `Tranzactii`) ---
 LEDGER_FX_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X"}
+TAB_BENCHMARKS = {"USD": ("SPY", "S&P 500 (SPY)"), "EUR": ("EXSA.DE", "STOXX Europe 600 (EXSA.DE)"),
+                  "RON": ("TVBETETF.RO", "BET (ETF TVBETETF)")}
 LEDGER_CLASS_ORDER = ["Actiuni RO", "Actiuni SUA", "Actiuni UE", "ETF", "Obligatiuni", "Altele"]
 
 # Explicațiile din semnul întrebării de lângă fiecare indicator: cum se calculează și ce înseamnă.
@@ -5193,6 +5195,9 @@ def main():
             hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
             
             tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
+            # Registrul, pentru performanța reală pe monedă (citirea foii e în cache)
+            _ledger_vals = load_ledger_values()
+            ledger_df_tabs = ledger_calc.parse_ledger(_ledger_vals)[0] if _ledger_vals is not None else None
             
             def render_portfolio_tab(df_subset, currency_symbol):
                 if df_subset.empty:
@@ -5224,7 +5229,7 @@ def main():
 
                 if pf_notes.get('curve_start') is not None:
                     st.caption(
-                        f"ℹ️ Graficele și indicatorii de risc de mai jos aplică deținerile de azi pe trecut, începând cu "
+                        f"ℹ️ Graficul valorii, Monte Carlo și optimizatorul aplică deținerile de azi pe trecut, începând cu "
                         f"{pf_notes['curve_start'].strftime('%d.%m.%Y')} (prima zi în care toate pozițiile au preț; "
                         f"istoricul cel mai scurt: {pf_notes.get('limiting_symbol')}). Nu reprezintă performanța realizată efectiv."
                     )
@@ -5295,87 +5300,102 @@ def main():
                     # --- NOU: COMPARAȚIE BENCHMARK ---
                 st.markdown("---")
                 st.subheader("🏁 Performanță Relativă (Benchmark)")
-                
-                # Definirea benchmark-ului înainte de apel (Fix Alpha EUR)
-                if currency_symbol == "$":
-                    current_bench_ticker = "SPY"
-                    current_bench_name = "S&P 500 (SPY)"
-                elif currency_symbol == "RON":
-                    # Schimbăm STOXX 600 cu indicele local BET
-                    current_bench_ticker = "TVBETETF.RO"
-                    current_bench_name = "BET (ETF TVBETETF)"
+                cur_code = {"$": "USD", "€": "EUR"}.get(currency_symbol, currency_symbol)
+                bench_ticker, bench_name = TAB_BENCHMARKS[cur_code]
+                # Performanța și riscul se măsoară pe ce s-a întâmplat efectiv: acțiunile și ETF-urile din
+                # această monedă, din registrul `Tranzactii`, cu TWR (fără efectul cumpărărilor și vânzărilor).
+                sleeve = None
+                if ledger_df_tabs is not None and not ledger_df_tabs.empty:
+                    sleeve_syms = sorted(set(ledger_df_tabs.loc[
+                        (ledger_df_tabs["Currency"] == cur_code) & ledger_df_tabs["Symbol"].ne("")
+                        & ~ledger_df_tabs["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"]))
+                    sleeve_start = (ledger_df_tabs["Date"].min() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+                    sleeve_index = pd.bdate_range(ledger_df_tabs["Date"].min().normalize(), pd.Timestamp(now_ro().replace(tzinfo=None)).normalize())
+                    with st.spinner(f"Reconstruim istoricul real al pozițiilor în {cur_code}..."):
+                        sleeve_market = get_ledger_market_history(tuple(sleeve_syms), sleeve_start)
+                    s_values, s_in, s_out, s_sources, s_blockers = ledger_calc.currency_sleeve(
+                        ledger_df_tabs, cur_code, sleeve_index, sleeve_market)
+                    s_daily, s_cum, s_total = ledger_calc.twr_in_out(s_values, s_in, s_out)
+                    if s_total is not None:
+                        sleeve = {"wealth": slice_window(1.0 + s_cum, hist_range), "sources": s_sources, "blockers": s_blockers}
+                if sleeve is None or len(sleeve["wealth"]) < 2:
+                    st.info(f"Istoricul real al pozițiilor în {cur_code} nu poate fi reconstruit din registru "
+                            "(lipsesc prețurile istorice sau tranzacțiile); indicatorii de mai jos sunt N/A.")
+                    wealth_w = pd.Series(dtype=float)
                 else:
-                    # Rămâne STOXX 600 doar pentru portofoliul în EURO
-                    current_bench_ticker = "EXSA.DE"
-                    current_bench_name = "STOXX Europe 600 (EXSA.DE)"
+                    wealth_w = sleeve["wealth"]
+                    with st.spinner(f"Se compară cu {bench_name}..."):
+                        render_benchmark_comparison(wealth_w, bench_ticker, bench_name)
+                    proxy = sorted(s for s, src in sleeve["sources"].items() if src in ("proxy", "mixed"))
+                    st.caption(
+                        f"ℹ️ Curba de sus e randamentul ponderat cu timpul (TWR) al acțiunilor și ETF-urilor în {cur_code} din registrul "
+                        f"`Tranzactii`, {wealth_w.index[0]:%d.%m.%Y}–{wealth_w.index[-1]:%d.%m.%Y}: cumpărările și vânzările nu "
+                        "contează ca randament, dividendele încasate (nete de impozit) da. Fără numerar și fără titluri de stat."
+                        + (f" Fără istoric complet de piață, evaluate la prețul ultimei tranzacții (proxy): {', '.join(proxy)}." if proxy else "")
+                        + (f" Zile fără preț din cauza: {', '.join(sleeve['blockers'])}; TWR începe după ultima." if sleeve["blockers"] else ""))
 
-                with st.spinner(f"Se compară cu {current_bench_name}..."):
-                    # Trimitem ticker-ul și numele corect către funcție
-                    render_benchmark_comparison(hist_curve, current_bench_ticker, current_bench_name)
-                
-                # --- CALCUL METRICI (Rândul 1 & 2) ---
-                # 1. Calculăm metricile de risc intern
-                max_dd, sharpe, var_abs, vol_ann = calculate_risk_metrics(hist_curve)
-                
-                # 2. Alegem benchmark-ul automat bazat pe monedă
-                if currency_symbol == "$":
-                    bench_ticker = "SPY"
-                    bench_name = "S&P 500 (SPY)"
-                elif currency_symbol == "RON":
-                    # Schimbarea crucială pentru piața din România
-                    bench_ticker = "TVBETETF.RO"
-                    bench_name = "BET (ETF TVBETETF)"
-                else:
-                    # Rămâne STOXX 600 doar pentru portofoliul în EUR
-                    bench_ticker = "EXSA.DE"
-                    bench_name = "STOXX Europe 600 (EXSA.DE)"
-                
-                # 3. Calculăm Corelația Globală și Beta
-                global_corr, portfolio_beta = calculate_portfolio_beta(hist_curve, bench_ticker)
+                rets_w = wealth_w.pct_change(fill_method=None).dropna() if len(wealth_w) > 1 else pd.Series(dtype=float)
+                rf_tab, rf_tab_label = get_risk_free_for_currency(cur_code)
+                risk_tab = performance_risk(rets_w, rf_tab) if len(rets_w) else None
+                bench_close_tab = get_benchmark_close(bench_ticker)
+                bc = beta_corr_weekly(wealth_w, bench_close_tab) if len(wealth_w) > 1 else None
 
                 st.markdown(f"#### 🛡️ Diagnostic Portofoliu ({currency_symbol})")
-                
-                # Rândul 1: Riscul Intern al activelor tale
+                if risk_tab is None:
+                    st.info(f"Prea puține zile cu randament în fereastra aleasă ({len(rets_w)}); indicatorii de risc cer cel puțin 60. "
+                            "Alege o perioadă mai lungă (de ex. 1A).")
+                pct_t = lambda v, d=2: "N/A" if v is None else f"{ro(v * 100):.{d}f}%"
+                rat_t = lambda v: "N/A" if v is None else f"{ro(v):.2f}"
+                amt_t = lambda v: "N/A" if (v is None or not total_current) else f"{currency_symbol} {format_ro(abs(v * total_current))}"
+                rk = risk_tab or {}
+                rf_txt = (f"Rata fără risc: {ro(rf_tab * 100):.2f}% [{rf_tab_label}]." if rf_tab is not None
+                          else f"Rata fără risc indisponibilă ({rf_tab_label}): Sharpe și Sortino sunt N/A.")
+                n_txt = f" Eșantion: {rk['n']} zile ({rk['start']:%d.%m.%Y}–{rk['end']:%d.%m.%Y})." if rk else ""
+
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
-                c_r1.metric("Max Drawdown", f"{ro(max_dd*100):.2f}%", help="Cea mai mare scădere istorică.")
-                c_r2.metric("Sharpe Ratio", f"{ro(sharpe):.2f}", help="Eficiența profitului vs risc (Ideal > 1).")
-                c_r3.metric("VaR (95%)", f"{currency_symbol} {format_ro(abs(var_abs))}", help="Pierderea maximă probabilă într-o singură zi.")
-                c_r4.metric("Volatilitate Anualizată", f"{ro(vol_ann*100):.2f}%", help="Agitația generală a prețurilor portofoliului.")
+                c_r1.metric("Max Drawdown", pct_t(rk.get("max_drawdown")),
+                            help="Cea mai mare scădere de la un vârf la minimul de după el, pe curba TWR din fereastra aleasă." + n_txt)
+                c_r2.metric("Sharpe Ratio", rat_t(rk.get("sharpe")),
+                            help="(media zilnică − rata fără risc zilnică) / deviația standard zilnică × √252. "
+                                 "Sub 0: mai slab decât titlurile de stat; peste 1: bun. " + rf_txt + n_txt)
+                c_r3.metric("VaR istoric (95%, 1 zi)", amt_t(rk.get("var95_hist")),
+                            help="Percentila 5 a randamentelor zilnice, aplicată la valoarea de azi: într-o zi din 20 pierderea a fost "
+                                 f"mai mare. Procent: {pct_t(rk.get('var95_hist'))}." + n_txt)
+                c_r4.metric("Volatilitate Anualizată", pct_t(rk.get("vol_ann")),
+                            help="Deviația standard a randamentelor zilnice × √252." + n_txt)
 
-                # Rândul 2: Relația Strategică cu Piața (Benchmark-ul)
-                st.write("") # Mic spațiu vizual între rânduri
+                st.write("")
                 c_b1, c_b2, c_b3, c_b4 = st.columns(4)
-                
-                c_b1.metric("Benchmark", bench_name)
-                
-                c_b2.metric("Corelație cu Piața", f"{ro(global_corr):.2f}", 
-                           help=f"Scorul de {ro(global_corr):.2f} arată cât de mult imiți indexul {bench_name}. 1,00 = Copie fidelă.")
-                
-                c_b3.metric("Beta Portofoliu", f"{ro(portfolio_beta):.2f}", 
-                           help=f"Sensibilitatea la piață. Un Beta de {ro(portfolio_beta):.2f} înseamnă că ești {'mai agresiv' if portfolio_beta > 1 else 'mai stabil'} decât media.")
+                c_b1.metric("Benchmark", bench_name, help="Indicele pieței în aceeași monedă cu pozițiile.")
+                bc_txt = (f" {bc['n']} randamente săptămânale comune, {bc['start']:%d.%m.%Y}–{bc['end']:%d.%m.%Y}." if bc
+                          else " Sub 52 de săptămâni comune: N/A.")
+                corr_v = bc["corr"] if bc else None
+                c_b2.metric("Corelație cu Piața", rat_t(corr_v),
+                            help=f"Corelația randamentelor săptămânale TWR cu {bench_name}. 1,00 = mișcare identică." + bc_txt)
+                c_b3.metric("Beta Portofoliu", rat_t(bc["beta"] if bc else None),
+                            help=f"cov(portofoliu, {bench_name}) / var({bench_name}), pe randamente săptămânale. "
+                                 "Peste 1 = mai sensibil decât piața." + bc_txt)
+                c_b4.metric("Scor Diversificare", "N/A" if corr_v is None else f"{ro((1 - abs(corr_v)) * 100):.1f}%",
+                            help="(1 − |corelația cu piața|) × 100. Cât de independent se mișcă portofoliul față de indice.")
 
-                # Scorul de Diversificare Strategică
-                div_score = (1 - abs(global_corr)) * 100
-                c_b4.metric("Scor Diversificare", f"{ro(div_score):.1f}%", 
-                           help="Indică cât de independentă este strategia ta față de restul pieței.")
-                
-                sortino_val = calculate_sortino_ratio(hist_curve)
-                # Creăm un rând nou de metrici sau adăugăm la cel existent
-                st.write("") 
-                c_s1, c_s2 = st.columns(2)
-
-                with c_s1:
-                    s_color = "#3FB950" if sortino_val > 2 else ("#D29922" if sortino_val > 1 else "#F85149")
-                    st.metric("Sortino Ratio (Calitate Profit)", f"{ro(sortino_val):.2f}", 
-                            help="Ideal > 2. Arată cât de mult câștigi pentru fiecare unitate de risc la scădere.")
-
-                with c_s2:
+                st.write("")
+                c_s1, c_s2, c_s3 = st.columns(3)
+                sortino_val = rk.get("sortino")
+                c_s1.metric("Sortino Ratio", rat_t(sortino_val),
+                            help="Ca Sharpe, dar la numitor intră doar variația zilelor sub rata fără risc. " + rf_txt + n_txt)
+                c_s2.metric("CVaR (95%, 1 zi)", amt_t(rk.get("cvar95")),
+                            help="Media pierderilor din cele mai rele 5% din zile, aplicată la valoarea de azi. "
+                                 f"Procent: {pct_t(rk.get('cvar95'))}." + n_txt)
+                c_s3.metric("VaR parametric (95%)", amt_t(rk.get("var95_param")),
+                            help="media − 1,645 × deviația standard (presupune distribuție normală; subestimează cozile). "
+                                 f"Procent: {pct_t(rk.get('var95_param'))}." + n_txt)
+                if sortino_val is not None:
                     if sortino_val > 2:
-                        st.success("🌟 **Excelent:** Portofoliul tău produce profituri cu un risc minim de scădere majoră.")
+                        st.success("🌟 **Sortino peste 2:** randament mare față de scăderile din perioadă (prag orientativ, netestat).")
                     elif sortino_val > 1:
-                        st.info("⚖️ **Acceptabil:** Profitul justifică riscul asumat.")
+                        st.info("⚖️ **Sortino între 1 și 2:** randamentul acoperă scăderile (prag orientativ, netestat).")
                     else:
-                        st.warning("⚠️ **Risc Ridicat:** Obții profit, dar ești expus la scăderi violente. Verifică diversificarea.")
+                        st.warning("⚠️ **Sortino sub 1:** scăderile au fost mari față de randament (prag orientativ, netestat).")
 
                 st.markdown("---")
 
