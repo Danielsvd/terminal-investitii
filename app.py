@@ -2203,7 +2203,7 @@ def add_to_watchlist(symbol, target, note):
     if ws:
         try:
             ws.append_row([symbol, float(target), note])
-            st.cache_data.clear()
+            # load_watchlist nu are cache: nu e nimic de golit (înainte: st.cache_data.clear() global)
             return True
         except Exception as e:
             st.error(f"Eroare salvare: {e}")
@@ -2218,7 +2218,7 @@ def remove_from_watchlist(symbol):
             cell = ws.find(symbol)
             if cell:
                 ws.delete_rows(cell.row)
-                st.cache_data.clear()
+                # load_watchlist nu are cache: nu e nimic de golit
                 return True
         except:
             pass
@@ -2230,7 +2230,7 @@ def add_trade(s, q, p, d, c):
     if sheet:
         row = [s, str(d), float(q), float(p), c]
         sheet.append_row(row)
-        st.cache_data.clear()
+        # load_portfolio nu are cache: nu e nimic de golit
 
 @st.cache_data(ttl=300)
 def get_portfolio_history_data(tickers):
@@ -6485,7 +6485,10 @@ def main():
         st.caption("Datele sunt curățate și standardizate automat (Format RO & US).")
         
         if st.button("🔄 Reîncarcă Datele"):
-            st.cache_data.clear()
+            # golește doar funcțiile care citesc din Google Sheets, nu și datele de piață
+            for _fn in (load_bvb_fundamentals, load_ledger_values, load_manual_price_values,
+                        load_iv_history_values, list_company_files, build_bvb_dataset):
+                _fn.clear()
             st.rerun()
 
         tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", "🌍 Internațional (Global)"])
