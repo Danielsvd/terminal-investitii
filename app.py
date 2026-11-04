@@ -1527,8 +1527,13 @@ ECB_RO_10Y_URL = "https://data-api.ecb.europa.eu/service/data/IRS/M.RO.L.L40.CI.
 EUROSTAT_MONEY_MARKET_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/irt_st_m"
 
 
+class CurveUnavailable(Exception):
+    """Curba nu a putut fi citită. Excepțiile nu intră în cache-ul Streamlit: un eșec temporar se reîncearcă
+    la următoarea afișare, nu rămâne 6 ore (aceeași regulă ca rata fără risc, #75)."""
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_market_curve(market):
+def _market_curve_cached(market):
     """Panta curbei randamentelor (10 ani − 3 luni, în puncte procentuale) pe piața acțiunii:
     (spread, descriere) sau (None, motiv). Fără valoare de rezervă.
 
@@ -1549,7 +1554,7 @@ def get_market_curve(market):
                                        f"(^TNX − ^IRX, {res['date']:%d.%m.%Y})")
         except Exception as e:
             print(f"DEBUG: curba SUA (^TNX/^IRX) indisponibilă: {e}")
-        return None, "curba SUA (^TNX − ^IRX) nu a putut fi citită"
+        raise CurveUnavailable("curba SUA (^TNX − ^IRX) nu a putut fi citită")
     if market == "EU":
         try:
             resp = requests.get(ECB_EU_CURVE_URL, params={"lastNObservations": 5, "format": "csvdata"}, timeout=10)
@@ -1561,7 +1566,7 @@ def get_market_curve(market):
                 print(f"DEBUG: BCE (curba zonei euro): HTTP {resp.status_code}")
         except requests.RequestException as e:
             print(f"DEBUG: BCE (curba zonei euro) indisponibilă: {e}")
-        return None, "curba zonei euro (BCE) nu a putut fi citită"
+        raise CurveUnavailable("curba zonei euro (BCE) nu a putut fi citită")
     if market == "RO":
         try:
             r10 = requests.get(ECB_RO_10Y_URL, params={"lastNObservations": 6, "format": "csvdata"}, timeout=10)
@@ -1577,8 +1582,16 @@ def get_market_curve(market):
                 print(f"DEBUG: curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
         except (requests.RequestException, ValueError) as e:
             print(f"DEBUG: curba RO indisponibilă: {e}")
-        return None, "curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită"
-    return None, "nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)"
+        raise CurveUnavailable("curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită")
+    raise CurveUnavailable("nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)")
+
+
+def get_market_curve(market):
+    """(spread, descriere) sau (None, motiv). Doar citirile reușite stau în cache 6 ore (`_market_curve_cached`)."""
+    try:
+        return _market_curve_cached(market)
+    except CurveUnavailable as exc:
+        return None, str(exc)
 
 
 class RiskFreeUnavailable(Exception):
