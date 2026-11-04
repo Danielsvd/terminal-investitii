@@ -5607,7 +5607,7 @@ def main():
                                         help="**Cum se calculează:** deviația standard a randamentelor zilnice ale alocării × √252.\n\n"
                                              "**Ce înseamnă:** cât de mult ar fi fluctuat alocarea într-un an obișnuit.")
                             
-                            c_opt3.metric("Sharpe Ratio", "N/A" if opt_res['sharpe_ratio'] is None else f"{ro(opt_res['sharpe_ratio']):.2f}",
+                            c_opt3.metric("Sharpe Ratio", "N/A" if (opt_res['sharpe_ratio'] is None or rf_opt is None) else f"{ro(opt_res['sharpe_ratio']):.2f}",
                                         help="**Cum se calculează:** (randament anual − rata fără risc) ÷ volatilitate.\n\n"
                                              "**Ce înseamnă:** randamentul peste titlurile de stat pentru fiecare unitate de risc. E valoarea maximă posibilă pe aceste date, "
                                              "cu plafonul pe poziție; în practică iese mai mic.")
@@ -5619,13 +5619,13 @@ def main():
                                     "Alocare": [r["label"] for r in oos],
                                     "Randament anualizat": [f"{ro(r['return']):.1f}%" for r in oos],
                                     "Volatilitate": [f"{ro(r['volatility']):.1f}%" for r in oos],
-                                    "Sharpe": ["N/A" if r["sharpe"] is None else f"{ro(r['sharpe']):.2f}" for r in oos],
+                                    "Sharpe": ["N/A" if (r["sharpe"] is None or rf_opt is None) else f"{ro(r['sharpe']):.2f}" for r in oos],
                                 }), hide_index=True, width='stretch')
                             st.caption(
                                 f"Din {opt_res['n_days']} zile comune de tranzacționare, {opt_res['start']:%d.%m.%Y} – {opt_res['end']:%d.%m.%Y}. "
                                 f"Plafon pe poziție: {ro(opt_res['cap']):.0f}%. Covarianță Ledoit-Wolf (shrinkage {ro(opt_res['shrinkage']):.2f}). "
                                 + (f"Excluse pentru istoric prea scurt: {', '.join(opt_res['excluded'])}. " if opt_res.get('excluded') else "")
-                                + (f"Rata fără risc: {ro(rf_opt * 100):.2f}% ({rf_opt_label}). " if rf_opt is not None else "Rata fără risc indisponibilă: Sharpe calculat cu 0%. ")
+                                + (f"Rata fără risc: {ro(rf_opt * 100):.2f}% ({rf_opt_label}). " if rf_opt is not None else f"Rata fără risc indisponibilă ({rf_opt_label}): alocarea „Sharpe maxim” maximizează randament ÷ volatilitate (rată 0%), iar Sharpe se afișează N/A. ")
                                 + ("Tabelul de verificare: ponderile au fost calculate pe primele 70% din zile și evaluate pe ultimele 30%. "
                                    "Dacă acolo nu bat ponderile egale, „optimul” e în mare parte potrivire pe trecut. " if oos else "")
                                 + "Varianța minimă nu depinde de estimarea randamentelor, deci e mai stabilă decât Sharpe maxim."
