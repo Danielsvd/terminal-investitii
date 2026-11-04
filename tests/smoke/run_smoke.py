@@ -784,6 +784,9 @@ def main():
             infos = " ".join(str(e.value) for e in at.info)
             assert ("pb într-o lună" in infos) or ("nu are istoric suficient" in infos), "lipsește interpretarea dobânzilor"
             assert "Semnale pe variația unei singure ședințe" in infos, "ghidul macro nu e marcat pe o ședință / netestat"
+            # rotația Nasdaq/Dow pe o lună calendaristică; barometrul refolosește sentimentul de sus (nu rulează FinBERT a doua oară)
+            assert any("Trend Rotație (1 lună)" in str(e.value) for e in at.markdown), "rotația nu e pe o lună"
+            assert not any("Barometrul de sentiment se actualizează" in str(e.value) for e in at.info), "barometrul a căzut pe excepție"
             # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
             stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
             print("Stres:", stress_m)

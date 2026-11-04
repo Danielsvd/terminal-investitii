@@ -3146,6 +3146,16 @@ def get_equity_risk_rows():
                                                     f"titluri SUA 10 ani, FRED DGS10 {us_when or 'indisponibil'}. Proxy.")})
     return rows
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_rotation_ratio():
+    """Raportul Nasdaq Composite / Dow Jones pe un an (zilele comune). Fără date → excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(['^IXIC', '^DJI'], period="1y", progress=False, auto_adjust=True), ['^IXIC', '^DJI'])
+    both = closes.dropna(how="any") if closes is not None else pd.DataFrame()
+    if both.empty or not {'^IXIC', '^DJI'} <= set(both.columns):
+        raise ValueError("Yahoo: ^IXIC / ^DJI fără zile comune")
+    return both['^IXIC'] / both['^DJI']
+
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
@@ -6435,41 +6445,42 @@ def main():
                 st.markdown("---")
                 st.subheader("📊 Matricea de Sensibilitate Economică (Scenarii)")
                 
-                impact_data = {
-                    "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
-                    "Dacă Dobânzile CRESC (↑)": [
-                        "🔴 NEGATIV (Evaluări scăzute)", 
-                        "🟢 POZITIV (Marje mai mari)", 
-                        "🔴 NEGATIV (Costuri datorie)", 
-                        "🟡 NEUTRU/POZITIV (Hedge)", 
-                        "🟡 NEUTRU (Cerere stabilă)"
-                    ],
-                    "Dacă Dobânzile SCAD (↓)": [
-                        "🟢 POZITIV (Expansiune multipli)", 
-                        "🔴 NEGATIV (Venituri scăzute)", 
-                        "🟢 POZITIV (Refinanțare ieftină)", 
-                        "🔴 NEGATIV (Semnal încetinire)", 
-                        "🟢 POZITIV (Randament dividend)"
-                    ]
-                }
+                with st.expander("📖 Cum reacționează sectoarele la dobânzi (ghid static, nu date de azi)", expanded=False):
+                    impact_data = {
+                        "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
+                        "Dacă Dobânzile CRESC (↑)": [
+                            "🔴 NEGATIV (Evaluări scăzute)", 
+                            "🟢 POZITIV (Marje mai mari)", 
+                            "🔴 NEGATIV (Costuri datorie)", 
+                            "🟡 NEUTRU/POZITIV (Hedge)", 
+                            "🟡 NEUTRU (Cerere stabilă)"
+                        ],
+                        "Dacă Dobânzile SCAD (↓)": [
+                            "🟢 POZITIV (Expansiune multipli)", 
+                            "🔴 NEGATIV (Venituri scăzute)", 
+                            "🟢 POZITIV (Refinanțare ieftină)", 
+                            "🔴 NEGATIV (Semnal încetinire)", 
+                            "🟢 POZITIV (Randament dividend)"
+                        ]
+                    }
                 
-                # Afișare tabel profesional
-                st.table(pd.DataFrame(impact_data))
+                    # Afișare tabel profesional
+                    st.table(pd.DataFrame(impact_data))
 
-                # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
-                col_c1, col_c2 = st.columns(2)
-                with col_c1:
-                    st.success("**🏢 Companii Large-Cap (Gigant)**")
-                    st.markdown("""
-                    * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
-                    * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
-                    """)
-                with col_c2:
-                    st.warning("**🚜 Companii Small-Cap (Mici)**")
-                    st.markdown("""
-                    * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
-                    * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
-                    """)
+                    # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
+                    col_c1, col_c2 = st.columns(2)
+                    with col_c1:
+                        st.success("**🏢 Companii Large-Cap (Gigant)**")
+                        st.markdown("""
+                        * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
+                        * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
+                        """)
+                    with col_c2:
+                        st.warning("**🚜 Companii Small-Cap (Mici)**")
+                        st.markdown("""
+                        * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
+                        * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
+                        """)
                 with st.expander("📖 Vezi Minighid de Macroeconomie"):
                     st.markdown("""
                     **1. Aurul: Refugiu Financiar**
@@ -6490,15 +6501,17 @@ def main():
                 st.markdown("---")
                 st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
                 
+                rot_change = None   # folosit și de barometrul de sentiment de mai jos
                 try:
-                    # 1. Date și Calcule (Rămân la fel)
-                    rot_data = yf.download(['^IXIC', '^DJI'], period="1y", progress=False)['Close']
-                    ratio = rot_data['^IXIC'] / rot_data['^DJI']
+                    # Raportul pe zilele comune; variația pe o lună calendaristică (nu 22 de rânduri)
+                    ratio = get_rotation_ratio()
                     ratio_sma = ratio.rolling(window=50).mean()
                     
                     current_ratio = ratio.iloc[-1]
-                    prev_ratio = ratio.iloc[-22]
-                    rot_change = ((current_ratio - prev_ratio) / prev_ratio) * 100
+                    rot_ret = macro_calc.period_return(ratio, months=1)
+                    if rot_ret is None:
+                        raise ValueError("raportul Nasdaq/Dow nu acoperă o lună")
+                    rot_change = rot_ret * 100
 
                     # --- PASUL A: GRAFICUL PE TOATĂ LĂȚIMEA (SUS) ---
                     fig_rot = go.Figure()
@@ -6551,7 +6564,7 @@ def main():
                         st.markdown(f"""
                             <div style="background-color: #161B22; padding: 22px; border-radius: 12px; border: 1px solid #30363D; height: 100%;">
                                 <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
-                                    Trend Rotație (30z)
+                                    Trend Rotație (1 lună)
                                 </div>
                                 <div style="font-size: 22px; font-weight: bold; color: #FFFFFF; margin-bottom: 18px;">
                                     {rot_status}
@@ -6574,56 +6587,49 @@ def main():
                             st.warning("🛡️ **MOD DEFENSIV:** Investitorii fug în Industriale și Value. Se caută siguranța dividendelor și a companiilor stabile.")
                         else:
                             st.info("⚖️ **ECHILIBRU:** Rotația este neutră între 'Creștere' și 'Valoare'. Piața își caută o direcție clară.")
+                        st.caption("Variația raportului Nasdaq Composite / Dow Jones într-o lună calendaristică. Prag ±1,5%, orientativ, netestat. "
+                                   "Dow Jones e ponderat cu prețul, deci e doar un proxy pentru „value”.")
                             
-                except Exception as e:
-                    st.info("Indicatorul de rotație se recalibrează...")
+                except Exception as e:  # rețea / Yahoo / istoric scurt
+                    logger.warning("rotație Nasdaq/Dow: %s", e)
+                    st.info("Indicatorul de rotație nu are date acum (Yahoo): N/A.")
                     
                     # --- MODUL: BAROMETRU DE SENTIMENT GLOBAL (ȘTIRI) ---
                 st.markdown("---")
                 st.subheader("🎭 Barometru Sentiment Global al Media")
                 
-                try:
-                    # Colectăm știrile de la indicii majori pentru un eșantion relevant
-                    news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
-                    
-                    if news_samples:
-                        # Calculăm scorul mediu folosind motorul tău de IA
-                        from ai_engine import analyze_sentiment_ai
-                        global_sentiment_score = analyze_sentiment_ai(news_samples)
-                        
-                        # Definire culori și mesaje profesionale
-                        if global_sentiment_score > 0.15:
-                            s_col, s_msg = "#3FB950", "🚀 BULLISH: Narațiunea globală este optimistă."
-                        elif global_sentiment_score < -0.15:
-                            s_col, s_msg = "#F85149", "📉 BEARISH: Predomină frica și incertitudinea."
-                        else:
-                            s_col, s_msg = "#8B949E", "⚖️ NEUTRU: Media reflectă o perioadă de consolidare."
-                            
-                        # Afișare vizuală
-                        sb1, sb2 = st.columns([1, 2])
-                        with sb1:
-                            st.markdown(f"""
-                            <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {s_col}; text-align:center;">
-                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sentiment Media</p>
-                                <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{ro(global_sentiment_score):.2f}</h1>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        
-                        with sb2:
-                            st.info(s_msg)
-                            st.write("**Corelație cu Rotația:**")
-                            # Logică de corelare automată
-                            if global_sentiment_score < 0 and rot_change < 0:
-                                st.write("⚠️ **CONFIRMARE DEFENSIVĂ:** Atât știrile, cât și mișcările de capital (rotația) indică o fugă către siguranță.")
-                            elif global_sentiment_score > 0 and rot_change > 0:
-                                st.write("🌟 **CONFIRMARE GROWTH:** Sentimentul pozitiv din media susține migrarea banilor către Tehnologie.")
-                            else:
-                                st.write("🔄 **DIVERGENȚĂ:** Piața se mișcă într-o direcție, dar media raportează altceva. Atenție la potențiale capcane!")
+                # Același scor ca pilonul „Sentiment” din verdictul de sus (aceleași știri, același model): nu se recalculează.
+                global_sentiment_score = macro_sentiment
+                if global_sentiment_score is None:
+                    st.info("Fără știri analizate acum pentru S&P 500 / Nasdaq: sentimentul e N/A.")
+                else:
+                    if global_sentiment_score > 0.15:
+                        s_col, s_msg = "#3FB950", "🚀 BULLISH: Narațiunea globală este optimistă."
+                    elif global_sentiment_score < -0.15:
+                        s_col, s_msg = "#F85149", "📉 BEARISH: Predomină frica și incertitudinea."
                     else:
-                        st.info("Sincronizare fluxuri știri pentru barometru...")
-                except Exception as exc:  # înainte: except: gol
-                    logger.warning("render_portfolio_tab: %s", exc)
-                    st.info("Barometrul de sentiment se actualizează...")
+                        s_col, s_msg = "#8B949E", "⚖️ NEUTRU: Media reflectă o perioadă de consolidare."
+                    sb1, sb2 = st.columns([1, 2])
+                    with sb1:
+                        st.markdown(f"""
+                        <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {s_col}; text-align:center;">
+                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sentiment Media</p>
+                            <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{ro(global_sentiment_score):.2f}</h1>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with sb2:
+                        st.info(s_msg)
+                        st.write("**Corelație cu Rotația:**")
+                        if rot_change is None:
+                            st.write("ℹ️ Rotația Nasdaq/Dow nu are date: comparația nu se poate face.")
+                        elif global_sentiment_score < 0 and rot_change < 0:
+                            st.write("⚠️ **CONFIRMARE DEFENSIVĂ:** Atât știrile, cât și mișcările de capital (rotația) indică o fugă către siguranță.")
+                        elif global_sentiment_score > 0 and rot_change > 0:
+                            st.write("🌟 **CONFIRMARE GROWTH:** Sentimentul pozitiv din media susține migrarea banilor către Tehnologie.")
+                        else:
+                            st.write("🔄 **DIVERGENȚĂ:** Piața se mișcă într-o direcție, dar media raportează altceva. Atenție la potențiale capcane!")
+                    st.caption("Media FinBERT (−1…+1) pe titlurile din fluxurile S&P 500 și Nasdaq; praguri ±0,15, netestate. "
+                               "O eroare a modelului dă tot 0 (neutru): limită cunoscută.")
 
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
