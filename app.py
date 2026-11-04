@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
 from data.news import filter_company_news
-from ui.card_help import fund_help
+from ui.card_help import FUND_HELP, fund_help
 import os
 import time
 from datetime import datetime, timedelta
@@ -853,7 +853,10 @@ def render_bvb_decision(real_sym, hist):
             "fund_score": None if pd.isna(row["scor"]) else float(row["scor"]), "fund_detail": vb["fund_detail"],
             "fund_basis": "testat pe BVB", "moment": moment, "moment_label": vb["moment_label"],
             "moment_color": vb["moment_color"], "moment_detail": vb["moment_detail"],
-            "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False}
+            "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False,
+            # Randamentul dividendului din fișier (dividend total pe ultimul an / capitalizarea la prețul curent),
+            # pentru cardul „Dividend (Randament)”: Yahoo nu îl trimite la BVB.
+            "dy": None if pd.isna(me["DY"]) else float(me["DY"]), "dy_year": me.get("raport_anual"), "price": price}
     st.markdown("---")
 
 
@@ -3573,7 +3576,16 @@ def main():
                     st.metric("Forward P/E", format_num(info.get('forwardPE')), help=fund_help(info, "forwardPE"))
                     div_rate = info.get('dividendRate')
                     div_display = f"{ro(div_rate):.2f} ({ro((div_rate/curr_price*100)):.2f}%)" if (div_rate and curr_price) else "N/A"
-                    st.metric("Dividend (Randament)", div_display, help=fund_help(info, "dividendRate"))
+                    div_help = fund_help(info, "dividendRate")
+                    bvb_dy = (bvb_decision or {}).get("dy")
+                    if bvb_dy is not None and (bvb_decision or {}).get("price"):
+                        # BVB: din fișierul „Analiză companii” (Yahoo nu trimite dividendul); are prioritate.
+                        dps = bvb_dy * bvb_decision["price"]
+                        div_display = f"{ro(dps):.4f} ({ro(bvb_dy * 100):.2f}%)" if dps < 1 else f"{ro(dps):.2f} ({ro(bvb_dy * 100):.2f}%)"
+                        div_help = (f"{FUND_HELP['dividendRate']} Sursă: fișierul „Analiză companii” {bvb_symbol(real_sym)}: "
+                                    f"dividendul total din {bvb_decision.get('dy_year') or 'ultimul an'} / capitalizarea la prețul curent "
+                                    f"({ro(bvb_decision['price']):.4f} lei); pe acțiune = randament × preț.")
+                    st.metric("Dividend (Randament)", div_display, help=div_help)
                     st.metric("P/BV", format_num(info.get('priceToBook')), help=fund_help(info, "priceToBook"))
                     gn_pe, gn_pb = num(info, 'trailingPE'), num(info, 'priceToBook')
                     gn_calc = gn_pe * gn_pb if (gn_pe is not None and gn_pb is not None) else None   # lipsă = N/A, nu 0
