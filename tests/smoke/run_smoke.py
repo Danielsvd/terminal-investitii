@@ -686,7 +686,12 @@ def main():
             for dd in detail_dfs:
                 w = dd.data["Pondere %"] if hasattr(dd, "data") else dd["Pondere %"]
                 assert abs(float(w.sum()) - 100.0) < 1e-6 or w.isna().all(), f"ponderile nu dau 100%: {list(w)}"
-            print("Detaliu Poziții:", [list(dd.data["Simbol"]) if hasattr(dd, "data") else list(dd["Simbol"]) for dd in detail_dfs])
+            # sectoarele: la BVB din harta proprie (Yahoo nu trimite sectorul), cu verdictul marcat „netestat”
+            sec_caps = " ".join(str(c.value) for c in at.caption)
+            assert "sector din harta proprie BVB: TLV.RO" in sec_caps, "TLV.RO nu primește sectorul din harta BVB"
+            assert any("netestat" in str(e.value) for e in list(at.success) + list(at.warning) if "sector" in str(e.value)), \
+                "verdictul pe sectoare nu e marcat netestat"
+            print("Detaliu Poziții:",[list(dd.data["Simbol"]) if hasattr(dd, "data") else list(dd["Simbol"]) for dd in detail_dfs])
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
