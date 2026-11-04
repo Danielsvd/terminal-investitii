@@ -538,6 +538,9 @@ EXPECTED_MESSAGES = (
     "STRATEGIE SHORT VOL", "ALERTA IV",            # avertismente informative de opțiuni
     "Concentrare mare",                            # avertisment informativ de portofoliu
     "Risc Ridicat",                                # avertisment informativ Sortino
+    "Sortino sub 1", "Sortino între 1 și 2",       # avertisment informativ Sortino (TWR pe monedă)
+    "Istoricul real al pozițiilor în",            # tab fără registru reconstruibil în datele de test
+    "Prea puține zile cu randament în fereastra", # fereastră scurtă în datele de test
     "Tranziție", "Frică Extremă", "MOD DEFENSIV",   # texte informative macro
     "AI-ul nu a găsit o soluție convergentă",      # optimizator pe date sintetice
     # titluri de secțiune afișate cu st.error / st.warning / st.success (nu sunt erori)
@@ -671,6 +674,11 @@ def main():
             assert qty.get("R9901AE") == "3", f"titlul de stat lipsește din poziții: {qty}"
             # taburile pe monedă folosesc tot registrul: tabul RON are poziții (nu mesajul de portofoliu gol)
             assert not any("Nu există acțiuni sau ETF-uri deschise" in str(e.value) for e in at.info), "taburile nu primesc pozițiile din registru"
+            # Diagnosticul pe monedă vine din TWR-ul registrului: Sharpe are rata fără risc a monedei în „?”
+            sharpe_tabs = [m for m in at.metric if m.label == "Sharpe Ratio"]
+            print("Sharpe pe taburi:", [str(m.value) for m in sharpe_tabs])
+            assert sharpe_tabs and all("Rata fără risc" in m.proto.help for m in sharpe_tabs), "Sharpe fără rata monedei"
+            assert any(str(m.value) != "N/A" for m in sharpe_tabs), "Sharpe N/A pe toate taburile"
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
