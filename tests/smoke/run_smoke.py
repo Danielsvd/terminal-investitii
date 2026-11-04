@@ -780,6 +780,10 @@ def main():
             for _, e_ in erp.iterrows():
                 if not pd.isna(e_["Prima de risc (pp)"]):
                     assert abs(e_["Randamentul profiturilor (E/P)"] - e_["Titluri de stat 10 ani"] - e_["Prima de risc (pp)"]) < 1e-9
+            # indicatori macro: interpretarea dobânzilor pe o lună în puncte de bază; ghidul spune că e pe o ședință, netestat
+            infos = " ".join(str(e.value) for e in at.info)
+            assert ("pb într-o lună" in infos) or ("nu are istoric suficient" in infos), "lipsește interpretarea dobânzilor"
+            assert "Semnale pe variația unei singure ședințe" in infos, "ghidul macro nu e marcat pe o ședință / netestat"
             # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
             stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
             print("Stres:", stress_m)

@@ -361,47 +361,46 @@ def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
         logger.warning("calculate_portfolio_beta: %s", exc)
         return 0.0, 1.0
 
-def get_macro_interpretation(ticker_data):
-    """
-    Motor IA Macro Profesional: Analiză corelații, inflație și impact sectorial.
-    """
-    try:
-        def get_chg(t): return ticker_data[t]['Close'].pct_change().iloc[-1] if t in ticker_data else 0
+def get_macro_interpretation(ticker_data, vix_close=None):
+    """Ghidul macro al zilei: semnalele din analytics/macro.py (daily_cross_asset_signals) pe variațiile ultimei ședințe
+    a fiecărei serii. Un simbol fără date nu mai contează ca variație 0: regula lui se sare. Randamentul pe 10 ani
+    se compară în puncte procentuale, nu în procente din randament."""
+    def close_of(t):
+        try:
+            if isinstance(ticker_data.columns, pd.MultiIndex) and t in ticker_data.columns.levels[0]:
+                return ticker_data[t]['Close']
+        except (KeyError, AttributeError) as exc:
+            logger.warning("get_macro_interpretation %s: %s", t, exc)
+        return None
 
-        usd = get_chg('DX-Y.NYB')
-        gold = get_chg('GC=F')
-        oil = get_chg('CL=F')
-        copper = get_chg('HG=F')
-        tnx_chg = get_chg('^TNX') # Yield 10Y
-        
-        v = []
+    def pct_of(t):
+        c = macro_calc.last_change(close_of(t))
+        return None if c is None else c["pct"]
 
-        # --- 1. CORELAȚII ACTIVE (DINAMICE) ---
-        if usd < -0.003 and gold > 0.003:
-            v.append("🟡 **AUR:** Refugiu activ. Dolarul slăbește, confirmând rolul aurului de protecție a puterii de cumpărare.")
-        
-        if usd > 0.003 and oil < -0.005:
-            v.append("🛢️ **PETROL:** Presiune valutară. Dolarul puternic scumpește barilul pentru importatori, reducând cererea.")
-
-        if copper > 0.01:
-            v.append("🏗️ **CUPRU:** Semnal expansiune. Creșterea metalelor industriale indică activitate industrială robustă.")
-
-        # --- 2. IMPACT SECTORIAL & INFLAȚIE (PROFESIONAL) ---
-        if tnx_chg > 0.01: # Dacă dobânzile cresc
-            v.append("🚀 **SECTOR BANCAR:** Impact Pozitiv. Creșterea yield-urilor îmbunătățește marjele nete de dobândă (spread).")
-            v.append("📉 **TECH & GROWTH:** Risc ridicat. Dobânzile mari scad valoarea prezentă a profiturilor viitoare (model DCF).")
-            v.append("🚩 **SMALL CAPS:** Vulnerabilitate crescută la refinanțarea datoriilor cu dobândă variabilă.")
-        elif tnx_chg < -0.01: # Dacă dobânzile scad
-            v.append("🟢 **TECH & REAL ESTATE:** Mediu favorabil. Costul capitalului scade, stimulând evaluările activelor imobiliare și tehnologice.")
-        
-        # --- 3. ALERTA "BLACK SWAN" (CRERATĂ DE TINE) ---
-        if gold > 0.01 and usd > 0.005 and get_chg('^VIX') > 0.10:
-            v.append("🚨 **ALERTA BLACK SWAN:** Fuga masivă către siguranță detectată (Aur+Dolar+VIX în creștere). Risc sistemic ridicat!")
-
-        return v if v else ["⚖️ **ECHILIBRU:** Corelațiile macro sunt stabile azi. Mișcările reflectă fundamentele individuale ale activelor."]
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("get_macro_interpretation: %s", exc)
+    pct = {"usd": pct_of('DX-Y.NYB'), "gold": pct_of('GC=F'), "oil": pct_of('CL=F'), "copper": pct_of('HG=F')}
+    tnx = macro_calc.last_change(close_of('^TNX'))
+    vix = macro_calc.last_change(vix_close)
+    if all(v is None for v in pct.values()) and tnx is None:
         return ["⚠️ Date insuficiente pentru procesarea corelațiilor macro."]
+    texts = {
+        "aur_refugiu": "🟡 **AUR:** Refugiu activ. Dolarul slăbește (sub −0,3% azi), iar aurul crește (peste +0,3%).",
+        "petrol_dolar": "🛢️ **PETROL:** Presiune valutară. Dolarul puternic (peste +0,3%) scumpește barilul pentru importatori; petrolul scade.",
+        "cupru_expansiune": "🏗️ **CUPRU:** Creștere de peste 1% azi: metalele industriale semnalează cerere industrială.",
+        "dobanzi_cresc": "📈 **DOBÂNZI:** Randamentul SUA pe 10 ani a crescut cu peste 10 puncte de bază azi: presiune pe acțiunile de creștere "
+                         "(valoarea prezentă a profiturilor viitoare scade) și pe companiile mici îndatorate; marje mai bune la bănci.",
+        "dobanzi_scad": "🟢 **DOBÂNZI:** Randamentul SUA pe 10 ani a scăzut cu peste 10 puncte de bază azi: costul capitalului scade "
+                        "(favorabil tehnologiei și imobiliarelor).",
+        "fuga_siguranta": "🚨 **FUGĂ SPRE SIGURANȚĂ:** Aurul (peste +1%), dolarul (peste +0,5%) și VIX (peste +10%) cresc simultan azi.",
+    }
+    sig = macro_calc.daily_cross_asset_signals(pct, None if tnx is None else tnx["abs"], None if vix is None else vix["pct"])
+    out = [texts[k] for k in sig]
+    missing = [n for n, v in (("dolar", pct["usd"]), ("aur", pct["gold"]), ("petrol", pct["oil"]), ("cupru", pct["copper"]),
+                              ("randament 10 ani", tnx), ("VIX", vix)) if v is None]
+    if not out:
+        out = ["⚖️ **ECHILIBRU:** Nicio regulă a ghidului nu s-a declanșat azi."]
+    out.append("ℹ️ Semnale pe variația unei singure ședințe, praguri orientative, netestate."
+               + (f" Fără date azi pentru: {', '.join(missing)} (regulile lor nu s-au evaluat)." if missing else ""))
+    return out
 
 def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
     """
@@ -1207,7 +1206,7 @@ def get_macro_data_visuals():
         'DAX 40 (Germania) 🇩🇪': '^GDAXI'
     }
     # Descărcăm 5 ani (5y)
-    data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False)
+    data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False, auto_adjust=True)
     return tickers, data
 
 @st.cache_data(ttl=3600)
@@ -6297,24 +6296,24 @@ def main():
         # --- PASUL 2: MODUL INTERPRETARE DINAMICĂ DOBÂNZI ---
         st.markdown("### 🧭 Indicatori Macroeconomici")
         
-        # Verificăm dacă avem date pentru randamentele pe 10 ani
-        has_tnx = '^TNX' in macro_data.columns.levels[0] if isinstance(macro_data.columns, pd.MultiIndex) else '^TNX' in macro_data
-        
-        if has_tnx:
-            try:
-                tnx_series = macro_data['^TNX']['Close'].dropna() if isinstance(macro_data.columns, pd.MultiIndex) else macro_data['^TNX'].dropna()
-                tnx_chg = tnx_series.pct_change().iloc[-1]
-                
-                if tnx_chg > 0.015:
-                    macro_msg = "🚨 **RANDAMENTE ÎN CREȘTERE:** Yield-ul 10Y crește brusc. Acest lucru pune presiune pe acțiunile de Tehnologie (Growth) și crește costul creditării."
-                elif tnx_chg < -0.015:
-                    macro_msg = "🟢 **REDUCERE COST CAPITAL:** Yield-ul 10Y scade. Un mediu favorabil pentru acțiuni și pentru refinanțarea datoriilor companiilor."
-                else:
-                    macro_msg = "⚖️ **STABILITATE DOBÂNZI:** Yield-ul 10Y este stabil. Piața nu anticipează schimbări majore de politică monetară în acest moment."
-                st.info(macro_msg)
-            except Exception as exc:  # înainte: except: gol
-                logger.warning("main: %s", exc)
-                st.info("💡 Interpretare: Dacă US 10Y Yield crește brusc, acțiunile de tehnologie tind să scadă. Dacă Aurul crește, indică frică în piață.")
+        # Randamentul SUA pe 10 ani: variația în puncte procentuale pe o zi și pe o lună (analytics/macro.py).
+        tnx_close = None
+        if isinstance(macro_data.columns, pd.MultiIndex) and '^TNX' in macro_data.columns.levels[0]:
+            tnx_close = macro_data['^TNX']['Close']
+        tnx_d1 = macro_calc.last_change(tnx_close)
+        tnx_m1 = macro_calc.change_over(tnx_close, 1)
+        tnx_trend = macro_calc.yield_trend(tnx_m1)
+        if tnx_trend is None:
+            st.info("ℹ️ Randamentul SUA pe 10 ani (^TNX) nu are istoric suficient acum: interpretarea dobânzilor nu se poate face.")
+        else:
+            tnx_txt = (f"Randamentul pe 10 ani: {ro(tnx_d1['last']):.2f}% ({tnx_d1['date']:%d.%m.%Y}); "
+                       f"{ro(tnx_d1['abs'] * 100):+.0f} pb față de ședința precedentă, {ro(tnx_m1 * 100):+.0f} pb într-o lună.")
+            macro_msg = {
+                "creste": "🚨 **RANDAMENTE ÎN CREȘTERE:** peste +25 pb într-o lună. Presiune pe acțiunile de creștere (Tehnologie) și cost mai mare al creditării.",
+                "scade": "🟢 **REDUCERE COST CAPITAL:** peste −25 pb într-o lună. Mediu favorabil acțiunilor și refinanțării datoriilor companiilor.",
+                "stabil": "⚖️ **STABILITATE DOBÂNZI:** sub ±25 pb într-o lună. Piața nu anticipează schimbări majore de politică monetară.",
+            }[tnx_trend]
+            st.info(f"{macro_msg}\n\n{tnx_txt} Prag orientativ (±25 pb pe o lună), netestat.")
                 
         # --- 1. CONFIGURARE UI (Selectori) ---
         c_sel1, c_sel2 = st.columns([1, 3])
@@ -6350,15 +6349,15 @@ def main():
                 
                 curr_val = series.iloc[-1] # Valoarea curentă (Azi)
 
-                # A. Calcul Interval (Start Slider vs Azi)
+                # A. Calcul Interval (Start Slider vs Azi); lipsă = N/A, nu 0
                 start_val = subset.iloc[0]
                 diff_interval = curr_val - start_val
-                pct_interval = (diff_interval / start_val) * 100 if start_val != 0 else 0
+                pct_interval = (diff_interval / start_val) * 100 if start_val != 0 else None
 
-                # B. Calcul Zi (Ieri vs Azi) - Folosim seria completă, nu subsetul
-                prev_day_val = series.iloc[-2] if len(series) >= 2 else curr_val
-                diff_day = curr_val - prev_day_val
-                pct_day = (diff_day / prev_day_val) * 100 if prev_day_val != 0 else 0
+                # B. Calcul Zi (ultima ședință vs precedenta cu valoare)
+                day_chg = macro_calc.last_change(series)
+                diff_day = None if day_chg is None else day_chg["abs"]
+                pct_day = None if day_chg is None else day_chg["pct"]
                 
                 # --- FORMATARE TEXT ---
                 suffix = "%" if "Yield" in selected_macro_name else ""
@@ -6367,16 +6366,20 @@ def main():
                 # --- AFIȘARE DUALĂ (2 Metric Carduri) ---
                 m1, m2 = st.columns(2)
                 
+                fmt_delta = lambda d, pc: (None if d is None else
+                                           f"{ro(d):.4f}" + ("" if pc is None else f" ({ro(pc):.2f}%)"))
                 m1.metric(
                     f"Interval ({time_frame})", 
                     val_fmt, 
-                    f"{ro(diff_interval):.4f} ({ro(pct_interval):.2f}%)"
+                    fmt_delta(diff_interval, pct_interval),
+                    help=f"Față de prima valoare din fereastra aleasă ({subset.index[0]:%d.%m.%Y})."
                 )
                 
                 m2.metric(
                     "Evoluție Azi", 
                     val_fmt, 
-                    f"{ro(diff_day):.4f} ({ro(pct_day):.2f}%)"
+                    fmt_delta(diff_day, pct_day),
+                    help="Ultima ședință față de precedenta cu valoare. La randamente (Yield) variația e în puncte procentuale."
                 )
                 
                 # --- 3. GRAFIC PLOTLY ---
@@ -6394,7 +6397,7 @@ def main():
                 # TRUC: Zoom-in pe axa Y pentru active stabile (Valute)
                 y_min = subset.min()
                 y_max = subset.max()
-                is_stable = (y_max - y_min) / y_min < 0.1 
+                is_stable = y_min > 0 and (y_max - y_min) / y_min < 0.1 
                 
                 range_y = [y_min * 0.999, y_max * 1.001] if is_stable else None
                 
@@ -6418,7 +6421,12 @@ def main():
                 st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
                 
                 # Trimitem tot bulk-ul de date macro descărcat anterior
-                macro_verdicts = get_macro_interpretation(macro_data)
+                try:
+                    _vix_for_guide = get_vix_curve_closes().get("^VIX")
+                except Exception as exc:  # rețea / Yahoo
+                    logger.warning("ghid macro VIX: %s", exc)
+                    _vix_for_guide = None
+                macro_verdicts = get_macro_interpretation(macro_data, _vix_for_guide)
                 
                 for v in macro_verdicts:
                     st.info(v)
