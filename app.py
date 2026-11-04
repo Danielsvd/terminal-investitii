@@ -305,8 +305,9 @@ def format_large_currency(val):
         logger.warning("format_large_currency: %s", exc)
         return str(val)
     
-def format_num(val, is_pct=False):
-    """Formatare afișare (folosește smart_to_float intern)"""
+def format_num(val, is_pct=False, small_decimals=None):
+    """Formatare afișare (folosește smart_to_float intern). Cu `small_decimals`, valorile sub 1 în modul
+    se afișează cu atâtea zecimale (EPS de 0,0446 lei nu devine 0,04)."""
     if val is None: return "N/A"
     # Asigurăm conversia dacă vine string
     if isinstance(val, str):
@@ -314,6 +315,8 @@ def format_num(val, is_pct=False):
     if pd.isna(val): return "N/A"
         
     if is_pct: return f"{ro(val * 100):.2f}%"
+    if small_decimals is not None and 0 < abs(val) < 1:
+        return f"{ro(val):.{small_decimals}f}"
     return scale_number(val)
 
 def format_amount(val):
@@ -653,6 +656,30 @@ def compact_html(fragment):
     cu 4+ spații după o linie goală devine bloc de cod: o listă goală (de ex. nimic „la mijloc”)
     făcea ca restul casetei să apară ca text HTML brut."""
     return "".join(line.strip() for line in fragment.splitlines() if line.strip())
+
+
+XTB_BULLET_CSS = """<style>
+.xtb-bullet-container {background-color:#161B22; padding:25px; border-radius:12px; border:1px solid #30363D; box-shadow:0 4px 6px rgba(0,0,0,0.1);}
+.xtb-row {display:flex; align-items:flex-start; margin-bottom:20px;}
+.xtb-icon {margin-right:15px; font-size:20px; margin-top:-2px;}
+.xtb-text {font-size:15px; color:#C9D1D9; line-height:1.5; font-weight:400;}
+.xtb-footer {margin-top:10px; font-size:12px; color:#8B949E; border-top:1px solid #30363D; padding-top:15px; display:flex; justify-content:space-between; align-items:center;}
+</style>"""
+
+
+def render_bullet_box(bullets, footer_text):
+    """Caseta cu bulleturi (stil XTB) într-un singur st.markdown.
+
+    Înainte, deschiderea <div>, fiecare rând și închiderea erau trimise în apeluri st.markdown separate:
+    Streamlit închide singur fiecare fragment, deci caseta apărea goală, cu rândurile dedesubt.
+    Textul bulleturilor e generat de aplicație; titlurile de știri din el sunt deja escapate."""
+    rows = "".join(
+        f'<div class="xtb-row"><div class="xtb-icon" style="color:{b["color"]};">{b["icon"]}</div>'
+        f'<div class="xtb-text">{b["text"]}</div></div>' for b in bullets)
+    footer = (f'<div class="xtb-footer"><span>{footer_text}</span>'
+              '<span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span></div>')
+    st.markdown(compact_html(XTB_BULLET_CSS + f'<div class="xtb-bullet-container">{rows}{footer}</div>'),
+                unsafe_allow_html=True)
 
 
 def render_bvb_decision(real_sym, hist):
@@ -3551,8 +3578,8 @@ def main():
                     gn_pe, gn_pb = num(info, 'trailingPE'), num(info, 'priceToBook')
                     gn_calc = gn_pe * gn_pb if (gn_pe is not None and gn_pb is not None) else None   # lipsă = N/A, nu 0
                     st.metric("GN (Graham)", f"{ro(gn_calc):.2f}" if (gn_calc is not None and gn_calc > 0) else "N/A", help=fund_help(info, "gn"))
-                    st.metric("EPS", format_num(info.get('trailingEps')), help=fund_help(info, "trailingEps"))
-                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')), help=fund_help(info, "bookValue"))
+                    st.metric("EPS", format_num(info.get('trailingEps'), small_decimals=4), help=fund_help(info, "trailingEps"))
+                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue'), small_decimals=4), help=fund_help(info, "bookValue"))
                 with c_prof:
                     st.markdown("**Profitabilitate**")
                     st.metric("ROA", format_num(info.get('returnOnAssets'), True), help=fund_help(info, "returnOnAssets"))
@@ -5107,60 +5134,8 @@ def main():
 
                 # --- RANDARE UI PREMIUM ---
                 if bullets:
-                    st.markdown("""
-                    <style>
-                    .xtb-bullet-container {
-                        background-color: #161B22; 
-                        padding: 25px; 
-                        border-radius: 12px; 
-                        border: 1px solid #30363D;
-                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                    }
-                    .xtb-row {
-                        display: flex; 
-                        align-items: flex-start; 
-                        margin-bottom: 20px;
-                    }
-                    .xtb-icon {
-                        margin-right: 15px; 
-                        font-size: 20px; 
-                        margin-top: -2px;
-                    }
-                    .xtb-text {
-                        font-size: 15px; 
-                        color: #C9D1D9; 
-                        line-height: 1.5;
-                        font-weight: 400;
-                    }
-                    .xtb-footer {
-                        margin-top: 10px; 
-                        font-size: 12px; 
-                        color: #8B949E; 
-                        border-top: 1px solid #30363D; 
-                        padding-top: 15px; 
-                        display: flex; 
-                        justify-content: space-between;
-                        align-items: center;
-                    }
-                    </style>
-                    <div class="xtb-bullet-container">
-                    """, unsafe_allow_html=True)
-                    
-                    for b in bullets:
-                        st.markdown(f"""
-                        <div class="xtb-row">
-                            <div class="xtb-icon" style="color: {b['color']};">{b['icon']}</div>
-                            <div class="xtb-text">{b['text']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                    st.markdown("""
-                        <div class="xtb-footer">
-                            <span>Informațiile de mai sus au fost generate algoritmic. Nu le trata ca recomandare sau sfat de investiții.</span>
-                            <span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    render_bullet_box(bullets, "Informațiile de mai sus au fost generate algoritmic. "
+                                      "Nu le trata ca recomandare sau sfat de investiții.")
                 else:
                     st.info("Date insuficiente pentru generarea sintezei AI.")
             st.markdown("---")    
@@ -5704,60 +5679,8 @@ def main():
             )
             
             if macro_bullets:
-                st.markdown("""
-                <style>
-                .xtb-bullet-container {
-                    background-color: #161B22; 
-                    padding: 25px; 
-                    border-radius: 12px; 
-                    border: 1px solid #30363D;
-                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                }
-                .xtb-row {
-                    display: flex; 
-                    align-items: flex-start; 
-                    margin-bottom: 20px;
-                }
-                .xtb-icon {
-                    margin-right: 15px; 
-                    font-size: 20px; 
-                    margin-top: -2px;
-                }
-                .xtb-text {
-                    font-size: 15px; 
-                    color: #C9D1D9; 
-                    line-height: 1.5;
-                    font-weight: 400;
-                }
-                .xtb-footer {
-                    margin-top: 10px; 
-                    font-size: 12px; 
-                    color: #8B949E; 
-                    border-top: 1px solid #30363D; 
-                    padding-top: 15px; 
-                    display: flex; 
-                    justify-content: space-between;
-                    align-items: center;
-                }
-                </style>
-                <div class="xtb-bullet-container">
-                """, unsafe_allow_html=True)
-                
-                for b in macro_bullets:
-                    st.markdown(f"""
-                    <div class="xtb-row">
-                        <div class="xtb-icon" style="color: {b['color']};">{b['icon']}</div>
-                        <div class="xtb-text">{b['text']}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                st.markdown("""
-                    <div class="xtb-footer">
-                        <span>Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri (Aur, Petrol, Cupru), sentimentului și pieței de credit.</span>
-                        <span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                render_bullet_box(macro_bullets, "Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri "
+                                  "(Aur, Petrol, Cupru), sentimentului și pieței de credit.")
             else:
                 st.info("Așteptăm date suficiente pentru generarea sintezei.")
 
