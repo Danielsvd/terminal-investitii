@@ -3231,7 +3231,7 @@ def get_sector_performance():
     }
     try:
         # Descărcăm datele pe ultimele 5 zile pentru a fi siguri că prindem "ieri" și "azi"
-        data = yf.download(list(sectors_map.keys()), period="5d", group_by='ticker', progress=False)
+        data = yf.download(list(sectors_map.keys()), period="5d", group_by='ticker', progress=False, auto_adjust=True)
         
         results = []
         for ticker, name in sectors_map.items():
@@ -6639,10 +6639,18 @@ def main():
         # =================================================================
         st.markdown("---")
         st.subheader("🗺️ Harta Termică a Sectoarelor (Money Flow)")
-        st.markdown("Radiografia indicelui S&P 500: Urmărește în timp real în ce sectoare își mută instituțiile capitalul astăzi.")
+        st.markdown("Cele 11 ETF-uri sectoriale ale S&P 500 (XLK…XLC): în ce sectoare se mută capitalul.")
+        heat_hz = st.radio("Orizont", ["Azi", "1 lună"], index=1, horizontal=True, key="sec_heat_hz",
+                           help="Azi = ultima ședință față de precedenta (zgomotos: o zi nu e o tendință). "
+                                "1 lună = randamentul pe o lună calendaristică, același folosit de pilonul „Rotația sectorială” din verdict.")
+        heat_word = "zilei" if heat_hz == "Azi" else "lunii"
 
         with st.spinner("Se calculează fluxul de capital pe sectoare..."):
-            df_sectors = get_sector_performance()
+            if heat_hz == "Azi":
+                df_sectors = get_sector_performance()
+            else:
+                df_sectors = (pd.DataFrame([{"Sector": k, "Variație %": v * 100} for k, v in sector_month.items()])
+                              .sort_values("Variație %", ascending=True) if sector_month else pd.DataFrame())
             
             if not df_sectors.empty:
                 # --- GRAFIC PLOTLY ORIZONTAL ---
@@ -6690,7 +6698,7 @@ def main():
                     aggressive = ['Tehnologie', 'Consum Discreționar', 'Comunicații', 'Financiar']
                     
                     # 2. Logică Financiară Avansată
-                    top_sector = top_3.iloc[0] # Liderul absolut al zilei
+                    top_sector = top_3.iloc[0] # Liderul absolut al perioadei alese
                     
                     if len(sectoare_verzi) == 0:
                         # Dacă absolut totul e pe roșu
@@ -6723,14 +6731,14 @@ def main():
                     st.markdown("---")
                     
                     # Afișare Lideri cu procente
-                    st.write("**🏆 Liderii Zilei (Top 3):**")
+                    st.write(f"**🏆 Liderii {heat_word} (Top 3):**")
                     for _, row in top_3.iterrows():
                         st.write(f"<span style='color:#3FB950;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
                         
                     st.markdown("<br>", unsafe_allow_html=True)
                     
                     # Afișare Codași cu procente și culori inteligente
-                    st.write("**🐢 Codașii Zilei (Bottom 3):**")
+                    st.write(f"**🐢 Codașii {heat_word} (Bottom 3):**")
                     for _, row in bottom_3.iterrows():
                         if row['Variație %'] < 0:
                             # E pe minus -> Săgeată roșie
@@ -6738,6 +6746,8 @@ def main():
                         else:
                             # E "codaș", dar e pe plus -> Săgeată galbenă (neutră)
                             st.write(f"<span style='color:#D29922;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
+        st.caption("Clasificarea (risk-on / risk-off / rotație / trade de inflație) numără sectoarele agresive și defensive din primele 3 "
+                   "ale perioadei alese. Reguli orientative, netestate; pe „Azi” reflectă o singură ședință.")
         st.markdown("---")
         # =================================================================
         # MODUL NOU: RADAR DE RISC SISTEMIC (CU SELECTOR ȘI ZOOM)
