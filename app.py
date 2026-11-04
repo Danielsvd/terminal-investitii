@@ -5132,22 +5132,8 @@ def main():
     elif sectiune == "3. Portofoliu":
         st.title("💼 Portofoliu Personal")
         
-        with st.expander("➕ Adaugă Tranzacție Nouă"):
-            st.caption("Scrie un rând în foaia `Portofoliu`, care nu mai alimentează această pagină: pozițiile vin din "
-                       "registrul `Tranzactii`. Pentru tranzacții noi folosește importul exportului de la broker, de mai jos.")
-            with st.form("add_pf"):
-                c1, c2, c3, c4 = st.columns(4)
-                s = c1.text_input("Simbol (ex: AAPL, EUNL.DE, TLV.RO)").upper()
-                q = c2.number_input("Cantitate", min_value=0.01, value=1.0, format="%.4f")
-                p = c3.number_input("Preț Achiziție", min_value=0.01, value=100.0, format="%.2f")
-                curr = c4.selectbox("Moneda", ["USD", "EUR", "RON"]) 
-                
-                d_acq = st.date_input("Data", now_ro().date())
-                
-                if st.form_submit_button("Salvează") and s:
-                    add_trade(s, q, p, d_acq, curr)
-                    st.success(f"Adăugat {s} în Google Sheets!")
-                    st.rerun()
+        # Formularul „Adaugă Tranzacție Nouă” (scria în foaia Portofoliu) a fost scos la 04.11.2026, cu acordul
+        # lui Daniel: tranzacțiile intră doar prin importul exporturilor de la broker (deduplicare pe ID).
 
         # Toată pagina folosește pozițiile din registrul `Tranzactii` (exporturile brokerilor);
         # foaia Portofoliu nu mai alimentează pagina.
