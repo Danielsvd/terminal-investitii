@@ -1,4 +1,6 @@
 import pandas as pd
+import logging
+logger = logging.getLogger(__name__)
 import numpy as np
 from prophet import Prophet
 from transformers import pipeline  # <--- Librăria pentru noul AI
@@ -340,7 +342,8 @@ def detect_volume_anomaly_ai(df_t):
         current_status = df_ml['Anomaly'].iloc[-1]
         
         return current_status == -1
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("detect_volume_anomaly_ai: %s", exc)
         return False
 
 def calculate_and_plot_seasonality(hist_data):
@@ -675,7 +678,9 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
             reasons.append(f"🚨 **Overbought (RSI {ro(rsi):.0f}):** Acțiunea este extrem de supra-cumpărată. Corecție iminentă!")
         else:
             score += 5
-    except: pass
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_master_ai_score: %s", exc)
+        pass
 
     # 8. MACROECONOMIE & REGIM (Max 5 puncte)
     if spread is None:
@@ -755,7 +760,9 @@ def calculate_master_macro_verdict(df_sectors, credit_ratio_series, corr_matrix,
             reasons.append(f"⚠️ **Dolar Dominant:** Corelație inversă severă ({ro(spy_uup):.2f}). Orice creștere a Dolarului va lovi bursa.")
         else:
             score += 5
-    except: pass
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_master_macro_verdict: %s", exc)
+        pass
 
     # 4. MONEY FLOW SECTORIAL - 15%
     if not df_sectors.empty:
@@ -813,7 +820,8 @@ def calculate_iv_rank_percentile(ticker_sym, current_iv):
         iv_percentile = (vol_hist < current_iv).mean() * 100
         
         return max(0, min(100, iv_rank)), max(0, min(100, iv_percentile))
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_iv_rank_percentile: %s", exc)
         return 0, 0
 
 def get_detailed_ownership_and_execs(ticker_sym):
@@ -919,7 +927,9 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
             elif len(series) >= 5:
                 return (series.iloc[-1] / series.iloc[-5]) - 1
             return 0
-        except: return 0
+        except Exception as exc:  # înainte: except: gol
+            logger.warning("get_trend: %s", exc)
+            return 0
 
     gold_trend = get_trend('GC=F')
     oil_trend = get_trend('CL=F')

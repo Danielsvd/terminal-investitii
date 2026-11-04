@@ -1,4 +1,6 @@
 import streamlit as st
+import logging
+logger = logging.getLogger(__name__)
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
@@ -297,7 +299,8 @@ def format_large_currency(val):
         if val >= 1e9: return f"{ro(val/1e9):.2f} B USD"
         if val >= 1e6: return f"{ro(val/1e6):.2f} M USD"
         return f"{ro(val):,.2f} USD"
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("format_large_currency: %s", exc)
         return str(val)
     
 def format_num(val, is_pct=False):
@@ -342,7 +345,8 @@ def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
         beta = returns['Port'].cov(returns['Bench']) / variance if variance != 0 else 1.0
         
         return correlation, beta
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_portfolio_beta: %s", exc)
         return 0.0, 1.0
 
 def get_macro_interpretation(ticker_data):
@@ -383,7 +387,8 @@ def get_macro_interpretation(ticker_data):
             v.append("🚨 **ALERTA BLACK SWAN:** Fuga masivă către siguranță detectată (Aur+Dolar+VIX în creștere). Risc sistemic ridicat!")
 
         return v if v else ["⚖️ **ECHILIBRU:** Corelațiile macro sunt stabile azi. Mișcările reflectă fundamentele individuale ale activelor."]
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("get_macro_interpretation: %s", exc)
         return ["⚠️ Date insuficiente pentru procesarea corelațiilor macro."]
 
 def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
@@ -411,7 +416,8 @@ def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
         if downside_std == 0: return 0.0
         
         return (mean_return - risk_free_rate) / downside_std
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_sortino_ratio: %s", exc)
         return 0.0
 
 def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, spread_label=None):
@@ -1074,7 +1080,9 @@ def fetch_news_data():
                     "date_obj": dt,
                     "date_str": dt.strftime("%Y-%m-%d %H:%M")
                 })
-        except: continue
+        except Exception as exc:  # înainte: except: gol
+            logger.debug("fetch_news_data: %s", exc)
+            continue
     all_news.sort(key=lambda x: x['date_obj'], reverse=True)
     return all_news
 
@@ -1126,7 +1134,9 @@ def get_company_news_rss(symbol):
                 "publisher": "Yahoo Finance",
                 "date_str": dt.strftime("%Y-%m-%d %H:%M")
             })
-    except: return []
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("get_company_news_rss: %s", exc)
+        return []
     return news_list
 
 # --- FUNCȚII ANALIZĂ (Professional Update) ---
@@ -1160,7 +1170,9 @@ def get_market_data():
     try:
         spy = yf.Ticker("SPY").history(period="1y")['Close']
         return spy
-    except: return None
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("get_market_data: %s", exc)
+        return None
 
 @st.cache_data(ttl=3600)
 def get_risk_free_rate():
@@ -1169,7 +1181,8 @@ def get_risk_free_rate():
         tnx = yf.Ticker("^TNX").history(period="1d")
         if not tnx.empty:
             return tnx['Close'].iloc[-1] / 100
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("get_risk_free_rate: %s", exc)
         pass
     return 0.04 # Fallback la 4%
 
@@ -1195,7 +1208,9 @@ def calculate_alpha(stock_hist, beta):
         # Formula CAPM: Alpha = R_stock - (R_rf + Beta * (R_market - R_rf))
         alpha = ret_stock - (risk_free + beta * (ret_market - risk_free))
         return alpha
-    except: return None
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_alpha: %s", exc)
+        return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_financial_statements(symbol):
@@ -2161,7 +2176,8 @@ def calculate_bvb_sentiment(bvb_data):
         else: label = "Panică / Capitulare 🚨"
         
         return score, label
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_bvb_sentiment: %s", exc)
         return 50, "Neutral ⚖️"
     
 # --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
@@ -2220,7 +2236,8 @@ def remove_from_watchlist(symbol):
                 ws.delete_rows(cell.row)
                 # load_watchlist nu are cache: nu e nimic de golit
                 return True
-        except:
+        except Exception as exc:  # înainte: except: gol
+            logger.warning("remove_from_watchlist: %s", exc)
             pass
     return False
 
@@ -2809,7 +2826,8 @@ def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
         var_abs = var_pct * portfolio_curve.iloc[-1]
         
         return max_dd, sharpe, var_abs, volatility_ann
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_risk_metrics: %s", exc)
         return 0.0, 0.0, 0.0, 0.0
 
 @st.cache_data(ttl=3600)
@@ -2839,7 +2857,8 @@ def get_portfolio_sectors(df_current):
                 sec = bulk_data.tickers[sym].info.get('sector', 'Nedefinit') or 'Nedefinit'
             val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
             sector_map[sec] = sector_map.get(sec, 0) + val
-        except:
+        except Exception as exc:  # înainte: except: gol
+            logger.warning("get_portfolio_sectors: %s", exc)
             val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
             sector_map['Nedefinit'] = sector_map.get('Nedefinit', 0) + val
 
@@ -2888,7 +2907,9 @@ def get_global_market_data():
                 data.append({
                     'Instrument': name, 'Simbol': sym, 'Preț': price, 'Variație': change, 'Variație %': pct
                 })
-            except: continue
+            except Exception as exc:  # înainte: except: gol
+                logger.debug("process_tickers: %s", exc)
+                continue
         return pd.DataFrame(data)
 
     df_indices = process_tickers(indices)
@@ -2936,7 +2957,8 @@ def get_sector_performance():
                     prev_price = df_t.iloc[-2]
                     pct_change = ((curr_price - prev_price) / prev_price) * 100
                     results.append({'Simbol': ticker, 'Sector': name, 'Variație %': pct_change})
-            except:
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("get_sector_performance: %s", exc)
                 continue
                 
         df = pd.DataFrame(results)
@@ -3018,7 +3040,8 @@ def get_index_technical_levels(symbol):
             "dist50": dist_50,
             "dist200": dist_200
         }
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("get_index_technical_levels: %s", exc)
         return None
 
 def calculate_market_breadth(data, tickers):
@@ -3039,7 +3062,9 @@ def calculate_market_breadth(data, tickers):
                 if change > 0.001: adv += 1
                 elif change < -0.001: dec += 1
                 else: flat += 1
-        except: continue
+        except Exception as exc:  # înainte: except: gol
+            logger.debug("calculate_market_breadth: %s", exc)
+            continue
     
     total = adv + dec + flat
     if total == 0: return 0, 0, 0, 0, 0, 0
@@ -3064,7 +3089,8 @@ def get_volume_analysis(symbol):
             "average": avg_vol,
             "intensity": intensity
         }
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("get_volume_analysis: %s", exc)
         return None
 
 import pandas_datareader.data as web
@@ -5588,13 +5614,17 @@ def main():
             df_fred = get_fred_macro_data()
             
             try: vix_val = yf.Ticker("^VIX").fast_info.last_price
-            except: vix_val = 20.0
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("main: %s", exc)
+                vix_val = 20.0
             
             try:
                 t_10y = yf.Ticker("^TNX").fast_info.last_price
                 t_3m = yf.Ticker("^IRX").fast_info.last_price
                 curr_yield_spread = t_10y - t_3m
-            except: curr_yield_spread = 0.5
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("main: %s", exc)
+                curr_yield_spread = 0.5
 
             news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
             from ai_engine import analyze_sentiment_ai
@@ -5768,7 +5798,8 @@ def main():
                 else:
                     macro_msg = "⚖️ **STABILITATE DOBÂNZI:** Yield-ul 10Y este stabil. Piața nu anticipează schimbări majore de politică monetară în acest moment."
                 st.info(macro_msg)
-            except:
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("main: %s", exc)
                 st.info("💡 Interpretare: Dacă US 10Y Yield crește brusc, acțiunile de tehnologie tind să scadă. Dacă Aurul crește, indică frică în piață.")
                 
         # --- 1. CONFIGURARE UI (Selectori) ---
@@ -5791,7 +5822,9 @@ def main():
                 try:
                     if selected_macro_sym in macro_data.columns.levels[0]:
                         series = macro_data[selected_macro_sym]['Close'].dropna()
-                except: pass
+                except Exception as exc:  # înainte: except: gol
+                    logger.warning("render_portfolio_tab: %s", exc)
+                    pass
             else:
                 series = macro_data['Close'] # Fallback
 
@@ -6066,7 +6099,8 @@ def main():
                                 st.write("🔄 **DIVERGENȚĂ:** Piața se mișcă într-o direcție, dar media raportează altceva. Atenție la potențiale capcane!")
                     else:
                         st.info("Sincronizare fluxuri știri pentru barometru...")
-                except:
+                except Exception as exc:  # înainte: except: gol
+                    logger.warning("render_portfolio_tab: %s", exc)
                     st.info("Barometrul de sentiment se actualizează...")
 
             else:
@@ -6323,7 +6357,8 @@ def main():
                         # Regula 3: Aurul ca panică pură
                         if gld_uup > 0.3:
                             st.warning(f"🥇 **Frică Extremă:** Aurul crește ÎMPREUNĂ cu Dolarul (Corelație {ro(gld_uup):.2f}). Marile fonduri cumpără masiv orice activ de refugiu, ignorând matematica standard.")
-                    except:
+                    except Exception as exc:  # înainte: except: gol
+                        logger.warning("render_portfolio_tab: %s", exc)
                         st.write("Date insuficiente pentru diagnoza automată.")
                         
                     with st.expander("📖 Cum citești matricea?"):
@@ -7219,10 +7254,14 @@ def main():
                                      else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
                                      else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
                         })
-                    except: continue
+                    except Exception as exc:  # înainte: except: gol
+                        logger.debug("get_rvol_data: %s", exc)
+                        continue
                     
                 return pd.DataFrame(results)
-            except: return pd.DataFrame()
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("get_rvol_data: %s", exc)
+                return pd.DataFrame()
                         
 
         # --- SELECTOR DE PIAȚĂ (DROPDOWN în loc de TABURI pentru eficiență) ---
