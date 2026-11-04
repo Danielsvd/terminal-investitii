@@ -3104,6 +3104,49 @@ def get_breadth_closes():
         raise ValueError("Yahoo: RSP/IWM/SPY fără date")
     return closes
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_spy_trailing_pe():
+    """P/E-ul pe ultimele 12 luni al SPY (Yahoo `info`), proxy pentru S&P 500. Lipsă sau ≤ 0 → excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    pe = num(yf.Ticker("SPY").info or {}, "trailingPE")
+    if pe is None or pe <= 0:
+        raise ValueError("Yahoo: SPY fără trailingPE")
+    return float(pe)
+
+def get_equity_risk_rows():
+    """Prima de risc a acțiunilor (proxy) pentru BVB și SUA: list de dict (Piață, rezultatul equity_risk_gap, bază)."""
+    rows = []
+    # BVB: EPS-ul din foaia BVB la prețul curent al fiecărei companii, mediana; minus titlurile RO 10 ani (BCE, lunar)
+    sheet = load_bvb_fundamentals()
+    syms = sorted(k for k in sheet if not str(k).startswith("_"))
+    prices = get_bvb_peer_prices(tuple(syms)) if syms else {}
+    yields = [markets_calc.earnings_yield(sheet[k]["info"].get("trailingEps"), prices.get(k)) for k in syms]
+    try:
+        ro10 = rates_calc.to_monthly(_ecb_rate_series("IRS/M.RO.L.L40.CI.0000.RON.N.Z", 30))
+        ro_bond, ro_when = float(ro10.iloc[-1]), rates_calc.period_label(ro10.index[-1])
+    except Exception as exc:  # rețea / BCE
+        logger.warning("prima de risc BVB: %s", exc)
+        ro_bond, ro_when = None, None
+    g = markets_calc.equity_risk_gap(yields, ro_bond)
+    rows.append({"Piață": "BVB", **g, "Bază": (f"mediana EPS ÷ prețul curent pe {g['n']} companii din foaia BVB (din {len(syms)}); "
+                                               f"titluri de stat RO 10 ani, BCE {ro_when or 'indisponibil'}. Mediană simplă, nu BET ponderat: proxy.")})
+    # SUA: 1 ÷ P/E-ul SPY (Yahoo); minus titlurile SUA pe 10 ani (FRED DGS10, ultima zi)
+    try:
+        spy_ep = [1.0 / get_spy_trailing_pe()]
+    except Exception as exc:  # rețea / Yahoo
+        logger.warning("prima de risc SUA (P/E): %s", exc)
+        spy_ep = []
+    try:
+        us10 = rates_calc.to_daily(_fred_rate_series("DGS10"))
+        us_bond, us_when = float(us10.iloc[-1]), f"{us10.index[-1]:%d.%m.%Y}"
+    except Exception as exc:  # rețea / FRED
+        logger.warning("prima de risc SUA (10 ani): %s", exc)
+        us_bond, us_when = None, None
+    g2 = markets_calc.equity_risk_gap(spy_ep, us_bond)
+    rows.append({"Piață": "S&P 500", **g2, "Bază": ("1 ÷ P/E-ul pe 12 luni al SPY (Yahoo, " + ("disponibil" if spy_ep else "indisponibil") + "); "
+                                                    f"titluri SUA 10 ani, FRED DGS10 {us_when or 'indisponibil'}. Proxy.")})
+    return rows
+
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
@@ -6126,6 +6169,26 @@ def main():
             })
         st.caption("ℹ️ Dobânda de politică monetară a BNR nu are o sursă automată: nu e în tabel. Randamentele RO și DE pe 10 ani sunt seriile lunare "
                    "de convergență (criteriile Maastricht) publicate de BCE.")
+
+        # --- PRIMA DE RISC A ACȚIUNILOR (proxy) ---
+        st.markdown("**Acțiunile față de titlurile de stat** (prima de risc a acțiunilor, proxy)")
+        with st.spinner("Calculăm randamentul profiturilor..."):
+            erp_rows = get_equity_risk_rows()
+        pc2 = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.2f}%"
+        st.dataframe(
+            pd.DataFrame([{"Piață": r["Piață"], "Randamentul profiturilor (E/P)": r["ep"], "Titluri de stat 10 ani": r["bond"],
+                           "Prima de risc (pp)": r["gap"], "Bază": r["Bază"]} for r in erp_rows]).style.format({
+                "Randamentul profiturilor (E/P)": pc2, "Titluri de stat 10 ani": pc2,
+                "Prima de risc (pp)": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}"}, na_rep="N/A"),
+            hide_index=True, width='stretch',
+            column_config={
+                "Randamentul profiturilor (E/P)": st.column_config.Column(help="Profitul pe acțiune ÷ prețul = inversul P/E. "
+                    "Cât profit „cumperi” la 100 de lei investiți, înainte de creștere."),
+                "Prima de risc (pp)": st.column_config.Column(help="E/P − randamentul titlurilor de stat pe 10 ani, în puncte procentuale. "
+                    "Mare și pozitivă: acțiunile sunt ieftine față de obligațiuni (plătesc bine riscul). Mică sau negativă: "
+                    "titlurile de stat dau aproape cât profiturile, deci acțiunile sunt scumpe relativ, dacă profiturile nu cresc. "
+                    "Nu ține cont de creșterea profiturilor și de inflație: proxy, fără verdict."),
+            })
 
         # --- STRESUL PIEȚEI: structura VIX + spread-urile de credit ---
         st.markdown("---")
