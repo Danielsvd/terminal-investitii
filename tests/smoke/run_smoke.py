@@ -554,6 +554,7 @@ def install_fakes():
 # Rularea
 # --------------------------------------------------------------------------
 EXPECTED_MESSAGES = (
+    "RETRAGERE DIN RISC",           # semnal de piață pe datele false HYG/IEF (radar de credit)
     "(prag absolut 45%, netestat)", "(prag absolut 20%, netestat)",   # nivelul IV la bani pe lanțul sintetic
     "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
     "Fără opțiuni listate în Yahoo", "Yahoo nu a trimis lista de expirări", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
