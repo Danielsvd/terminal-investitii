@@ -33,6 +33,7 @@ from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_
 from analytics import macro as macro_calc
 from analytics import markets as markets_calc
 from analytics import rates as rates_calc
+from analytics import stress as stress_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -3084,6 +3085,15 @@ def get_rates_dashboard():
     ]
     return rows
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_vix_curve_closes():
+    """Închiderile ^VIX și ^VIX3M pe un an (Yahoo). Fără niciuna → excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(["^VIX", "^VIX3M"], period="1y", progress=False, auto_adjust=False), ["^VIX", "^VIX3M"])
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: VIX / VIX3M fără date")
+    return closes
+
 # --- FUNCȚIE GLOBAL MARKET ---
 @st.cache_data(ttl=300)
 def get_global_market_data():
@@ -6078,6 +6088,54 @@ def main():
             })
         st.caption("ℹ️ Dobânda de politică monetară a BNR nu are o sursă automată: nu e în tabel. Randamentele RO și DE pe 10 ani sunt seriile lunare "
                    "de convergență (criteriile Maastricht) publicate de BCE.")
+
+        # --- STRESUL PIEȚEI: structura VIX + spread-urile de credit ---
+        st.markdown("---")
+        st.subheader("🌡️ Stresul pieței")
+        with st.spinner("Citim VIX, VIX3M și spread-urile de credit..."):
+            try:
+                vix_cl = get_vix_curve_closes()
+                vterm = stress_calc.vix_term(vix_cl.get("^VIX"), vix_cl.get("^VIX3M"))
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("VIX/VIX3M: %s", exc)
+                vterm = None
+            credit = {}
+            for code in ("BAMLH0A0HYM2", "BAMLC0A0CM"):
+                try:
+                    credit[code] = stress_calc.spread_stats(_fred_rate_series(code, 3700))
+                except Exception as exc:  # rețea / FRED
+                    logger.warning("FRED %s: %s", code, exc)
+                    credit[code] = stress_calc.spread_stats(None)
+        c_st1, c_st2, c_st3 = st.columns(3)
+        state_txt = {"stres": "🔴 stres acut", "tensiune": "🟠 tensiune", "normal": "🟢 normal"}
+        c_st1.metric("VIX / VIX3M", "N/A" if vterm is None else f"{ro(vterm['ratio']):.2f}",
+                     None if vterm is None else state_txt[vterm["state"]], delta_color="off",
+                     help="Volatilitatea implicită pe 30 de zile ÷ cea pe 3 luni (S&P 500), aceeași zi. "
+                          f"Sub {ro(stress_calc.VIX_TERM_TENSE):.2f}: normal (piața se teme mai puțin de imediat decât de viitor); "
+                          f"{ro(stress_calc.VIX_TERM_TENSE):.2f}–{ro(stress_calc.VIX_TERM_STRESS):.2f}: tensiune; peste 1: stres acut "
+                          "(apare în corecții și vânzări forțate). Praguri uzuale de piață, netestate."
+                          + ("" if vterm is None else f" VIX {ro(vterm['vix']):.2f}, VIX3M {ro(vterm['vix3m']):.2f}, {vterm['date']:%d.%m.%Y}."))
+        for col, code, name in ((c_st2, "BAMLH0A0HYM2", "Spread high yield SUA"), (c_st3, "BAMLC0A0CM", "Spread investment grade SUA")):
+            cs = credit[code]
+            col.metric(name, "N/A" if cs["value"] is None else f"{ro(cs['value']):.2f} pp",
+                       None if cs["d1m"] is None else f"{ro(cs['d1m']):+.2f} pp într-o lună", delta_color="inverse",
+                       help=f"ICE BofA option-adjusted spread (FRED {code}): randamentul obligațiunilor corporative peste titlurile de stat. "
+                            "Crește când investitorii cer mai mult pentru riscul de neplată (stres); scade când creditul e ieftin. "
+                            + ("" if cs["value"] is None else
+                               f"Ultima valoare {cs['date']:%d.%m.%Y}. Percentila în istoricul disponibil "
+                               f"({cs['start']:%m.%Y}–{cs['date']:%m.%Y}, {cs['n']} zile): {ro(cs['pctile']):.0f}% "
+                               "(100% = cel mai larg spread din perioadă). FRED publică doar ultimii ~3 ani din seriile ICE.")
+                            + ("" if cs["d1y"] is None else f" Față de acum un an: {ro(cs['d1y']):+.2f} pp."))
+        if vterm is not None and len(vterm["series"]) > 1:
+            fig_vt = go.Figure(go.Scatter(x=vterm["series"].index, y=vterm["series"].values, mode="lines",
+                                          line=dict(color="#3987e5", width=2), name="VIX / VIX3M",
+                                          hovertemplate="%{x|%d.%m.%Y}: %{y:.2f}<extra></extra>"))
+            fig_vt.add_hline(y=stress_calc.VIX_TERM_STRESS, line=dict(color="#8B949E", dash="dot", width=1))
+            fig_vt.update_layout(height=220, margin=dict(l=0, r=0, t=10, b=0), template="plotly_dark",
+                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False,
+                                 yaxis=dict(title="VIX / VIX3M", gridcolor='#30363D'))
+            plot_ro(fig_vt, width='stretch', key="vix_term_chart")
+            st.caption("Linia punctată = 1: peste ea, volatilitatea pe termen scurt depășește pe cea pe 3 luni.")
 
         # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
