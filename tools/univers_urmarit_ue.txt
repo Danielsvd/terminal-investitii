@@ -1,0 +1,91 @@
+# Lista UNICĂ de acțiuni urmărite pe bursele europene (Daniel, 05.11.2026): Piață Globală, Scanner Volum,
+# tabul Europa din Rezumatul Zilei. BVB are lista ei (tools/univers_bvb.txt) și NU se amestecă aici.
+# Simbolurile noi se adaugă DOAR aici. Un simbol pe rând (simbolul Yahoo, cu sufixul bursei: .DE, .PA, .L, .MI...).
+# Rândurile „# == Nume ==” deschid o secțiune = un grup în Scanner Volum. Fiecare simbol apare o singură dată.
+# ADR-urile listate în SUA stau în tools/univers_urmarit_sua.txt.
+# Construită la 05.11.2026 din reuniunea listelor existente din app.py (nimic scos).
+
+# == Germania (DAX 40) ==
+SAP.DE
+SIE.DE
+ALV.DE
+DTE.DE
+AIR.DE
+BMW.DE
+VOW3.DE
+MBG.DE
+BAS.DE
+BAYN.DE
+ADS.DE
+DHL.DE
+DB1.DE
+MUV2.DE
+IFX.DE
+EOAN.DE
+RWE.DE
+ENR.DE
+DTG.DE
+BSP.DE
+RHM.DE
+HEN3.DE
+VNA.DE
+DBK.DE
+CBK.DE
+CON.DE
+HEI.DE
+SY1.DE
+MTX.DE
+BEI.DE
+PUM.DE
+ZAL.DE
+
+# == Franța (CAC 40) ==
+MC.PA
+OR.PA
+TTE.PA
+SAN.PA
+AIR.PA
+SU.PA
+AI.PA
+BNP.PA
+EL.PA
+KER.PA
+RMS.PA
+SAF.PA
+CS.PA
+DG.PA
+RNO.PA
+STLAP.PA
+ACA.PA
+ORA.PA
+CAP.PA
+EN.PA
+VIV.PA
+ENG.PA
+LR.PA
+ML.PA
+DGE.L
+HO.PA
+RI.PA
+BN.PA
+DSY.PA
+
+# == Marea Britanie, Italia & altele ==
+SHEL.L
+HSBA.L
+ULVR.L
+GSK.L
+REL.L
+BATS.L
+LSEG.L
+AAL.L
+BARC.L
+LLOY.L
+BA.L
+LDO.MI
+NWG.L
+VOD.L
+RR.L
+TSCO.L
+UCG.MI
+RACE.MI

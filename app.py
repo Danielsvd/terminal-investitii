@@ -9,6 +9,7 @@ import feedparser
 from data.news import filter_company_news
 from data import fred_calendar as fred_cal
 from data import sheet_view
+from data import universes
 from ui.card_help import FUND_HELP, fund_help
 import os
 import time
@@ -2156,36 +2157,19 @@ def generate_market_narrative(ticker_data, symbol, name):
         return f"Nu s-au putut genera date pentru {name}.", 0, 0
 
 BRIEFING_US_INDICES = ["^GSPC", "^IXIC", "^DJI"]
-# Universul SUA urmărit în Rezumatul Zilei (alegerea lui Daniel, nu S&P 500): topuri și lățimea pe acest univers.
-BRIEFING_US_UNIVERSE = [
-    'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU',
-    'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'T', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB',
-    'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'GPOR', 'UUUU', 'FSLR', 'VG', 'TTE', 'RIO', 'BHP', 'D', 'VALE',
-    'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS',
-    'MCD', 'SPCX', 'SMR', 'CMG', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
-]
+# Universul SUA urmărit (lista unică: tools/univers_urmarit_sua.txt, prin data/universes.py; nu S&P 500).
+BRIEFING_US_UNIVERSE = universes.symbols("us")
 BRIEFING_BET_PROXY = "TVBETETF.RO"
 
 
-def _briefing_bvb_text():
-    """Textul fișierului tools/univers_bvb.txt (gol la eroare, cu logare)."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "univers_bvb.txt")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
-    except OSError as exc:
-        logger.warning("universul BVB: %s", exc)
-        return ""
-
-
 def briefing_bvb_universe():
-    """Universul BVB al Rezumatului: tools/univers_bvb.txt (BET Plus + BET-FI + BETAeRO; aceeași listă ca testul istoric)."""
-    return briefing_calc.parse_universe(_briefing_bvb_text())
+    """Universul BVB (lista unică tools/univers_bvb.txt: BET Plus + BET-FI + BETAeRO; și testul istoric)."""
+    return universes.symbols("bvb")
 
 
 def briefing_bvb_sections():
     """{simbol: piața} din secțiunile „# == Nume ==” ale tools/univers_bvb.txt."""
-    return briefing_calc.universe_sections(_briefing_bvb_text())
+    return universes.sections("bvb")
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -3312,12 +3296,9 @@ def get_global_market_data():
         'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Copper': 'HG=F', 'Gaz Natural': 'NG=F'
     }
     
-    us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-                 'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'SPCX', 'BIIB', 
-                 'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'GPOR', 'COP', 'OXY', 'VG', 'DVN', 'LNG', 'T', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
-                 'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'CMG', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
-    eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.MI', 'ENR.DE', 'DBK.DE', 'ULVR.L', 'REL.L', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'BA.L', 'DGE.L', 'SHEL.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
+    # Listele unice (data/universes.py): SUA = tot ce se tranzacționează în SUA (inclusiv ADR), Europa = bursele europene.
+    us_stocks = universes.symbols("us")
+    eu_stocks = universes.symbols("eu")
 
     all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
     tickers = yf.Tickers(' '.join(all_symbols))
@@ -7530,47 +7511,13 @@ def main():
         threshold = st.slider("Arată doar acțiunile cu Volum de 'X' ori mai mare decât media:", 
                             min_value=1.2, max_value=5.0, value=1.5, step=0.1)
 
-        # Definim listele de scanare (Extinse)
-        tickers_map = {
-            "🇷🇴 BVB (România - BET)": [
-                'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
-                'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 'MILK.RO', 
-                'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ARS.RO', 'ASC.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
-                'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
-            ],
-            
-            "🇺🇸 SUA - Tech & Growth (Nasdaq 100)": [
-                'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AVGO', 'COST', 'PEP', 'CSCO', 'TMUS',
-                'CMCSA', 'INTC', 'AMD', 'CLS', 'NFLX', 'TXN', 'ANET', 'NET', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
-                'ARM', 'BKNG', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
-                'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'TSM', 'AFRM'
-            ],
-            
-            "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
-                'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
-                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'GPOR', 'VG', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO', 'T',
-                'CAT', 'DE', 'BA', 'SPCX', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'AMGN', 'BIIB', 'SNY', 'NVS',
-                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'CMG', 'METC', 'RIO', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
-            ],
-            
-            "🇪🇺 Europa - Germania (DAX 40)": [
-                'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'AIR.DE', 'BMW.DE', 'VOW3.DE', 'MBG.DE', 'BAS.DE', 'BAYN.DE',
-                'ADS.DE', 'DHL.DE', 'DB1.DE', 'MUV2.DE', 'IFX.DE', 'EOAN.DE', 'RWE.DE', 'ENR.DE', 'DTG.DE', 'BSP.DE', 'RHM.DE', 'HEN3.DE', 'VNA.DE',
-                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'PUM.DE', 'ZAL.DE'
-            ],
-            
-            "🇪🇺 Europa - Franța (CAC 40)": [
-                'MC.PA', 'OR.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA', 'BNP.PA', 'EL.PA', 'KER.PA',
-                'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'RNO.PA', 'STLAP.PA', 'GLNCY', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
-                'VIV.PA', 'ENG.PA', 'LR.PA', 'ML.PA', 'DGE.L', 'SU.PA', 'HO.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
-            ],
-            
-            "🇬🇧 UK & Others (FTSE/Global)": [
-                'SHEL.L', 'AZN', 'HSBA.L', 'ULVR.L', 'BP', 'RIO', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
-                'GLNCY', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'BA.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
-                'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
-            ]
-        }
+        # Listele de scanare: din listele unice (data/universes.py), câte un grup pe secțiune + „toate” pe piață.
+        # BVB rămâne separat de Europa; ETF-ul BET (TVBETETF.RO) se scanează împreună cu BVB, ca înainte.
+        tickers_map = {f"🇷🇴 BVB – toate ({len(universes.symbols('bvb')) + 1})": [BRIEFING_BET_PROXY] + universes.symbols("bvb")}
+        for mk, flag in (("us", "🇺🇸 SUA"), ("eu", "🇪🇺 Europa")):
+            tickers_map[f"{flag} – toate ({len(universes.symbols(mk))})"] = universes.symbols(mk)
+            for sec, syms in universes.groups(mk).items():
+                tickers_map[f"{flag} – {sec} ({len(syms)})"] = syms
         
         # Funcție internă de calcul RVOL + AI Isolation Forest
         def get_rvol_data(ticker_list):

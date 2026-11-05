@@ -1,13 +1,15 @@
 """Listele de simboluri nu au voie să scadă (Daniel, 05.11.2026: „peste tot mai multe companii, niciodată mai puține”).
 
 Instantaneul de mai jos = listele din `main` (0e3b82f) la 05.11.2026. Fiecare listă curentă trebuie să le conțină pe
-toate. Se pot adăuga simboluri oricând; un simbol scos intenționat (delistat, redenumit) se scoate și de aici, cu
-mențiune în PR. Testul citește `app.py` cu `ast` (fără import, fără rețea).
+toate. Din 05.11.2026 listele sunt unice, câte un fișier pe piață (data/universes.py): fiecare simbol din instantaneu
+trebuie să fie în fișierul pieței lui (`.RO` → BVB, sufix european → Europa, fără sufix → SUA, inclusiv ADR-urile).
+Se pot adăuga simboluri oricând; un simbol scos intenționat (delistat, redenumit) se scoate și de aici, cu mențiune
+în PR. Fără rețea.
 """
 import ast
 from pathlib import Path
 
-from analytics.briefing import parse_universe
+from data import universes
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -79,33 +81,43 @@ SCANNER_MIN = {
 }
 
 
-def _app_lists():
-    """{nume: valoare} pentru atribuirile cu liste/dicționare de simboluri din app.py (oriunde în fișier)."""
+
+def _all_old():
+    out = set(BVB_MIN) | US_BRIEFING_MIN | US_STOCKS_MIN | EU_STOCKS_MIN
+    for v in SCANNER_MIN.values():
+        out |= v
+    return out - {"TVBETETF.RO"}                       # ETF-ul BET: proxy de indice, nu companie (adăugat separat)
+
+
+def test_niciun_simbol_vechi_nu_lipseste_din_listele_unice():
+    now = {m: set(universes.symbols(m)) for m in universes.UNIVERSE_FILES}
+    lost = {s for s in _all_old() if s not in now[universes.market_of(s)]}
+    assert lost == set()
+    assert {"BENTO.RO", "AG.RO", "SMTL.RO"} <= now["bvb"]                  # deținerile lui Daniel
+
+
+def test_listele_unice_nu_se_amesteca():
+    seen = {}
+    for m in universes.UNIVERSE_FILES:
+        syms = universes.symbols(m)
+        assert syms, m
+        assert all(universes.market_of(s) == m for s in syms), m           # BVB nu intră în Europa și invers
+        for s in syms:
+            assert s not in seen, (s, seen.get(s), m)                       # un simbol într-o singură piață
+            seen[s] = m
+        assert sum(len(v) for v in universes.groups(m).values()) == len(syms)   # fiecare simbol o dată în grupuri
+
+
+def test_app_nu_mai_are_liste_scrise_de_mana():
+    """Lista se adaugă într-un singur loc: în app.py nu mai există liste literale lungi de simboluri."""
     tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
-    out = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            name = node.targets[0].id
-            if name in ("BRIEFING_US_UNIVERSE", "us_stocks", "eu_stocks", "tickers_map"):
-                out[name] = ast.literal_eval(node.value)
-    return out
+            if node.targets[0].id in ("BRIEFING_US_UNIVERSE", "us_stocks", "eu_stocks", "tickers_map"):
+                literal = [e for lst in ast.walk(node.value) if isinstance(lst, ast.List) for e in lst.elts
+                           if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+                assert len(literal) < 5, (node.targets[0].id, literal[:5])
 
 
-def test_universul_bvb_nu_pierde_simboluri():
-    now = set(parse_universe((ROOT / "tools" / "univers_bvb.txt").read_text(encoding="utf-8")))
-    assert BVB_MIN - now == set()
-    assert {"BENTO.RO", "AG.RO", "SMTL.RO"} <= now                       # deținerile lui Daniel
-
-
-def test_listele_sua_si_ue_nu_pierd_simboluri():
-    lists = _app_lists()
-    assert US_BRIEFING_MIN - set(lists["BRIEFING_US_UNIVERSE"]) == set()
-    assert US_STOCKS_MIN - set(lists["us_stocks"]) == set()
-    assert EU_STOCKS_MIN - set(lists["eu_stocks"]) == set()
-
-
-def test_scanner_volum_nu_pierde_simboluri():
-    scanner = _app_lists()["tickers_map"]
-    for group, minimum in SCANNER_MIN.items():
-        assert group in scanner, group
-        assert minimum - set(scanner[group]) == set(), group
+def test_piata_dupa_sufix():
+    assert [universes.market_of(s) for s in ("TLV.RO", "SAP.DE", "BRK-B", "AZN", "HSBA.L")] == ["bvb", "eu", "us", "us", "eu"]
