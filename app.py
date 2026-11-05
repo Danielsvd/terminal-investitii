@@ -2068,27 +2068,39 @@ def get_portfolio_day_closes(symbols):
 
 PDAY_MARKET_HOURS = {"bvb": "BVB", "us": "NYSE", "eu": "XETRA"}
 PDAY_HELP = {
-    "total": ("Câștigul sau pierderea pozițiilor deschise (acțiuni și ETF-uri din registrul `Tranzactii`) în ultima "
-              "ședință a pieței fiecăreia: cantitatea de acum × (închiderea ședinței − închiderea precedentă), "
-              "în lei la ultimul curs BNR. Procentul = P/L ÷ valoarea acelorași poziții la închiderea precedentă. "
-              "Doar efectul prețului: efectul cursului din ziua respectivă nu e inclus. Titlurile de stat și "
-              "obligațiunile nu intră (nu au preț zilnic). Pozițiile fără cotație în ședință sunt excluse."),
-    "value": ("Cât valorează azi acțiunile și ETF-urile deschise din registrul `Tranzactii`: cantitatea × ultima "
-              "închidere × ultimul curs BNR. Fără titluri de stat, obligațiuni și numerar (totalul cu ele e în "
-              "„3. Portofoliu”, la cursul de piață Yahoo, deci poate diferi puțin). Sub valoare: P/L-ul ultimei ședințe."),
-    "market": ("Valoarea de azi a pozițiilor din această piață (cantitatea × ultima închidere × cursul BNR) și, "
-               "dedesubt, P/L-ul lor în ultima ședință (data din etichetă), în lei și în procente față de "
+    "grand": ("Tot ce ai la brokeri, în lei la ultimul curs BNR: acțiunile și ETF-urile deschise (cantitatea × ultima "
+              "închidere) + titlurile de stat și obligațiunile (prețul din foaia `Preturi_manuale`, altfel nominal 100, "
+              "proxy) + numerarul, toate din registrul `Tranzactii`. Dedesubt: P/L-ul ultimei ședințe (doar acțiunile și "
+              "ETF-urile au preț zilnic) și procentul lui față de valoarea totală de la închiderea precedentă. "
+              "„3. Portofoliu” arată aceleași poziții pe fiecare monedă și folosește cursul de piață Yahoo, deci totalul "
+              "în lei de acolo poate diferi puțin."),
+    "equity": ("Acțiunile și ETF-urile deschise: cantitatea × ultima închidere × ultimul curs BNR. Dedesubt: P/L-ul "
+               "ultimei ședințe a pieței fiecăreia, cantitatea de acum × (închiderea − închiderea precedentă), în lei; "
+               "procentul e față de valoarea acelorași poziții la închiderea precedentă. Doar efectul prețului: efectul "
+               "cursului din ziua respectivă nu e inclus. Pozițiile fără cotație în ședință intră în valoare (la ultima "
+               "lor cotație), dar nu și în P/L."),
+    "bonds": ("Titlurile de stat și obligațiunile din registru: cantitatea × prețul din foaia `Preturi_manuale` (pe unitate, "
+              "fără dobânda acumulată), altfel nominalul 100 (proxy), × cursul BNR. Fără variație zilnică."),
+    "cash": "Numerarul la brokeri din registrul `Tranzactii` (suma mișcărilor pe broker și monedă), × cursul BNR.",
+    "market": ("Valoarea de azi a acțiunilor și ETF-urilor din această piață (cantitatea × ultima închidere × cursul BNR) "
+               "și, dedesubt, P/L-ul lor în ultima ședință (data din etichetă), în lei și în procente față de "
                "închiderea precedentă."),
-    "Contribuție": ("P/L-ul poziției în lei ÷ valoarea tuturor pozițiilor incluse la închiderea precedentă, în puncte "
-                    "procentuale. Suma contribuțiilor = variația totală a portofoliului."),
+    "Contribuție": ("P/L-ul poziției în lei ÷ valoarea tuturor acțiunilor și ETF-urilor incluse la închiderea precedentă, "
+                    "în puncte procentuale. Suma contribuțiilor = variația acțiunilor și ETF-urilor."),
     "σ": ("Variația zilei ÷ abaterea standard a variațiilor zilnice din ultimele 60 de ședințe (fără ziua curentă; "
           "minimum 20). Peste 2σ = mișcare neobișnuită pentru acest titlu (prag netestat)."),
 }
 
 
-def render_portfolio_today(sessions):
-    """„💼 Portofoliul meu azi” (Rezumatul Zilei, etapa B). Calculele sunt în analytics/portfolio_day.py.
-    `sessions` = {piață: data ultimei ședințe din universul întreg al Rezumatului} (None unde lipsește)."""
+def rezumat_fx():
+    """Ultimul curs BNR pe valută pentru Rezumatul Zilei (toate sumele în lei): (dict cod → lei, dict cod → data)."""
+    fx_hist, _failed = get_bnr_fx_history()
+    return pday_calc.fx_from_bnr(fx_hist)
+
+
+def render_portfolio_today(sessions, fx, fx_dates):
+    """„💼 Portofoliul meu azi” (Rezumatul Zilei, etapa B), toate sumele în lei la cursul BNR. Calculele sunt în
+    analytics/portfolio_day.py. `sessions` = {piață: data ultimei ședințe din universul întreg al Rezumatului}."""
     st.markdown("### 💼 Portofoliul meu azi")
     values = load_ledger_values()
     if values is None:
@@ -2100,21 +2112,24 @@ def render_portfolio_today(sessions):
         return
     positions, _ = ledger_calc.build_positions(ledger_df)
     holdings = pday_calc.held_positions(positions, ledger_calc.NOMINAL_CLASSES, ledger_calc.QTY_EPS)
-    if holdings.empty:
-        st.info("Nicio poziție deschisă în acțiuni sau ETF-uri în registrul `Tranzactii`.")
-        return
-    with st.spinner("Citim ultima ședință pentru pozițiile tale..."):
-        try:
-            closes = get_portfolio_day_closes(tuple(sorted(holdings["Symbol"])))
-        except Exception as exc:  # rețea / Yahoo
-            logger.warning("portofoliul azi: %s", exc)
-            closes = pd.DataFrame()
-        fx_hist, _fx_failed = get_bnr_fx_history()
-    fx, fx_dates = pday_calc.fx_from_bnr(fx_hist)
+    closes = pd.DataFrame()
+    if not holdings.empty:
+        with st.spinner("Citim ultima ședință pentru pozițiile tale..."):
+            try:
+                closes = get_portfolio_day_closes(tuple(sorted(holdings["Symbol"])))
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("portofoliul azi: %s", exc)
     rows, tot = pday_calc.portfolio_day(holdings, closes, fx, sessions, pday_calc.last_trade_dates(ledger_df))
+    manual_prices, _ = ledger_calc.parse_manual_prices(load_manual_price_values())
+    bonds = pday_calc.bond_values(positions, fx, manual_prices, ledger_calc.NOMINAL_CLASSES)
+    cash = pday_calc.cash_values(ledger_calc.cash_balances(ledger_df), fx)
+    grand = pday_calc.grand_total(tot, bonds, cash)
 
     def _lei(v):
         return "N/A" if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v, 0, " lei")
+
+    def _val(v):
+        return "N/A" if v is None or pd.isna(v) else format_ro(v, 0, " lei")
 
     def _pp(v, d=2):
         return None if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v * 100, d, "%")
@@ -2122,25 +2137,28 @@ def render_portfolio_today(sessions):
     def _cpp(v):
         return "N/A" if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v * 100, 2, " pp")
 
-    def _val(v):
-        return "N/A" if v is None or pd.isna(v) else format_ro(v, 0, " lei")
-
     def _day(pnl, pct):
         """Delta-ul cardului: P/L-ul zilei în lei și în procente („-276 lei · -0,83%”); fără P/L → fără delta."""
         if pnl is None or pd.isna(pnl):
             return None
         return _lei(pnl) + (f" · {_pp(pct)}" if _pp(pct) else "")
 
+    # Rândul 1: totalul și din ce e făcut
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Valoare totală azi (lei)", _val(grand["value_ron"]), _day(grand["pnl_ron"], grand["pct"]), help=PDAY_HELP["grand"])
+    g2.metric("Acțiuni și ETF", _val(tot["value_ron"]), _day(tot["pnl_ron"], tot["pct"]),
+              help=PDAY_HELP["equity"] + f" Evaluate: {tot['n_valued']} din {tot['held']}; în P/L: {tot['n']} din {tot['held']}.")
+    g3.metric("Titluri de stat", _val(grand["bonds_ron"]), help=PDAY_HELP["bonds"] + f" Poziții: {len(bonds)}.")
+    g4.metric("Numerar", _val(grand["cash_ron"]), help=PDAY_HELP["cash"])
+    # Rândul 2: acțiunile și ETF-urile pe piață, fiecare cu data ultimei ei ședințe
     mkts = list(tot["by_market"].items())
-    cols = st.columns(1 + len(mkts))
-    cols[0].metric("Valoare azi (lei)", _val(tot["value_ron"]), _day(tot["pnl_ron"], tot["pct"]),
-                   help=PDAY_HELP["value"] + f" Evaluate: {tot['n_valued']} din {tot['held']} poziții.\n\n"
-                   + PDAY_HELP["total"] + f" Incluse în P/L: {tot['n']} din {tot['held']} poziții.")
-    for col, (mkt, b) in zip(cols[1:], mkts):
-        sd = b["session"]
-        lbl = f"{pday_calc.MARKET_LABEL[mkt]} · {sd:%d.%m}" if sd is not None else pday_calc.MARKET_LABEL[mkt]
-        col.metric(lbl, _val(b["value_ron"]), _day(b["pnl_ron"], b["pct"]),
-                   help=PDAY_HELP["market"] + f" Evaluate: {b['n_valued']} din {b['held']}; incluse în P/L: {b['n']} din {b['held']}.")
+    if mkts:
+        cols = st.columns(len(mkts))
+        for col, (mkt, b) in zip(cols, mkts):
+            sd = b["session"]
+            lbl = f"{pday_calc.MARKET_LABEL[mkt]} · {sd:%d.%m}" if sd is not None else pday_calc.MARKET_LABEL[mkt]
+            col.metric(lbl, _val(b["value_ron"]), _day(b["pnl_ron"], b["pct"]),
+                       help=PDAY_HELP["market"] + f" Evaluate: {b['n_valued']} din {b['held']}; în P/L: {b['n']} din {b['held']}.")
     partial = [pday_calc.MARKET_LABEL[m] for m, b in mkts
                if briefing_calc.session_is_partial(b["session"], briefing_calc.market_state(PDAY_MARKET_HOURS[m], now_ro()))]
     if partial:
@@ -2156,45 +2174,63 @@ def render_portfolio_today(sessions):
         st.markdown("**⚠️ Mișcări peste 2σ:** " + ", ".join(
             f"{name(s)} {_pp(r.loc[s, 'Pct'])} ({format_ro(r.loc[s, 'Sigma'], 1, 'σ')})" for s in tot["alerts"]))
     if tot["excluded"]:
-        st.caption("Neincluse în total: " + "; ".join(f"{name(s)} ({why})" for s, why in tot["excluded"]) + ".")
+        st.caption("Neincluse în P/L: " + "; ".join(f"{name(s)} ({why})" for s, why in tot["excluded"]) + ".")
     if tot["approx"]:
         st.caption("Cantitate schimbată în ziua ședinței (tranzacție în registru), P/L aproximativ: "
                    + ", ".join(name(s) for s in tot["approx"]) + ".")
-    fx_used = sorted({c for c in rows["Currency"].dropna() if c != "RON" and c in fx_dates})
+    if grand["missing"]:
+        st.caption("Neincluse în valoarea totală: " + ", ".join(grand["missing"]) + ".")
+    proxy = bonds.loc[bonds["PriceSource"] == ledger_calc.PRICE_NOMINAL, "Symbol"].tolist() if len(bonds) else []
+    if proxy:
+        st.caption("Titluri la nominal 100 (proxy, fără preț în `Preturi_manuale`): " + ", ".join(proxy) + ".")
+    used = sorted(set(rows["Currency"].dropna()) | set(bonds["Currency"].dropna()) | set(cash["Currency"].dropna()))
+    fx_used = [c for c in used if c != "RON" and c in fx_dates]
     if fx_used:
-        st.caption("Curs BNR folosit: " + "; ".join(f"{c} {format_ro(fx[c], 4)} ({fx_dates[c]:%d.%m.%Y})" for c in fx_used)
+        st.caption("Toate sumele în lei, la cursul BNR: " + "; ".join(f"{c} {format_ro(fx[c], 4)} ({fx_dates[c]:%d.%m.%Y})"
+                                                                       for c in fx_used)
                    + ". Fără efectul cursului din ziua ședinței.")
-    elif any(c != "RON" for c in rows["Currency"].dropna()):
-        st.caption("Cursurile BNR nu au putut fi citite: pozițiile în valută nu intră în total.")
+    elif any(c != "RON" for c in used):
+        st.caption("Cursurile BNR nu au putut fi citite: sumele în valută nu intră în totaluri.")
 
-    with st.expander(f"📋 Toate pozițiile ({tot['held']})"):
-        view = pd.DataFrame({
+    n_lines = len(rows) + len(bonds)
+    with st.expander(f"📋 Toate pozițiile ({n_lines}) și numerarul"):
+        eq_view = pd.DataFrame({
             "Simbol": [name(s) for s in rows["Symbol"]],
             "Piață": [pday_calc.MARKET_LABEL[m] for m in rows["Market"]],
             "Ședința": rows["Date"].values,
             "Variație": rows["Pct"].values,
             "σ": rows["Sigma"].values,
-            "P/L (monedă)": [None if pd.isna(v) else f"{('+' if v > 0 else '')}{format_ro(v, 2)} {c}"
-                             for v, c in zip(rows["PnL"], rows["Currency"])],
             "P/L (lei)": rows["PnL_RON"].values,
             "Contribuție": rows["Contribution"].values,
             "Valoare (lei)": rows["Value_RON"].values,
             "Stare": ["" if s == pday_calc.STATUS_OK else s for s in rows["Status"]],
         })
+        bond_view = pd.DataFrame({
+            "Simbol": bonds["Symbol"].values, "Piață": "Titluri de stat",
+            "Ședința": bonds["PriceDate"].values, "Variație": None, "σ": None, "P/L (lei)": None, "Contribuție": None,
+            "Valoare (lei)": bonds["Value_RON"].values,
+            "Stare": ["nominal 100 (proxy)" if s == ledger_calc.PRICE_NOMINAL else "preț manual" for s in bonds["PriceSource"]],
+        })
+        view = pd.concat([eq_view, bond_view], ignore_index=True) if len(bond_view) else eq_view
         st.dataframe(
             text_frame(view, {
                 "Ședința": lambda d: f"{pd.Timestamp(d):%d.%m.%Y}",
                 "Variație": lambda v: _pp(v), "σ": lambda v: format_ro(v, 1, "σ"),
-                "P/L (monedă)": str, "P/L (lei)": _lei,
-                "Contribuție": _cpp,
-                "Valoare (lei)": lambda v: format_ro(v, 0, " lei"),
+                "P/L (lei)": _lei, "Contribuție": _cpp, "Valoare (lei)": _val,
             }),
             width='stretch', hide_index=True,
             column_config={"σ": st.column_config.Column(help=PDAY_HELP["σ"]),
                            "Contribuție": st.column_config.Column(help=PDAY_HELP["Contribuție"]),
-                           "Ședința": st.column_config.Column(help="Ziua ultimei cotații folosite pentru poziție."),
-                           "P/L (lei)": st.column_config.Column(help="P/L în moneda poziției × ultimul curs BNR."),
-                           "Valoare (lei)": st.column_config.Column(help="Cantitatea × închiderea ședinței × cursul BNR.")})
+                           "Ședința": st.column_config.Column(help="Acțiuni și ETF: ziua ultimei cotații folosite. "
+                                                                    "Titluri de stat: data prețului din `Preturi_manuale`."),
+                           "P/L (lei)": st.column_config.Column(help="Cantitatea × (închiderea − închiderea precedentă) × cursul BNR."),
+                           "Valoare (lei)": st.column_config.Column(help="Cantitatea × prețul × cursul BNR.")})
+        if len(cash):
+            st.dataframe(
+                text_frame(pd.DataFrame({"Numerar": [f"{b} · {c}" for b, c in zip(cash["Broker"], cash["Currency"])],
+                                         "Valoare (lei)": cash["Value_RON"].values}), {"Valoare (lei)": _val}),
+                width='stretch', hide_index=True,
+                column_config={"Valoare (lei)": st.column_config.Column(help="Soldul din registru × cursul BNR.")})
     st.markdown("---")
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -7051,10 +7087,12 @@ def main():
 
         def _moves_table(df, currency, show_value=True):
             unit = " lei" if currency == "RON" else f" {currency}"
+            rate = pday_calc.rate_for(currency, rz_fx)   # valoarea tranzacționată în lei (prețul rămâne în moneda bursei)
             view = pd.DataFrame({
                 "Simbol": [s.replace(".RO", "") for s in df.index], "Preț": df["close"].values,
                 "Variație": (df["pct"] * 100).values, "σ": df["sigma"].values,
-                **({"Valoare": [briefing_calc.money_short(v, currency) for v in df["value"]]} if show_value else {}),
+                **({"Valoare": [briefing_calc.money_short(v * rate if (rate is not None and v is not None and pd.notna(v)) else None, "RON")
+                                for v in df["value"]]} if show_value else {}),
             })
             color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
             st.dataframe(
@@ -7064,7 +7102,8 @@ def main():
                 column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice din "
                                                                   "ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
                                                                   "Peste 2σ = mișcare neobișnuită pentru acest titlu."),
-                               "Valoare": st.column_config.Column(help="Preț × volum în ședință (valoarea tranzacționată)."),
+                               "Valoare": st.column_config.Column(help="Preț × volum în ședință (valoarea tranzacționată), "
+                                                                        "în lei la cursul BNR."),
                                "Variație": st.column_config.Column(help="Față de închiderea ședinței precedente, preț neajustat.")})
 
         def _news_list(items, src_key):
@@ -7082,7 +7121,8 @@ def main():
         if brief is not None:
             _rz_sessions["bvb"] = briefing_calc.session_date(brief["bvb_close"].drop(columns=[BRIEFING_BET_PROXY], errors="ignore"))
             _rz_sessions["us"] = briefing_calc.session_date(brief["us_close"].drop(columns=BRIEFING_US_INDICES, errors="ignore"))
-        render_portfolio_today(_rz_sessions)
+        rz_fx, rz_fx_dates = rezumat_fx()          # toate sumele din Rezumatul Zilei în lei, la cursul BNR
+        render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates)
 
         tab_bvb, tab_us = st.tabs(["🇷🇴 BVB", "🇺🇸 Wall Street"])
 
@@ -7242,10 +7282,14 @@ def main():
                                     "capitalizarea, deci mișcarea zilei a fost largă, nu dusă de câțiva giganți.")
                 _breadth_bar(briefing_calc.breadth_counts(us_t), f"Universul urmărit ({len(us_t)} simboluri, nu S&P 500)")
                 us_turn = briefing_calc.turnover_vs_median(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
-                st.metric("Valoare tranzacționată (universul urmărit)", briefing_calc.money_short(us_turn["today"], "USD"),
+                usd_rz = rz_fx.get("USD")
+                st.metric("Valoare tranzacționată (universul urmărit)",
+                          briefing_calc.money_short(us_turn["today"] * usd_rz if (usd_rz and us_turn["today"] is not None) else None, "RON"),
                           None if us_turn["ratio"] is None else f"×{format_ro(us_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
-                          help=f"Preț × volum pe universul urmărit în ultima ședință, față de mediana celor {us_turn['n']} ședințe dinainte.")
+                          help=f"Preț × volum pe universul urmărit în ultima ședință, în lei la cursul BNR"
+                               + (f" ({format_ro(usd_rz, 4)} lei/USD, {rz_fx_dates['USD']:%d.%m.%Y})" if usd_rz and "USD" in rz_fx_dates else " (indisponibil)")
+                               + f", față de mediana celor {us_turn['n']} ședințe dinainte (raportul nu depinde de curs).")
 
                 st.markdown("---")
                 st.markdown("#### 🎯 Regimul S&P 500 (regula „Moment”)")

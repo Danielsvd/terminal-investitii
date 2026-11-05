@@ -726,23 +726,34 @@ def main():
             assert len(sig_tabs) >= 3, "lipsesc topurile cu σ"
             all_text = " ".join(str(e.value) for e in list(at.markdown) + list(at.info) + list(at.caption))
             assert "Sentimentul Wall Street" not in all_text and "Pulsul Pieței" not in all_text, "scorurile vechi încă afișate"
-            # etapa B, „Portofoliul meu azi”: pozițiile deschise din registrul fals (TLV.RO, SAP.DE, AAPL), fără obligațiune
-            assert "Valoare azi (lei)" in mets and mets["Valoare azi (lei)"] != "N/A", mets.get("Valoare azi (lei)")
+            # etapa B, „Portofoliul meu azi”, totul în lei: acțiuni (TLV.RO, SAP.DE, AAPL) + titlul de stat R9901AE + numerar
+            for lbl in ("Valoare totală azi (lei)", "Acțiuni și ETF", "Titluri de stat", "Numerar"):
+                assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
             pday = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Contribuție" in
                          getattr(getattr(d.value, "data", d.value), "columns", [])), None)
-            assert pday is not None, "lipsește tabelul „Portofoliul meu azi”"
-            print("Portofoliul azi:", mets["Valoare azi (lei)"], pday[["Simbol", "Piață", "P/L (lei)", "Contribuție", "Valoare (lei)", "Stare"]].values.tolist())
-            # valoarea de azi = suma coloanei „Valoare (lei)” (toate pozițiile evaluate), toleranță de rotunjire
-            vals_ = [_ro_num(v.replace(" lei", "")) for v in pday["Valoare (lei)"] if v != "N/A"]
-            assert abs(sum(vals_) - _ro_num(mets["Valoare azi (lei)"].replace(" lei", ""))) <= 0.5 * (len(vals_) + 1)
-            assert set(pday["Simbol"]) == {"TLV", "SAP.DE", "AAPL"}, list(pday["Simbol"])
-            assert not pday.isna().any().any(), "celule nule în „Portofoliul meu azi” (se afișează „None”)"
+            cash_t = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Numerar" in
+                           getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert pday is not None and cash_t is not None, "lipsește tabelul „Portofoliul meu azi” sau numerarul"
+            print("Portofoliul azi:", {k: mets[k] for k in ("Valoare totală azi (lei)", "Acțiuni și ETF", "Titluri de stat", "Numerar")},
+                  pday[["Simbol", "Piață", "P/L (lei)", "Contribuție", "Valoare (lei)", "Stare"]].values.tolist(),
+                  cash_t.values.tolist())
+            assert set(pday["Simbol"]) == {"TLV", "SAP.DE", "AAPL", "R9901AE"}, list(pday["Simbol"])
+            assert "P/L (monedă)" not in pday.columns, "sumele din Rezumat trebuie să fie doar în lei"
+            assert not pday.isna().any().any() and not cash_t.isna().any().any(), "celule nule (se afișează „None”)"
+            lei = lambda t: _ro_num(t.replace(" lei", ""))
+            eq_rows, bond_rows = pday[pday["Piață"] != "Titluri de stat"], pday[pday["Piață"] == "Titluri de stat"]
+            assert abs(sum(lei(v) for v in eq_rows["Valoare (lei)"]) - lei(mets["Acțiuni și ETF"])) <= 0.5 * (len(eq_rows) + 1)
+            assert abs(sum(lei(v) for v in bond_rows["Valoare (lei)"]) - lei(mets["Titluri de stat"])) <= 0.5 * (len(bond_rows) + 1)
+            assert abs(sum(lei(v) for v in cash_t["Valoare (lei)"]) - lei(mets["Numerar"])) <= 0.5 * (len(cash_t) + 1)
+            parts = sum(lei(mets[k]) for k in ("Acțiuni și ETF", "Titluri de stat", "Numerar"))
+            assert abs(parts - lei(mets["Valoare totală azi (lei)"])) <= 1.5, (parts, mets["Valoare totală azi (lei)"])
             ok_rows = pday[pday["Stare"] == ""]
             if len(ok_rows):
                 tot_pp = sum(_ro_num(v.replace(" pp", "")) for v in ok_rows["Contribuție"])
-                tot_delta = next(m.delta for m in at.metric if m.label == "Valoare azi (lei)")      # „-276 lei · -0,83%”
-                tot_pct = _ro_num(tot_delta.split(" · ")[1])
-                assert abs(tot_pp - tot_pct) <= 0.011 * len(ok_rows), (tot_pp, tot_pct)   # suma contribuțiilor = variația
+                eq_delta = next(m.delta for m in at.metric if m.label == "Acțiuni și ETF")      # „-276 lei · -0,83%”
+                assert abs(tot_pp - _ro_num(eq_delta.split(" · ")[1])) <= 0.011 * len(ok_rows), (tot_pp, eq_delta)
+            # Wall Street: valoarea tranzacționată în lei (cursul BNR), nu în USD
+            assert mets.get("Valoare tranzacționată (universul urmărit)", "").endswith("lei"), mets.get("Valoare tranzacționată (universul urmărit)")
         if section == "5. Import Date":
             # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
             frames = [getattr(d.value, "data", d.value) for d in at.dataframe]
