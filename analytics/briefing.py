@@ -29,6 +29,7 @@ TOP_N = 10                       # câte creșteri / scăderi arată fiecare top
 MARKET_HOURS = {
     "BVB": ("Europe/Bucharest", time(10, 0), time(17, 45)),
     "NYSE": ("America/New_York", time(9, 30), time(16, 0)),
+    "XETRA": ("Europe/Berlin", time(9, 0), time(17, 30)),    # reper pentru Europa (LSE: 08:00–16:30 Londra, aceeași oră)
 }
 
 
