@@ -21,7 +21,7 @@ SIGMA_WINDOW = 60
 SIGMA_MIN_OBS = 20
 TURNOVER_LOOKBACK = 20
 TURNOVER_MIN_OBS = 10
-MIN_VALUE_RON = 100_000          # pragul de valoare tranzacționată pentru topurile BVB (decizia lui Daniel, 05.11.2026)
+MIN_VALUE_RON = 50_000           # pragul de valoare tranzacționată pentru topurile BVB (Daniel, 05.11.2026: coborât de la 100.000)
 
 # Orele ședinței continue, ora locală a bursei. Fără sărbători legale: data ultimei ședințe vine din date.
 MARKET_HOURS = {

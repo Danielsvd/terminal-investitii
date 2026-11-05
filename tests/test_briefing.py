@@ -127,3 +127,19 @@ def test_suma_scurta():
     assert money_short(1_234_000_000, "USD") == "1,23 mld. USD"
     assert money_short(850_000, "RON") == "850.000 lei"
     assert money_short(None, "RON") == "N/A" and money_short(float("nan"), "USD") == "N/A"
+
+
+
+def test_prag_bvb_implicit_50000():
+    from analytics.briefing import MIN_VALUE_RON
+    assert MIN_VALUE_RON == 50_000
+    t = pd.DataFrame({"traded": [True, True, True, True, False],
+                      "pct":    [1.5, -2.0, 0.8, -0.4, 3.0],
+                      "value":  [75_000.0, 50_000.0, 49_999.0, np.nan, 900_000.0]},
+                     index=["MID", "EDGE", "LOW", "NAV", "OFF"])
+    up, down = top_moves(t, n=5, min_value=MIN_VALUE_RON)
+    # MID (75.000) intră acum, sub vechiul prag nu intra; EDGE (exact 50.000) intră (≥);
+    # LOW (49.999) sub prag; NAV (valoare lipsă) exclus; OFF netranzacționat exclus
+    assert list(up.index) == ["MID"] and list(down.index) == ["EDGE"]
+    up, down = top_moves(t, n=5, min_value=100_000)
+    assert up.empty and down.empty
