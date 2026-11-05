@@ -120,3 +120,16 @@ def test_ultima_tranzactie_pe_simbol():
     led = pd.DataFrame({"Date": pd.to_datetime(["2026-01-05 10:00", "2026-02-03 11:00", "2026-02-10 09:00"]),
                         "Symbol": ["A", "A", ""], "Type": ["BUY", "DIV", "DEPOSIT"]})
     assert pdy.last_trade_dates(led) == {"A": pd.Timestamp("2026-01-05")}      # DIV nu schimbă cantitatea
+
+
+def test_valoare_azi_include_si_pozitiile_fara_cotatie_in_sedinta():
+    holdings, close = _setup()
+    rows, tot = pdy.portfolio_day(holdings, close, FX)
+    # AAA 100 × 11 = 1.100; BBB 10 × 95 × 4,5 = 4.275; CCC 5 × 210 × 5 = 5.250; DDD 40 × 5 = 200 (ultima cotație);
+    # EEE fără curs → fără valoare. Total 10.825 lei din 4 poziții.
+    assert tot["value_ron"] == pytest.approx(10_825.0) and tot["n_valued"] == 4
+    assert tot["by_market"]["bvb"]["value_ron"] == pytest.approx(1_300.0) and tot["by_market"]["bvb"]["n_valued"] == 2
+    assert tot["by_market"]["us"]["value_ron"] == pytest.approx(4_275.0)          # EEE (CHF) fără curs
+    r = rows.set_index("Symbol")
+    assert pd.isna(r.loc["DDD.RO", "PnL_RON"])                                     # tot în afara P/L-ului
+    assert tot["pnl_ron"] == pytest.approx(125.0)

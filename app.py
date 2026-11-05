@@ -2073,8 +2073,12 @@ PDAY_HELP = {
               "în lei la ultimul curs BNR. Procentul = P/L ÷ valoarea acelorași poziții la închiderea precedentă. "
               "Doar efectul prețului: efectul cursului din ziua respectivă nu e inclus. Titlurile de stat și "
               "obligațiunile nu intră (nu au preț zilnic). Pozițiile fără cotație în ședință sunt excluse."),
-    "market": ("P/L-ul pozițiilor din această piață în ultima ei ședință (data din etichetă), în lei la cursul BNR. "
-               "Procentul e față de valoarea lor la închiderea precedentă."),
+    "value": ("Cât valorează azi acțiunile și ETF-urile deschise din registrul `Tranzactii`: cantitatea × ultima "
+              "închidere × ultimul curs BNR. Fără titluri de stat, obligațiuni și numerar (totalul cu ele e în "
+              "„3. Portofoliu”, la cursul de piață Yahoo, deci poate diferi puțin). Sub valoare: P/L-ul ultimei ședințe."),
+    "market": ("Valoarea de azi a pozițiilor din această piață (cantitatea × ultima închidere × cursul BNR) și, "
+               "dedesubt, P/L-ul lor în ultima ședință (data din etichetă), în lei și în procente față de "
+               "închiderea precedentă."),
     "Contribuție": ("P/L-ul poziției în lei ÷ valoarea tuturor pozițiilor incluse la închiderea precedentă, în puncte "
                     "procentuale. Suma contribuțiilor = variația totală a portofoliului."),
     "σ": ("Variația zilei ÷ abaterea standard a variațiilor zilnice din ultimele 60 de ședințe (fără ziua curentă; "
@@ -2118,15 +2122,25 @@ def render_portfolio_today(sessions):
     def _cpp(v):
         return "N/A" if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v * 100, 2, " pp")
 
+    def _val(v):
+        return "N/A" if v is None or pd.isna(v) else format_ro(v, 0, " lei")
+
+    def _day(pnl, pct):
+        """Delta-ul cardului: P/L-ul zilei în lei și în procente („-276 lei · -0,83%”); fără P/L → fără delta."""
+        if pnl is None or pd.isna(pnl):
+            return None
+        return _lei(pnl) + (f" · {_pp(pct)}" if _pp(pct) else "")
+
     mkts = list(tot["by_market"].items())
     cols = st.columns(1 + len(mkts))
-    cols[0].metric("Total portofoliu (lei)", _lei(tot["pnl_ron"]), _pp(tot["pct"]),
-                   help=PDAY_HELP["total"] + f" Incluse: {tot['n']} din {tot['held']} poziții.")
+    cols[0].metric("Valoare azi (lei)", _val(tot["value_ron"]), _day(tot["pnl_ron"], tot["pct"]),
+                   help=PDAY_HELP["value"] + f" Evaluate: {tot['n_valued']} din {tot['held']} poziții.\n\n"
+                   + PDAY_HELP["total"] + f" Incluse în P/L: {tot['n']} din {tot['held']} poziții.")
     for col, (mkt, b) in zip(cols[1:], mkts):
         sd = b["session"]
         lbl = f"{pday_calc.MARKET_LABEL[mkt]} · {sd:%d.%m}" if sd is not None else pday_calc.MARKET_LABEL[mkt]
-        col.metric(lbl, _lei(b["pnl_ron"]), _pp(b["pct"]),
-                   help=PDAY_HELP["market"] + f" Incluse: {b['n']} din {b['held']} poziții.")
+        col.metric(lbl, _val(b["value_ron"]), _day(b["pnl_ron"], b["pct"]),
+                   help=PDAY_HELP["market"] + f" Evaluate: {b['n_valued']} din {b['held']}; incluse în P/L: {b['n']} din {b['held']}.")
     partial = [pday_calc.MARKET_LABEL[m] for m, b in mkts
                if briefing_calc.session_is_partial(b["session"], briefing_calc.market_state(PDAY_MARKET_HOURS[m], now_ro()))]
     if partial:
