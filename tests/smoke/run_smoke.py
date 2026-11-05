@@ -334,7 +334,8 @@ SHEETS = {
         [(__import__("datetime").date.today() - __import__("datetime").timedelta(days=40 - i)).isoformat(), "AAPL", (20 + i) / 100]
         for i in range(25)],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
-               ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
+               ["Tech", "AAPL", "2.500.000.000.000 $", "180,5 $", "28,1", "35,2%", "Buy"],
+               ["", "SAP", "200.000.000.000€", "150,5€", "#DIV/0!", "-%", "Ține"]],
 }
 
 
@@ -707,6 +708,16 @@ def main():
                     "7. Scanner Volum", "8. Watchlist"):
         radio().set_value(section).run()
         check(at, section)
+        if section == "5. Import Date":
+            # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
+            frames = [getattr(d.value, "data", d.value) for d in at.dataframe]
+            bvb_t = next((f for f in frames if "P/E TTM" in getattr(f, "columns", [])), None)
+            assert bvb_t is not None and list(bvb_t.index)[:2] == ["TLV", "SNP"], "lipsește tabelul BVB transpus"
+            assert pd.isna(bvb_t.loc["SNP", "Rentabilitate capital (ROE)"]), "#DIV/0! din BVB a devenit număr"
+            glob_t = next((f for f in frames if "Capitalizare (mld.)" in getattr(f, "columns", [])), None)
+            assert glob_t is not None and list(glob_t["Companii"]) == ["AAPL", "SAP"], "lipsește tabelul GLOBAL"
+            assert list(glob_t["Industrie"]) == ["Tech", "Tech"] and pd.isna(glob_t.at[1, "P/E"]), glob_t
+            print("Import Date:", bvb_t.shape, glob_t.shape)
         if section == "3. Portofoliu":
             pos_df = next((d.value for d in at.dataframe if {"Simbol", "Cantitate", "Sursă preț"} <= set(getattr(d.value, "columns", []))), None)
             assert pos_df is not None, "lipsește tabelul pozițiilor deschise"
