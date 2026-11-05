@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.briefing import (full_table, missing_symbols, universe_sections, breadth_counts, daily_move, liquidity_top, market_state, parse_universe,
+from analytics.briefing import (session_date, full_table, missing_symbols, universe_sections, breadth_counts, daily_move, liquidity_top, market_state, parse_universe,
                                 relative_day, session_is_partial, session_table, sigma_label, sigma_of_last,
                                 top_moves, turnover_vs_median)
 
@@ -164,3 +164,23 @@ def test_simboluri_fara_date_si_tabel_complet():
     # Principală înainte de AeRO; în secțiune: tranzacționate întâi, apoi după variație (lipsă la coadă)
     assert list(f.index) == ["P1", "P2", "A2", "A1"]
     assert list(f["section"]) == ["Principală", "Principală", "AeRO", "AeRO"]
+
+
+def test_un_singur_simbol_cu_rand_nou_nu_muta_sedinta():
+    # 10 simboluri pe 04.11; doar „X” are deja un rând pe 05.11 (pre-market / OTC) → ședința rămâne 04.11
+    idx = pd.to_datetime(["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"])
+    close = pd.DataFrame({f"S{i}": [10.0, 10.0, 11.0, np.nan] for i in range(9)}, index=idx)
+    close["X"] = [20.0, 20.0, 22.0, 30.0]
+    vol = pd.DataFrame(100.0, index=idx, columns=close.columns)
+    assert session_date(close) == pd.Timestamp("2026-11-04")
+    t, session = session_table(close, vol)
+    assert session == pd.Timestamp("2026-11-04")
+    assert bool(t["traded"].all()) and len(t) == 10                      # toți tranzacționați pe 04.11
+    assert t.loc["X", "pct"] == pytest.approx(0.10)                      # 22 / 20 − 1, nu 30 / 22 − 1
+    r = turnover_vs_median(close, vol, min_obs=1)
+    assert r["date"] == pd.Timestamp("2026-11-04") and r["today"] == pytest.approx(9 * 11 * 100 + 22 * 100)
+    # când majoritatea are 05.11, ședința e 05.11
+    close.loc[pd.Timestamp("2026-11-05"), ["S0", "S1"]] = 12.0
+    assert session_date(close) == pd.Timestamp("2026-11-05")             # 3 din 10 ≥ 20%
+    assert session_date(pd.DataFrame()) is None
+
