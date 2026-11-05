@@ -102,13 +102,45 @@ def news_time(item):
         return None
 
 
+def _bare_name(name):
+    """Numele fără forma juridică și fără cuvintele generice de la final („Bank of America Corporation” → „Bank of
+    America”, „Novo Nordisk A/S” → „Novo Nordisk”, „OMV PETROM SA” → „OMV PETROM”)."""
+    parts = str(name or "").replace(",", " ").split()
+    while parts and parts[-1].lower().replace("/", "").strip(".") in LEGAL_SUFFIXES | {"sa", "nv"}:
+        parts.pop()
+    return " ".join(parts)
+
+
+def strict_terms(symbol, names=()):
+    """Termenii stricți pentru „Știri despre acțiunile tale”: numele întreg al companiei (fără forma juridică), ca
+    expresie, și simbolul (≥ 3 litere, cu majuscule, exact). Un cuvânt singur din nume NU ajunge când numele are mai
+    multe cuvinte: „America” din Bank of America prindea „America Latină”, „First” din First Majestic orice „first”.
+    Numele dintr-un singur cuvânt (CoreWeave, Alphabet) rămâne cuvânt, de la 4 litere. Întoarce (expresii, acronime)."""
+    phrases, acronyms = set(), set()
+    base = str(symbol or "").split(".")[0].strip()
+    if base.isalpha() and len(base) >= MIN_ACRONYM and not base.startswith("^"):
+        acronyms.add(base.upper())
+    for name in names or ():
+        bare = _bare_name(name)
+        if not bare:
+            continue
+        if " " in bare:
+            phrases.add(bare.lower())
+        elif bare.isupper() and bare.isalpha() and len(bare) >= MIN_ACRONYM:
+            acronyms.add(bare)
+        elif len(bare) >= MIN_WORD and bare.lower() not in LEGAL_SUFFIXES:
+            phrases.add(bare.lower())
+    return phrases, acronyms
+
+
 def holdings_news(holdings, general, own=None, now=None, max_age_hours=NEWS_MAX_AGE_HOURS,
                   per_symbol=NEWS_PER_SYMBOL, total=NEWS_TOTAL):
     """Știrile recente care menționează pozițiile tale.
 
-    holdings: {simbol: (nume, ...)} — numele companiei (din Yahoo); fără nume → doar simbolul (`company_terms`).
-    general: știrile din fluxurile generale (RO și internaționale), filtrate aici pe fiecare companie.
-    own: {simbol: știri} din fluxul Yahoo pe simbol, deja filtrate (`get_company_news_rss` cu nume).
+    holdings: {simbol: (nume, ...)} — numele companiei (din Yahoo); fără nume → doar simbolul (`strict_terms`).
+    general: știrile din fluxurile generale (RO și internaționale).
+    own: {simbol: știri} din fluxul Yahoo pe simbol. Toate se filtrează aici cu `strict_terms` (numele întreg sau
+    simbolul), mai strict decât `filter_company_news` (care rămâne neschimbat pentru sentiment).
     now: datetime naiv în ora României (implicit acum, pentru teste se dă explicit).
 
     Întoarce lista de dict symbol, title, link, source, time (datetime), cea mai nouă întâi: cel mult `per_symbol`
@@ -119,7 +151,11 @@ def holdings_news(holdings, general, own=None, now=None, max_age_hours=NEWS_MAX_
     oldest = now - timedelta(hours=max_age_hours)
     seen, out = set(), []
     for sym, names in (holdings or {}).items():
-        cands = list(own.get(sym) or []) + filter_company_news(general or [], sym, tuple(n for n in names or () if n))
+        terms = strict_terms(sym, tuple(n for n in names or () if n))
+        if not terms[0] and not terms[1]:
+            continue
+        cands = [it for it in list(own.get(sym) or []) + list(general or [])
+                 if mentions_company(f"{it.get('title', '')} {it.get('summary', '')}", terms)]
         picked = []
         for it in sorted(cands, key=lambda x: news_time(x) or datetime.min, reverse=True):
             t, title = news_time(it), str(it.get("title", "")).strip()

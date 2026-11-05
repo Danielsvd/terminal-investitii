@@ -100,3 +100,21 @@ def test_stiri_limita_pe_simbol_si_aceeasi_stire_o_data():
     assert len(aapl) == 3 and [x["link"] for x in aapl] == ["x", "4", "3"]   # cele mai noi 3
     assert msft == []                                                           # știrea comună: o singură dată, la AAPL
     assert news_time({"date_str": "bad"}) is None
+
+
+def test_termeni_stricti_fara_cuvinte_generice_din_nume():
+    from data.news import strict_terms
+    now = datetime(2026, 11, 5, 21, 0)
+    assert strict_terms("BAC", ("Bank of America Corporation",)) == ({"bank of america"}, {"BAC"})
+    assert strict_terms("NVO", ("Novo Nordisk A/S",)) == ({"novo nordisk"}, {"NVO"})
+    assert strict_terms("CRWV", ("CoreWeave, Inc.",)) == ({"coreweave"}, {"CRWV"})
+    assert strict_terms("SNP.RO", ("OMV PETROM SA",)) == ({"omv petrom"}, {"SNP"})
+    general = [
+        {"title": "eToro se extinde în America Latină prin achiziția fintech-ului argentinian LB Finanzas", "date_str": "2026-11-05 19:47"},
+        {"title": "After US$474m gamble flops, what happens now to Elon Musk's Tesla?", "summary": "The first time ...",
+         "date_str": "2026-11-05 17:00"},
+        {"title": "ETFs Are Net Sellers of Bank of America (BAC) on Nov. 3", "date_str": "2026-11-05 13:02"},
+        {"title": "First Majestic Silver raises output", "date_str": "2026-11-05 12:00"},
+    ]
+    out = holdings_news({"BAC": ("Bank of America Corporation",), "AG": ("First Majestic Silver Corp.",)}, general, now=now)
+    assert [(x["symbol"], x["title"][:10]) for x in out] == [("BAC", "ETFs Are N"), ("AG", "First Maje")]

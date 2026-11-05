@@ -243,3 +243,19 @@ def test_sectoare_fata_de_indice():
     df2, _ = sector_moves(close, vol, spx.iloc[:1])
     assert df2["vs_index_pp"].isna().all()
     assert len(US_SECTOR_ETFS) == 11
+
+
+def test_simboluri_fara_pret_acoperire_si_completare():
+    from analytics.briefing import symbols_without_prices, coverage, merge_price_frames
+    idx = pd.to_datetime(["2026-11-04", "2026-11-05"])
+    first = pd.DataFrame({"SAP.DE": [np.nan, np.nan], "ADS.DE": [178.0, 179.6]}, index=idx)   # SAP.DE refuzat
+    syms = ["SAP.DE", "ADS.DE", "^STOXX"]
+    assert symbols_without_prices(first, syms) == ["SAP.DE", "^STOXX"]
+    assert coverage(first, syms) == pytest.approx(1 / 3)
+    retry = pd.DataFrame({"SAP.DE": [220.0, 222.0], "^STOXX": [560.0, 555.0]}, index=idx)
+    merged = merge_price_frames(first, retry)
+    assert symbols_without_prices(merged, syms) == []
+    assert merged.loc[pd.Timestamp("2026-11-05"), "SAP.DE"] == 222.0
+    assert merged.loc[pd.Timestamp("2026-11-05"), "ADS.DE"] == 179.6        # valoarea din prima citire rămâne
+    assert coverage(merged, syms) == 1.0 and coverage(pd.DataFrame(), []) == 1.0
+    assert symbols_without_prices(None, ["A"]) == ["A"]

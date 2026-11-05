@@ -246,6 +246,12 @@ def fake_download(tickers, period=None, start=None, group_by="column", **k):
         tickers = tickers.split()
     n = _n_rows(period, start)
     frames = {t: _ohlcv(t, n) for t in tickers}
+    if "^STOXX" in tickers and len(tickers) > 60:
+        # ca pe test1 la 05.11: în cererea mare a Europei Yahoo refuză cele mai multe simboluri (coloane goale);
+        # recererea în grupuri mici (app._download_briefing) trebuie să le completeze
+        for i, t in enumerate(tickers):
+            if i % 8:
+                frames[t] = frames[t] * np.nan
     if group_by == "ticker":
         out = pd.concat(frames, axis=1)
     else:
@@ -755,6 +761,8 @@ def main():
             # Wall Street: valoarea tranzacționată în lei (cursul BNR), nu în USD
             assert mets.get("Valoare tranzacționată (universul urmărit)", "").endswith("lei"), mets.get("Valoare tranzacționată (universul urmărit)")
             # etapa C: tabul Europa (indici, sume în lei, moneda pe rând) și sectoarele SUA (11 ETF-uri SPDR)
+            caps_rz = " ".join(str(e.value) for e in at.caption)
+            assert "Universul urmărit Europa (79 simboluri, 79 cu date Yahoo)" in caps_rz, "recererea Europei n-a completat simbolurile"
             for lbl in ("STOXX Europe 600", "DAX", "CAC 40", "FTSE 100"):
                 assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
             vals_ron = [str(m.value) for m in at.metric if m.label == "Valoare tranzacționată (universul urmărit)"]
