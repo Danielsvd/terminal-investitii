@@ -6186,12 +6186,14 @@ def main():
             except Exception as exc:  # rețea / Yahoo
                 logger.warning("VIX/VIX3M: %s", exc)
                 vterm = None
-            credit = {}
+            credit, credit_ser = {}, {}
             for code in ("BAMLH0A0HYM2", "BAMLC0A0CM"):
                 try:
-                    credit[code] = stress_calc.spread_stats(_fred_rate_series(code, 3700))
+                    credit_ser[code] = _fred_rate_series(code, 3700)
+                    credit[code] = stress_calc.spread_stats(credit_ser[code])
                 except Exception as exc:  # rețea / FRED
                     logger.warning("FRED %s: %s", code, exc)
+                    credit_ser[code] = None
                     credit[code] = stress_calc.spread_stats(None)
         c_st1, c_st2, c_st3 = st.columns(3)
         state_txt = {"stres": "🔴 stres acut", "tensiune": "🟠 tensiune", "normal": "🟢 normal"}
@@ -6223,6 +6225,59 @@ def main():
                                  yaxis=dict(title="VIX / VIX3M", gridcolor='#30363D'))
             plot_ro(fig_vt, width='stretch', key="vix_term_chart")
             st.caption("Linia punctată = 1: peste ea, volatilitatea pe termen scurt depășește pe cea pe 3 luni.")
+
+        # --- GRAFICELE CREDITULUI (înlocuiesc „Radar de Risc Sistemic”, scos 05.11) ---
+        cr_c1, cr_c2 = st.columns(2)
+        with cr_c1:
+            st.markdown("**Spread-urile de credit SUA** (măsura directă)")
+            sp_lines = [(code, name, colr) for code, name, colr in (("BAMLH0A0HYM2", "High yield", "#3987e5"),
+                                                                    ("BAMLC0A0CM", "Investment grade", "#d95926"))
+                        if credit_ser.get(code) is not None]
+            if not sp_lines:
+                st.info("Spread-urile ICE BofA nu au putut fi citite acum de la FRED: N/A.")
+            else:
+                fig_sp = go.Figure()
+                for code, name, colr in sp_lines:
+                    ser_sp = rates_calc.to_daily(credit_ser[code])
+                    fig_sp.add_trace(go.Scatter(x=ser_sp.index, y=ser_sp.values, mode="lines", name=name,
+                                                line=dict(color=colr, width=2),
+                                                hovertemplate=name + " %{x|%d.%m.%Y}: %{y:.2f} pp<extra></extra>"))
+                fig_sp.update_layout(height=260, margin=dict(l=0, r=0, t=30, b=0), template="plotly_dark",
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                                     yaxis=dict(title="puncte procentuale", gridcolor='#30363D'))
+                plot_ro(fig_sp, width='stretch', key="credit_spreads_chart")
+                st.caption("Randamentul obligațiunilor corporative SUA peste titlurile de stat (FRED, ICE BofA option-adjusted spread). "
+                           "Urcă = investitorii cer mai mult pentru riscul de neplată. FRED publică doar ultimii ~3 ani din seriile ICE.")
+        with cr_c2:
+            st.markdown("**Pilonul „Piața de credit”: HYG / IEF** (un an)")
+            cb = macro_calc.credit_band_frame(macro_risk_ratio)
+            if cb.empty:
+                st.info("HYG / IEF nu au putut fi citite acum de la Yahoo: N/A.")
+            else:
+                fig_cb = go.Figure()
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["upper"], mode="lines", line=dict(width=0),
+                                            showlegend=False, hoverinfo="skip"))
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["lower"], mode="lines", line=dict(width=0),
+                                            fill="tonexty", fillcolor="rgba(139,148,158,0.18)",
+                                            name=f"Banda ±{ro(macro_calc.CREDIT_BAND * 100):.0f}% (neutru)", hoverinfo="skip"))
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["sma"], mode="lines", name=f"Media pe {macro_calc.CREDIT_SMA_DAYS} de ședințe",
+                                            line=dict(color="#8B949E", dash="dot", width=1.5),
+                                            hovertemplate="Media %{x|%d.%m.%Y}: %{y:.3f}<extra></extra>"))
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["ratio"], mode="lines", name="HYG / IEF",
+                                            line=dict(color="#3987e5", width=2),
+                                            hovertemplate="HYG/IEF %{x|%d.%m.%Y}: %{y:.3f}<extra></extra>"))
+                fig_cb.update_layout(height=260, margin=dict(l=0, r=0, t=30, b=0), template="plotly_dark",
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                                     yaxis=dict(title="raport", gridcolor='#30363D'))
+                plot_ro(fig_cb, width='stretch', key="credit_band_chart")
+                cp = macro_pillars["credit"]
+                cp_txt = "N/A" if cp["score"] is None else f"{cp['score']:.0f}"
+                st.caption(f"Azi: {cp['detail']}; scor pilon {cp_txt}. "
+                           "Peste bandă = apetit pentru risc (100), sub bandă = retragere din risc (0), în bandă = neutru (50); "
+                           "prag orientativ, netestat. HYG/IEF (randament total, Yahoo) e un proxy: banii care trec din "
+                           "obligațiunile firmelor în titlurile de stat trag raportul în jos.")
 
         # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
         st.markdown("---")
@@ -6700,93 +6755,8 @@ def main():
                             st.write(f"<span style='color:#D29922;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
         st.caption("Clasificarea (risk-on / risk-off / rotație / trade de inflație) numără sectoarele agresive și defensive din primele 3 "
                    "ale perioadei alese. Reguli orientative, netestate; pe „Azi” reflectă o singură ședință.")
-        st.markdown("---")
-        # =================================================================
-        # MODUL NOU: RADAR DE RISC SISTEMIC (CU SELECTOR ȘI ZOOM)
-        # =================================================================
-        st.subheader("💣 Radar de Risc Sistemic (Piața de Credit)")
-        
-        # --- NOU: SELECTOR DE PERIOADĂ ---
-        col_title, col_time = st.columns([2, 1])
-        with col_time:
-            time_map_bonds = {
-                "1 Lună": "1mo", "3 Luni": "3mo", "6 Luni": "6mo", 
-                "1 An": "1y", "3 Ani": "3y", "5 Ani": "5y"
-            }
-            selected_period_label = st.selectbox("Interval Radar:", list(time_map_bonds.keys()), index=3)
-            selected_period_code = time_map_bonds[selected_period_label]
-
-        with st.spinner(f"Se analizează stresul financiar pe {selected_period_label}..."):
-            ratio_series = get_credit_risk_data(selected_period_code)
-            
-            if not ratio_series.empty:
-                current_ratio = ratio_series.iloc[-1]
-                # Interpretarea folosește aceeași regulă ca pilonul „Piața de credit” din verdict (SMA 50, bandă ±1%),
-                # pe seria de un an, indiferent de intervalul ales pentru grafic.
-                credit_pillar = macro_calc.pillar_credit(macro_risk_ratio)
-                
-                # Calculăm variația procentuală pe intervalul selectat
-                start_ratio = ratio_series.iloc[0]
-                total_change = ((current_ratio - start_ratio) / start_ratio) * 100
-                
-                c_bond1, c_bond2 = st.columns([2, 1.2])
-                
-                with c_bond1:
-                    # --- GRAFIC CU ZOOM DINAMIC ---
-                    fig_bonds = go.Figure()
-                    
-                    # Linia principală
-                    fig_bonds.add_trace(go.Scatter(
-                        x=ratio_series.index, y=ratio_series.values, 
-                        mode='lines', name='Raport HYG/IEF', 
-                        line=dict(color='#BF91FF', width=2.5),
-                        fill='tozeroy', fillcolor='rgba(191, 145, 255, 0.05)'
-                    ))
-                    
-                    # Adăugăm media mobilă pentru a vedea trendul
-                    fig_bonds.add_trace(go.Scatter(
-                        x=ratio_series.index, y=ratio_series.rolling(macro_calc.CREDIT_SMA_DAYS).mean(), 
-                        mode='lines', name=f'Trend (SMA {macro_calc.CREDIT_SMA_DAYS})', 
-                        line=dict(color='rgba(255, 255, 255, 0.3)', dash='dot')
-                    ))
-
-                    # TRUCUL PENTRU VIZIBILITATE: Zoom pe axa Y
-                    y_min = ratio_series.min() * 0.99  # Luăm valoarea minimă și mai scădem 1%
-                    y_max = ratio_series.max() * 1.01  # Luăm valoarea maximă și mai adăugăm 1%
-
-                    fig_bonds.update_layout(
-                        height=350, margin=dict(l=0, r=0, t=10, b=0), 
-                        template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                        yaxis=dict(
-                            showgrid=True, gridcolor='#30363D',
-                            range=[y_min, y_max], # ACEASTA ESTE LINIA CARE FACE ZOOM PE VARIAȚII
-                            fixedrange=False
-                        ),
-                        xaxis=dict(showgrid=False),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
-                    plot_ro(fig_bonds, width='stretch')
-                    
-                with c_bond2:
-                    st.markdown("#### 🌡️ Termometrul Creditării")
-                    st.metric(f"Raport ({selected_period_label})", f"{ro(current_ratio):.3f}", f"{ro(total_change):+.2f}%")
-                    
-                    # Aceeași regulă ca pilonul din verdict: sub −1% față de SMA 50 = retragere; peste +1% = apetit; între = neutru
-                    if credit_pillar["score"] is None:
-                        st.info(f"ℹ️ Interpretarea cere {macro_calc.CREDIT_SMA_DAYS} de ședințe de istoric HYG/IEF: N/A.")
-                    elif credit_pillar["score"] == 0:
-                        st.warning(f"🚨 **RETRAGERE DIN RISC:** {credit_pillar['detail']}. Banii ies din obligațiunile firmelor și intră în titluri de stat.")
-                    elif credit_pillar["score"] == 100:
-                        st.success(f"✅ **APETIT PENTRU RISC:** {credit_pillar['detail']}. Piața de credit susține evaluările acțiunilor.")
-                    else:
-                        st.info(f"⚖️ **NEUTRU:** {credit_pillar['detail']} (în banda ±1%).")
-                    st.caption("Aceeași regulă ca pilonul „Piața de credit” din verdictul de sus (prag orientativ, netestat). "
-                               "HYG/IEF e un proxy; spread-ul de credit măsurat direct e în „Stresul pieței”.")
-                        
-                    st.info(f"💡 **Interpretare:** În intervalul de **{selected_period_label}**, linia s-a mișcat cu **{ro(total_change):+.2f}%**. Orice pantă bruscă în jos pe grafic indică faptul că băncile devin nervoase.")
-            else:
-                st.info("Sincronizare date obligațiuni...")
-        
+        # „Radar de Risc Sistemic” (HYG/IEF) a fost scos (05.11, decizia lui Daniel): graficul HYG/IEF cu regula
+        # pilonului și spread-urile de credit sunt acum în „Stresul pieței”.
         # =================================================================
         # MODUL NOU: MATRICEA CROSS-ASSET (CORELAȚII MACRO)
         # =================================================================
