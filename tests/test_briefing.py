@@ -184,3 +184,62 @@ def test_un_singur_simbol_cu_rand_nou_nu_muta_sedinta():
     assert session_date(close) == pd.Timestamp("2026-11-05")             # 3 din 10 ≥ 20%
     assert session_date(pd.DataFrame()) is None
 
+
+
+# --- Etapa C: Europa în lei și sectoarele SUA (valori calculate de mână) ---------------------------------------------
+from analytics.briefing import (quote_currency, with_ron_value, close_in_ron, liquidity_top_ron, sector_moves,
+                                US_SECTOR_ETFS)
+
+
+def test_moneda_dupa_sufix():
+    assert quote_currency("SAP.DE") == "EUR" and quote_currency("MC.PA") == "EUR" and quote_currency("UCG.MI") == "EUR"
+    assert quote_currency("SHEL.L") == "GBp"          # Londra în pence
+    assert quote_currency("NESN.SW") == "CHF"
+    assert quote_currency("AAPL") == "USD" and quote_currency("TLV.RO") == "RON"
+    assert quote_currency("X.ZZ") is None             # sufix necunoscut: nu se ghicește
+
+
+def test_valoare_in_lei_si_top_lichiditate():
+    t = pd.DataFrame({"value": [1_000_000.0, 50_000_000.0, 2_000.0, 5.0],
+                      "traded": [True, True, True, False]},
+                     index=["SAP.DE", "SHEL.L", "X.ZZ", "MC.PA"])
+    # 1 EUR = 5,0 lei; 1 GBp = 5,8 / 100 = 0,058 lei; X.ZZ fără curs
+    rates = {"SAP.DE": 5.0, "SHEL.L": 0.058, "MC.PA": 5.0}
+    r = with_ron_value(t, rates)
+    assert r.loc["SAP.DE", "value_ron"] == pytest.approx(5_000_000.0)
+    assert r.loc["SHEL.L", "value_ron"] == pytest.approx(2_900_000.0)   # 50 mil. pence = 500.000 £ × 5,8
+    assert pd.isna(r.loc["X.ZZ", "value_ron"])                          # lipsă, nu 0
+    assert list(r["currency"]) == ["EUR", "GBp", None, "EUR"]
+    top = liquidity_top_ron(r, n=10)
+    assert list(top.index) == ["SAP.DE", "SHEL.L"]                      # MC.PA netranzacționat, X.ZZ fără lei
+
+
+def test_inchideri_in_lei_pentru_valoarea_tranzactionata():
+    idx = pd.to_datetime(["2026-11-03", "2026-11-04"])
+    close = pd.DataFrame({"A.DE": [10.0, 11.0], "B.L": [1000.0, 1000.0], "C.ZZ": [1.0, 1.0]}, index=idx)
+    vol = pd.DataFrame({"A.DE": [100.0, 100.0], "B.L": [10.0, 20.0], "C.ZZ": [5.0, 5.0]}, index=idx)
+    c, dropped = close_in_ron(close, {"A.DE": 5.0, "B.L": 0.058})
+    assert dropped == ["C.ZZ"] and list(c.columns) == ["A.DE", "B.L"]
+    r = turnover_vs_median(c, vol, min_obs=1)
+    # 04.11: 11 × 5 × 100 + 1000 × 0,058 × 20 = 5.500 + 1.160 = 6.660 lei; 03.11: 5.000 + 580 = 5.580
+    assert r["today"] == pytest.approx(6_660.0)
+    assert r["median"] == pytest.approx(5_580.0)
+
+
+def test_sectoare_fata_de_indice():
+    idx = pd.to_datetime(["2026-11-03", "2026-11-04"])
+    close = pd.DataFrame({"XLK": [100.0, 102.0], "XLE": [50.0, 49.0], "XLU": [80.0, np.nan]}, index=idx)
+    vol = pd.DataFrame(1000.0, index=idx, columns=close.columns)
+    spx = pd.Series([6000.0, 6030.0], index=idx)           # +0,5%
+    df, session = sector_moves(close, vol, spx)
+    assert session == pd.Timestamp("2026-11-04")
+    assert list(df.index) == ["XLK", "XLE", "XLU"]          # XLU fără preț în ședință → la coadă
+    assert df.loc["XLK", "pct"] == pytest.approx(0.02)
+    assert df.loc["XLK", "vs_index_pp"] == pytest.approx(1.5)   # 2,0% − 0,5%
+    assert df.loc["XLE", "vs_index_pp"] == pytest.approx(-2.5)  # −2,0% − 0,5%
+    assert df.loc["XLK", "name"] == "Tehnologie"
+    assert pd.isna(df.loc["XLU", "pct"]) and not bool(df.loc["XLU", "traded"])
+    # indicele fără preț în ziua ședinței → fără comparație
+    df2, _ = sector_moves(close, vol, spx.iloc[:1])
+    assert df2["vs_index_pp"].isna().all()
+    assert len(US_SECTOR_ETFS) == 11

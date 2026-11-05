@@ -2023,6 +2023,9 @@ BRIEFING_US_INDICES = ["^GSPC", "^IXIC", "^DJI"]
 # Universul SUA urmărit (lista unică: tools/univers_urmarit_sua.txt, prin data/universes.py; nu S&P 500).
 BRIEFING_US_UNIVERSE = universes.symbols("us")
 BRIEFING_BET_PROXY = "TVBETETF.RO"
+# Etapa C: indicii Europei (cardurile tabului Europa) și ETF-urile sectoriale SPDR (Wall Street). Nu intră în lățime și topuri.
+BRIEFING_EU_INDICES = ["^STOXX", "^GDAXI", "^FCHI", "^FTSE"]
+BRIEFING_US_SECTORS = ["XLK", "XLC", "XLY", "XLP", "XLF", "XLV", "XLI", "XLE", "XLB", "XLU", "XLRE"]
 
 
 def briefing_bvb_universe():
@@ -2038,16 +2041,18 @@ def briefing_bvb_sections():
 @st.cache_data(ttl=900, show_spinner=False)
 def get_daily_briefing_data():
     """Închiderile NEAJUSTATE și volumele pe ~6 luni (Yahoo), pentru Rezumatul Zilei: dict bvb_close, bvb_volume
-    (universul BVB + ETF-ul BET), us_close, us_volume (universul SUA + indicii). Prețul neajustat dă variația zilei
-    cum o raportează bursa; 6 luni ajung pentru σ pe 60 de ședințe. Fără niciun preț → excepție (nu intră în cache)."""
+    (universul BVB + ETF-ul BET), us_close, us_volume (universul SUA + indicii + ETF-urile sectoriale), eu_close,
+    eu_volume (universul Europa + indicii). Prețul neajustat dă variația zilei cum o raportează bursa; 6 luni ajung
+    pentru σ pe 60 de ședințe. Fără niciun preț → excepție (nu intră în cache)."""
     out = {}
     for key, syms in (("bvb", briefing_bvb_universe() + [BRIEFING_BET_PROXY]),
-                      ("us", BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES)):
+                      ("us", BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES + BRIEFING_US_SECTORS),
+                      ("eu", universes.symbols("eu") + BRIEFING_EU_INDICES)):
         _yf_limiter.wait_if_needed()
         raw = yf.download(syms, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
         out[f"{key}_close"] = close_frame(raw, syms)
         out[f"{key}_volume"] = field_frame(raw, "Volume", syms)
-    if out["bvb_close"].empty and out["us_close"].empty:
+    if out["bvb_close"].empty and out["us_close"].empty and out["eu_close"].empty:
         raise ValueError("Yahoo: nicio închidere pentru Rezumatul Zilei")
     return out
 
@@ -7086,13 +7091,18 @@ def main():
                        + ". Nemodificat = variație exact 0.")
 
         def _moves_table(df, currency, show_value=True):
-            unit = " lei" if currency == "RON" else f" {currency}"
-            rate = pday_calc.rate_for(currency, rz_fx)   # valoarea tranzacționată în lei (prețul rămâne în moneda bursei)
+            # currency=None (Europa): moneda pe rând (df["currency"]) și valoarea deja în lei (df["value_ron"])
+            mixed = currency is None
+            unit = "" if mixed else (" lei" if currency == "RON" else f" {currency}")
+            rate = None if mixed else pday_calc.rate_for(currency, rz_fx)   # valoarea în lei (prețul rămâne în moneda bursei)
+            values_ron = (list(df["value_ron"]) if mixed else
+                          [v * rate if (rate is not None and v is not None and pd.notna(v)) else None for v in df["value"]])
             view = pd.DataFrame({
                 "Simbol": [s.replace(".RO", "") for s in df.index], "Preț": df["close"].values,
+                **({"Monedă": [c or "N/A" for c in df["currency"]]} if mixed else {}),
                 "Variație": (df["pct"] * 100).values, "σ": df["sigma"].values,
-                **({"Valoare": [briefing_calc.money_short(v * rate if (rate is not None and v is not None and pd.notna(v)) else None, "RON")
-                                for v in df["value"]]} if show_value else {}),
+                **({"Valoare": [briefing_calc.money_short(v if (v is not None and pd.notna(v)) else None, "RON")
+                                for v in values_ron]} if show_value else {}),
             })
             color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
             st.dataframe(
@@ -7120,11 +7130,14 @@ def main():
         _rz_sessions = {}
         if brief is not None:
             _rz_sessions["bvb"] = briefing_calc.session_date(brief["bvb_close"].drop(columns=[BRIEFING_BET_PROXY], errors="ignore"))
-            _rz_sessions["us"] = briefing_calc.session_date(brief["us_close"].drop(columns=BRIEFING_US_INDICES, errors="ignore"))
+            _rz_sessions["us"] = briefing_calc.session_date(brief["us_close"].drop(columns=BRIEFING_US_INDICES + BRIEFING_US_SECTORS,
+                                                                                   errors="ignore"))
+            if not brief["eu_close"].empty:      # Europa: din universul urmărit (79), nu doar din deținerile tale
+                _rz_sessions["eu"] = briefing_calc.session_date(brief["eu_close"].drop(columns=BRIEFING_EU_INDICES, errors="ignore"))
         rz_fx, rz_fx_dates = rezumat_fx()          # toate sumele din Rezumatul Zilei în lei, la cursul BNR
         render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates)
 
-        tab_bvb, tab_us = st.tabs(["🇷🇴 BVB", "🇺🇸 Wall Street"])
+        tab_bvb, tab_eu, tab_us = st.tabs(["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street"])
 
         # === BVB ===
         with tab_bvb:
@@ -7232,12 +7245,128 @@ def main():
             if not _news_list(unique_ro_news[:5], "source"):
                 st.info("Nu s-au găsit știri locale recente.")
 
+        # === EUROPA (etapa C): toate sumele în lei la cursul BNR; prețurile în moneda bursei ===
+        with tab_eu:
+            if brief is None or brief["eu_close"].empty:
+                st.info("Cotațiile Europa nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
+            else:
+                eu_cols = [c for c in brief["eu_close"].columns if c not in BRIEFING_EU_INDICES]
+                eu_close, eu_vol = brief["eu_close"][eu_cols], brief["eu_volume"].reindex(columns=eu_cols)
+                eu_t, eu_session = briefing_calc.session_table(eu_close, eu_vol)
+                _session_header("XETRA", "Europa (reper: XETRA)", eu_session)
+                i_cols = st.columns(4)
+                for col, (sym, name, kind) in zip(i_cols, (("^STOXX", "STOXX Europe 600", "indice de preț"),
+                                                           ("^GDAXI", "DAX", "indice de performanță (cu dividendele reinvestite)"),
+                                                           ("^FCHI", "CAC 40", "indice de preț"),
+                                                           ("^FTSE", "FTSE 100", "indice de preț"))):
+                    mv = briefing_calc.daily_move(brief["eu_close"].get(sym))
+                    col.metric(name, "N/A" if mv["last"] is None else format_ro(mv["last"], 2),
+                               None if mv["pct"] is None else f"{_pct(mv['pct'])} · {_sig(mv['sigma'])}",
+                               help=briefing_calc.sigma_label(mv["sigma"]).capitalize()
+                                    + f". σ față de ultimele {mv['n']} ședințe. {kind.capitalize()}."
+                                    + (f" Ultima cotație: {mv['date']:%d.%m.%Y}." if mv["date"] is not None else ""))
+
+                eu_rates = {s: pday_calc.rate_for(briefing_calc.quote_currency(s), rz_fx) for s in eu_cols}
+                eu_t = briefing_calc.with_ron_value(eu_t, eu_rates)
+                eu_close_ron, eu_no_fx = briefing_calc.close_in_ron(eu_close, eu_rates)
+                eu_turn = briefing_calc.turnover_vs_median(eu_close_ron, eu_vol.reindex(columns=eu_close_ron.columns))
+                eu_b = briefing_calc.breadth_counts(eu_t)
+                eu_cur = sorted({c for c in (briefing_calc.quote_currency(s) for s in eu_cols) if c})
+
+                def _eu_fx(c):
+                    base = "GBP" if c in pday_calc.PENCE_CODES else c
+                    r = pday_calc.rate_for(c, rz_fx)
+                    if not r:
+                        return f"{c}: curs indisponibil"
+                    d = rz_fx_dates.get(base)
+                    return (f"1 {c} = {format_ro(r, 4)} lei" + (" (GBP ÷ 100)" if base != c else "")
+                            + (f", {d:%d.%m.%Y}" if d is not None else ""))
+
+                eu_fx_txt = "; ".join(_eu_fx(c) for c in eu_cur)
+                m1, m2 = st.columns(2)
+                m1.metric("Lățime (cresc / scad)", f"{eu_b['up']} / {eu_b['down']}" if eu_b["n"] else "N/A",
+                          help="Companiile din universul urmărit (tools/univers_urmarit_ue.txt: DAX 40, CAC 40, Londra, "
+                               "Milano) care au tranzacționat în ultima ședință.")
+                m2.metric("Valoare tranzacționată (universul urmărit)", briefing_calc.money_short(eu_turn["today"], "RON"),
+                          None if eu_turn["ratio"] is None else f"×{format_ro(eu_turn['ratio'], 2)} față de mediană",
+                          delta_color="off",
+                          help="Preț × volum pe universul urmărit în ultima ședință, fiecare titlu în lei la cursul BNR al "
+                               f"monedei lui ({eu_fx_txt}), față de mediana celor {eu_turn['n']} ședințe dinainte (minimum 10; "
+                               "același curs pe toate ședințele, deci raportul nu depinde de curs). Doar universul, nu toată bursa.")
+                if eu_no_fx:
+                    st.caption("Fără curs BNR, excluse din sumele în lei: " + ", ".join(eu_no_fx) + ".")
+
+                st.markdown("#### 🎯 Regimul STOXX 600 (regula „Moment”)")
+                _regime_metrics("^STOXX", "STOXX 600")
+                st.markdown("---")
+                st.markdown("#### ⚖️ Lățimea pieței")
+                eu_universe = universes.symbols("eu")
+                eu_missing = briefing_calc.missing_symbols(eu_universe, eu_t)
+                _breadth_bar(eu_b, f"Universul urmărit Europa ({len(eu_universe)} simboluri, {len(eu_t)} cu date Yahoo)")
+                st.caption("Ședința e ultima zi cu preț la cel puțin 20% din titluri. Bursele au sărbători diferite (Londra, "
+                           "de exemplu): într-o zi închisă doar acolo, titlurile ei apar fără tranzacții și ies din calcule.")
+                if eu_missing:
+                    st.caption(f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(eu_missing)}), excluse din toate calculele: "
+                               + ", ".join(eu_missing) + ".")
+                st.markdown("---")
+                eu_up, eu_down = briefing_calc.top_moves(eu_t, n=briefing_calc.TOP_N)
+                st.caption("Topurile: fără prag de valoare (toate titlurile sunt componente ale indicilor mari; decizia din "
+                           "05.11.2026). Prețul în moneda bursei (Londra în pence, GBp); valoarea în lei.")
+                c_eu1, c_eu2 = st.columns(2)
+                with c_eu1:
+                    st.markdown(f"**🚀 Top {briefing_calc.TOP_N} creșteri (universul urmărit)**")
+                    if eu_up is not None and not eu_up.empty:
+                        _moves_table(eu_up, None)
+                    else:
+                        st.info("Nicio creștere în ultima ședință.")
+                with c_eu2:
+                    st.markdown(f"**🔻 Top {briefing_calc.TOP_N} scăderi (universul urmărit)**")
+                    if eu_down is not None and not eu_down.empty:
+                        _moves_table(eu_down, None)
+                    else:
+                        st.info("Nicio scădere în ultima ședință.")
+                st.markdown("---")
+                st.subheader("📊 Top lichiditate (valoare tranzacționată, în lei)")
+                eu_liq = briefing_calc.liquidity_top_ron(eu_t, n=10)
+                if eu_liq is not None and not eu_liq.empty:
+                    _moves_table(eu_liq, None)
+                else:
+                    st.info("Nicio companie din univers nu a tranzacționat în ultima ședință.")
+                eu_full = briefing_calc.full_table(eu_t, universes.sections("eu"))
+                if eu_full is not None and not eu_full.empty:
+                    tr = eu_full["traded"].astype(bool)
+                    with st.expander(f"📋 Toate companiile urmărite ({len(eu_full)}; {int(tr.sum())} tranzacționate în ședință)"):
+                        st.caption("La titlurile fără tranzacții în ultima ședință variația, σ și valoarea sunt N/A, iar "
+                                   "„Ultima cotație” arată data ultimului preț din Yahoo.")
+                        fv = text_frame(pd.DataFrame({
+                            "Piață": eu_full["section"].fillna("N/A").values,
+                            "Simbol": list(eu_full.index),
+                            "Preț": eu_full["close"].values,
+                            "Monedă": [c or "N/A" for c in eu_full["currency"]],
+                            "Variație": (eu_full["pct"] * 100).where(tr).values,
+                            "σ": eu_full["sigma"].where(tr).values,
+                            "Valoare": [briefing_calc.money_short(v, "RON") if (t and pd.notna(v)) else "N/A"
+                                        for v, t in zip(eu_full["value_ron"], tr)],
+                            "Ultima cotație": [d.strftime("%d.%m.%Y") for d in eu_full["date"]],
+                        }), {"Preț": lambda v: format_ro(v, 2),
+                             "Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
+                             "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ")})
+                        s_color = lambda v: ("color: #3FB950" if str(v).startswith("+") and str(v) != "+0,00%"
+                                             else "color: #F85149" if str(v).startswith("-") else "")
+                        st.dataframe(fv.style.map(s_color, subset=["Variație"]), width='stretch', hide_index=True,
+                                     height=min(38 + 35 * len(fv), 600),
+                                     column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a "
+                                                                                      "variațiilor din ultimele 60 de ședințe "
+                                                                                      "(fără ziua curentă; minimum 20)."),
+                                                    "Valoare": st.column_config.Column(help="Preț × volum în ședință, în lei la cursul BNR."),
+                                                    "Piață": st.column_config.Column(help="Secțiunea din tools/univers_urmarit_ue.txt.")})
+
         # === SUA ===
         with tab_us:
             if brief is None or brief["us_close"].empty:
                 st.info("Cotațiile SUA nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
             else:
-                us_cols = [c for c in brief["us_close"].columns if c not in BRIEFING_US_INDICES]
+                us_cols = [c for c in brief["us_close"].columns if c not in BRIEFING_US_INDICES + BRIEFING_US_SECTORS]
                 us_t, us_session = briefing_calc.session_table(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
                 _session_header("NYSE", "Wall Street", us_session)
                 i_cols = st.columns(3)
@@ -7294,6 +7423,40 @@ def main():
                 st.markdown("---")
                 st.markdown("#### 🎯 Regimul S&P 500 (regula „Moment”)")
                 _regime_metrics("^GSPC", "S&P 500")
+
+                st.markdown("---")
+                st.markdown("#### 🧩 Sectoarele S&P 500 (ETF-urile SPDR, o zi)")
+                sec_cols = [s for s in BRIEFING_US_SECTORS if s in brief["us_close"].columns]
+                if sec_cols:
+                    sec_df, sec_session = briefing_calc.sector_moves(brief["us_close"][sec_cols],
+                                                                     brief["us_volume"].reindex(columns=sec_cols),
+                                                                     brief["us_close"].get("^GSPC"))
+                    sv = text_frame(pd.DataFrame({
+                        "Sector": sec_df["name"].values, "ETF": list(sec_df.index),
+                        "Variație": (sec_df["pct"] * 100).values, "σ": sec_df["sigma"].values,
+                        "Față de S&P 500": sec_df["vs_index_pp"].values,
+                    }), {"Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
+                         "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ"),
+                         "Față de S&P 500": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, " pp")})
+                    s_color = lambda v: ("color: #3FB950" if str(v).startswith("+") and not str(v).startswith("+0,00")
+                                         else "color: #F85149" if str(v).startswith("-") else "")
+                    st.dataframe(sv.style.map(s_color, subset=["Variație", "Față de S&P 500"]), width='stretch', hide_index=True,
+                                 column_config={
+                                     "Variație": st.column_config.Column(help="Față de închiderea precedentă, preț neajustat: în ziua "
+                                                                              "ex-dividend scăderea include dividendul."),
+                                     "σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice ale "
+                                                                       "ETF-ului din ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
+                                                                       "Peste 2σ = mișcare neobișnuită pentru sector (prag netestat)."),
+                                     "Față de S&P 500": st.column_config.Column(help="Variația ETF-ului minus variația S&P 500 în "
+                                                                                     "aceeași ședință, în puncte procentuale. Pozitiv = "
+                                                                                     "sectorul a făcut mai bine decât indicele.")})
+                    if sec_session is not None and us_session is not None and pd.Timestamp(sec_session) != pd.Timestamp(us_session):
+                        st.caption(f"Atenție: ultima ședință a ETF-urilor sectoriale ({pd.Timestamp(sec_session):%d.%m.%Y}) diferă "
+                                   "de cea a universului.")
+                    st.caption("Cele 11 ETF-uri SPDR Select Sector, câte unul pe sector GICS din S&P 500 (ponderate cu "
+                               "capitalizarea). Sortate după variația zilei.")
+                else:
+                    st.info("ETF-urile sectoriale nu au putut fi citite acum de la Yahoo.")
 
                 st.markdown("---")
                 us_up, us_down = briefing_calc.top_moves(us_t, n=briefing_calc.TOP_N)
