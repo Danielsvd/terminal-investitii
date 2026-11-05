@@ -60,7 +60,7 @@ from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_li
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data import bnr as bnr_data
-from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html
+from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html, text_frame
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -5879,11 +5879,12 @@ def main():
         with st.spinner("Calculăm randamentul profiturilor..."):
             erp_rows = get_equity_risk_rows()
         pc2 = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.2f}%"
+        # Text gata formatat: st.dataframe arată celulele nule ca „None” chiar cu Styler.format(na_rep=...).
         st.dataframe(
-            pd.DataFrame([{"Piață": r["Piață"], "Randamentul profiturilor (E/P)": r["ep"], "Titluri de stat 10 ani": r["bond"],
-                           "Prima de risc (pp)": r["gap"], "Bază": r["Bază"]} for r in erp_rows]).style.format({
+            text_frame(pd.DataFrame([{"Piață": r["Piață"], "Randamentul profiturilor (E/P)": r["ep"], "Titluri de stat 10 ani": r["bond"],
+                                      "Prima de risc (pp)": r["gap"], "Bază": r["Bază"]} for r in erp_rows]), {
                 "Randamentul profiturilor (E/P)": pc2, "Titluri de stat 10 ani": pc2,
-                "Prima de risc (pp)": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}"}, na_rep="N/A"),
+                "Prima de risc (pp)": lambda v: f"{ro(v):+.2f}"}),
             hide_index=True, width='stretch',
             column_config={
                 "Randamentul profiturilor (E/P)": st.column_config.Column(help="Profitul pe acțiune ÷ prețul = inversul P/E. "
@@ -6660,12 +6661,13 @@ def main():
                 for c, u in zip(df_fx["Cod"], df_fx["Unitate"])])
             df_fx["Unitate"] = [f"{u} {c}" if c != "XAU" else "1 g" for u, c in zip(df_fx["Unitate"], df_fx["Cod"])]
             pct_fmt = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}%"
+            # Text gata formatat: st.dataframe arată celulele nule ca „None” chiar cu Styler.format(na_rep=...).
             st.dataframe(
-                df_fx.drop(columns=["Cod"]).style.format({
+                text_frame(df_fx.drop(columns=["Cod"]), {
                     "Curs BNR": lambda v: format_ro(v, 4), "Live (Yahoo)": lambda v: format_ro(v, 4),
-                    "Data": lambda d: "N/A" if d is None or pd.isna(d) else f"{d:%d.%m.%Y}",
+                    "Data": lambda d: f"{d:%d.%m.%Y}",
                     "Zi %": pct_fmt, "1 lună %": pct_fmt, "De la 1 ian. %": pct_fmt, "1 an %": pct_fmt,
-                }, na_rep="N/A"),
+                }),
                 width='stretch', hide_index=True,
                 column_config={
                     "Unitate": st.column_config.Column(help="Câți lei costă această cantitate de valută (cum publică BNR: 100 de unități la yen și forint)."),

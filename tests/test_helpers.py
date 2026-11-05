@@ -291,3 +291,16 @@ def test_md_bold_html():
     assert md_bold_html("**A** și **B**") == "<b>A</b> și <b>B</b>"
     assert md_bold_html("P/E < 15 & **ok**") == "P/E &lt; 15 &amp; <b>ok</b>"
     assert md_bold_html("fără bold") == "fără bold"
+
+
+def test_text_frame_lipsa_devine_na_si_restul_formatat():
+    import numpy as np
+    import pandas as pd
+    from data.helpers import text_frame, format_ro
+    df = pd.DataFrame({"Piață": ["BVB", "S&P 500"], "ep": [7.1234, None], "gap": [np.nan, 1.5], "x": [1, 2]})
+    out = text_frame(df, {"ep": lambda v: f"{format_ro(v)}%", "gap": lambda v: format_ro(v), "lipsa": str})
+    assert out["ep"].tolist() == ["7,12%", "N/A"]
+    assert out["gap"].tolist() == ["N/A", "1,50"]
+    assert out["x"].tolist() == [1, 2]            # coloană neformatată: neschimbată
+    assert df["ep"].iloc[1] is None or pd.isna(df["ep"].iloc[1])   # originalul nu e modificat
+    assert "lipsa" not in out.columns
