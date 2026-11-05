@@ -777,8 +777,17 @@ def main():
             print("Sectoare SUA:", sect.head(3).values.tolist())
             # etapa D: evenimentele de azi/mâine și știrile despre pozițiile din registru
             md = " ".join(str(e.value) for e in at.markdown)
-            assert "Evenimente și știri" in md and "Calendar macro SUA, azi și mâine" in md, "lipsește secțiunea Evenimente"
-            assert "Știri despre acțiunile tale" in md, "lipsesc știrile pe poziții"
+            # după 05.11 seara: calendarul pe un rând sus, toate știrile în tabul „📰 Știri”
+            assert "Calendar macro SUA:" in md, "lipsește rândul cu calendarul"
+            assert "Evenimente și știri" not in md, "secțiunea veche de știri e încă sus"
+            subs = [str(e.value) for e in at.subheader]
+            assert any("Despre acțiunile tale" in x for x in subs), subs
+            i_own = next(i for i, x in enumerate(subs) if "Despre acțiunile tale" in x)
+            i_ro = next(i for i, x in enumerate(subs) if "Top 5 știri financiare (România)" in x)
+            i_us = next(i for i, x in enumerate(subs) if "Top 10 știri Wall Street" in x)
+            assert i_own < i_ro < i_us, "ordinea din tabul Știri"
+            assert len([x for x in subs if "Top 5 știri financiare (România)" in x]) == 1, "știrile RO apar de două ori"
+            assert len(at.tabs) >= 4 and [t.label for t in at.tabs][-4:] == ["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street", "📰 Știri"], [t.label for t in at.tabs]
             # etapa E: „3 lucruri de știut azi”, sus, din reguli; în smoke există P/L, deci primul rând e portofoliul
             assert "3 lucruri de știut azi" in md, "lipsește „3 lucruri de știut azi”"
             box = next(str(e.value) for e in at.markdown if "<b>1.</b>" in str(e.value))
@@ -786,8 +795,7 @@ def main():
             print("3 lucruri:", box[:600])
             badges = [str(e.value) for e in at.markdown if "background:#21262D" in str(e.value)]
             assert badges and "TLV" in badges[0] and "<b>" not in badges[0], "știrile pe poziții: lipsă sau HTML neescapat"
-            print("Evenimente:", [str(e.value)[:90] for e in at.markdown if str(e.value).startswith(("- **Azi", "- **Mâine", "Azi și mâine", "Nicio publicare"))],
-                  [str(e.value)[:90] for e in at.info if "știre" in str(e.value)])
+            print("Calendar:", [str(e.value)[:120] for e in at.markdown if "Calendar macro SUA:" in str(e.value)])
         if section == "5. Import Date":
             # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
             frames = [getattr(d.value, "data", d.value) for d in at.dataframe]
