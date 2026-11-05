@@ -59,6 +59,9 @@ SNO.RO
 ALU.RO
 TBK.RO
 RMAH.RO
+# din lista veche a Rezumatului / Scanner-ului (în afara BET Plus)
+BIO.RO
+EBS.RO
 
 # == Principală – SIF (BET-FI) ==
 LION.RO
