@@ -31,9 +31,11 @@ def get_finbert_pipeline():
 
 def analyze_sentiment_ai(news_list):
     """
-    Calculează scorul general (Barometrul) folosind FinBERT.
+    Calculează scorul general (Barometrul) folosind FinBERT: media pe primele 10 titluri,
+    +încredere la „positive”, −încredere la „negative”, 0 la „neutral” → între −1 și +1.
+    Fără știri, fără titluri analizate sau la eroare FinBERT → None (lipsă, nu sentiment neutru 0).
     """
-    if not news_list: return 0
+    if not news_list: return None
     try:
         analyzer = get_finbert_pipeline()
         total_score = 0
@@ -49,12 +51,12 @@ def analyze_sentiment_ai(news_list):
                 total_score -= result['score']
             count += 1
             
-        if count == 0: return 0
+        if count == 0: return None
         # Returnăm o medie între -1.0 și 1.0
         return total_score / count
     except Exception as e:
         logger.warning(f"[FinBERT ERROR] la scor general: {e}")
-        return 0
+        return None
 
 # Funcție utilitară pentru a crea un "cheie" de timp (ziua curentă)
 def get_daily_hash():
@@ -180,7 +182,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     # --- STRENGTHS ---
     if h_score is not None and h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
     if (num(info, 'profitMargins') or 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
-    if s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
+    if s_score is not None and s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
     if _altman_distress(z_val): swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")

@@ -4499,7 +4499,7 @@ def main():
                 
                 # Colectare date necesare pentru SWOT
                 c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
-                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
+                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else None   # lipsă ≠ neutru
                 mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if (dcf_calc is not None and dcf_calc > 0) else None
                 z_val_swot = altman_res["zone"]   # zona, nu scorul: pragul depinde de variantă
                 
@@ -4555,7 +4555,9 @@ def main():
                         s_score = analyze_sentiment_ai(c_news_ai)
                         
                         # --- LOGICĂ EXTINSĂ PE 5 PRAGURI ---
-                        if s_score >= 0.25:
+                        if s_score is None:      # FinBERT indisponibil: fără scor, nu 0 „neutru”
+                            c_ai, status_text = "#8B949E", "Indisponibil: FinBERT nu a putut analiza știrile"
+                        elif s_score >= 0.25:
                             c_ai, status_text = "#3FB950", "🚀 Euforie media"
                         elif s_score >= 0.05:
                             c_ai, status_text = "#3FB950", "📈 Optimism moderat"
@@ -4571,7 +4573,7 @@ def main():
                         
                         st.markdown(f"""
                         <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {c_ai}; text-align:center;'>
-                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{ro(s_score):.2f}</h1>
+                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{"N/A" if s_score is None else f"{ro(s_score):.2f}"}</h1>
                             <div style='color:{c_ai}; font-weight:bold; font-size:18px; margin-top:5px;'>{status_text}</div>
                             <p style='color:#8B949E; font-size:11px; margin-top:10px;'>Încredere Model: {confidence} ({len(c_news_ai)} surse)</p>
                         </div>
@@ -5057,7 +5059,10 @@ def main():
                     from ai_engine import analyze_sentiment_ai
                     s_score = analyze_sentiment_ai(c_news_ai)
                     
-                    if s_score > 0.15:
+                    if s_score is None:
+                        bullets.append({"icon": "➡️", "color": "#8B949E",
+                                        "text": "Sentimentul știrilor nu a putut fi calculat acum (FinBERT indisponibil)."})
+                    elif s_score > 0.15:
                         text_news = f"Sentimentul media general este optimist. Atenția presei este captată de evoluții pozitive, un catalizator recent fiind: «{top_news}»."
                         bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_news})
                     elif s_score < -0.15:
