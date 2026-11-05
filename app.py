@@ -3820,7 +3820,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
-                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
+                    st.dataframe(e_disp.style.map(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
                 else: st.info("Date earnings indisponibile.")
             
             # --- MODUL NOU: ANALIZA VOLUMULUI INSTITUȚIONAL ---
@@ -5132,7 +5132,7 @@ def main():
             st.info("Nu există acțiuni sau ETF-uri deschise în registrul `Tranzactii` (sau registrul nu a putut fi citit).")
         else:
             st.markdown("### Perioadă Analiză")
-            hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
+            hist_range = st.select_slider("Perioadă analiză", label_visibility="collapsed", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
             
             tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
             # Registrul, pentru performanța reală pe monedă (citirea foii e în cache)
@@ -6060,7 +6060,7 @@ def main():
             
             st.markdown("##### 2. Perioadă:")
             # Slider pentru timp
-            time_frame = st.select_slider("", options=["1L", "3L", "6L", "1A", "3A", "5A"], value="1A")
+            time_frame = st.select_slider("Perioadă", label_visibility="collapsed", options=["1L", "3L", "6L", "1A", "3A", "5A"], value="1A")
 
         # --- 2. PROCESARE DATE ---
         with c_sel2:
