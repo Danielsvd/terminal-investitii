@@ -754,6 +754,19 @@ def main():
                 assert abs(tot_pp - _ro_num(eq_delta.split(" · ")[1])) <= 0.011 * len(ok_rows), (tot_pp, eq_delta)
             # Wall Street: valoarea tranzacționată în lei (cursul BNR), nu în USD
             assert mets.get("Valoare tranzacționată (universul urmărit)", "").endswith("lei"), mets.get("Valoare tranzacționată (universul urmărit)")
+            # etapa C: tabul Europa (indici, sume în lei, moneda pe rând) și sectoarele SUA (11 ETF-uri SPDR)
+            for lbl in ("STOXX Europe 600", "DAX", "CAC 40", "FTSE 100"):
+                assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
+            vals_ron = [str(m.value) for m in at.metric if m.label == "Valoare tranzacționată (universul urmărit)"]
+            assert len(vals_ron) == 2 and all(v.endswith("lei") for v in vals_ron), vals_ron   # Europa + Wall Street
+            frames_rz = [getattr(d.value, "data", d.value) for d in at.dataframe]
+            eu_tops = [f for f in frames_rz if "Monedă" in getattr(f, "columns", []) and "Valoare" in f.columns]
+            assert eu_tops, "lipsesc topurile Europa"
+            assert all(str(v).endswith("lei") or v == "N/A" for f in eu_tops for v in f["Valoare"]), "valoarea Europa nu e în lei"
+            sect = next((f for f in frames_rz if "Față de S&P 500" in getattr(f, "columns", [])), None)
+            assert sect is not None and len(sect) == 11, "lipsește tabelul sectoarelor SUA"
+            print("Europa, primul top:", eu_tops[0].head(3).values.tolist())
+            print("Sectoare SUA:", sect.head(3).values.tolist())
         if section == "5. Import Date":
             # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
             frames = [getattr(d.value, "data", d.value) for d in at.dataframe]

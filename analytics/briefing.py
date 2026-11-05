@@ -299,3 +299,94 @@ def money_short(value, currency):
     if a >= 1e6:
         return f"{format_ro(value / 1e6, 1)} mil. {unit}"
     return f"{format_ro(value, 0)} {unit}"
+
+
+# --- Etapa C: Europa (valori în lei) și sectoarele SUA ---------------------------------------------------------------
+
+# Moneda cotației Yahoo după sufixul bursei. Londra (.L): Yahoo dă acțiunile în pence (GBp), nu în lire.
+SUFFIX_CURRENCY = {
+    "DE": "EUR", "F": "EUR", "PA": "EUR", "AS": "EUR", "MI": "EUR", "MC": "EUR", "BR": "EUR", "LS": "EUR",
+    "HE": "EUR", "VI": "EUR", "IR": "EUR", "AT": "EUR",
+    "L": "GBp", "SW": "CHF", "ST": "SEK", "CO": "DKK", "OL": "NOK", "WA": "PLN", "PR": "CZK", "BD": "HUF",
+    "RO": "RON",
+}
+
+# Cele 11 ETF-uri sectoriale SPDR (Select Sector), câte unul pe sectorul GICS din S&P 500.
+US_SECTOR_ETFS = {
+    "XLK": "Tehnologie", "XLC": "Comunicații", "XLY": "Consum ciclic", "XLP": "Consum de bază",
+    "XLF": "Financiar", "XLV": "Sănătate", "XLI": "Industrie", "XLE": "Energie", "XLB": "Materiale",
+    "XLU": "Utilități", "XLRE": "Imobiliare",
+}
+
+
+def quote_currency(symbol):
+    """Moneda cotației Yahoo după sufix: `.DE` → EUR, `.L` → GBp (pence), `.SW` → CHF...; fără sufix → USD.
+    Sufix necunoscut → None (valoarea în lei rămâne N/A, nu se ghicește)."""
+    s = str(symbol or "").upper()
+    if "." not in s:
+        return "USD"
+    return SUFFIX_CURRENCY.get(s.rsplit(".", 1)[1])
+
+
+def with_ron_value(table, rates):
+    """Copie a tabelului de ședință cu `currency` (moneda cotației) și `value_ron` = value × cursul simbolului.
+    `rates` = {simbol: lei pentru o unitate din moneda cotației}; fără curs → value_ron None (nu 0)."""
+    if table is None or table.empty:
+        return table
+    t = table.copy()
+    t["currency"] = [quote_currency(s) for s in t.index]
+    vals = []
+    for sym, v in zip(t.index, t["value"]):
+        r = rates.get(sym)
+        vals.append(float(v) * r if (r is not None and v is not None and pd.notna(v)) else None)
+    t["value_ron"] = pd.Series(vals, index=t.index, dtype="float64")
+    return t
+
+
+def close_in_ron(close, rates):
+    """Închiderile înmulțite cu cursul fiecărui simbol (constant: ultimul curs BNR), ca suma preț × volum pe univers
+    să fie în lei și când universul are mai multe monede. Coloanele fără curs se scot: (frame, simboluri scoase).
+    Raportul față de mediană nu depinde de curs (același curs pe toate ședințele)."""
+    c = _clean_frame(close)
+    keep = [col for col in c.columns if rates.get(col) is not None]
+    dropped = [col for col in c.columns if rates.get(col) is None]
+    if not keep:
+        return pd.DataFrame(index=c.index), dropped
+    return c[keep].mul(pd.Series({col: float(rates[col]) for col in keep})), dropped
+
+
+def liquidity_top_ron(table, n=10):
+    """Primele `n` simboluri tranzacționate după valoarea în lei (`value_ron`); fără valoare în lei → excluse."""
+    if table is None or table.empty:
+        return table
+    t = table[table["traded"] & table["value_ron"].notna()]
+    return t.sort_values("value_ron", ascending=False).head(n)
+
+
+def sector_moves(close, volume, index_close, names=None):
+    """Mișcarea zilei pe ETF-urile sectoriale față de indice, în aceeași ședință.
+
+    Întoarce (df, session): df cu index = simbol și coloanele name, pct (fracție), sigma, vs_index_pp (variația
+    ETF-ului − variația indicelui în ziua ședinței, puncte procentuale), traded; sortat după variație descrescător
+    (fără variație la coadă). Indicele fără preț în ziua ședinței → vs_index_pp None."""
+    names = names or US_SECTOR_ETFS
+    t, session = session_table(close, volume)
+    cols = ["name", "pct", "sigma", "vs_index_pp", "traded"]
+    if t is None or t.empty:
+        return pd.DataFrame(columns=cols), session
+    idx = pd.to_numeric(pd.Series(index_close, dtype="float64"), errors="coerce") if index_close is not None else pd.Series(dtype=float)
+    if len(idx) and isinstance(idx.index, pd.DatetimeIndex) and session is not None:
+        ix = idx.index.tz_localize(None) if idx.index.tz is not None else idx.index
+        idx = pd.Series(idx.values, index=ix.normalize())
+        idx = idx[~idx.index.duplicated(keep="last")].sort_index()
+        idx = idx[idx.index <= session]
+    m = daily_move(idx) if len(idx) else {"date": None, "pct": None}
+    ipct = m["pct"] if (m["date"] is not None and session is not None and m["date"] == session) else None
+    out = pd.DataFrame(index=t.index)
+    out["name"] = [names.get(s, s) for s in t.index]
+    out["pct"] = t["pct"].where(t["traded"]).astype("float64")
+    out["sigma"] = t["sigma"].where(t["traded"]).astype("float64")
+    out["vs_index_pp"] = (out["pct"] - ipct) * 100.0 if ipct is not None else np.nan
+    out["traded"] = t["traded"].astype(bool)
+    order = out["pct"].fillna(-np.inf).sort_values(ascending=False, kind="mergesort").index
+    return out.loc[order, cols], session
