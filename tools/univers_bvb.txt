@@ -1,23 +1,102 @@
-# Universul testului istoric pe BVB: companiile lichide. Simbolurile fără date sau cu istoric scurt
-# sunt raportate de script la final. Eșantion mic și corelat (BET e dominat de energie și bănci):
-# rezultatul e orientativ.
+# Universul BVB urmărit: Rezumatul Zilei (topuri, lățime, tabelul complet) și testul istoric (tools/backtest_scor.py).
+# Un simbol pe rând (simbolul Yahoo, cu .RO). „#” începe un comentariu. Rândurile „# == Nume ==” deschid o secțiune
+# (piața), afișată în tabelul complet din Rezumat.
+# Sursa: componența indicilor BET Plus, BET-FI și BETAeRO de pe bvb.ro la 04.11.2026 (Daniel, 05.11.2026: lista mare,
+# piața principală + AeRO). Componența indicilor se schimbă trimestrial: lista NU se actualizează singură.
+# Simbolurile fără date în Yahoo sunt afișate în Rezumat și raportate de testul istoric la final.
+# Atenție la testul istoric: titlurile AeRO au tranzacții rare (prețuri „înghețate” zile la rând), deci momentumul
+# și media pieței sunt mai zgomotoase decât pe universul vechi de 20 de companii lichide.
+
+# == Principală ==
 TLV.RO
-BRD.RO
 SNP.RO
 SNG.RO
-TGN.RO
-SNN.RO
 H2O.RO
+BRD.RO
 EL.RO
-TEL.RO
+TGN.RO
 DIGI.RO
-ONE.RO
 M.RO
-TTS.RO
-BVB.RO
-SFG.RO
+SNN.RO
+TEL.RO
+PE.RO
+FP.RO
+RRC.RO
+ONE.RO
+CFH.RO
 AQ.RO
+EAI.RO
+TTS.RO
+ARS.RO
+BVB.RO
 ATB.RO
-COTE.RO
 TRP.RO
+SFG.RO
+AROBS.RO
+SOCP.RO
+COTE.RO
+ALR.RO
 WINE.RO
+IARV.RO
+IMP.RO
+SMTL.RO
+TRIP.RO
+CMP.RO
+PBK.RO
+OIL.RO
+PREB.RO
+SAFE.RO
+ELMA.RO
+NC.RO
+TBM.RO
+EFO.RO
+BRK.RO
+PTR.RO
+BNET.RO
+ROCE.RO
+ROC1.RO
+SNO.RO
+ALU.RO
+TBK.RO
+RMAH.RO
+
+# == Principală – SIF (BET-FI) ==
+LION.RO
+EVER.RO
+TRANSI.RO
+LONG.RO
+INFINITY.RO
+
+# == AeRO ==
+DN.RO
+CMVX.RO
+FOJE.RO
+EM.RO
+IPRU.RO
+BENTO.RO
+MACO.RO
+CC.RO
+PRSN.RO
+AG.RO
+SCDM.RO
+BUCU.RO
+ASC.RO
+AST.RO
+ALW.RO
+HUNT.RO
+JTG.RO
+NRF.RO
+MILK.RO
+REIT.RO
+HAI.RO
+MIB.RO
+ATRD.RO
+SPX.RO
+AVIO.RO
+CODE.RO
+UNISEM.RO
+CLAIM.RO
+ITG.RO
+2P.RO
+SEVE.RO
+LIH.RO

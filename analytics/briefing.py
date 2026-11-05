@@ -40,6 +40,46 @@ def parse_universe(text):
     return out
 
 
+def universe_sections(text):
+    """{simbol: secțiune} dintr-un fișier de univers. O secțiune începe cu un rând „# == Nume ==”;
+    simbolurile de dinaintea primei secțiuni primesc None. Aceleași reguli de citire ca `parse_universe`."""
+    out, section = {}, None
+    for line in str(text or "").splitlines():
+        raw = line.strip()
+        if raw.startswith("#"):
+            body = raw.lstrip("#").strip()
+            if body.startswith("==") and body.endswith("==") and len(body) > 4:
+                section = body.strip("=").strip() or None
+            continue
+        sym = raw.split("#", 1)[0].strip().upper()
+        if sym and sym not in out:
+            out[sym] = section
+    return out
+
+
+def missing_symbols(universe, table):
+    """Simbolurile din univers care nu au niciun preț în date (lipsesc din `table`), în ordinea universului."""
+    have = set() if table is None else set(table.index)
+    return [s for s in (universe or []) if s not in have]
+
+
+def full_table(table, sections=None):
+    """Toate simbolurile cu date, cu coloana `section` (piața), ordonate pe secțiune (ordinea din fișier),
+    apoi tranzacționate înaintea celor fără tranzacții în ședință, apoi după variație descrescător."""
+    if table is None or table.empty:
+        return table
+    sections = sections or {}
+    order = {}
+    for sec in sections.values():
+        order.setdefault(sec, len(order))
+    t = table.copy()
+    t["section"] = [sections.get(s) for s in t.index]
+    t["_o"] = [order.get(sec, len(order)) for sec in t["section"]]
+    t["_nt"] = ~t["traded"].astype(bool)
+    t["_p"] = -t["pct"].astype("float64").fillna(-np.inf)
+    return t.sort_values(["_o", "_nt", "_p"], kind="mergesort").drop(columns=["_o", "_nt", "_p"])
+
+
 def _clean_frame(frame):
     if frame is None or len(frame) == 0:
         return pd.DataFrame()
