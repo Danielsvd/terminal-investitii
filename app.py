@@ -3097,6 +3097,15 @@ def get_rates_dashboard():
     ]
     return rows
 
+def get_us_curve_history(days=3700):
+    """Panta SUA 10 ani − 3 luni pe ~10 ani (FRED DGS10 − DGS3MO, aceeași zi), pentru graficul din „Dobânzi”.
+    Eroare la oricare serie → serie goală; eșecul nu intră în cache (`_fred_rate_series` aruncă excepția)."""
+    try:
+        return rates_calc.daily_diff(_fred_rate_series("DGS10", days), _fred_rate_series("DGS3MO", days))
+    except Exception as exc:  # rețea / FRED
+        logger.warning("curba SUA istoric: %s", exc)
+        return pd.Series(dtype="float64")
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_vix_curve_closes():
     """Închiderile ^VIX și ^VIX3M pe un an (Yahoo). Fără niciuna → excepție (nu se salvează în cache)."""
@@ -6123,6 +6132,30 @@ def main():
         st.caption("ℹ️ Dobânda de politică monetară a BNR nu are o sursă automată: nu e în tabel. Randamentele RO și DE pe 10 ani sunt seriile lunare "
                    "de convergență (criteriile Maastricht) publicate de BCE.")
 
+        # --- PANTA CURBEI SUA, ISTORIC (graficul pilonului „Curba”; înlocuiește „Early Warning System”) ---
+        st.markdown("**Panta curbei SUA, 10 ani − 3 luni** (istoric; aceeași măsură ca pilonul „Curba” din verdict)")
+        us_curve = get_us_curve_history()
+        cv_sum = rates_calc.curve_inversion_summary(us_curve)
+        if cv_sum is None:
+            st.info("Seriile FRED DGS10 / DGS3MO nu au putut fi citite acum: graficul pantei e N/A.")
+        else:
+            fig_cv = go.Figure(go.Scatter(x=us_curve.index, y=us_curve.values, mode="lines",
+                                          line=dict(color="#3987e5", width=2), name="10 ani − 3 luni",
+                                          hovertemplate="%{x|%d.%m.%Y}: %{y:.2f} pp<extra></extra>"))
+            fig_cv.add_hline(y=0, line=dict(color="#8B949E", dash="dot", width=1))
+            fig_cv.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0), template="plotly_dark",
+                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False,
+                                 yaxis=dict(title="puncte procentuale", gridcolor='#30363D', zeroline=False))
+            plot_ro(fig_cv, width='stretch', key="us_curve_chart")
+            last_inv = ("niciuna în istoricul afișat" if cv_sum["last_inverted"] is None
+                        else f"{cv_sum['last_inverted']:%d.%m.%Y}")
+            st.caption(f"Ultima valoare {ro(cv_sum['value']):+.2f} pp ({cv_sum['date']:%d.%m.%Y}). În ultimele 12 luni curba a fost "
+                       f"inversată în {cv_sum['inverted_window']} din {cv_sum['n_window']} ședințe; ultima zi inversată: {last_inv}. "
+                       "Sub linia punctată (0) curba e inversată: în SUA, inversarea 10 ani − 3 luni a precedat recesiunile din 1969 "
+                       "încoace, cu un decalaj de 6–24 de luni și cel puțin un semnal fals; nu dă momentul. "
+                       f"Sursa: FRED DGS10 − DGS3MO, aceeași zi, din {cv_sum['start']:%m.%Y}. Pilonul din verdict folosește "
+                       "^TNX − ^IRX (Yahoo), deci ultima valoare poate diferi cu câteva sutimi.")
+
         # --- PRIMA DE RISC A ACȚIUNILOR (proxy) ---
         st.markdown("**Acțiunile față de titlurile de stat** (prima de risc a acțiunilor, proxy)")
         with st.spinner("Calculăm randamentul profiturilor..."):
@@ -6214,33 +6247,8 @@ def main():
             get_macro_data_visuals.clear()
             st.rerun()
 
-        # Urmează restul codului tău cu "🚨 Early Warning System..."
-
-        st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-3M)")
-        
-        # Același spread ca în verdict (get_market_curve: ^TNX − ^IRX din aceeași zi); lipsă = N/A, fără valoare de rezervă.
-        spread = curr_yield_spread
-        y_col1, y_col2 = st.columns([1, 2])
-        with y_col1:
-            spread_color = "#8B949E" if spread is None else ("#F85149" if spread < 0 else "#3FB950")
-            spread_txt = "N/A" if spread is None else f"{ro(spread):.3f}"
-            st.markdown(f"""
-                <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {spread_color}; text-align:center;">
-                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">SPREAD 10Y − 3M (puncte procentuale)</p>
-                    <h1 style="color:{spread_color}; margin:10px 0;">{spread_txt}</h1>
-                </div>
-            """, unsafe_allow_html=True)
-        with y_col2:
-            if spread is None:
-                st.info(f"ℹ️ Spread-ul nu poate fi calculat acum: {curve_desc}.")
-            elif spread < 0:
-                st.error(f"⚠️ **CURBĂ INVERSATĂ:** spread {ro(spread):.3f} pp. În SUA, inversarea 10Y − 3M a precedat recesiunile din 1969 încoace, "
-                         "cu un decalaj de 6–24 de luni și cu cel puțin un semnal fals; nu dă momentul.")
-            else:
-                st.success(f"✅ **CURBĂ NORMALĂ:** spread {ro(spread):.3f} pp. Randamentul pe termen lung e peste cel pe termen scurt.")
-            st.caption(f"Sursa: {curve_desc}.")
-
-        # --- AICI CONTINUĂ RESTUL CODULUI TĂU (HARTA, RADAR, MATRICE, TABELE) ---
+        # „Early Warning System” (10 ani − 3 luni) a fost scos (05.11, decizia lui Daniel): valoarea e în pilonul „Curba”,
+        # iar istoricul în graficul pantei din „Dobânzi și risc de țară”.
         st.markdown("---")    
 
         # --- PASUL 1: DESCĂRCARE DATE (Trebuie să fie PRIMUL rând!) ---
