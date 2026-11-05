@@ -99,9 +99,9 @@ async def fetch_ticker_price_async(client, ticker):
             data = response.json()
             price = data['chart']['result'][0]['meta']['regularMarketPrice']
             return ticker, float(price)
-        print(f"DEBUG: preț live {ticker}: HTTP {response.status_code}")
+        logger.warning(f"preț live {ticker}: HTTP {response.status_code}")
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
-        print(f"DEBUG: preț live {ticker} indisponibil: {e}")
+        logger.warning(f"preț live {ticker} indisponibil: {e}")
     return ticker, None
 
 async def get_all_portfolio_prices(tickers):
@@ -118,7 +118,7 @@ def get_fast_live_prices(tickers):
     try:
         return asyncio.run(get_all_portfolio_prices(tickers))
     except (RuntimeError, httpx.HTTPError) as e:
-        print(f"DEBUG: prețuri live indisponibile: {e}")
+        logger.warning(f"prețuri live indisponibile: {e}")
         return {t: None for t in tickers}
 
 # --- 0. CONFIGURARE GLOBALĂ ---
@@ -291,7 +291,7 @@ def parse_date(entry):
         if getattr(entry, 'updated_parsed', None):
             return struct_time_utc_to_ro(entry.updated_parsed)
     except (TypeError, ValueError, OverflowError) as e:
-        print(f"DEBUG: dată de știre neinterpretabilă: {e}")
+        logger.warning(f"dată de știre neinterpretabilă: {e}")
     return now_ro()
 
 # --- FUNCȚIE NOUĂ DE PARSARE INTELIGENTĂ (SENIOR FIX) ---
@@ -460,7 +460,7 @@ def get_watchlist_target(symbol):
             if not match.empty:
                 return positive_or_none(match.iloc[0]['TargetPrice'])
     except (KeyError, IndexError, TypeError, ValueError) as exc:
-        print(f"DEBUG: preț țintă din watchlist pentru {symbol}: {exc}")
+        logger.warning(f"preț țintă din watchlist pentru {symbol}: {exc}")
     return None
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -497,7 +497,7 @@ def list_company_files():
         files = client.list_spreadsheet_files(folder_id=folders[0]["id"])
         return [{"id": f["id"], "name": f["name"], "modified": f.get("modifiedTime")} for f in files], None
     except (gspread.exceptions.APIError, requests.exceptions.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: lista fișierelor de analiză: {e}")
+        logger.warning(f"lista fișierelor de analiză: {e}")
         return [], f"Lista fișierelor din „{COMPANY_FOLDER_NAME}” nu a putut fi citită: {e}"
 
 
@@ -983,7 +983,7 @@ def _read_peer_rows(symbols):
         try:
             inf = yf.Ticker(p_sym).info or {}
         except Exception as e:
-            print(f"DEBUG: comparabil {p_sym} indisponibil: {e}")
+            logger.warning(f"comparabil {p_sym} indisponibil: {e}")
             failed.append(p_sym)
             continue
         row = {"Simbol": p_sym, "Capitalizare": num(inf, 'marketCap'), "Monedă": inf.get('currency') or "",
@@ -1180,7 +1180,7 @@ def get_financial_statements(symbol):
             if isinstance(raw, pd.DataFrame) and not raw.empty:
                 df = raw
         except Exception as e:
-            print(f"DEBUG: {attr} indisponibil pentru {symbol}: {e}")
+            logger.warning(f"{attr} indisponibil pentru {symbol}: {e}")
         out[key] = df
         if df is None:
             out["errors"].append(attr)
@@ -1195,7 +1195,7 @@ def get_benchmark_close(symbol):
         if data is not None and not data.empty and 'Close' in data:
             return data['Close'].dropna()
     except Exception as e:
-        print(f"DEBUG: benchmark {symbol} indisponibil: {e}")
+        logger.warning(f"benchmark {symbol} indisponibil: {e}")
     return pd.Series(dtype=float)
 
 
@@ -1248,7 +1248,7 @@ def load_bvb_fundamentals():
         parsed["_unmapped"] = unmapped_info_keys(values)
         return parsed
     except Exception as e:
-        print(f"DEBUG: foaia BVB nu a putut fi citită: {e}")
+        logger.warning(f"foaia BVB nu a putut fi citită: {e}")
         return {}
 
 
@@ -1409,7 +1409,7 @@ def get_aaa_yield():
         if len(serie) and 0 < float(serie.iloc[-1]) < 25:
             return float(serie.iloc[-1]), f"obligațiuni corporative AAA SUA (FRED AAA, {serie.index[-1]:%m.%Y})"
     except Exception as e:
-        print(f"DEBUG: randament AAA (FRED) indisponibil: {e}")
+        logger.warning(f"randament AAA (FRED) indisponibil: {e}")
     return None, "Randamentul obligațiunilor AAA (FRED) nu a putut fi citit."
 
 
@@ -1425,9 +1425,9 @@ def get_aaa_spread():
         res = fund.aaa_treasury_spread(aaa, gs10)
         if res is not None and 0 < res["aaa"] < 25 and 0 < res["treasury"] < 25:
             return res, f"marja AAA din SUA {ro(res['spread']):.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
-        print("DEBUG: marja AAA (FRED AAA/GS10): nicio lună comună validă")
+        logger.warning("marja AAA (FRED AAA/GS10): nicio lună comună validă")
     except Exception as e:
-        print(f"DEBUG: marja AAA (FRED AAA/GS10) indisponibilă: {e}")
+        logger.warning(f"marja AAA (FRED AAA/GS10) indisponibilă: {e}")
     return None, "Marja AAA față de titlurile SUA (FRED AAA, GS10) nu a putut fi citită."
 
 
@@ -1482,7 +1482,7 @@ def _market_curve_cached(market):
                 return res["spread"], (f"SUA, titluri de stat 10 ani {ro(res['long']):.2f}% − 3 luni {ro(res['short']):.2f}% "
                                        f"(^TNX − ^IRX, {res['date']:%d.%m.%Y})")
         except Exception as e:
-            print(f"DEBUG: curba SUA (^TNX/^IRX) indisponibilă: {e}")
+            logger.warning(f"curba SUA (^TNX/^IRX) indisponibilă: {e}")
         raise CurveUnavailable("curba SUA (^TNX − ^IRX) nu a putut fi citită")
     if market == "EU":
         try:
@@ -1492,9 +1492,9 @@ def _market_curve_cached(market):
                 if obs is not None and _valid(obs[1]):
                     return obs[1], f"zona euro, curba titlurilor de stat AAA 10 ani − 3 luni (BCE, {obs[0]}; proxy pentru Bund)"
             else:
-                print(f"DEBUG: BCE (curba zonei euro): HTTP {resp.status_code}")
+                logger.warning(f"BCE (curba zonei euro): HTTP {resp.status_code}")
         except requests.RequestException as e:
-            print(f"DEBUG: BCE (curba zonei euro) indisponibilă: {e}")
+            logger.warning(f"BCE (curba zonei euro) indisponibilă: {e}")
         raise CurveUnavailable("curba zonei euro (BCE) nu a putut fi citită")
     if market == "RO":
         try:
@@ -1506,11 +1506,11 @@ def _market_curve_cached(market):
                 if res is not None and _valid(res["spread"]):
                     return res["spread"], (f"România, titluri de stat 10 ani {ro(res['long']):.2f}% (BCE) − ROBOR 3M "
                                            f"{ro(res['short']):.2f}% (Eurostat), {res['month']}")
-                print("DEBUG: curba RO: nicio lună comună între BCE și Eurostat")
+                logger.warning("curba RO: nicio lună comună între BCE și Eurostat")
             else:
-                print(f"DEBUG: curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
+                logger.warning(f"curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
         except (requests.RequestException, ValueError) as e:
-            print(f"DEBUG: curba RO indisponibilă: {e}")
+            logger.warning(f"curba RO indisponibilă: {e}")
         raise CurveUnavailable("curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită")
     raise CurveUnavailable("nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)")
 
@@ -1549,7 +1549,7 @@ def _risk_free_cached(currency):
             if len(closes) and _valid(float(closes.iloc[-1])):
                 return float(closes.iloc[-1]) / 100, f"titluri SUA 10 ani (^TNX, {closes.index[-1]:%d.%m.%Y})"
         except Exception as e:
-            print(f"DEBUG: ^TNX indisponibil: {e}")
+            logger.warning(f"^TNX indisponibil: {e}")
         raise RiskFreeUnavailable("Randamentul titlurilor SUA pe 10 ani (^TNX) nu a putut fi citit.")
     if cur == "EUR":
         try:
@@ -1558,7 +1558,7 @@ def _risk_free_cached(currency):
             if len(serie) and _valid(float(serie.iloc[-1])):
                 return float(serie.iloc[-1]) / 100, f"Bund 10 ani (FRED IRLTLT01DEM156N, {serie.index[-1]:%m.%Y})"
         except Exception as e:
-            print(f"DEBUG: Bund 10 ani (FRED) indisponibil: {e}")
+            logger.warning(f"Bund 10 ani (FRED) indisponibil: {e}")
         raise RiskFreeUnavailable("Randamentul Bund pe 10 ani (FRED) nu a putut fi citit.")
     if cur == "RON":
         try:
@@ -1571,9 +1571,9 @@ def _risk_free_cached(currency):
                 if obs is not None and _valid(obs[1]):
                     return obs[1] / 100, f"titluri de stat RO 10 ani (BCE, {obs[0]})"
             else:
-                print(f"DEBUG: BCE (randament RO 10 ani): HTTP {resp.status_code}")
+                logger.warning(f"BCE (randament RO 10 ani): HTTP {resp.status_code}")
         except requests.RequestException as e:
-            print(f"DEBUG: BCE (randament RO 10 ani) indisponibil: {e}")
+            logger.warning(f"BCE (randament RO 10 ani) indisponibil: {e}")
         raise RiskFreeUnavailable("Randamentul titlurilor de stat românești pe 10 ani (BCE) nu a putut fi citit.")
     raise RiskFreeUnavailable(f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}.")
 
@@ -1632,7 +1632,7 @@ def calculate_health_score_ext(info):
                 cons.append("Lichiditate precară")
             
     except Exception as e:
-        print(f"DEBUG: scor sănătate incomplet: {e}")
+        logger.warning(f"scor sănătate incomplet: {e}")
 
     # Fără niciun indicator de bilanț, scorul ar rămâne 5/10 („mediu") fără nicio bază.
     if all(num(info, k) is None for k in ('debtToEquity', 'returnOnEquity', 'currentRatio')):
@@ -1765,7 +1765,7 @@ def _safe_info(t):
         if len(info) < 10:
             info_error = f"răspuns aproape gol de la Yahoo ({len(info)} câmpuri)"
     except Exception as e:
-        print(f"DEBUG: info indisponibil pentru {getattr(t, 'ticker', '?')}: {e}")
+        logger.warning(f"info indisponibil pentru {getattr(t, 'ticker', '?')}: {e}")
         info_error = f"{type(e).__name__}: {str(e)[:300]}"
         info = {}
     try:
@@ -1778,9 +1778,9 @@ def _safe_info(t):
                     if value is not None:
                         info[key] = value
                 except Exception as e:
-                    print(f"DEBUG: fast_info.{attr} indisponibil: {e}")
+                    logger.warning(f"fast_info.{attr} indisponibil: {e}")
     except Exception as e:
-        print(f"DEBUG: fast_info indisponibil: {e}")
+        logger.warning(f"fast_info indisponibil: {e}")
     info["_fundamentals_available"] = any(
         num(info, k) is not None for k in ("trailingPE", "returnOnEquity", "debtToEquity", "profitMargins", "bookValue")
     )
@@ -1793,7 +1793,7 @@ def _safe_earnings(t):
     try:
         return getattr(t, 'earnings_history', None)
     except Exception as e:
-        print(f"DEBUG: earnings indisponibil: {e}")
+        logger.warning(f"earnings indisponibil: {e}")
         return None
 
 
@@ -1821,7 +1821,7 @@ def get_stock_data(symbol):
 
     except Exception as e:
         # Dacă apare o eroare de conexiune, o afișăm în consolă pentru debug, nu blocăm UI-ul
-        print(f"DEBUG: Eroare yfinance pentru {symbol}: {e}")
+        logger.warning(f"Eroare yfinance pentru {symbol}: {e}")
         return None, None, None, symbol
 
 def calculate_technical_indicators(df):
@@ -2077,7 +2077,7 @@ def load_portfolio():
         values = sheet.get_all_values(value_render_option="UNFORMATTED_VALUE",
                                       date_time_render_option="FORMATTED_STRING")
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia Portofoliu nu a putut fi citită: {e}")
+        logger.warning(f"foaia Portofoliu nu a putut fi citită: {e}")
         return pd.DataFrame()
     df, problems = portfolio_sheet.parse_portfolio_values(values)
     df.attrs["problems"] = problems
@@ -2092,6 +2092,7 @@ def load_watchlist():
             data = ws.get_all_records()
             return pd.DataFrame(data)
         except Exception as e:
+            logger.warning("load_watchlist: %s", e)
             return pd.DataFrame()
     return pd.DataFrame()
 
@@ -2238,7 +2239,7 @@ def load_ledger_values():
     try:
         return ws.get_all_values()
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia Tranzactii nu a putut fi citită: {e}")
+        logger.warning(f"foaia Tranzactii nu a putut fi citită: {e}")
         return None
 
 MANUAL_PRICE_STALE_DAYS = 30  # peste atât, prețul manual e semnalat ca vechi
@@ -2252,7 +2253,7 @@ def load_iv_history_values():
     try:
         return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia IV_istoric nu a putut fi citită: {e}")
+        logger.warning(f"foaia IV_istoric nu a putut fi citită: {e}")
         return None
 
 def update_iv_history(symbol, iv_pct):
@@ -2273,7 +2274,7 @@ def update_iv_history(symbol, iv_pct):
             df, problems = iv_history.parse_iv_history(load_iv_history_values())
             note = f"IV-ul de azi ({ro(iv_pct):.1f}%) a fost salvat în IV_istoric pentru {session:%d.%m.%Y}."
         except (gspread.exceptions.GSpreadException, AttributeError) as e:
-            print(f"DEBUG: IV_istoric, scriere eșuată pentru {symbol}: {e}")
+            logger.warning(f"IV_istoric, scriere eșuată pentru {symbol}: {e}")
             note = "IV-ul de azi nu a putut fi salvat în IV_istoric."
     series = iv_history.history_for(df, symbol)
     rank = opt_calc.iv_rank_percentile(series, None if iv_pct is None else iv_pct / 100, as_of=pd.Timestamp(session))
@@ -2291,7 +2292,7 @@ def load_manual_price_values():
     try:
         return ws.get_all_values()
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia Preturi_manuale nu a putut fi citită: {e}")
+        logger.warning(f"foaia Preturi_manuale nu a putut fi citită: {e}")
         return None
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -2304,7 +2305,7 @@ def get_last_closes(symbols):
     try:
         data = yf.download(symbols, period="5d", group_by='ticker', progress=False, auto_adjust=False)
     except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: ultimele închideri indisponibile: {e}")
+        logger.warning(f"ultimele închideri indisponibile: {e}")
         return {}
     closes = close_frame(data, symbols)
     out = {}
@@ -2329,7 +2330,7 @@ def get_ledger_fx_history(start):
     try:
         data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False)
     except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: istoric curs valutar indisponibil: {e}")
+        logger.warning(f"istoric curs valutar indisponibil: {e}")
         return pd.DataFrame()
     closes = _naive_index(close_frame(data, symbols))
     closes = closes.rename(columns={sym: cur for cur, sym in LEDGER_FX_SYMBOLS.items()})
@@ -2337,7 +2338,7 @@ def get_ledger_fx_history(start):
     for cur in closes.columns:
         cleaned, fixed = ledger_calc.despike(closes[cur].dropna(), jump=1.10, tolerance=0.03, max_days=3)
         if fixed:
-            print(f"DEBUG: curs {cur}/RON corectat în {len(fixed)} zile cu cotație aberantă: {[f'{d:%Y-%m-%d}' for d in fixed]}")
+            logger.warning(f"curs {cur}/RON corectat în {len(fixed)} zile cu cotație aberantă: {[f'{d:%Y-%m-%d}' for d in fixed]}")
         closes[cur] = cleaned.reindex(closes.index)
     return closes
 
@@ -2351,7 +2352,7 @@ def get_ledger_market_history(symbols, start):
     try:
         data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False, actions=True)
     except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: istoric de preț indisponibil pentru registru: {e}")
+        logger.warning(f"istoric de preț indisponibil pentru registru: {e}")
         return pd.DataFrame()
     closes = _naive_index(close_frame(data, symbols))
     splits = field_frame(data, "Stock Splits", symbols)
@@ -3077,7 +3078,7 @@ def get_sector_performance():
             df = df.sort_values(by='Variație %', ascending=True)
         return df
     except Exception as e:
-        print(f"Eroare sectoare: {e}")
+        logger.warning(f"Eroare sectoare: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -3092,7 +3093,7 @@ def get_credit_risk_data(period="1y"):
             return ratio.dropna()
         return pd.Series()
     except Exception as e:
-        print(f"Eroare date bonduri: {e}")
+        logger.warning(f"Eroare date bonduri: {e}")
         return pd.Series()
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -3151,7 +3152,7 @@ def get_cross_asset_correlation():
         corr_matrix, _ = common_day_correlation(data, min_obs=30)
         return corr_matrix
     except Exception as e:
-        print(f"Eroare Cross-Asset: {e}")
+        logger.warning(f"Eroare Cross-Asset: {e}")
         return pd.DataFrame()
 
 import pandas_datareader.data as web
@@ -7322,8 +7323,8 @@ def main():
                         # --------------------------------------------------------
 
                     except Exception as e:
-                        # st.error(f"Eroare date: {e}") 
-                        live_data = pd.Series()
+                        logger.warning("Watchlist, prețuri live: %s", e)
+                        live_data = pd.Series(dtype=float)
 
             # 2. Construim tabelul final
             display_rows = []
