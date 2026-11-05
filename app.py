@@ -2039,20 +2039,73 @@ def briefing_bvb_sections():
     return universes.sections("bvb")
 
 
+BRIEF_RETRY_CHUNK = 20       # simbolurile refuzate se recer în grupuri mici
+BRIEF_RETRY_PASSES = 2
+BRIEF_MIN_COVERAGE = 0.8     # sub 80% din simboluri cu preț, citirea e considerată parțială și NU intră în cache
+
+
+class _PartialBriefing(Exception):
+    """Citire Yahoo incompletă: datele se folosesc o dată, fără cache, ca la următoarea deschidere să se reîncerce."""
+    def __init__(self, data):
+        super().__init__("citire parțială")
+        self.data = data
+
+
+def _download_briefing(syms):
+    """Închiderile neajustate și volumele pe 6 luni, într-o cerere; simbolurile rămase fără preț (Yahoo refuză uneori
+    o parte dintr-o cerere mare) se recer în grupuri de BRIEF_RETRY_CHUNK, de cel mult BRIEF_RETRY_PASSES ori."""
+    _yf_limiter.wait_if_needed()
+    raw = yf.download(syms, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
+    close, volume = close_frame(raw, syms), field_frame(raw, "Volume", syms)
+    for attempt in range(BRIEF_RETRY_PASSES):
+        missing = briefing_calc.symbols_without_prices(close, syms)
+        if not missing:
+            break
+        logger.warning("rezumat: %d simboluri fără preț, reîncercarea %d", len(missing), attempt + 1)
+        time.sleep(2 * (attempt + 1))
+        for i in range(0, len(missing), BRIEF_RETRY_CHUNK):
+            chunk = missing[i:i + BRIEF_RETRY_CHUNK]
+            _yf_limiter.wait_if_needed()
+            try:
+                raw2 = yf.download(chunk, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("rezumat, reîncercare %s...: %s", chunk[0], exc)
+                continue
+            close = briefing_calc.merge_price_frames(close, close_frame(raw2, chunk))
+            volume = briefing_calc.merge_price_frames(volume, field_frame(raw2, "Volume", chunk))
+    return close, volume
+
+
 @st.cache_data(ttl=900, show_spinner=False)
+def _briefing_market(syms):
+    """O piață a Rezumatului (cache 15 min). Sub BRIEF_MIN_COVERAGE → _PartialBriefing (excepția nu intră în cache)."""
+    syms = list(syms)
+    close, volume = _download_briefing(syms)
+    data = {"close": close, "volume": volume}
+    if briefing_calc.coverage(close, syms) < BRIEF_MIN_COVERAGE:
+        raise _PartialBriefing(data)
+    return data
+
+
 def get_daily_briefing_data():
     """Închiderile NEAJUSTATE și volumele pe ~6 luni (Yahoo), pentru Rezumatul Zilei: dict bvb_close, bvb_volume
     (universul BVB + ETF-ul BET), us_close, us_volume (universul SUA + indicii + ETF-urile sectoriale), eu_close,
-    eu_volume (universul Europa + indicii). Prețul neajustat dă variația zilei cum o raportează bursa; 6 luni ajung
-    pentru σ pe 60 de ședințe. Fără niciun preț → excepție (nu intră în cache)."""
-    out = {}
+    eu_volume (universul Europa + indicii) și partial = {piață: True dacă Yahoo a dat sub 80% din simboluri}.
+    Fiecare piață are cererea și cache-ul ei: o citire parțială nu se păstrează și nu le strică pe celelalte.
+    Prețul neajustat dă variația zilei cum o raportează bursa; 6 luni ajung pentru σ pe 60 de ședințe.
+    Fără niciun preț pe nicio piață → excepție."""
+    out = {"partial": {}}
     for key, syms in (("bvb", briefing_bvb_universe() + [BRIEFING_BET_PROXY]),
                       ("us", BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES + BRIEFING_US_SECTORS),
                       ("eu", universes.symbols("eu") + BRIEFING_EU_INDICES)):
-        _yf_limiter.wait_if_needed()
-        raw = yf.download(syms, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
-        out[f"{key}_close"] = close_frame(raw, syms)
-        out[f"{key}_volume"] = field_frame(raw, "Volume", syms)
+        try:
+            data, partial = _briefing_market(tuple(syms)), False
+        except _PartialBriefing as exc:
+            data, partial = exc.data, True
+            logger.warning("rezumat %s: citire parțială (%d din %d simboluri fără preț)", key,
+                           len(briefing_calc.symbols_without_prices(data["close"], syms)), len(syms))
+        out[f"{key}_close"], out[f"{key}_volume"] = data["close"], data["volume"]
+        out["partial"][key] = partial
     if out["bvb_close"].empty and out["us_close"].empty and out["eu_close"].empty:
         raise ValueError("Yahoo: nicio închidere pentru Rezumatul Zilei")
     return out
@@ -2269,6 +2322,9 @@ def get_holdings_news(symbols):
     return items, no_name
 
 
+NEWS_VISIBLE = 5     # câte știri pe poziții se văd direct; restul într-un expander, ca taburile să nu coboare mult
+
+
 def render_events_today(holdings):
     """„📅 Evenimente și știri” (Rezumatul Zilei, etapa D): publicările macro SUA de azi și mâine (același calendar
     ca în „4. Piață Globală”) și știrile recente despre acțiunile din registru (fără ETF-uri și titluri de stat)."""
@@ -2315,14 +2371,21 @@ def render_events_today(holdings):
             st.info("Nicio știre din ultimele 48 de ore care să menționeze acțiunile tale.")
         else:
             result["news"] = items
-            st.markdown(compact_html("".join(
-                f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
-                <span style="background:#21262D; color:#C9D1D9; border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; margin-right:6px;">{html.escape(it['symbol'].replace('.RO', ''))}</span>
-                <a href="{html.escape(str(it['link']), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(it['title'])}</a>
-                <div style="font-size:12px; color:#8B949E;">{html.escape(str(it['source']))} • {it['time']:%d.%m %H:%M}</div></div>"""
-                for it in items)), unsafe_allow_html=True)
+
+            def _news_html(part):
+                return compact_html("".join(
+                    f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
+                    <span style="background:#21262D; color:#C9D1D9; border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; margin-right:6px;">{html.escape(it['symbol'].replace('.RO', ''))}</span>
+                    <a href="{html.escape(str(it['link']), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(it['title'])}</a>
+                    <div style="font-size:12px; color:#8B949E;">{html.escape(str(it['source']))} • {it['time']:%d.%m %H:%M}</div></div>"""
+                    for it in part))
+
+            st.markdown(_news_html(items[:NEWS_VISIBLE]), unsafe_allow_html=True)   # primele 5; restul pliate
+            if len(items) > NEWS_VISIBLE:
+                with st.expander(f"Încă {len(items) - NEWS_VISIBLE} știri"):
+                    st.markdown(_news_html(items[NEWS_VISIBLE:]), unsafe_allow_html=True)
         st.caption(f"{len(syms)} acțiuni din registru (fără ETF-uri și titluri de stat). Se păstrează doar știrile al căror "
-                   "titlu sau rezumat conține numele companiei sau simbolul; cel mult 3 pe companie, ora României. "
+                   "titlu sau rezumat conține numele întreg al companiei sau simbolul; cel mult 3 pe companie, ora României. "
                    "Fluxurile RO acoperă puține companii mici, deci lipsa unei știri nu înseamnă că nu s-a întâmplat nimic."
                    + (f" Fără nume în Yahoo (filtrate doar după simbol): {', '.join(no_name)}." if no_name else ""))
     st.markdown("---")
@@ -7241,6 +7304,8 @@ def main():
                 bvb_t, bvb_session = briefing_calc.session_table(brief["bvb_close"][bvb_cols],
                                                                  brief["bvb_volume"].reindex(columns=bvb_cols))
                 _session_header("BVB", "BVB", bvb_session)
+                if brief["partial"].get("bvb"):
+                    st.warning("⚠️ Yahoo a trimis acum doar o parte din cotații (sub 80% din simboluri, și după reîncercare). Ce lipsește nu e inclus în calcule; datele nu se păstrează în cache, deci se recitesc la următoarea deschidere a paginii.")
                 bet = briefing_calc.daily_move(brief["bvb_close"].get(BRIEFING_BET_PROXY))
                 bvb_b = briefing_calc.breadth_counts(bvb_t)
                 bvb_turn = briefing_calc.turnover_vs_median(brief["bvb_close"][bvb_cols], brief["bvb_volume"].reindex(columns=bvb_cols))
@@ -7267,7 +7332,8 @@ def main():
                 bvb_missing = briefing_calc.missing_symbols(bvb_universe, bvb_t)
                 _breadth_bar(bvb_b, f"Universul urmărit BVB ({len(bvb_universe)} simboluri, {len(bvb_t)} cu date Yahoo)")
                 if bvb_missing:
-                    st.caption(f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(bvb_missing)}), excluse din toate calculele: "
+                    st.caption((f"Necitite acum de la Yahoo ({len(bvb_missing)}), excluse din calcule: " if brief["partial"].get("bvb") else
+                                f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(bvb_missing)}), excluse din toate calculele: ")
                                + ", ".join(s.replace(".RO", "") for s in bvb_missing) + ".")
                 st.markdown("---")
                 bvb_up, bvb_down = briefing_calc.top_moves(bvb_t, n=briefing_calc.TOP_N, min_value=briefing_calc.MIN_VALUE_RON)
@@ -7347,6 +7413,8 @@ def main():
                 eu_close, eu_vol = brief["eu_close"][eu_cols], brief["eu_volume"].reindex(columns=eu_cols)
                 eu_t, eu_session = briefing_calc.session_table(eu_close, eu_vol)
                 _session_header("XETRA", "Europa (reper: XETRA)", eu_session)
+                if brief["partial"].get("eu"):
+                    st.warning("⚠️ Yahoo a trimis acum doar o parte din cotații (sub 80% din simboluri, și după reîncercare). Ce lipsește nu e inclus în calcule; datele nu se păstrează în cache, deci se recitesc la următoarea deschidere a paginii.")
                 i_cols = st.columns(4)
                 for col, (sym, name, kind) in zip(i_cols, (("^STOXX", "STOXX Europe 600", "indice de preț"),
                                                            ("^GDAXI", "DAX", "indice de performanță (cu dividendele reinvestite)"),
@@ -7399,7 +7467,8 @@ def main():
                 st.caption("Ședința e ultima zi cu preț la cel puțin 20% din titluri. Bursele au sărbători diferite (Londra, "
                            "de exemplu): într-o zi închisă doar acolo, titlurile ei apar fără tranzacții și ies din calcule.")
                 if eu_missing:
-                    st.caption(f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(eu_missing)}), excluse din toate calculele: "
+                    st.caption((f"Necitite acum de la Yahoo ({len(eu_missing)}), excluse din calcule: " if brief["partial"].get("eu") else
+                                f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(eu_missing)}), excluse din toate calculele: ")
                                + ", ".join(eu_missing) + ".")
                 st.markdown("---")
                 eu_up, eu_down = briefing_calc.top_moves(eu_t, n=briefing_calc.TOP_N)
@@ -7462,6 +7531,8 @@ def main():
                 us_cols = [c for c in brief["us_close"].columns if c not in BRIEFING_US_INDICES + BRIEFING_US_SECTORS]
                 us_t, us_session = briefing_calc.session_table(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
                 _session_header("NYSE", "Wall Street", us_session)
+                if brief["partial"].get("us"):
+                    st.warning("⚠️ Yahoo a trimis acum doar o parte din cotații (sub 80% din simboluri, și după reîncercare). Ce lipsește nu e inclus în calcule; datele nu se păstrează în cache, deci se recitesc la următoarea deschidere a paginii.")
                 i_cols = st.columns(3)
                 for col, (sym, name) in zip(i_cols, (("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq Composite"), ("^DJI", "Dow Jones"))):
                     mv = briefing_calc.daily_move(brief["us_close"].get(sym))

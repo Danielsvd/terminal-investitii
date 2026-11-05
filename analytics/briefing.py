@@ -390,3 +390,39 @@ def sector_moves(close, volume, index_close, names=None):
     out["traded"] = t["traded"].astype(bool)
     order = out["pct"].fillna(-np.inf).sort_values(ascending=False, kind="mergesort").index
     return out.loc[order, cols], session
+
+
+# --- Citirea în bloc: simbolurile rămase fără preț (Yahoo refuză uneori o parte dintr-o cerere mare) -----------------
+
+def symbols_without_prices(frame, symbols):
+    """Simbolurile din `symbols` care nu au niciun preț > 0 în `frame` (coloană lipsă sau doar goluri), în ordine."""
+    if frame is None or len(frame) == 0:
+        return list(symbols or [])
+    out = []
+    for s in symbols or []:
+        if s not in frame.columns:
+            out.append(s)
+            continue
+        col = pd.to_numeric(frame[s], errors="coerce")
+        if not (col > 0).any():
+            out.append(s)
+    return out
+
+
+def coverage(frame, symbols):
+    """Ce parte din `symbols` are cel puțin un preț în `frame` (0–1); univers gol → 1."""
+    symbols = list(symbols or [])
+    if not symbols:
+        return 1.0
+    return 1.0 - len(symbols_without_prices(frame, symbols)) / len(symbols)
+
+
+def merge_price_frames(base, extra):
+    """Uniunea a două tabele de prețuri (coloane = simboluri, index = date): valorile din `base` rămân, golurile și
+    coloanele noi se iau din `extra`. Index normalizat la zi, fără fus orar, sortat."""
+    a, b = _clean_frame(base), _clean_frame(extra)
+    if a.empty:
+        return b
+    if b.empty:
+        return a
+    return a.combine_first(b).sort_index()
