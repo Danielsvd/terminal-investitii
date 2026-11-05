@@ -708,6 +708,17 @@ def main():
                     "7. Scanner Volum", "8. Watchlist"):
         radio().set_value(section).run()
         check(at, section)
+        if section == "6. Rezumatul Zilei":
+            # data ședinței, BET proxy, VIX/VIX3M, lățimea pe o zi; scorurile vechi (Fear & Greed, Pulsul BVB) au ieșit
+            mets = {m.label: str(m.value) for m in at.metric}
+            print("Rezumat:", {k: mets[k] for k in mets if k.startswith(("BET", "VIX", "Lățime", "RSP", "S&P"))})
+            for lbl in ("BET (proxy: ETF TVBETETF)", "Mișcarea BET în σ", "VIX / VIX3M", "RSP − SPY (o zi)", "S&P 500"):
+                assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
+            assert any("Ultima ședință:" in str(e.value) for e in at.markdown), "lipsește data ultimei ședințe"
+            sig_tabs = [getattr(d.value, "data", d.value) for d in at.dataframe if "σ" in getattr(getattr(d.value, "data", d.value), "columns", [])]
+            assert len(sig_tabs) >= 3, "lipsesc topurile cu σ"
+            all_text = " ".join(str(e.value) for e in list(at.markdown) + list(at.info) + list(at.caption))
+            assert "Sentimentul Wall Street" not in all_text and "Pulsul Pieței" not in all_text, "scorurile vechi încă afișate"
         if section == "5. Import Date":
             # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
             frames = [getattr(d.value, "data", d.value) for d in at.dataframe]

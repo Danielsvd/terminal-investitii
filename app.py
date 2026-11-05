@@ -36,6 +36,7 @@ from analytics import macro as macro_calc
 from analytics import markets as markets_calc
 from analytics import rates as rates_calc
 from analytics import stress as stress_calc
+from analytics import briefing as briefing_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -2154,26 +2155,56 @@ def generate_market_narrative(ticker_data, symbol, name):
     except Exception as e:
         return f"Nu s-au putut genera date pentru {name}.", 0, 0
 
-@st.cache_data(ttl=1800)
+BRIEFING_US_INDICES = ["^GSPC", "^IXIC", "^DJI"]
+# Universul SUA urmărit în Rezumatul Zilei (alegerea lui Daniel, nu S&P 500): topuri și lățimea pe acest univers.
+BRIEFING_US_UNIVERSE = [
+    'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU',
+    'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'T', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB',
+    'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'GPOR', 'UUUU', 'FSLR', 'VG', 'TTE', 'RIO', 'BHP', 'D', 'VALE',
+    'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS',
+    'MCD', 'SPCX', 'SMR', 'CMG', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
+]
+BRIEFING_BET_PROXY = "TVBETETF.RO"
+
+
+def briefing_bvb_universe():
+    """Universul BVB al Rezumatului: tools/univers_bvb.txt (companiile lichide, aceeași listă ca testul istoric)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "univers_bvb.txt")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return briefing_calc.parse_universe(fh.read())
+    except OSError as exc:
+        logger.warning("universul BVB: %s", exc)
+        return []
+
+
+@st.cache_data(ttl=900, show_spinner=False)
 def get_daily_briefing_data():
-    bvb_tickers = [
-        'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
-        'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 'MILK.RO', 
-        'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ASC.RO', 'ARS.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
-        'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
-    ]
-    bvb_data = yf.download(bvb_tickers, period="1mo", group_by='ticker', progress=False)
-    
-    us_tickers = [
-        '^GSPC', '^DJI', '^IXIC', '^VIX', 
-        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'T', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
-        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'GPOR', 'UUUU', 'FSLR', 'VG', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
-        'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SPCX', 'SMR', 'CMG', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
-    ]
-    us_data = yf.download(us_tickers, period="1mo", group_by='ticker', progress=False)
-    
-    return bvb_data, us_data
+    """Închiderile NEAJUSTATE și volumele pe ~6 luni (Yahoo), pentru Rezumatul Zilei: dict bvb_close, bvb_volume
+    (universul BVB + ETF-ul BET), us_close, us_volume (universul SUA + indicii). Prețul neajustat dă variația zilei
+    cum o raportează bursa; 6 luni ajung pentru σ pe 60 de ședințe. Fără niciun preț → excepție (nu intră în cache)."""
+    out = {}
+    for key, syms in (("bvb", briefing_bvb_universe() + [BRIEFING_BET_PROXY]),
+                      ("us", BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES)):
+        _yf_limiter.wait_if_needed()
+        raw = yf.download(syms, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
+        out[f"{key}_close"] = close_frame(raw, syms)
+        out[f"{key}_volume"] = field_frame(raw, "Volume", syms)
+    if out["bvb_close"].empty and out["us_close"].empty:
+        raise ValueError("Yahoo: nicio închidere pentru Rezumatul Zilei")
+    return out
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_us_index_news(limit=10):
+    """Știrile Yahoo (RSS) pentru ^GSPC și ^IXIC, fără dubluri, cele mai noi primele (cache 15 min)."""
+    seen, out = set(), []
+    for item in sorted(get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC"),
+                       key=lambda x: x.get("date_str", ""), reverse=True):
+        if item.get("title") and item["title"] not in seen:
+            seen.add(item["title"])
+            out.append(item)
+    return out[:limit]
 
 def get_bvb_stats(data, tickers):
     stats = []
@@ -7193,509 +7224,251 @@ def main():
     # ==================================================
     elif sectiune == "6. Rezumatul Zilei":
         st.title("🗞️ Rezumatul Zilei")
-        st.markdown("Raport automat generat la închiderea piețelor.")
-        
-        now = now_ro()  # ora României, nu ora serverului (UTC)
-        # Bursa din SUA deschide la 16:30, ora României
-        us_market_not_open_yet = (now.hour, now.minute) < (16, 30)
-        
-        # Obținem datele
-        with st.spinner("Generăm rezumatul pieței..."):
-            bvb_data, us_data = get_daily_briefing_data()
-        
-        # --- TABURI PENTRU PIEȚE ---
-        tab_bvb, tab_us = st.tabs(["🇷🇴 BVB (Ora 19:00)", "🇺🇸 Wall Street (Ora 23:00)"])
-        
-        # === REZUMAT BVB ===
+        st.caption("Ultima ședință a fiecărei piețe, din prețurile de închidere neajustate (Yahoo). Pragurile textelor "
+                   "(1σ, 2σ) sunt descriptive, netestate. Fără recomandări: datele și baza lor.")
+
+        try:
+            with st.spinner("Citim ultima ședință..."):
+                brief = get_daily_briefing_data()
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("rezumatul zilei: %s", exc)
+            brief = None
+        try:
+            mk_closes_rz = get_market_closes()
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("rezumat, regim: %s", exc)
+            mk_closes_rz = pd.DataFrame()
+
+        def _pct(v, d=2):
+            return "N/A" if v is None or pd.isna(v) else format_ro(v * 100, d, "%") if v < 0 else "+" + format_ro(v * 100, d, "%")
+
+        def _sig(v):
+            return "N/A" if v is None or pd.isna(v) else (("+" if v >= 0 else "") + format_ro(v, 1, "σ"))
+
+        STATE_TEXT_RZ = {"deschisă": "bursa e deschisă", "închisă": "bursa e închisă", "weekend": "weekend, bursa e închisă"}
+
+        def _session_header(market, label, session):
+            stt = briefing_calc.market_state(market, now_ro())
+            if session is None:
+                st.info(f"{label}: nicio cotație de la Yahoo acum.")
+                return stt
+            sd = pd.Timestamp(session)
+            st.markdown(f"**Ultima ședință: {fred_cal.WEEKDAYS_RO[sd.weekday()]} {sd:%d.%m.%Y}** · {label}: {STATE_TEXT_RZ[stt['state']]} "
+                        f"(ședința {stt['opens']}–{stt['closes']}, ora României; fără sărbătorile legale)")
+            if briefing_calc.session_is_partial(session, stt):
+                st.warning("⏳ Ședința e în desfășurare: prețurile, variațiile și volumele de azi sunt parțiale.")
+            return stt
+
+        def _regime_metrics(sym, name):
+            reg = markets_calc.market_regime(mk_closes_rz[sym] if sym in mk_closes_rz.columns else None)
+            r1, r2, r3 = st.columns(3)
+            r1.metric(f"Trend {name}", "N/A" if reg["trend_n"] is None else f"{reg['trend_n']}/3",
+                      help="Câte condiții sunt îndeplinite: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200. "
+                           "Aceeași regulă ca „Moment” din Analiză Companie (sub 200 de ședințe: N/A).")
+            r2.metric("Momentum 12-1", _pct(reg["momentum"], 1),
+                      help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă).")
+            r3.metric("Scor moment", "N/A" if reg["score"] is None else format_ro(reg["score"], 0),
+                      help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
+                           "Pragurile au fost testate pe acțiuni BVB, nu pe indici: aici e descriptiv.")
+
+        def _breadth_bar(b, scope):
+            if not b["n"]:
+                st.info("Niciun simbol din univers nu a tranzacționat în ultima ședință.")
+                return
+            st.markdown(compact_html(f"""
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:14px;">
+                <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {b['up']} ({format_ro(b['up_pct'], 1, '%')})</span>
+                <span style="color:#8B949E; font-weight:bold;">⚪ Nemodificate: {b['flat']}</span>
+                <span style="color:#F85149; font-weight:bold;">🔴 Scad: {b['down']} ({format_ro(b['down_pct'], 1, '%')})</span>
+            </div>
+            <div style="display:flex; height:14px; border-radius:7px; overflow:hidden; background-color:#30363D; margin-bottom:5px;">
+                <div style="width:{b['up_pct']}%; background-color:#3FB950;"></div>
+                <div style="width:{b['flat_pct']}%; background-color:#8B949E;"></div>
+                <div style="width:{b['down_pct']}%; background-color:#F85149;"></div>
+            </div>"""), unsafe_allow_html=True)
+            st.caption(f"{scope}: {b['n']} simboluri tranzacționate în ședință"
+                       + (f"; {b['not_traded']} fără tranzacții (excluse: variația lor ar fi din altă zi)" if b["not_traded"] else "")
+                       + ". Nemodificat = variație exact 0.")
+
+        def _moves_table(df, currency, show_value=True):
+            unit = " lei" if currency == "RON" else f" {currency}"
+            view = pd.DataFrame({
+                "Simbol": [s.replace(".RO", "") for s in df.index], "Preț": df["close"].values,
+                "Variație": (df["pct"] * 100).values, "σ": df["sigma"].values,
+                **({"Valoare": [briefing_calc.money_short(v, currency) for v in df["value"]]} if show_value else {}),
+            })
+            color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
+            st.dataframe(
+                view.style.format({"Preț": ro_spec(",.2f", unit), "Variație": ro_spec("+.2f", "%"), "σ": ro_spec("+.1f", "σ")})
+                .map(color, subset=["Variație"]),
+                width='stretch', hide_index=True,
+                column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice din "
+                                                                  "ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
+                                                                  "Peste 2σ = mișcare neobișnuită pentru acest titlu."),
+                               "Valoare": st.column_config.Column(help="Preț × volum în ședință (valoarea tranzacționată)."),
+                               "Variație": st.column_config.Column(help="Față de închiderea ședinței precedente, preț neajustat.")})
+
+        def _news_list(items, src_key):
+            if not items:
+                return False
+            st.markdown(compact_html("".join(
+                f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
+                <a href="{html.escape(str(it.get('link', '')), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(str(it.get('title', '')))}</a>
+                <div style="font-size:12px; color:#8B949E;">{html.escape(str(it.get(src_key, '')))} • {html.escape(str(it.get('date_str', '')))}</div></div>"""
+                for it in items)), unsafe_allow_html=True)
+            return True
+
+        tab_bvb, tab_us = st.tabs(["🇷🇴 BVB", "🇺🇸 Wall Street"])
+
+        # === BVB ===
         with tab_bvb:
-            st.markdown(f"### 📅 Raport Bursa de Valori București - {now.strftime('%d-%m-%Y')}")
-            
-            # 1. Narrativa Principală (Indicele BET) - ACUM MODIFICAT SĂ ARATE CA WALL STREET
-            bet_text, bet_change, bet_price = generate_market_narrative(bvb_data, 'TVBETETF.RO', 'Indicele BET')
-            
-            # Determinăm culoarea în funcție de schimbare
-            c_bet = "#3FB950" if bet_change >= 0 else "#F85149"
-            
-            # Afișare stil "Card" (similar cu Wall Street)
-            st.markdown(f"""
-            <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {c_bet}; margin-bottom: 20px;">
-                <h4 style="margin-top:0;">🇷🇴 Evoluția Pieței Locale</h4>
-                <p style="margin:5px 0; font-size:18px;">
-                    📉 <b>BET (TVBETETF):</b> {ro(bet_price):,.2f} RON <span style="color:{c_bet}; font-weight:bold;">({ro(bet_change):+.2f}%)</span>
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # --- NOU: SENTIMENTUL PIEȚEI BVB (RADAR) ---
-            # Calculăm scorul folosind funcția de proxy pentru BVB
-            bvb_score, bvb_sentiment_label = calculate_bvb_sentiment(bvb_data)
-            
-            # Stabilim culoarea vizuală în funcție de scor
-            b_color = "#3FB950" if bvb_score > 55 else ("#F85149" if bvb_score < 45 else "#8B949E")
-            
-            st.markdown(f"""
-            <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border: 1px solid {b_color}44; margin-bottom: 20px;">
-                <div style="font-size: 12px; color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Pulsul Pieței Locale (BVB)</div>
-                <div style="font-size: 20px; font-weight: bold; color: {b_color};">{bvb_sentiment_label}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Analiza Contextuală BVB (Explicație pentru investitor)
-            if bvb_score < 35:
-                bvb_conclusion = "🚨 **Vânzări emoționale pe BVB:** Piața locală este sub presiune. Investitorii tind să iasă din poziții, ceea ce poate crea oportunități pe companiile cu dividende mari."
-            elif bvb_score > 65:
-                bvb_conclusion = "🚀 **Apetit crescut pentru risc:** Există un val de optimism pe companiile din indexul BET. Atenție la raliurile care nu sunt susținute de volume mari."
+            if brief is None or brief["bvb_close"].empty:
+                st.info("Cotațiile BVB nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
             else:
-                bvb_conclusion = "⚖️ **Stabilitate locală:** Bursa de la București tranzacționează calm, fără mișcări speculative majore."
-            
-            st.info(f"🇷🇴 {bvb_conclusion}")
-
-            # Calculăm statisticile extinse
-            if isinstance(bvb_data.columns, pd.MultiIndex):
-                bvb_analysis_tickers = bvb_data.columns.levels[0].tolist()
-            else:
-                bvb_analysis_tickers = []
-
-            gainers, losers, vol_leaders = get_bvb_stats(bvb_data, bvb_analysis_tickers)
-            st.markdown("---")
-            # =========================================================
-            # NOU: MARKET BREADTH BVB
-            # =========================================================
-            st.markdown("#### ⚖️ Sănătatea Pieței (Market Breadth)")
-            adv_b, dec_b, flat_b, adv_pb, dec_pb, flat_pb = calculate_market_breadth(bvb_data, bvb_analysis_tickers)
-            
-            if (adv_b + dec_b + flat_b) > 0:
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
-                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_b} ({ro(adv_pb):.1f}%)</span>
-                    <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_b}</span>
-                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_b} ({ro(dec_pb):.1f}%)</span>
-                </div>
-                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
-                    <div style="width: {adv_pb}%; background-color: #3FB950;"></div>
-                    <div style="width: {flat_pb}%; background-color: #8B949E;"></div>
-                    <div style="width: {dec_pb}%; background-color: #F85149;"></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Verdict Pro Automat
-                if adv_b > dec_b * 1.5:
-                    st.caption("✅ **Raliu Sănătos:** Creșterea pieței este susținută de majoritatea companiilor (Participare largă).")
-                elif dec_b > adv_b * 1.5:
-                    st.caption("🚨 **Vânzare Generalizată:** Scăderile nu sunt izolate, presiunea acoperă tot spectrul.")
+                bvb_cols = [c for c in brief["bvb_close"].columns if c != BRIEFING_BET_PROXY]
+                bvb_t, bvb_session = briefing_calc.session_table(brief["bvb_close"][bvb_cols],
+                                                                 brief["bvb_volume"].reindex(columns=bvb_cols))
+                _session_header("BVB", "BVB", bvb_session)
+                bet = briefing_calc.daily_move(brief["bvb_close"].get(BRIEFING_BET_PROXY))
+                bvb_b = briefing_calc.breadth_counts(bvb_t)
+                bvb_turn = briefing_calc.turnover_vs_median(brief["bvb_close"][bvb_cols], brief["bvb_volume"].reindex(columns=bvb_cols))
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("BET (proxy: ETF TVBETETF)", "N/A" if bet["last"] is None else format_ro(bet["last"], 2, " lei"),
+                          None if bet["pct"] is None else _pct(bet["pct"]),
+                          help="Prețul ETF-ului care urmărește BET, nu nivelul indicelui (Yahoo nu are BET). "
+                               + (f"Ultima cotație: {bet['date']:%d.%m.%Y}." if bet["date"] is not None else ""))
+                m2.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=briefing_calc.sigma_label(bet["sigma"]).capitalize()
+                          + f". Variația zilei ÷ abaterea standard a variațiilor din ultimele {bet['n']} ședințe (fără ziua curentă).")
+                m3.metric("Lățime (cresc / scad)", f"{bvb_b['up']} / {bvb_b['down']}" if bvb_b["n"] else "N/A",
+                          help="Companiile din universul lichid (tools/univers_bvb.txt) care au tranzacționat în ultima ședință.")
+                m4.metric("Valoare tranzacționată", briefing_calc.money_short(bvb_turn["today"], "RON"),
+                          None if bvb_turn["ratio"] is None else f"×{format_ro(bvb_turn['ratio'], 2)} față de mediană",
+                          delta_color="off",
+                          help=f"Suma preț × volum pe universul lichid în ultima ședință, față de mediana celor {bvb_turn['n']} "
+                               "ședințe dinainte (minimum 10). Doar universul, nu toată bursa.")
+                st.markdown("#### 🎯 Regimul BET (regula „Moment”)")
+                _regime_metrics(BRIEFING_BET_PROXY, "BET")
+                st.markdown("---")
+                st.markdown("#### ⚖️ Lățimea pieței")
+                _breadth_bar(bvb_b, f"Universul lichid BVB ({len(bvb_t)} companii)")
+                st.markdown("---")
+                bvb_up, bvb_down = briefing_calc.top_moves(bvb_t, n=5, min_value=briefing_calc.MIN_VALUE_RON)
+                st.caption(f"Topurile: doar companiile cu valoare tranzacționată ≥ {briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} "
+                           "în ședință (sub prag, o singură tranzacție mică mișcă prețul).")
+                c_up, c_dn = st.columns(2)
+                with c_up:
+                    st.markdown("**🚀 Top 5 creșteri**")
+                    if bvb_up is not None and not bvb_up.empty:
+                        _moves_table(bvb_up, "RON")
+                    else:
+                        st.info("Nicio creștere peste prag.")
+                with c_dn:
+                    st.markdown("**🔻 Top 5 scăderi**")
+                    if bvb_down is not None and not bvb_down.empty:
+                        _moves_table(bvb_down, "RON")
+                    else:
+                        st.info("Nicio scădere peste prag.")
+                st.markdown("---")
+                st.subheader("📊 Top lichiditate (valoare tranzacționată)")
+                liq = briefing_calc.liquidity_top(bvb_t, n=10)
+                if liq is not None and not liq.empty:
+                    _moves_table(liq, "RON")
                 else:
-                    st.caption("🔄 **Piață Mixtă:** Echilibru. Banii se mută selectiv dintr-o acțiune în alta.")
-            st.write("") # Spațiu
-            st.markdown("---")
-            # =========================================================
-            # NOU: NIVELE TEHNICE CRITICE (BVB)
-            # =========================================================
-            st.markdown("#### 🎯 Nivele Tehnice Critice (Trend Macro)")
-            with st.spinner("Calculăm mediile mobile..."):
-                tech_bvb = get_index_technical_levels('TVBETETF.RO')
-                
-            if tech_bvb:
-                c50 = "#3FB950" if tech_bvb['dist50'] > 0 else "#F85149"
-                c200 = "#3FB950" if tech_bvb['dist200'] > 0 else "#F85149"
-                
-                # Diagnoza Trendului
-                if tech_bvb['dist50'] > 0 and tech_bvb['dist200'] > 0:
-                    regime_msg = "🟢 **BULL MARKET:** Prețul este deasupra mediilor majore. Trend ascendent confirmat."
-                elif tech_bvb['dist50'] < 0 and tech_bvb['dist200'] < 0:
-                    regime_msg = "🔴 **BEAR MARKET:** Prețul a spart suporturile majore. Presiune de vânzare activă."
-                else:
-                    regime_msg = "🟡 **ZONĂ DE TRANZIȚIE:** Prețul este prins între SMA 50 și SMA 200. Indecizie majoră."
-                
-                # Golden / Death Cross
-                cross_msg = "✨ *Golden Cross activ* (SMA 50 este deasupra SMA 200)" if tech_bvb['sma50'] > tech_bvb['sma200'] else "☠️ *Death Cross activ* (SMA 50 a picat sub SMA 200)"
+                    st.info("Nicio companie din univers nu a tranzacționat în ultima ședință.")
 
-                st.markdown(f"""
-                <div style="display:flex; gap:15px; margin-bottom: 10px;">
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c50};">{ro(tech_bvb['dist50']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_bvb['sma50']):.2f}</b></div>
-                    </div>
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c200};">{ro(tech_bvb['dist200']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_bvb['sma200']):.2f}</b></div>
-                    </div>
-                </div>
-                <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_bvb['dist200'] > 0 else '#F85149'};">
-                    {regime_msg} <br> <span style="color:#8B949E; font-size:12px;">{cross_msg}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("Date tehnice indisponibile pentru acest indice.")
             st.markdown("---")
-            
-            # =========================================================
-            # NOU: INTENSITATE VOLUM (BVB)
-            # =========================================================
-            st.markdown("#### 🔊 Intensitatea Tranzacționării (Volume)")
-            vol_bvb = get_volume_analysis('TVBETETF.RO')
-            
-            if vol_bvb:
-                v_int = vol_bvb['intensity']
-                # Culori în funcție de intensitate
-                v_color = "#3FB950" if v_int > 1.2 else ("#D29922" if v_int > 0.8 else "#8B949E")
-                v_label = "ACTIVITATE RIDICATĂ" if v_int > 1.2 else ("NORMAL" if v_int > 0.8 else "LICHIDITATE SCĂZUTĂ")
-                
-                # Formula intensității: $I = \frac{V_{current}}{V_{average}}$
-                st.markdown(f"""
-                <div style="background:#161B22; padding:20px; border-radius:12px; border-top: 4px solid {v_color};">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volum vs Media 20z</div>
-                            <div style="font-size:28px; font-weight:bold; color:white;">{ro(v_int):.2f}x</div>
-                        </div>
-                        <div style="text-align:right;">
-                            <span style="background:{v_color}22; color:{v_color}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
-                                {v_label}
-                            </span>
-                        </div>
-                    </div>
-                    <div style="margin-top:15px; background:#30363D; height:8px; border-radius:4px; overflow:hidden;">
-                        <div style="width:{min(v_int*50, 100)}%; background:{v_color}; height:100%;"></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if v_int > 1.5:
-                    st.caption("🔥 **Alertă:** Volum neobișnuit de mare. Instituțiile fac mutări importante în piața locală.")
-                elif v_int < 0.6:
-                    st.caption("💤 **Atenție:** Piață „adormită”. Mișcările de preț pot fi cauzate de ordine mici de retail.")
-            # =========================================================
-            st.markdown("---")
-            
-            # 2. Top Movers (5 companii)
-            col_mov1, col_mov2 = st.columns(2)
-            
-            with col_mov1:
-                st.markdown("**🚀 Top 5 Creșteri**")
-                if not gainers.empty:
-                    st.dataframe(
-                        gainers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #3FB950', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-                else: st.info("Date indisponibile.")
-                
-            with col_mov2:
-                st.markdown("**🔻 Top 5 Scăderi**")
-                if not losers.empty:
-                    st.dataframe(
-                        losers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #F85149', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-                else: st.info("Date indisponibile.")
-            
-            st.markdown("---")
-            
-            # 3. Clasament Volum (Top 10)
-            st.subheader("📊 Top Lichiditate (Volume Tranzacționate)")
-            if not vol_leaders.empty:
-                def format_vol(x):
-                    if x > 1e6: return f"{ro(x/1e6):.2f} M"
-                    if x > 1e3: return f"{ro(x/1e3):.2f} K"
-                    return f"{ro(x):.0f}"
-                
-                vol_display = vol_leaders.copy()
-                vol_display['Volum'] = vol_display['Volum'].apply(format_vol)
-                
-                st.dataframe(
-                    vol_display[['Simbol', 'Preț', 'Volum', 'Variație']].style
-                    .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
-                    .applymap(lambda x: 'color: #3FB950' if x > 0 else 'color: #F85149', subset=['Variație']),
-                    width='stretch', hide_index=True
-                )
-            else:
-                st.info("Nu există date despre volume.")
-
-            # 4. Top 5 Știri România
-            st.markdown("---")
-            st.subheader("🇷🇴 Top 5 Știri Financiare (România)")
-            
-            if 'raw_news' not in st.session_state:
-                raw_news = fetch_news_data()
-            else:
-                raw_news = st.session_state.get('raw_news', fetch_news_data())
-            
+            st.subheader("🇷🇴 Top 5 știri financiare (România)")
+            raw_news = fetch_news_data()
             ro_sources = ["Ziarul Financiar", "Biziday", "Economica", "Bursa", "Profit.ro", "StartupCafe", "Financial Intelligence", "Wall-Street"]
             ro_news = [n for n in raw_news if any(src.lower() in n['source'].lower() for src in ro_sources)]
             if not ro_news:
-                 ro_news = filter_news(raw_news, "Financiar") + filter_news(raw_news, "Energie")
-            
-            seen = set()
-            unique_ro_news = []
+                ro_news = filter_news(raw_news, "Financiar") + filter_news(raw_news, "Energie")
+            seen_ro, unique_ro_news = set(), []
             for n in ro_news:
-                if n['title'] not in seen:
+                if n['title'] not in seen_ro:
                     unique_ro_news.append(n)
-                    seen.add(n['title'])
-            
-            if unique_ro_news:
-                news_html = ""
-                for item in unique_ro_news[:5]:
-                      news_html += f"""
-                      <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
-                        <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
-                           {item['title']}
-                        </a>
-                        <div style="font-size: 12px; color: #8B949E;">{item['source']} • {item['date_str']}</div>
-                      </div>
-                      """
-                st.markdown(news_html, unsafe_allow_html=True)
-            else:
+                    seen_ro.add(n['title'])
+            if not _news_list(unique_ro_news[:5], "source"):
                 st.info("Nu s-au găsit știri locale recente.")
 
-        # === REZUMAT SUA ===
+        # === SUA ===
         with tab_us:
-            msg_us = ""
-            if us_market_not_open_yet:
-                msg_us = "(Datele afișate sunt de la închiderea precedentă)"
-            
-            st.markdown(f"### 🌎 Raport Wall Street {msg_us}")
-            
-            # --- 1. Indici Principali & Fear Index ---
-            c_idx, c_fg = st.columns([2, 1])
-            
-            with c_idx:
-                # ACUM PRIMIM SI PRETUL (PRICE)
-                sp500_txt, sp500_chg, sp500_price = generate_market_narrative(us_data, '^GSPC', 'S&P 500')
-                nasdaq_txt, nasdaq_chg, nasdaq_price = generate_market_narrative(us_data, '^IXIC', 'Nasdaq')
-                dow_txt, dow_chg, dow_price = generate_market_narrative(us_data, '^DJI', 'Dow Jones')
-                
-                # Culori border
-                us_border = "#3FB950" if sp500_chg >= 0 else "#F85149"
-                
-                # Culori text (verde/rosu) pentru fiecare indice
-                c_sp = "#3FB950" if sp500_chg >= 0 else "#F85149"
-                c_nq = "#3FB950" if nasdaq_chg >= 0 else "#F85149"
-                c_dj = "#3FB950" if dow_chg >= 0 else "#F85149"
-                
-                st.markdown(f"""
-                <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {us_border};">
-                    <p style="margin:5px 0; font-size:16px;">
-                        🇺🇸 <b>S&P 500:</b> {ro(sp500_price):,.2f} <span style="color:{c_sp}; font-weight:bold;">({ro(sp500_chg):+.2f}%)</span>
-                    </p>
-                    <p style="margin:5px 0; font-size:16px;">
-                        💻 <b>Nasdaq:</b> {ro(nasdaq_price):,.2f} <span style="color:{c_nq}; font-weight:bold;">({ro(nasdaq_chg):+.2f}%)</span>
-                    </p>
-                    <p style="margin:5px 0; font-size:16px;">
-                        🏭 <b>Dow Jones:</b> {ro(dow_price):,.2f} <span style="color:{c_dj}; font-weight:bold;">({ro(dow_chg):+.2f}%)</span>
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with c_fg:
-                # Preluăm datele calculate de funcția ta existentă
-                fg_score, fg_label, vix_val = calculate_fear_greed_proxy(us_data)
-                
-                # Stabilim culoarea în funcție de sentiment
-                fg_color = "#F85149" if fg_score < 40 else ("#3FB950" if fg_score > 60 else "#8B949E")
-                
-                st.markdown(f"""
-                <div style="text-align: center; background-color: #21262D; padding: 15px; border-radius: 12px; border: 1px solid {fg_color}44;">
-                    <small style="color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Sentimentul Wall Street</small>
-                    <h1 style="color: {fg_color}; margin: 10px 0; font-size: 42px;">{int(fg_score)}</h1>
-                    <div style="font-weight:bold; color: #FFFFFF; font-size: 18px; margin-bottom: 5px;">{fg_label}</div>
-                    <div style="font-size: 12px; color: #8B949E;">VIX (Volatilitate): {ro(vix_val):.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            # --- NOU: CONCLUZIA ZILEI (CONTEXTUALĂ) ---
-            st.markdown("#### 🧠 Analiza Contextuală a Zilei")
-            
-            if fg_score < 30:
-                conclusion = "🚨 **PANICĂ ÎN PIAȚĂ:** Sentimentul este de teamă extremă. Din punct de vedere contrarian, acestea sunt momentele în care se caută oportunități de cumpărare 'la reducere'."
-            elif fg_score > 70:
-                conclusion = "⚠️ **EUFORIE EXCESIVĂ:** Piața este lăcomă. Istoric, acest nivel precede adesea o corecție minoră. Atenție la noi intrări acum."
+            if brief is None or brief["us_close"].empty:
+                st.info("Cotațiile SUA nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
             else:
-                conclusion = "⚖️ **ECHILIBRU:** Piața tranzacționează fără o direcție emoțională clară. Prețurile sunt dictate de datele economice, nu de impulsuri."
-            
-            st.info(conclusion)
+                us_cols = [c for c in brief["us_close"].columns if c not in BRIEFING_US_INDICES]
+                us_t, us_session = briefing_calc.session_table(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
+                _session_header("NYSE", "Wall Street", us_session)
+                i_cols = st.columns(3)
+                for col, (sym, name) in zip(i_cols, (("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq Composite"), ("^DJI", "Dow Jones"))):
+                    mv = briefing_calc.daily_move(brief["us_close"].get(sym))
+                    col.metric(name, "N/A" if mv["last"] is None else format_ro(mv["last"], 2),
+                               None if mv["pct"] is None else f"{_pct(mv['pct'])} · {_sig(mv['sigma'])}",
+                               help=briefing_calc.sigma_label(mv["sigma"]).capitalize()
+                                    + f". σ față de ultimele {mv['n']} ședințe. Indice de preț (fără dividende).")
 
-            # --- 2. Top Movers & Volume (Top 10 Companii) ---
-            if isinstance(us_data.columns, pd.MultiIndex):
-                all_us_tickers = us_data.columns.levels[0].tolist()
-            else:
-                all_us_tickers = []
-                
-            us_analysis_tickers = [t for t in all_us_tickers if not t.startswith('^')]
-            
-            us_gainers, us_losers, us_vol = get_bvb_stats(us_data, us_analysis_tickers)
-            st.markdown("---")
-            
-            # =========================================================
-            # NOU: MARKET BREADTH SUA
-            # =========================================================
-            st.markdown("#### ⚖️ Sănătatea Pieței (Market Breadth)")
-            adv_u, dec_u, flat_u, adv_pu, dec_pu, flat_pu = calculate_market_breadth(us_data, us_analysis_tickers)
-            
-            if (adv_u + dec_u + flat_u) > 0:
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
-                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_u} ({ro(adv_pu):.1f}%)</span>
-                    <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_u}</span>
-                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_u} ({ro(dec_pu):.1f}%)</span>
-                </div>
-                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
-                    <div style="width: {adv_pu}%; background-color: #3FB950;"></div>
-                    <div style="width: {flat_pu}%; background-color: #8B949E;"></div>
-                    <div style="width: {dec_pu}%; background-color: #F85149;"></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Verdict Pro Automat (Corelare cu indicii)
-                if adv_u > dec_u * 1.5 and sp500_chg > 0:
-                    st.caption("✅ **Breakout Confirmat:** Indicele S&P urcă și o face tragând majoritatea acțiunilor cu el.")
-                elif dec_u > adv_u * 1.5 and sp500_chg > 0:
-                    st.caption("⚠️ **Divergență Periculoasă (Mega-Cap Illusion):** S&P crește doar datorită a 2-3 giganți (ex: Nvidia, Apple). Restul pieței de fapt scade!")
-                elif dec_u > adv_u * 1.5:
-                    st.caption("🚨 **Bearish Breadth:** Scădere severă, instituțiile vând la nivel generalizat.")
-                else:
-                    st.caption("🔄 **Rotație Sectorială:** Volumele sunt împărțite în mod egal între câștigători și perdanți.")
-            st.write("") # Spațiu
-            st.markdown("---")
-            
-            # =========================================================
-            # NOU: NIVELE TEHNICE CRITICE (SUA - S&P 500)
-            # =========================================================
-            st.markdown("#### 🎯 Nivele Tehnice Critice (Trend Macro S&P 500)")
-            with st.spinner("Calculăm mediile mobile S&P 500..."):
-                tech_us = get_index_technical_levels('^GSPC')
-                
-            if tech_us:
-                c50_u = "#3FB950" if tech_us['dist50'] > 0 else "#F85149"
-                c200_u = "#3FB950" if tech_us['dist200'] > 0 else "#F85149"
-                
-                if tech_us['dist50'] > 0 and tech_us['dist200'] > 0:
-                    regime_us = "🟢 **BULL MARKET:** Trend lung intact. Scăderile spre SMA 50 sunt văzute ca oportunități de cumpărare ('Buy the dip')."
-                elif tech_us['dist50'] < 0 and tech_us['dist200'] < 0:
-                    regime_us = "🔴 **BEAR MARKET:** Teritoriul urșilor. Orice creștere este considerată o capcană ('Dead cat bounce')."
-                else:
-                    regime_us = "🟡 **ZONĂ DE CONSOLIDARE:** Luptă critică la nivelul mediilor mobile. Așteaptă confirmarea spargerii."
-                
-                cross_us = "✨ *Golden Cross activ* (Piață în expansiune lungă)" if tech_us['sma50'] > tech_us['sma200'] else "☠️ *Death Cross activ* (Risc de recesiune a pieței)"
+                st.markdown("#### 🌡️ Volatilitatea așteptată (VIX)")
+                try:
+                    vix_c = get_vix_curve_closes()
+                except Exception as exc:  # rețea / Yahoo
+                    logger.warning("rezumat, VIX: %s", exc)
+                    vix_c = pd.DataFrame()
+                vt = stress_calc.vix_term(vix_c.get("^VIX"), vix_c.get("^VIX3M")) if not vix_c.empty else None
+                vix_s = vix_c["^VIX"].dropna() if "^VIX" in vix_c.columns else pd.Series(dtype=float)
+                v1, v2, v3 = st.columns(3)
+                v1.metric("VIX", "N/A" if vix_s.empty else format_ro(vix_s.iloc[-1], 2),
+                          help="Volatilitatea anualizată pe 30 de zile implicită în opțiunile pe S&P 500 (puncte procentuale).")
+                v2.metric("Percentila VIX pe 1 an", "N/A" if vix_s.empty else format_ro(stress_calc.percentile_rank(vix_s), 0, "%"),
+                          help=f"Ce procent din cele {len(vix_s)} închideri din ultimul an au fost ≤ VIX-ul de azi.")
+                v3.metric("VIX / VIX3M", "N/A" if vt is None else f"{format_ro(vt['ratio'], 2)} ({vt['state']})",
+                          help="Frica pe 30 de zile față de cea pe 3 luni. ≥ 1,00 = stres (structură inversată), 0,90–1,00 = "
+                               "tensiune, sub 0,90 = normal. Praguri uzuale de piață, netestate în aplicație.")
 
-                st.markdown(f"""
-                <div style="display:flex; gap:15px; margin-bottom: 10px;">
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c50_u};">{ro(tech_us['dist50']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_us['sma50']):,.2f}</b></div>
-                    </div>
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c200_u};">{ro(tech_us['dist200']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_us['sma200']):,.2f}</b></div>
-                    </div>
-                </div>
-                <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_us['dist200'] > 0 else '#F85149'};">
-                    {regime_us} <br> <span style="color:#8B949E; font-size:12px;">{cross_us}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("Date tehnice indisponibile pentru S&P 500.")
-            st.markdown("---")
-            
-            # =========================================================
-            # NOU: INTENSITATE VOLUM (SUA)
-            # =========================================================
-            st.markdown("#### 🔊 Intensitatea Tranzacționării (S&P 500)")
-            vol_us = get_volume_analysis('^GSPC')
-            
-            if vol_us:
-                v_int_u = vol_us['intensity']
-                v_color_u = "#3FB950" if v_int_u > 1.2 else ("#D29922" if v_int_u > 0.8 else "#8B949E")
-                v_label_u = "CONVINGERE TARE" if v_int_u > 1.2 else ("STABIL" if v_int_u > 0.8 else "FĂRĂ CONVINGERE")
-                
-                st.markdown(f"""
-                <div style="background:#161B22; padding:20px; border-radius:12px; border-top: 4px solid {v_color_u};">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volume Intensity Index</div>
-                            <div style="font-size:28px; font-weight:bold; color:white;">{ro(v_int_u):.2f}x</div>
-                        </div>
-                        <div style="text-align:right;">
-                            <span style="background:{v_color_u}22; color:{v_color_u}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
-                                {v_label_u}
-                            </span>
-                        </div>
-                    </div>
-                    <div style="margin-top:15px; background:#30363D; height:8px; border-radius:4px; overflow:hidden;">
-                        <div style="width:{min(v_int_u*50, 100)}%; background:{v_color_u}; height:100%;"></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if v_int_u > 1.2 and sp500_chg > 0:
-                    st.caption("🚀 **Bullish Confirmation:** Creșterea este susținută de volume mari. Trendul are „combustibil” instituțional.")
-                elif v_int_u > 1.2 and sp500_chg < 0:
-                    st.caption("🚨 **Heavy Distribution:** Se vinde masiv pe volume mari. Pericol de continuare a scăderii.")
-                elif v_int_u < 0.7:
-                    st.caption("⚠️ **Low Conviction:** Volum sub medie. Mișcarea zilei nu este confirmată de jucătorii mari.")
-            st.markdown("---")
-            # =========================================================
+                st.markdown("---")
+                st.markdown("#### ⚖️ Lățimea pieței")
+                try:
+                    br_c = get_breadth_closes()
+                except Exception as exc:  # rețea / Yahoo
+                    logger.warning("rezumat, lățime: %s", exc)
+                    br_c = pd.DataFrame()
+                b1, b2 = st.columns(2)
+                for col, (a_sym, b_sym, label) in zip((b1, b2), markets_calc.BREADTH_PAIRS):
+                    rd = briefing_calc.relative_day(br_c.get(a_sym), br_c.get(b_sym)) if not br_c.empty else {"diff_pp": None}
+                    col.metric(f"{a_sym} − {b_sym} (o zi)",
+                               "N/A" if rd["diff_pp"] is None else ("+" if rd["diff_pp"] >= 0 else "") + format_ro(rd["diff_pp"], 2, " pp"),
+                               help=f"{label}: variația zilei a lui {a_sym} minus a lui {b_sym} (prețuri ajustate). Pozitiv = "
+                                    "companiile cu pondere egală (sau cele mici) au făcut mai bine decât indicele ponderat cu "
+                                    "capitalizarea, deci mișcarea zilei a fost largă, nu dusă de câțiva giganți.")
+                _breadth_bar(briefing_calc.breadth_counts(us_t), f"Universul urmărit ({len(us_t)} simboluri, nu S&P 500)")
+                us_turn = briefing_calc.turnover_vs_median(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
+                st.metric("Valoare tranzacționată (universul urmărit)", briefing_calc.money_short(us_turn["today"], "USD"),
+                          None if us_turn["ratio"] is None else f"×{format_ro(us_turn['ratio'], 2)} față de mediană",
+                          delta_color="off",
+                          help=f"Preț × volum pe universul urmărit în ultima ședință, față de mediana celor {us_turn['n']} ședințe dinainte.")
 
-            c_us1, c_us2 = st.columns(2)
-            with c_us1:
-                st.markdown("**🚀 Top Creșteri (Big Caps)**")
-                if not us_gainers.empty:
-                    st.dataframe(
-                        us_gainers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f', ' USD'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #3FB950', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-            
-            with c_us2:
-                st.markdown("**🔻 Top Scăderi (Big Caps)**")
-                if not us_losers.empty:
-                    st.dataframe(
-                        us_losers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f', ' USD'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #F85149', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
+                st.markdown("---")
+                st.markdown("#### 🎯 Regimul S&P 500 (regula „Moment”)")
+                _regime_metrics("^GSPC", "S&P 500")
 
-            # --- 3. Top Știri Wall Street ---
+                st.markdown("---")
+                us_up, us_down = briefing_calc.top_moves(us_t, n=5)
+                c_us1, c_us2 = st.columns(2)
+                with c_us1:
+                    st.markdown("**🚀 Top 5 creșteri (universul urmărit)**")
+                    if us_up is not None and not us_up.empty:
+                        _moves_table(us_up, "USD")
+                    else:
+                        st.info("Nicio creștere în ultima ședință.")
+                with c_us2:
+                    st.markdown("**🔻 Top 5 scăderi (universul urmărit)**")
+                    if us_down is not None and not us_down.empty:
+                        _moves_table(us_down, "USD")
+                    else:
+                        st.info("Nicio scădere în ultima ședință.")
+
             st.markdown("---")
-            st.subheader("🇺🇸 Top 10 Știri Wall Street")
-            
-            if 'news_cache_us' not in st.session_state:
-                 news_us_gspc = get_company_news_rss("^GSPC")
-                 news_us_ixic = get_company_news_rss("^IXIC")
-                 combined_us = news_us_gspc + news_us_ixic
-                 combined_us.sort(key=lambda x: x['date_str'], reverse=True)
-                 st.session_state['news_cache_us'] = combined_us
-            
-            final_us_news = st.session_state['news_cache_us']
-            
-            seen_us = set()
-            unique_us_news = []
-            for n in final_us_news:
-                if n['title'] not in seen_us:
-                    unique_us_news.append(n)
-                    seen_us.add(n['title'])
-
-            if unique_us_news:
-                us_news_html = ""
-                for item in unique_us_news[:10]:
-                      us_news_html += f"""
-                      <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
-                        <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
-                           {item['title']}
-                        </a>
-                        <div style="font-size: 12px; color: #8B949E;">{item['publisher']} • {item['date_str']}</div>
-                      </div>
-                      """
-                st.markdown(us_news_html, unsafe_allow_html=True)
-            else:
+            st.subheader("🇺🇸 Top 10 știri Wall Street")
+            if not _news_list(get_us_index_news(), "publisher"):
                 st.info("Nu s-au putut încărca știrile din SUA.")
 
     # ==================================================
