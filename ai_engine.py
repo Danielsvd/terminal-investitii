@@ -26,7 +26,7 @@ def get_finbert_pipeline():
     La prima rulare, va descărca fișierele (~400MB) pe PC-ul tău.
     Apoi va rula instantaneu, fără să depindă de chei API.
     """
-    print("⏳ [AI SYSTEM] Se încarcă motorul financiar FinBERT...")
+    logger.info("[AI SYSTEM] Se încarcă motorul financiar FinBERT...")
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 def analyze_sentiment_ai(news_list):
@@ -53,7 +53,7 @@ def analyze_sentiment_ai(news_list):
         # Returnăm o medie între -1.0 și 1.0
         return total_score / count
     except Exception as e:
-        print(f"❌ [FinBERT ERROR] la scor general: {e}")
+        logger.warning(f"[FinBERT ERROR] la scor general: {e}")
         return 0
 
 # Funcție utilitară pentru a crea un "cheie" de timp (ziua curentă)
@@ -91,7 +91,7 @@ def get_cached_prophet_prediction(symbol, _hist_data, daily_hash):
         forecast = m.predict(future)
         return forecast
     except Exception as e:
-        print(f"Eroare Prophet: {e}")
+        logger.warning(f"Eroare Prophet: {e}")
         return None
 
 def render_ai_chart(forecast, hist):
@@ -311,7 +311,7 @@ def optimize_portfolio_ai(hist_data):
         }, "Optimizare finalizată."
 
     except Exception as e:
-        print(f"Eroare AI Portofoliu: {e}")
+        logger.warning(f"Eroare AI Portofoliu: {e}")
         return None, str(e)
 
 def detect_volume_anomaly_ai(df_t):
@@ -433,7 +433,7 @@ def get_options_analysis_ai(ticker_sym, dividend_rate=None):
     except Exception as e:
         # Ultima plasă: yfinance ridică tipuri de excepții nedocumentate (HTTP, JSON, 429).
         error_msg = str(e)
-        print(f"DEBUG: opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
+        logger.warning(f"opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
         if "429" in error_msg or "Too Many Requests" in error_msg:
             return None, "🚨 LIMITĂ ATINSĂ: Yahoo Finance a restricționat temporar accesul. Reîncearcă în câteva minute."
         return None, f"Eroare Opțiuni: {error_msg}"
@@ -472,7 +472,7 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
     try:
         spot = num({"p": t.fast_info.last_price}, "p")
     except (KeyError, AttributeError, TypeError, ValueError) as e:
-        print(f"DEBUG: fast_info.last_price {ticker_sym}: {e}")
+        logger.warning(f"fast_info.last_price {ticker_sym}: {e}")
         spot = None
     if spot is None or spot <= 0:
         raise _OptionsUnavailable("Prețul curent nu a putut fi citit; opțiunile nu se pot evalua fără el.")
@@ -487,7 +487,7 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
             r = float(np.log1p(float(irx.iloc[-1]) / 100.0))
             r_src = f"^IRX {ro(float(irx.iloc[-1])):.2f}% ({irx.index[-1]:%d.%m.%Y})"
     except (KeyError, IndexError, ValueError, TypeError) as e:
-        print(f"DEBUG: ^IRX indisponibil: {e}")
+        logger.warning(f"^IRX indisponibil: {e}")
     if r is None:
         missing.append("rata fără risc (^IRX)")
 
@@ -800,7 +800,7 @@ def get_detailed_ownership_and_execs(ticker_sym):
 
         return df_summary, df_details, ceo_name, inst_pct
     except Exception as e:
-        print(f"DEBUG: acționariat {ticker_sym} indisponibil: {e}")
+        logger.warning(f"acționariat {ticker_sym} indisponibil: {e}")
         return None, None, "N/A", None
 
 def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data, df_fred):
@@ -999,7 +999,7 @@ def get_gemini_sentiment_label(title):
         result = analyzer(title)[0]
         label = result['label']
         
-        print(f"🔍 [FinBERT] Titlu: {title[:30]}... -> Răspuns: {label.upper()}")
+        logger.debug(f"🔍 [FinBERT] Titlu: {title[:30]}... -> Răspuns: {label.upper()}")
 
         if label == "positive":
             return "Pozitiv", "impact-poz", "📈"
@@ -1008,5 +1008,5 @@ def get_gemini_sentiment_label(title):
         else:
             return "Neutru", "impact-neu", "➡️"
     except Exception as e:
-        print(f"❌ [FinBERT ERROR] {e}")
+        logger.warning(f"[FinBERT ERROR] {e}")
         return "Neutru", "impact-neu", "➡️"
