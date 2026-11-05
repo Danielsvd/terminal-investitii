@@ -133,3 +133,24 @@ def test_valoare_azi_include_si_pozitiile_fara_cotatie_in_sedinta():
     r = rows.set_index("Symbol")
     assert pd.isna(r.loc["DDD.RO", "PnL_RON"])                                     # tot în afara P/L-ului
     assert tot["pnl_ron"] == pytest.approx(125.0)
+
+
+def test_titluri_numerar_si_total():
+    pos = pd.DataFrame({"Symbol": ["R2601A", "R2702B", "A.RO"], "Class": ["Obligatiuni", "Obligatiuni", "Actiuni RO"],
+                        "Currency": ["RON", "EUR", "RON"], "Quantity": [10.0, 4.0, 5.0], "CostBasis": [1000.0, 396.0, 50.0]})
+    manual = {"R2601A": {"price": 101.25, "date": pd.Timestamp("2026-11-01")}}
+    bonds = pdy.bond_values(pos, FX, manual)
+    b = bonds.set_index("Symbol")
+    assert b.loc["R2601A", "Value_RON"] == pytest.approx(1012.5)                  # 10 × 101,25 (preț manual)
+    assert b.loc["R2702B", "Value_RON"] == pytest.approx(4 * 100 * 5.0)           # nominal 100 (proxy) × 5,0 lei/EUR
+    assert b.loc["R2702B", "PriceSource"] != b.loc["R2601A", "PriceSource"]
+    cash = pdy.cash_values(pd.DataFrame({"Broker": ["T", "X", "X", "X"], "Currency": ["RON", "USD", "EUR", "CHF"],
+                                         "Cash": [250.0, 10.0, 0.001, 3.0]}), FX)
+    assert list(cash["Currency"]) == ["RON", "USD", "CHF"]                         # restul de 0,001 EUR iese
+    assert cash["Value_RON"].tolist()[:2] == [250.0, 45.0] and pd.isna(cash["Value_RON"].iloc[2])
+    eq = {"value_ron": 10_000.0, "pnl_ron": -100.0}
+    g = pdy.grand_total(eq, bonds, cash)
+    assert g["value_ron"] == pytest.approx(10_000 + 1012.5 + 2000 + 295)          # 13.307,5 lei
+    assert g["pct"] == pytest.approx(-100.0 / (13_307.5 + 100.0))
+    assert g["missing"] == ["numerar CHF (fără curs)"]
+    assert pdy.grand_total({}, pdy.bond_values(None, FX), pdy.cash_values(None, FX))["value_ron"] is None

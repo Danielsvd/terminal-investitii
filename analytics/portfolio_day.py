@@ -200,3 +200,61 @@ def portfolio_day(holdings, close, fx, sessions=None, trade_dates=None):
     order = df["Contribution"].astype("float64").fillna(-np.inf)
     df = df.loc[order.sort_values(ascending=False).index].reset_index(drop=True)
     return df, totals
+
+
+# --- Titluri de stat, obligațiuni și numerar (doar în „Valoare totală azi”, fără variație zilnică) -------------------
+
+def bond_values(positions, fx, manual_prices=None, nominal_classes=("Obligatiuni",)):
+    """Titlurile de stat și obligațiunile deschise, evaluate ca în „3. Portofoliu” (`ledger.value_open_positions`:
+    preț manual din `Preturi_manuale`, altfel nominal 100, marcat proxy), în lei la cursul BNR.
+    Coloane: Symbol, Currency, Quantity, Price, PriceSource, PriceDate, MarketValue, Value_RON (None fără curs)."""
+    from analytics import ledger as ledger_calc
+    cols = ["Symbol", "Currency", "Quantity", "Price", "PriceSource", "PriceDate", "MarketValue", "Value_RON"]
+    if positions is None or len(positions) == 0:
+        return pd.DataFrame(columns=cols)
+    bonds = positions[positions["Class"].isin(nominal_classes)]
+    valued = ledger_calc.value_open_positions(bonds, {}, {}, nominal_classes=nominal_classes, manual_prices=manual_prices)
+    if valued.empty:
+        return pd.DataFrame(columns=cols)
+    valued["Value_RON"] = [None if (r := rate_for(c, fx)) is None or pd.isna(mv) else mv * r
+                           for c, mv in zip(valued["Currency"], valued["MarketValue"])]
+    return valued[cols].reset_index(drop=True)
+
+
+def cash_values(cash, fx, eps=0.005):
+    """Numerarul pe (broker, monedă) din `ledger.cash_balances`, în lei la cursul BNR. Soldurile sub `eps` (resturi de
+    rotunjire) ies. Coloane: Broker, Currency, Cash, Value_RON (None fără curs)."""
+    cols = ["Broker", "Currency", "Cash", "Value_RON"]
+    if cash is None or len(cash) == 0:
+        return pd.DataFrame(columns=cols)
+    c = cash[pd.to_numeric(cash["Cash"], errors="coerce").abs() > eps].copy()
+    c["Value_RON"] = [None if (r := rate_for(cur, fx)) is None else float(v) * r for cur, v in zip(c["Currency"], c["Cash"])]
+    return c[cols].reset_index(drop=True)
+
+
+def _sum_or_none(values):
+    v = pd.to_numeric(pd.Series(list(values), dtype="object"), errors="coerce").dropna()
+    return float(v.sum()) if len(v) else None
+
+
+def grand_total(equity_totals, bonds, cash):
+    """Valoarea totală azi, în lei: acțiuni și ETF (`portfolio_day`) + titluri de stat/obligațiuni + numerar.
+
+    dict value_ron (suma părților cu valoare; None dacă nu e niciuna), equity_ron, bonds_ron, cash_ron,
+    pnl_ron (P/L-ul zilei: doar acțiunile și ETF-urile au preț zilnic), pct (P/L ÷ (valoarea totală − P/L), adică
+    față de valoarea de la închiderea precedentă, cu titlurile și numerarul neschimbate), missing (părți fără curs).
+    """
+    eq = equity_totals.get("value_ron") if equity_totals else None
+    b = _sum_or_none(bonds["Value_RON"]) if bonds is not None and len(bonds) else None
+    c = _sum_or_none(cash["Value_RON"]) if cash is not None and len(cash) else None
+    parts = [x for x in (eq, b, c) if x is not None]
+    total = float(sum(parts)) if parts else None
+    pnl = equity_totals.get("pnl_ron") if equity_totals else None
+    base = (total - pnl) if total is not None and pnl is not None else None
+    missing = []
+    if bonds is not None and len(bonds) and bonds["Value_RON"].isna().any():
+        missing += [f"{s} (fără curs)" for s in bonds.loc[bonds["Value_RON"].isna(), "Symbol"]]
+    if cash is not None and len(cash) and cash["Value_RON"].isna().any():
+        missing += [f"numerar {cur} (fără curs)" for cur in cash.loc[cash["Value_RON"].isna(), "Currency"]]
+    return {"value_ron": total, "equity_ron": eq, "bonds_ron": b, "cash_ron": c, "pnl_ron": pnl,
+            "pct": (pnl / base) if base is not None and base > 0 else None, "missing": missing}
