@@ -75,3 +75,23 @@ def test_orizont_neacoperit_e_na():
 def test_lista_valute_unica():
     codes = [c for c, _, _ in FX_CURRENCIES]
     assert len(codes) == len(set(codes)) and codes[:2] == ["EUR", "USD"]
+
+
+def test_namespace_nou_https_2026():
+    xml = ('<?xml version="1.0" encoding="utf-8"?><DataSet xmlns="https://www.bnr.ro/xsd"><Body>'
+           '<Cube date="2026-11-04"><Rate currency="EUR">5.0866</Rate></Cube></Body></DataSet>')
+    from data.bnr import parse_bnr_xml
+    f = parse_bnr_xml(xml)
+    assert f.loc[pd.Timestamp("2026-11-04"), "EUR"] == 5.0866
+
+
+def test_ordinea_serverelor_si_motivul_scurt():
+    import requests
+    from types import SimpleNamespace
+    from data.bnr import BNR_10DAYS_PATH, bnr_urls, short_error
+    assert bnr_urls(BNR_10DAYS_PATH) == ["https://curs.bnr.ro/nbrfxrates10days.xml", "https://www.bnr.ro/nbrfxrates10days.xml"]
+    err = requests.HTTPError("x")
+    err.response = SimpleNamespace(status_code=404)
+    assert short_error(err) == "HTTP 404"
+    assert short_error(ValueError("BNR: fișier fără cursuri (u)")).startswith("răspuns fără cursuri")
+    assert short_error(requests.Timeout("t")) == "Timeout"
