@@ -8,6 +8,7 @@ from plotly.subplots import make_subplots
 import feedparser
 from data.news import filter_company_news
 from data import fred_calendar as fred_cal
+from data import sheet_view
 from ui.card_help import FUND_HELP, fund_help
 import os
 import time
@@ -1302,6 +1303,31 @@ STATEMENT_RATIO_LABELS = {
     "quickRatio": "quick ratio", "totalRevenue": "venituri", "netIncomeToCommon": "profit net",
     "operatingCashflow": "flux din exploatare", "totalDebt": "datorie totală", "totalCash": "numerar",
 }
+
+
+class SheetUnavailable(Exception):
+    """Foaia cerută nu există sau nu e accesibilă (mesaj fără date din foaie)."""
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_sheet_values(sheet_name):
+    """`get_all_values()` al unei foi din `portofoliu_db`, pentru tabul „Import Date”. Doar citire.
+    Eroarea aruncă excepția, deci nu intră în cache."""
+    ws = connect_to_gsheets(sheet_name)
+    if not ws:
+        raise SheetUnavailable(f"foaia {sheet_name} nu există sau nu e accesibilă")
+    return ws.get_all_values()
+
+
+def read_sheet_values(sheet_name):
+    """(valori, None) sau (None, motivul) — pentru afișare cu st.error, fără excepție brută."""
+    try:
+        return load_sheet_values(sheet_name), None
+    except SheetUnavailable as exc:
+        return None, str(exc)
+    except (gspread.exceptions.GSpreadException, requests.RequestException) as exc:
+        logger.warning("citire foaie %s: %s", sheet_name, exc)
+        return None, f"citirea foii {sheet_name} a eșuat ({type(exc).__name__})"
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -7075,142 +7101,92 @@ def main():
     # ==================================================
     elif sectiune == "5. Import Date":
         st.title("📂 Analiză Date (Cloud Sheets)")
-        st.caption("Datele sunt curățate și standardizate automat (Format RO & US).")
-        
+        st.caption("Foile BVB și GLOBAL din portofoliu_db, așa cum sunt calculate în foaie (prețul vine din GOOGLEFINANCE "
+                   "în foaie; aplicația nu recalculează nimic aici). Celulele goale, „-” și erorile de foaie (#DIV/0!, #N/A) "
+                   "apar ca N/A, nu ca 0. Coloanele se sortează numeric.")
+
         if st.button("🔄 Reîncarcă Datele"):
             # golește doar funcțiile care citesc din Google Sheets, nu și datele de piață
-            for _fn in (load_bvb_fundamentals, load_ledger_values, load_manual_price_values,
+            for _fn in (load_sheet_values, load_bvb_fundamentals, load_ledger_values, load_manual_price_values,
                         load_iv_history_values, list_company_files, build_bvb_dataset):
                 _fn.clear()
             st.rerun()
 
         tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", "🌍 Internațional (Global)"])
 
-        # Funcție locală de încărcare
-        def load_gsheet_data(sheet_name):
-            ws = connect_to_gsheets(sheet_name)  # Folosim singleton-ul
-            if not ws: return pd.DataFrame()
-            try:
-                data = ws.get_all_values()
-                if len(data) < 2: return pd.DataFrame()
-                df = pd.DataFrame(data[1:], columns=data[0])
-                return df
-            except Exception as e:
-                st.error(f"Eroare citire {sheet_name}: {e}")
-                return pd.DataFrame()
-
-        # --- TAB BVB (DATE EXTINSE) ---
+        # --- TAB BVB: indicatorii pe rânduri în foaie → companiile pe rânduri aici ---
         with tab_bvb:
             st.subheader("Date BVB")
-            df_bvb = load_gsheet_data("BVB")
-
-            if not df_bvb.empty:
-                try:
-                    col_indicators = df_bvb.columns[1] 
-                    df_bvb = df_bvb[df_bvb[col_indicators] != ""]
-                    
-                    # Eliminăm duplicatele de pe coloana indicatorilor
-                    df_bvb = df_bvb.drop_duplicates(subset=[col_indicators], keep='first')
-                    
-                    # Transpunere
-                    final_df = df_bvb.set_index(col_indicators).T
-                    final_df = final_df.loc[:, ~final_df.columns.str.contains('^Unnamed')] 
-
-                    # === LISTA EXTINSĂ DE COLOANE NUMERICE ===
-                    cols_numeric = [
-                        "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "GN", "P/S TTM",
-                        "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)",
-                        "Marjă netă TTM", "Marjă operațională", "Câștig pe acțiune (EPS)", "EPS TTM",
-                        "Lichiditate curentă", "Lichiditatea imediată", "Levier financiar",
-                        "Div Yield", "Dividend Yield", "Net Debt/EBITDA", "Debt/EBITDA",
-                        "Rata de îndatorare globală", "Rata de cash din capitalizare", "Rata de cash din activ net"
-                    ]
-
-                    for col in final_df.columns:
-                        col_clean = col.strip()
-                        # Verificăm dacă e în listă sau conține indicii de număr
-                        if col_clean in cols_numeric or "%" in col_clean or "Ron" in col_clean or "lei" in col_clean:
-                            final_df[col] = final_df[col].apply(smart_to_float)
-
-                    # format românesc (punct la mii, virgulă la zecimale); Styler păstrează valorile numerice pentru sortare.
-                    # Coloanele nelistate: numerele cu 2 zecimale, textul rămâne neschimbat (ro_spec nu atinge șirurile)
-                    bvb_formats = {
-                        "Rentabilitate active (ROA)": ro_spec(".2f", "%"),
-                        "Rentabilitate capital (ROE)": ro_spec(".2f", "%"),
-                        "Marjă netă TTM": ro_spec(".2f", "%"),
-                        "Marjă operațională": ro_spec(".2f", "%"),
-                        "Div Yield": ro_spec(".2f", "%"),
-                        "Dividend Yield": ro_spec(".2f", "%"),
-                        "Câștig pe acțiune (EPS)": ro_spec(".4f"),
-                        "EPS TTM": ro_spec(".4f"),
-                        "Lichiditate curentă": ro_spec(".2f"),
-                        "Lichiditatea imediată": ro_spec(".2f"),
-                        "Levier financiar": ro_spec(".2f"),
-                        "Net Debt/EBITDA": ro_spec(".2f"),
-                        "Debt/EBITDA": ro_spec(".2f"),
-                        "Rata de îndatorare globală": ro_spec(".2f", "%"),
-                        "Rata de cash din capitalizare": ro_spec(".2f", "%"),
-                        "Rata de cash din activ net": ro_spec(".2f", "%"),
-                    }
-                    st.dataframe(
-                        final_df.style.format({c: bvb_formats.get(c.strip(), ro_spec(",.2f")) for c in final_df.columns}),
-                        height=600, width='stretch'
-                    )
-                except Exception as e:
-                    st.error(f"Eroare structură BVB: {e}")
-                    st.dataframe(df_bvb.head())
-            else:
+            bvb_values, bvb_err = read_sheet_values("BVB")
+            bvb_df, bvb_units, bvb_dropped = sheet_view.bvb_view(bvb_values) if bvb_values else (pd.DataFrame(), {}, [])
+            if bvb_err:
+                st.error(f"Foaia BVB nu poate fi citită: {bvb_err}")
+            elif bvb_df.empty:
                 st.info("Foaia BVB este goală.")
+            else:
+                def _bvb_fmt(col):
+                    if col not in bvb_units:
+                        return lambda v: "N/A" if v is None else v       # coloană text
+                    unit = bvb_units[col]
+                    if unit == "%":
+                        return ro_spec(".2f", "%")
+                    if unit == " lei" or "eps" in col.lower() or "câștig pe acțiune" in col.lower():
+                        return ro_spec(".4f", unit)
+                    return ro_spec(",.2f", unit)
+                st.dataframe(
+                    bvb_df.style.format({c: _bvb_fmt(c) for c in bvb_df.columns}),
+                    height=600, width='stretch',
+                )
+                st.caption(f"{len(bvb_df) - 2} companii, {len(bvb_df.columns)} indicatori. Ultimele două rânduri: "
+                           f"„{sheet_view.AVERAGE_ROW}” și „{sheet_view.MEDIAN_ROW}” (din companiile cu valoare; mai puțin "
+                           "sensibilă la extreme: un P/E de 200 trage media, nu și mediana).")
+                if bvb_dropped:
+                    st.warning("Indicatori care apar de două ori în foaie (s-a afișat prima apariție): "
+                               + ", ".join(bvb_dropped))
 
-        # --- TAB GLOBAL (FORMATĂRI CORRECTE) ---
+        # --- TAB GLOBAL: o companie pe rând, moneda citită din fiecare celulă ---
         with tab_global:
             st.subheader("Date Internaționale")
-            df_g = load_gsheet_data("GLOBAL")
-
-            if not df_g.empty:
-                try:
-                    df_g = df_g.loc[:, ~df_g.columns.str.contains('^Unnamed')]
-                    if "Companii" in df_g.columns:
-                        df_g = df_g.set_index("Companii")
-
-                    clean_df_g = df_g.copy()
-
-                    for col in clean_df_g.columns:
-                        if col in ["Industrie", "Recomandare", "Sector"]: continue
-                        clean_df_g[col] = clean_df_g[col].apply(smart_to_float)
-
-                    # Formatare string pentru afișare (Trilioane/Miliarde)
-                    display_df = clean_df_g.copy()
-                    if "Capitalizare" in display_df.columns:
-                        display_df["Capitalizare"] = display_df["Capitalizare"].apply(format_large_currency)
-                    if "Val. intrinsecă" in display_df.columns:
-                        display_df["Val. intrinsecă"] = display_df["Val. intrinsecă"].apply(format_large_currency)
-
-                    # format românesc; moneda după număr, ca în restul aplicației
-                    global_formats = {
-                        "Preț acțiune": ro_spec(".2f", " USD"),
-                        "Preț țintă": ro_spec(".2f", " USD"),
-                        "Dividend": ro_spec(".2f", " USD"),
-                        "Datorii/Ac. Net": ro_spec(".2f", "%"),
-                        "Abatere": ro_spec(".2f", "%"),
-                        "Marjă P. Net": ro_spec(".2f", "%"),
-                        "ROA": ro_spec(".2f", "%"),
-                        "ROE": ro_spec(".2f", "%"),
-                    }
-                    st.dataframe(
-                        display_df.style.format({c: global_formats.get(c, ro_spec(",.2f")) for c in display_df.columns}),
-                        height=600, width='stretch',
-                        column_config={
-                            "Capitalizare": st.column_config.TextColumn("Capitalizare", help="Valoare formatată"),
-                            "Val. intrinsecă": st.column_config.TextColumn("Val. intrinsecă"),
-                            "Recomandare": st.column_config.TextColumn("Recomandare"),
-                        }
-                    )
-                except Exception as e:
-                    st.error(f"Eroare procesare Global: {e}")
-                    st.dataframe(df_g)
-            else:
+            g_values, g_err = read_sheet_values("GLOBAL")
+            g_df, g_units, g_cur = sheet_view.global_view(g_values) if g_values else (pd.DataFrame(), {}, pd.DataFrame())
+            if g_err:
+                st.error(f"Foaia GLOBAL nu poate fi citită: {g_err}")
+            elif g_df.empty:
                 st.info("Foaia GLOBAL este goală.")
+            else:
+                g_style = g_df.style
+                for col in g_df.columns:
+                    if col not in g_units:
+                        g_style = g_style.format(lambda v: "N/A" if v is None else v, subset=[col])
+                        continue
+                    if g_units[col] == "%":
+                        spec = ".2f"
+                    elif col.strip().lower() in ("nr actiuni", "nr acțiuni"):
+                        spec = ",.0f"
+                    elif col == "Capitalizare (mld.)":
+                        spec = ",.1f"
+                    else:
+                        spec = ",.2f"
+                    g_style = g_style.format(ro_spec(spec, g_units[col]), subset=[col])
+                    for code, rows in sheet_view.currency_groups(g_cur, col).items():
+                        g_style = g_style.format(ro_spec(spec, f" {code}"), subset=pd.IndexSlice[rows, [col]])
+                st.dataframe(
+                    g_style, height=600, width='stretch', hide_index=True,
+                    column_config={
+                        "Capitalizare (mld.)": st.column_config.Column(
+                            help="Capitalizarea din foaie, în miliarde, în moneda scrisă în celulă."),
+                        "Industrie": st.column_config.Column(
+                            help="În foaie e scrisă doar la prima companie din grup; aici e completată pe fiecare rând."),
+                    },
+                )
+                counts = g_cur.stack().value_counts() if not g_cur.empty else pd.Series(dtype=int)
+                st.caption(f"{len(g_df)} companii. Moneda e cea scrisă în fiecare celulă din foaie "
+                           f"({', '.join(f'{k}: {v} celule' for k, v in counts.items()) or 'nicio monedă scrisă'}); "
+                           "valorile nu sunt convertite între monede.")
+                mixed = sheet_view.mixed_currency_rows(g_df, g_cur)
+                if mixed:
+                    st.warning("Companii cu monede diferite pe același rând (de verificat în foaie): " + "; ".join(
+                        f"{name}: {', '.join(f'{c} în {m}' for c, m in odd.items())}, restul în {main}" for name, main, odd in mixed))
 
     # ==================================================
     # 6. REZUMATUL ZILEI (NOU & OPTIMIZAT)
