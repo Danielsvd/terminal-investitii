@@ -6878,13 +6878,20 @@ def main():
                     hide_index=True, width='stretch',
                     column_config={
                         "Data": st.column_config.Column(help="Ziua publicării în SUA, după calendarul FRED. FRED nu dă ora; "
-                                                             "majoritatea se publică dimineața la New York (după-amiaza în România)."),
+                                                             "majoritatea se publică dimineața la New York (după-amiaza în România). "
+                                                             "Deciziile FOMC: calendarul oficial al Fed, comunicat la 14:00 ora New York "
+                                                             "(21:00 ora României, cu excepția săptămânilor în care doar una dintre țări "
+                                                             "a schimbat ora)."),
                         "Actualizează în tabelul de mai jos": st.column_config.Column(
                             help="Rândurile din „Barometrul Economiei Reale” care primesc valoarea nouă. FRED preia valoarea "
                                  "de obicei în aceeași zi sau a doua zi; tabelul de mai jos are cache."),
                     })
             st.caption("Sursa: FRED, calendarul publicărilor (releases/dates). Doar ziua, fără oră și fără estimări de consens. "
+                       "Deciziile FOMC: calendarul oficial federalreserve.gov (ședințele programate; FRED le listează zilnic). "
                        + (f"Fără dată în interval: {', '.join(cal_missing)}. " if cal_missing else ""))
+            if fred_cal.fomc_outdated(cal_today):
+                st.warning("⚠️ Lista ședințelor FOMC din aplicație nu acoperă tot intervalul: trebuie adăugat programul "
+                           "nou de pe federalreserve.gov (data/fred_calendar.py, FOMC_DECISIONS).")
             with st.expander("🔎 Toate publicările FRED din interval (verificarea potrivirii numelor)", expanded=False):
                 st.caption("Dacă o publicare urmărită lipsește deși știi că apare în aceste zile, FRED a schimbat probabil numele: "
                            "caut-o aici și spune-mi numele exact.")

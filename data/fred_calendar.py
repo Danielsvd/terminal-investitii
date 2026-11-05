@@ -2,6 +2,9 @@
 
 FRED dă doar ziua publicării, fără oră. Valorile publicate rămân în tabelul „Barometrul Economiei Reale”
 (aceleași serii FRED); calendarul spune doar când se actualizează.
+
+Excepție: deciziile FOMC. Publicarea FRED „FOMC Press Release” conține seriile zilnice ale intervalului țintă
+(DFEDTARU/DFEDTARL), deci FRED o listează în fiecare zi; datele ședințelor se iau din calendarul oficial al Fed.
 """
 from datetime import date, timedelta
 
@@ -24,7 +27,19 @@ TRACKED = (
     ("indpro", "Producția industrială", "Industrial Production and Capacity Utilization", "Producție Industrială"),
     ("houst", "Construcții noi de locuințe", "New Residential Construction", "Housing Starts"),
     ("umich", "Sentimentul consumatorilor (U. Mich)", "Surveys of Consumers", "Sentiment Consumatori"),
-    ("fomc", "Decizia de dobândă FOMC", "FOMC Press Release", "Dobânda Cheie FED"),
+)
+
+# Deciziile FOMC: a doua zi a fiecărei ședințe programate, comunicat la 14:00 ora New York.
+# Sursa: federalreserve.gov/monetarypolicy/fomccalendars.htm (verificat 05.11.2026; 2027 = program provizoriu,
+# confirmat la ședința precedentă). Ședințele neprogramate nu apar. Lista se actualizează anual (Fed publică anul
+# următor de obicei în august–septembrie); după ultima dată, `fomc_outdated` semnalează lipsa.
+FOMC_LABEL = "Decizia de dobândă FOMC (14:00 ora New York)"
+FOMC_UPDATES = "Dobânda Cheie FED (media lunară; se schimbă la publicarea lunii)"
+FOMC_DECISIONS = (
+    date(2026, 1, 28), date(2026, 3, 18), date(2026, 4, 29), date(2026, 6, 17),
+    date(2026, 7, 29), date(2026, 9, 16), date(2026, 10, 28), date(2026, 12, 9),
+    date(2027, 1, 27), date(2027, 3, 17), date(2027, 4, 28), date(2027, 6, 9),
+    date(2027, 7, 28), date(2027, 9, 15), date(2027, 10, 27), date(2027, 12, 8),
 )
 
 
@@ -44,10 +59,22 @@ def window(today, days=CALENDAR_DAYS):
     return today, today + timedelta(days=days - 1)
 
 
+def fomc_in_window(today, days=CALENDAR_DAYS, decisions=FOMC_DECISIONS):
+    """Datele deciziilor FOMC din intervalul [today, today + days − 1], sortate."""
+    start, end = window(today, days)
+    return sorted(d for d in decisions if start <= d <= end)
+
+
+def fomc_outdated(today, days=CALENDAR_DAYS, decisions=FOMC_DECISIONS):
+    """True când intervalul trece de ultima decizie FOMC din listă: lista trebuie actualizată."""
+    return not decisions or window(today, days)[1] > max(decisions)
+
+
 def upcoming(release_dates, today, days=CALENDAR_DAYS):
-    """Publicările urmărite din interval.
+    """Publicările urmărite din interval: cele din FRED (TRACKED) plus deciziile FOMC (FOMC_DECISIONS).
 
     release_dates: lista `release_dates` din răspunsul FRED (dict cu release_name și date „AAAA-LL-ZZ”).
+    „FOMC Press Release” din FRED e ignorată (apare zilnic, vezi docstring-ul modulului).
     Întoarce (rows, missing): rows = dict date, weekday, in_days, label, fred_name, updates, sortate după dată
     (o publicare apare o singură dată pe zi); missing = numele afișate ale publicărilor urmărite fără dată în interval.
     """
@@ -64,9 +91,14 @@ def upcoming(release_dates, today, days=CALENDAR_DAYS):
         seen.add((hit[0], d))
         rows.append({"date": d, "weekday": WEEKDAYS_RO[d.weekday()], "in_days": (d - today).days,
                      "label": hit[1], "fred_name": hit[2], "updates": hit[3], "key": hit[0]})
+    for d in fomc_in_window(today, days):
+        rows.append({"date": d, "weekday": WEEKDAYS_RO[d.weekday()], "in_days": (d - today).days,
+                     "label": FOMC_LABEL, "fred_name": None, "updates": FOMC_UPDATES, "key": "fomc"})
     rows.sort(key=lambda r: (r["date"], r["label"]))
     found = {r["key"] for r in rows}
     missing = [label for key, label, _, _ in TRACKED if key not in found]
+    if "fomc" not in found:
+        missing.append("Decizia de dobândă FOMC")
     return rows, missing
 
 

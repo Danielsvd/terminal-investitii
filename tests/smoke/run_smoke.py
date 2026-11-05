@@ -25,6 +25,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 APP_DIR = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else ROOT
 os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
+from data import fred_calendar as fred_cal   # noqa: E402  (deciziile FOMC din calendarul Fed)
 
 TODAY = pd.Timestamp.today().normalize()
 NO_DATA = {"NODATA.RO"}            # simbol fără nicio cotație
@@ -754,6 +755,10 @@ def main():
             cal = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Publicare", "Peste"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
             assert cal is not None, "lipsește calendarul macro"
+            # deciziile FOMC vin din calendarul Fed (data reală de azi): se scot înainte de comparația cu răspunsul fals
+            cal_fomc = cal[cal["Publicare"] == fred_cal.FOMC_LABEL]
+            assert len(cal_fomc) == len(fred_cal.fomc_in_window(TODAY.date())), cal
+            cal = cal[cal["Publicare"] != fred_cal.FOMC_LABEL]
             assert list(cal["Publicare"]) == ["Piața muncii (NFP, șomaj)", "Inflația CPI"] and list(cal["Peste"]) == ["mâine", "7 zile"], cal
             print("Calendar macro:", cal[["Data", "Publicare"]].values.tolist())
             # piețele în care investește: regim tehnic + randament în lei (curs BNR)
