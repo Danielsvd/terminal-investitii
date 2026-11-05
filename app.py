@@ -1545,7 +1545,7 @@ def _risk_free_cached(currency):
     cur = (currency or "").upper()
     if cur == "USD":
         try:
-            closes = yf.Ticker("^TNX").history(period="5d")['Close'].dropna()
+            closes = yf.Ticker("^TNX").history(period="5d", auto_adjust=True)['Close'].dropna()
             if len(closes) and _valid(float(closes.iloc[-1])):
                 return float(closes.iloc[-1]) / 100, f"titluri SUA 10 ani (^TNX, {closes.index[-1]:%d.%m.%Y})"
         except Exception as e:
@@ -1804,13 +1804,13 @@ def get_stock_data(symbol):
         t = yf.Ticker(symbol)
         
         # Încercăm să descărcăm datele istorice
-        hist = t.history(period="5y")
+        hist = t.history(period="5y", auto_adjust=True)
 
         # Fallback pentru Bursa de Valori București (BVB)
         if hist.empty and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
-            hist_ro = t_ro.history(period="5y")
+            hist_ro = t_ro.history(period="5y", auto_adjust=True)
             if not hist_ro.empty:
                 return hist_ro, _safe_info(t_ro), _safe_earnings(t_ro), sym_ro
 
@@ -1953,7 +1953,7 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
     
     try:
         start_date = portfolio_curve.index[0]
-        spy_data = yf.download(bench_ticker, start=start_date, progress=False)['Close']
+        spy_data = yf.download(bench_ticker, start=start_date, progress=False, auto_adjust=True)['Close']
         
         if isinstance(spy_data, pd.DataFrame):
             spy_data = spy_data.iloc[:, 0]
@@ -2128,7 +2128,7 @@ def remove_from_watchlist(symbol):
 @st.cache_data(ttl=300)
 def get_portfolio_history_data(tickers):
     if not tickers: return pd.DataFrame()
-    data = yf.download(tickers, period="5y", group_by='ticker')
+    data = yf.download(tickers, period="5y", group_by='ticker', auto_adjust=True)
     return data
 
 def calculate_portfolio_performance(df, history_range="1A"):
@@ -2152,7 +2152,7 @@ def calculate_portfolio_performance(df, history_range="1A"):
         current_prices = get_fast_live_prices(tickers)
         # Descărcăm istoricul bulk pentru grafic (cu rate limiter)
         _yf_limiter.wait_if_needed()
-        hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False)
+        hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False, auto_adjust=True)
 
     # close_frame tratează toate formele întoarse de yf.download (un simbol sau mai multe)
     closes = close_frame(hist_data, tickers)
@@ -3141,7 +3141,7 @@ def get_cross_asset_correlation():
     }
     try:
         # Descărcăm date pe 3 luni pentru a prinde regimul curent (nu prea vechi, nu prea scurt)
-        data = yf.download(list(tickers.values()), period="3mo", progress=False)['Close']
+        data = yf.download(list(tickers.values()), period="3mo", progress=False, auto_adjust=True)['Close']
         
         # Redenumim coloanele cu numele noastre intuitive
         rename_map = {v: k for k, v in tickers.items()}
@@ -7142,7 +7142,7 @@ def main():
             from ai_engine import detect_volume_anomaly_ai # Importăm funcția nouă AI
             try:
                 # Descărcăm date pe 3 luni pentru a avea destul istoric de "învățare" pt ML
-                data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False)
+                data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False, auto_adjust=True)
                 results = []
                 
                 for t in ticker_list:
@@ -7299,7 +7299,7 @@ def main():
                 with st.spinner("Actualizăm prețurile (Global)..."):
                     try:
                         # DESCĂRCARE DATE PE 5 ZILE (pentru siguranță)
-                        data_bulk = yf.download(tickers_list, period="5d", progress=False)['Close']
+                        data_bulk = yf.download(tickers_list, period="5d", progress=False, auto_adjust=True)['Close']
                         
                         # Tratare caz un singur ticker (Series -> DataFrame)
                         if isinstance(data_bulk, pd.Series):
