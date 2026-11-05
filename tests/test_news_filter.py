@@ -65,3 +65,38 @@ def test_fara_termeni_lista_goala():
 def test_fara_stiri():
     assert filter_company_news([], "AAPL", ("Apple Inc.",)) == []
     assert filter_company_news(None, "AAPL", ("Apple Inc.",)) == []
+
+
+# --- Rezumatul Zilei D: știrile pe pozițiile din registru ----------------------------------------------------------
+from datetime import datetime
+
+from data.news import holdings_news, news_time
+
+
+def test_stiri_pe_pozitii_filtrate_recente_fara_dubluri():
+    now = datetime(2026, 11, 5, 18, 0)
+    general = [
+        {"title": "Banca Transilvania raportează profit record", "link": "a", "source": "ZF", "date_str": "2026-11-05 09:00"},
+        {"title": "BET închide pe plus", "link": "b", "source": "Bursa", "date_str": "2026-11-05 17:50"},   # nu menționează
+        {"title": "TLV anunță dividende", "link": "c", "source": "Profit", "date_str": "2026-11-01 10:00"},  # prea veche
+        {"title": "OMV Petrom investește în gaze", "link": "d", "source": "ZF", "date_str": "2026-11-04 20:00"},
+        {"title": "Petrom: fără dată", "link": "e", "source": "ZF", "date_str": "n/a"},                     # fără dată
+    ]
+    own = {"AAPL": [{"title": "Apple unveils new chip", "link": "f", "publisher": "Yahoo Finance",
+                     "date_str": "2026-11-05 15:30"}]}
+    holdings = {"TLV.RO": ("Banca Transilvania S.A.",), "SNP.RO": ("OMV Petrom S.A.",), "AAPL": ("Apple Inc.",)}
+    out = holdings_news(holdings, general, own, now=now)
+    assert [(x["symbol"], x["link"]) for x in out] == [("AAPL", "f"), ("TLV.RO", "a"), ("SNP.RO", "d")]
+    assert out[0]["source"] == "Yahoo Finance" and out[0]["time"] == datetime(2026, 11, 5, 15, 30)
+
+
+def test_stiri_limita_pe_simbol_si_aceeasi_stire_o_data():
+    now = datetime(2026, 11, 5, 18, 0)
+    general = [{"title": f"Apple news {i}", "link": str(i), "date_str": f"2026-11-05 1{i}:00"} for i in range(5)]
+    general.append({"title": "Apple and Microsoft sign deal", "link": "x", "date_str": "2026-11-05 16:30"})
+    out = holdings_news({"AAPL": ("Apple Inc.",), "MSFT": ("Microsoft Corporation",)}, general, now=now, per_symbol=3)
+    aapl = [x for x in out if x["symbol"] == "AAPL"]
+    msft = [x for x in out if x["symbol"] == "MSFT"]
+    assert len(aapl) == 3 and [x["link"] for x in aapl] == ["x", "4", "3"]   # cele mai noi 3
+    assert msft == []                                                           # știrea comună: o singură dată, la AAPL
+    assert news_time({"date_str": "bad"}) is None
