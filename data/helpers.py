@@ -369,3 +369,20 @@ def format_ro(value, decimals=2, suffix="", trim=False):
     if text in ("-0", "-0,00") or (text.startswith("-") and set(text[1:]) <= set("0,.")):
         text = text[1:]
     return text + suffix
+
+
+def text_frame(df, formats, na="N/A"):
+    """Copie a tabelului în care coloanele din `formats` devin text gata de afișat.
+
+    `formats` = {coloană: funcție(valoare) → text}. O valoare lipsă (None, NaN) devine `na`
+    fără să mai treacă prin funcție. Motiv: `st.dataframe` arată celulele nule ca „None”
+    chiar și când `Styler.format(na_rep="N/A")` le-a dat alt text. Coloanele din afara
+    `formats` rămân neschimbate; tabelul original nu se modifică.
+    """
+    out = df.copy()
+    for col, fn in formats.items():
+        if col not in out.columns:
+            continue
+        out[col] = [na if v is None or (not isinstance(v, str) and pd.isna(v)) else fn(v)
+                    for v in out[col]]
+    return out

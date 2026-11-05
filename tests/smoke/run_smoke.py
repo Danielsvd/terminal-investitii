@@ -596,6 +596,13 @@ EXPECTED_MESSAGES = (
 )
 
 
+def _ro_num(text):
+    """„+1,39”, „7,28%”, „1.250,5000” → float; „N/A” → None (tabelele afișate ca text în format românesc)."""
+    if text == "N/A":
+        return None
+    return float(str(text).replace("%", "").replace("+", "").replace(".", "").replace(",", "."))
+
+
 def main():
     install_fakes()
     from streamlit.testing.v1 import AppTest
@@ -820,9 +827,12 @@ def main():
                         getattr(getattr(d.value, "data", d.value), "columns", [])), None)
             assert erp is not None and list(erp["Piață"]) == ["BVB", "S&P 500"], "lipsește tabelul primei de risc"
             print("Prima de risc:", erp[["Piață", "Randamentul profiturilor (E/P)", "Titluri de stat 10 ani", "Prima de risc (pp)"]].values.tolist())
+            # tabelul e text gata formatat (2 zecimale, lipsă = „N/A”, niciodată „None”): toleranță de rotunjire
+            assert not erp.isna().any().any(), "celule nule în prima de risc (se afișează „None”)"
             for _, e_ in erp.iterrows():
-                if not pd.isna(e_["Prima de risc (pp)"]):
-                    assert abs(e_["Randamentul profiturilor (E/P)"] - e_["Titluri de stat 10 ani"] - e_["Prima de risc (pp)"]) < 1e-9
+                ep_, bd_, gp_ = (_ro_num(e_[c]) for c in ("Randamentul profiturilor (E/P)", "Titluri de stat 10 ani", "Prima de risc (pp)"))
+                if gp_ is not None:
+                    assert abs(ep_ - bd_ - gp_) <= 0.011, e_.to_dict()
             # indicatori macro: interpretarea dobânzilor pe o lună în puncte de bază; ghidul spune că e pe o ședință, netestat
             infos = " ".join(str(e.value) for e in at.info)
             assert ("pb într-o lună" in infos) or ("nu are istoric suficient" in infos), "lipsește interpretarea dobânzilor"
@@ -849,9 +859,10 @@ def main():
             assert fx is not None, "lipsește tabelul cursului valutar"
             fx_df = getattr(fx, "data", fx).set_index("Valută")
             print("Curs BNR:", fx_df[["Curs BNR", "Zi %", "1 lună %", "1 an %"]].head(3).to_dict("index"))
-            assert abs(float(fx_df.loc["Euro", "Curs BNR"]) - 5.02) < 1e-9, fx_df.loc["Euro"]
-            assert pd.isna(fx_df.loc["Euro", "1 an %"]), "1 an fără istoric trebuie N/A"
-            assert pd.isna(fx_df.loc["Liră sterlină", "Curs BNR"]), "valută absentă la BNR trebuie N/A"
+            assert not fx_df.isna().any().any(), "celule nule în cursul valutar (se afișează „None”)"
+            assert abs(_ro_num(fx_df.loc["Euro", "Curs BNR"]) - 5.02) < 1e-9, fx_df.loc["Euro"]
+            assert fx_df.loc["Euro", "1 an %"] == "N/A", "1 an fără istoric trebuie N/A"
+            assert fx_df.loc["Liră sterlină", "Curs BNR"] == "N/A", "valută absentă la BNR trebuie N/A"
             assert any(f"nbrfxrates{TODAY.year - 1}.xml" in str(c.value) for c in at.caption), "lipsește nota fișierului BNR necitit"
         if section == "7. Scanner Volum":
             at.button[0].click().run()
