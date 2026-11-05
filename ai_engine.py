@@ -209,7 +209,7 @@ def detect_market_regime_ai(hist_data):
 
         # 1. Feature Engineering
         df_ml = pd.DataFrame()
-        df_ml['Return'] = hist_data['Close'].pct_change() * 100
+        df_ml['Return'] = hist_data['Close'].pct_change(fill_method=None) * 100
         df_ml['Volatility'] = df_ml['Return'].rolling(window=10).std()
         
         # Calculăm "Forward Return" la 20 de zile (ce s-a întâmplat după semnal)
@@ -262,7 +262,7 @@ def optimize_portfolio_ai(hist_data):
         df_clean = hist_data.ffill().dropna()
         
         # Randamente zilnice
-        returns = df_clean.pct_change().dropna()
+        returns = df_clean.pct_change(fill_method=None).dropna()
         
         # Parametri anuali (252 zile de tranzacționare/an)
         mean_returns = returns.mean() * 252
@@ -325,7 +325,7 @@ def detect_volume_anomaly_ai(df_t):
             
         # 1. Extragem datele relevante pentru AI
         df_ml = pd.DataFrame()
-        df_ml['Return'] = df_t['Close'].pct_change() * 100
+        df_ml['Return'] = df_t['Close'].pct_change(fill_method=None) * 100
         df_ml['Volume'] = df_t['Volume']
         df_ml['Volatility'] = df_ml['Return'].rolling(window=5).std()
         
