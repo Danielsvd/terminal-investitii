@@ -7368,18 +7368,18 @@ def main():
                     st.caption(f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(bvb_missing)}), excluse din toate calculele: "
                                + ", ".join(s.replace(".RO", "") for s in bvb_missing) + ".")
                 st.markdown("---")
-                bvb_up, bvb_down = briefing_calc.top_moves(bvb_t, n=5, min_value=briefing_calc.MIN_VALUE_RON)
+                bvb_up, bvb_down = briefing_calc.top_moves(bvb_t, n=briefing_calc.TOP_N, min_value=briefing_calc.MIN_VALUE_RON)
                 st.caption(f"Topurile: doar companiile cu valoare tranzacționată ≥ {briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} "
                            "în ședință (sub prag, o singură tranzacție mică mișcă prețul).")
                 c_up, c_dn = st.columns(2)
                 with c_up:
-                    st.markdown("**🚀 Top 5 creșteri**")
+                    st.markdown(f"**🚀 Top {briefing_calc.TOP_N} creșteri**")
                     if bvb_up is not None and not bvb_up.empty:
                         _moves_table(bvb_up, "RON")
                     else:
                         st.info("Nicio creștere peste prag.")
                 with c_dn:
-                    st.markdown("**🔻 Top 5 scăderi**")
+                    st.markdown(f"**🔻 Top {briefing_calc.TOP_N} scăderi**")
                     if bvb_down is not None and not bvb_down.empty:
                         _moves_table(bvb_down, "RON")
                     else:
@@ -7496,16 +7496,16 @@ def main():
                 _regime_metrics("^GSPC", "S&P 500")
 
                 st.markdown("---")
-                us_up, us_down = briefing_calc.top_moves(us_t, n=5)
+                us_up, us_down = briefing_calc.top_moves(us_t, n=briefing_calc.TOP_N)
                 c_us1, c_us2 = st.columns(2)
                 with c_us1:
-                    st.markdown("**🚀 Top 5 creșteri (universul urmărit)**")
+                    st.markdown(f"**🚀 Top {briefing_calc.TOP_N} creșteri (universul urmărit)**")
                     if us_up is not None and not us_up.empty:
                         _moves_table(us_up, "USD")
                     else:
                         st.info("Nicio creștere în ultima ședință.")
                 with c_us2:
-                    st.markdown("**🔻 Top 5 scăderi (universul urmărit)**")
+                    st.markdown(f"**🔻 Top {briefing_calc.TOP_N} scăderi (universul urmărit)**")
                     if us_down is not None and not us_down.empty:
                         _moves_table(us_down, "USD")
                     else:
