@@ -114,7 +114,9 @@ def portfolio_day(holdings, close, fx, sessions=None, trade_dates=None):
     trade_dates: {simbol: data ultimei tranzacții} (de la `last_trade_dates`).
 
     Întoarce (rows, totals): rows = DataFrame cu COLUMNS (Pct, Contribution ca fracții), sortat după contribuție;
-    totals = dict pnl_ron, prev_ron, pct, n, by_market {piață: dict pnl_ron, prev_ron, pct, n, session}, excluded
+    totals = dict value_ron (valoarea de azi a pozițiilor cu preț și curs, inclusiv cele fără cotație în ședință, la
+    ultima lor cotație), n_valued, pnl_ron, prev_ron, pct, n, by_market {piață: dict value_ron, n_valued, pnl_ron,
+    prev_ron, pct, n, held, session}, excluded
     (listă de (simbol, motiv)), alerts (simbolurile cu |σ| ≥ SIGMA_ALERT), top, bottom (cele mai mari contribuții
     pozitive / negative, câte TOP_CONTRIB).
     """
@@ -140,11 +142,13 @@ def portfolio_day(holdings, close, fx, sessions=None, trade_dates=None):
             continue
         m = briefing.daily_move(s)
         row.update({"Date": m["date"], "Close": m["last"], "Prev": m["prev"], "Pct": m["pct"], "Sigma": m["sigma"]})
+        rate = rate_for(cur, fx)
         if m["date"] != session or m["prev"] is None:
             row["Status"] = STATUS_STALE
+            if rate is not None:            # valoarea de azi la ultima cotație (intră în „Valoare azi”, nu în P/L)
+                row["Value_RON"] = qty * m["last"] * rate
             rows.append(row)
             continue
-        rate = rate_for(cur, fx)
         row["PnL"] = qty * (m["last"] - m["prev"])
         if rate is None:
             row["Status"] = STATUS_NO_FX
@@ -170,7 +174,9 @@ def portfolio_day(holdings, close, fx, sessions=None, trade_dates=None):
             continue
         p_prev = float(part["PrevValue_RON"].sum()) if len(part) else 0.0
         p_pnl = float(part["PnL_RON"].sum()) if len(part) else None
+        val_here = pd.to_numeric(held_here["Value_RON"], errors="coerce").dropna()
         by_market[mkt] = {"pnl_ron": p_pnl, "prev_ron": p_prev if len(part) else None,
+                          "value_ron": float(val_here.sum()) if len(val_here) else None, "n_valued": len(val_here),
                           "pct": (p_pnl / p_prev) if len(part) and p_prev > 0 else None,
                           "n": len(part), "held": len(held_here), "session": sessions.get(mkt)}
     ranked = df[df["Contribution"].notna()].sort_values("Contribution", ascending=False)
@@ -178,7 +184,9 @@ def portfolio_day(holdings, close, fx, sessions=None, trade_dates=None):
     bottom = ranked[ranked["Contribution"] < 0].sort_values("Contribution").head(TOP_CONTRIB)
     sig = pd.to_numeric(df["Sigma"], errors="coerce")
     alerts = df[(df["Status"] == STATUS_OK) & (sig.abs() >= SIGMA_ALERT)]
+    vals = pd.to_numeric(df["Value_RON"], errors="coerce").dropna()
     totals = {
+        "value_ron": float(vals.sum()) if len(vals) else None, "n_valued": len(vals),
         "pnl_ron": pnl_total,
         "prev_ron": prev_total if len(ok) else None,
         "pct": (pnl_total / prev_total) if pnl_total is not None and prev_total > 0 else None,
