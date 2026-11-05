@@ -497,6 +497,13 @@ def install_fakes():
             days = ([pd.Timestamp(TODAY) - pd.Timedelta(days=d) for d in (3, 2, 1)] if "10days" in url
                     else [pd.Timestamp(TODAY) - pd.DateOffset(months=2), pd.Timestamp(TODAY) - pd.Timedelta(days=4)])
             return types.SimpleNamespace(status_code=200, content=_bnr_xml(sorted(days)), raise_for_status=lambda: None)
+        if "api.stlouisfed.org" in url:          # calendarul FRED (releases/dates): 2 publicări urmărite + una neurmărită
+            assert k.get("params", {}).get("api_key") == FAKE_FRED_KEY
+            d0 = pd.Timestamp(TODAY)
+            rel = [{"release_id": 50, "release_name": "Employment Situation", "date": f"{d0 + pd.Timedelta(days=1):%Y-%m-%d}"},
+                   {"release_id": 10, "release_name": "Consumer Price Index", "date": f"{d0 + pd.Timedelta(days=7):%Y-%m-%d}"},
+                   {"release_id": 18, "release_name": "H.15 Selected Interest Rates", "date": f"{d0:%Y-%m-%d}"}]
+            return types.SimpleNamespace(status_code=200, json=lambda: {"release_dates": rel}, raise_for_status=lambda: None)
         if "ec.europa.eu/eurostat" in url:      # ROBOR 3M (Eurostat irt_st_m)
             return types.SimpleNamespace(status_code=200, text="", json=lambda: EUROSTAT_ROBOR, raise_for_status=lambda: None)
         if "data-api.ecb.europa.eu" not in url:
@@ -553,6 +560,8 @@ def install_fakes():
 # --------------------------------------------------------------------------
 # Rularea
 # --------------------------------------------------------------------------
+FAKE_FRED_KEY = "0" * 32
+
 EXPECTED_MESSAGES = (
     "(prag absolut 45%, netestat)", "(prag absolut 20%, netestat)",   # nivelul IV la bani pe lanțul sintetic
     "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
@@ -608,6 +617,7 @@ def main():
 
     at = AppTest.from_file(os.path.join(APP_DIR, "app.py"), default_timeout=300)
     at.secrets["gcp_service_account"] = {"type": "service_account"}
+    at.secrets["FRED_API_KEY"] = FAKE_FRED_KEY   # cheie falsă: calendarul macro rulează pe răspunsul fals de mai sus
     at.run()
     check(at, "1. Știri")
 
@@ -740,6 +750,12 @@ def main():
             assert len(pil_df) == 6 and float(pil_df["Pondere %"].sum()) == 100.0, pil_df
             print("Piloni macro:", list(zip(pil_df["Pilon"], pil_df["Scor"])))
             assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
+            # calendarul macro FRED: pe răspunsul fals, doar cele 2 publicări urmărite (H.15 nu e urmărită), ordonate
+            cal = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Publicare", "Peste"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert cal is not None, "lipsește calendarul macro"
+            assert list(cal["Publicare"]) == ["Piața muncii (NFP, șomaj)", "Inflația CPI"] and list(cal["Peste"]) == ["mâine", "7 zile"], cal
+            print("Calendar macro:", cal[["Data", "Publicare"]].values.tolist())
             # piețele în care investește: regim tehnic + randament în lei (curs BNR)
             reg = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Trend", "Scor moment"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
