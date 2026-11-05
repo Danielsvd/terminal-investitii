@@ -38,6 +38,7 @@ from analytics import markets as markets_calc
 from analytics import rates as rates_calc
 from analytics import stress as stress_calc
 from analytics import briefing as briefing_calc
+from analytics import day_notes
 from analytics import portfolio_day as pday_calc
 from analytics import scanner as scanner_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
@@ -2237,7 +2238,7 @@ def render_portfolio_today(sessions, fx, fx_dates):
                 width='stretch', hide_index=True,
                 column_config={"Valoare (lei)": st.column_config.Column(help="Soldul din registru × cursul BNR.")})
     st.markdown("---")
-    return holdings
+    return {"holdings": holdings, "totals": tot, "rows": rows}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2272,6 +2273,7 @@ def render_events_today(holdings):
     """„📅 Evenimente și știri” (Rezumatul Zilei, etapa D): publicările macro SUA de azi și mâine (același calendar
     ca în „4. Piață Globală”) și știrile recente despre acțiunile din registru (fără ETF-uri și titluri de stat)."""
     st.markdown("### 📅 Evenimente și știri")
+    result = {"soon": [], "news": []}
     c_cal, c_news = st.columns([2, 3])
     with c_cal:
         st.markdown("**Calendar macro SUA, azi și mâine**")
@@ -2282,6 +2284,7 @@ def render_events_today(holdings):
         else:
             cal_rows, _missing = fred_cal.upcoming(cal_data, today)
             soon, nxt = fred_cal.near(cal_rows)
+            result["soon"] = soon
             for r in soon:
                 st.markdown(f"- **{'Azi' if r['in_days'] == 0 else 'Mâine'}** ({r['weekday']} {r['date']:%d.%m}): "
                             f"{html.escape(r['label'])}")
@@ -2298,7 +2301,8 @@ def render_events_today(holdings):
             holdings.loc[holdings["Class"].astype(str).str.upper() != "ETF", "Symbol"].astype(str).unique())
         if not syms:
             st.info("Nicio acțiune deschisă în registrul `Tranzactii`.")
-            return
+            st.markdown("---")
+            return result
         with st.spinner("Căutăm știrile despre pozițiile tale..."):
             try:
                 items, no_name = get_holdings_news(tuple(syms))
@@ -2310,6 +2314,7 @@ def render_events_today(holdings):
         elif not items:
             st.info("Nicio știre din ultimele 48 de ore care să menționeze acțiunile tale.")
         else:
+            result["news"] = items
             st.markdown(compact_html("".join(
                 f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
                 <span style="background:#21262D; color:#C9D1D9; border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; margin-right:6px;">{html.escape(it['symbol'].replace('.RO', ''))}</span>
@@ -2321,6 +2326,7 @@ def render_events_today(holdings):
                    "Fluxurile RO acoperă puține companii mici, deci lipsa unei știri nu înseamnă că nu s-a întâmplat nimic."
                    + (f" Fără nume în Yahoo (filtrate doar după simbol): {', '.join(no_name)}." if no_name else ""))
     st.markdown("---")
+    return result
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -7111,6 +7117,7 @@ def main():
         st.title("🗞️ Rezumatul Zilei")
         st.caption("Ultima ședință a fiecărei piețe, din prețurile de închidere neajustate (Yahoo). Pragurile textelor "
                    "(1σ, 2σ) sunt descriptive, netestate. Fără recomandări: datele și baza lor.")
+        rz_top = st.container()        # „3 lucruri de știut azi” (etapa E): se completează după ce sunt calculate toate
 
         try:
             with st.spinner("Citim ultima ședință..."):
@@ -7220,8 +7227,8 @@ def main():
             if not brief["eu_close"].empty:      # Europa: din universul urmărit (79), nu doar din deținerile tale
                 _rz_sessions["eu"] = briefing_calc.session_date(brief["eu_close"].drop(columns=BRIEFING_EU_INDICES, errors="ignore"))
         rz_fx, rz_fx_dates = rezumat_fx()          # toate sumele din Rezumatul Zilei în lei, la cursul BNR
-        rz_holdings = render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates)
-        render_events_today(rz_holdings)
+        rz_pday = render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates) or {}
+        rz_events = render_events_today(rz_pday.get("holdings")) or {}
 
         tab_bvb, tab_eu, tab_us = st.tabs(["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street"])
 
@@ -7564,6 +7571,48 @@ def main():
             st.subheader("🇺🇸 Top 10 știri Wall Street")
             if not _news_list(get_us_index_news(), "publisher"):
                 st.info("Nu s-au putut încărca știrile din SUA.")
+
+        # === 3 lucruri de știut azi (etapa E): reguli fixe din analytics/day_notes.py, afișate sus ===
+        rz_rows = rz_pday.get("rows")
+        rz_by_sym = {}
+        for r in ([] if rz_rows is None else rz_rows.itertuples(index=False)):
+            rz_by_sym[r.Symbol] = {k: (None if pd.isna(getattr(r, k)) else float(getattr(r, k)))
+                                   for k in ("Pct", "Sigma", "Contribution")}
+        rz_tot = rz_pday.get("totals")
+        rz_moves, rz_sectors = [], []
+        if brief is not None:
+            for nm, key, sym in (("BET", "bvb_close", BRIEFING_BET_PROXY), ("STOXX 600", "eu_close", "^STOXX"),
+                                 ("S&P 500", "us_close", "^GSPC")):
+                rz_moves.append((nm, briefing_calc.daily_move(brief[key].get(sym))))
+            sec_cols_rz = [s for s in BRIEFING_US_SECTORS if s in brief["us_close"].columns]
+            if sec_cols_rz:
+                sec_rz, _ = briefing_calc.sector_moves(brief["us_close"][sec_cols_rz], brief["us_volume"].reindex(columns=sec_cols_rz),
+                                                       brief["us_close"].get("^GSPC"))
+                rz_sectors = [{"name": r.name, "etf": s, "pct": None if pd.isna(r.pct) else float(r.pct),
+                               "vs_index_pp": None if pd.isna(r.vs_index_pp) else float(r.vs_index_pp)}
+                              for s, r in zip(sec_rz.index, sec_rz.itertuples(index=False))]
+        rz_things = day_notes.three_things(
+            portfolio=day_notes.portfolio_note(rz_tot, rz_by_sym),
+            market=day_notes.market_note(rz_moves),
+            events=day_notes.events_note(rz_events.get("soon")),
+            alerts=day_notes.alerts_note((rz_tot or {}).get("alerts"), rz_by_sym),
+            sector=day_notes.sector_note(rz_sectors),
+            news=day_notes.news_note(rz_events.get("news")))
+        with rz_top:
+            st.markdown("### 🧭 3 lucruri de știut azi")
+            if rz_things:
+                st.markdown(compact_html(
+                    '<div style="border:1px solid #30363D; border-radius:8px; padding:10px 14px; margin-bottom:6px;">'
+                    + "".join(f'<div style="margin:4px 0;"><b>{i}.</b> {md_bold_html(t["text"])}</div>'
+                              for i, t in enumerate(rz_things, 1))
+                    + "</div>"), unsafe_allow_html=True)
+            else:
+                st.info("Nu sunt destule date acum pentru rezumat (cotațiile sau registrul nu au putut fi citite).")
+            st.caption("Text din reguli fixe, descriptiv (analytics/day_notes.py): 1) portofoliul în ultima ședință; 2) indicele "
+                       "cu cea mai mare mișcare în σ dintre BET (prin ETF-ul TVBETETF), STOXX 600 și S&P 500; 3) primul disponibil dintre calendarul "
+                       "macro SUA de azi/mâine, pozițiile tale peste 2σ, sectorul S&P 500 cu abaterea cea mai mare (≥ 1 pp) și "
+                       "cea mai nouă știre despre pozițiile tale. Detaliile sunt mai jos.")
+            st.markdown("---")
 
     # ==================================================
     # 7. SCANNER VOLUM (RVOL) - NOU

@@ -771,6 +771,11 @@ def main():
             md = " ".join(str(e.value) for e in at.markdown)
             assert "Evenimente și știri" in md and "Calendar macro SUA, azi și mâine" in md, "lipsește secțiunea Evenimente"
             assert "Știri despre acțiunile tale" in md, "lipsesc știrile pe poziții"
+            # etapa E: „3 lucruri de știut azi”, sus, din reguli; în smoke există P/L, deci primul rând e portofoliul
+            assert "3 lucruri de știut azi" in md, "lipsește „3 lucruri de știut azi”"
+            box = next(str(e.value) for e in at.markdown if "<b>1.</b>" in str(e.value))
+            assert "<b>3.</b>" in box and "Portofoliul (acțiuni și ETF)" in box and "Piața: cea mai mare mișcare" in box, box
+            print("3 lucruri:", box[:600])
             badges = [str(e.value) for e in at.markdown if "background:#21262D" in str(e.value)]
             assert badges and "TLV" in badges[0] and "<b>" not in badges[0], "știrile pe poziții: lipsă sau HTML neescapat"
             print("Evenimente:", [str(e.value)[:90] for e in at.markdown if str(e.value).startswith(("- **Azi", "- **Mâine", "Azi și mâine", "Nicio publicare"))],
