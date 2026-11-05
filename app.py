@@ -6445,7 +6445,7 @@ def main():
                 st.markdown("---")
                 st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
                 
-                rot_change = None   # folosit și de barometrul de sentiment de mai jos
+                rot_change = None
                 try:
                     # Raportul pe zilele comune; variația pe o lună calendaristică (nu 22 de rânduri)
                     ratio = get_rotation_ratio()
@@ -6538,42 +6538,8 @@ def main():
                     logger.warning("rotație Nasdaq/Dow: %s", e)
                     st.info("Indicatorul de rotație nu are date acum (Yahoo): N/A.")
                     
-                    # --- MODUL: BAROMETRU DE SENTIMENT GLOBAL (ȘTIRI) ---
-                st.markdown("---")
-                st.subheader("🎭 Barometru Sentiment Global al Media")
-                
-                # Același scor ca pilonul „Sentiment” din verdictul de sus (aceleași știri, același model): nu se recalculează.
-                global_sentiment_score = macro_sentiment
-                if global_sentiment_score is None:
-                    st.info("Fără știri analizate acum pentru S&P 500 / Nasdaq: sentimentul e N/A.")
-                else:
-                    if global_sentiment_score > 0.15:
-                        s_col, s_msg = "#3FB950", "🚀 BULLISH: Narațiunea globală este optimistă."
-                    elif global_sentiment_score < -0.15:
-                        s_col, s_msg = "#F85149", "📉 BEARISH: Predomină frica și incertitudinea."
-                    else:
-                        s_col, s_msg = "#8B949E", "⚖️ NEUTRU: Media reflectă o perioadă de consolidare."
-                    sb1, sb2 = st.columns([1, 2])
-                    with sb1:
-                        st.markdown(f"""
-                        <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {s_col}; text-align:center;">
-                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sentiment Media</p>
-                            <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{ro(global_sentiment_score):.2f}</h1>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with sb2:
-                        st.info(s_msg)
-                        st.write("**Corelație cu Rotația:**")
-                        if rot_change is None:
-                            st.write("ℹ️ Rotația Nasdaq/Dow nu are date: comparația nu se poate face.")
-                        elif global_sentiment_score < 0 and rot_change < 0:
-                            st.write("⚠️ **CONFIRMARE DEFENSIVĂ:** Atât știrile, cât și mișcările de capital (rotația) indică o fugă către siguranță.")
-                        elif global_sentiment_score > 0 and rot_change > 0:
-                            st.write("🌟 **CONFIRMARE GROWTH:** Sentimentul pozitiv din media susține migrarea banilor către Tehnologie.")
-                        else:
-                            st.write("🔄 **DIVERGENȚĂ:** Piața se mișcă într-o direcție, dar media raportează altceva. Atenție la potențiale capcane!")
-                    st.caption("Media FinBERT (−1…+1) pe titlurile din fluxurile S&P 500 și Nasdaq; praguri ±0,15, netestate. "
-                               "O eroare a modelului dă tot 0 (neutru): limită cunoscută.")
+                # „Barometru Sentiment Global al Media” a fost scos (05.11, decizia lui Daniel): același scor FinBERT e
+                # pilonul „Sentimentul știrilor” din verdictul de sus.
 
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
