@@ -103,7 +103,7 @@ def news_note(news):
     it = news[0]
     more = len(news) - 1
     return {"tag": "știri", "text": f"Știre despre {it['symbol'].replace('.RO', '')}: „{it['title']}” ({it['source']}, "
-                                    f"{it['time']:%d.%m %H:%M})" + (f"; încă {more} în lista de mai jos." if more else ".")}
+                                    f"{it['time']:%d.%m %H:%M})" + (f"; încă {more} în tabul „📰 Știri”." if more else ".")}
 
 
 def three_things(portfolio=None, market=None, events=None, alerts=None, sector=None, news=None, n=N_ITEMS):
