@@ -342,30 +342,6 @@ def format_amount(val):
     if a >= 1e6: return f"{sign}{ro(a/1e6):,.2f} mil"
     return f"{sign}{ro(a):,.2f}"
 
-def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
-    """Calculează Beta și Corelația globală a întregului portofoliu."""
-    if portfolio_curve is None or portfolio_curve.empty:
-        return 0.0, 0.0
-    try:
-        start_date = portfolio_curve.index[0]
-        bench_data = yf.download(benchmark_ticker, start=start_date, progress=False)['Close']
-        if isinstance(bench_data, pd.DataFrame): bench_data = bench_data.iloc[:, 0]
-        
-        combined = pd.DataFrame({'Port': portfolio_curve, 'Bench': bench_data}).ffill().dropna()
-        returns = combined.pct_change().dropna()
-        
-        # Corelația globală (0 la 1)
-        correlation = returns['Port'].corr(returns['Bench'])
-        
-        # Beta (Sensibilitatea la piață)
-        variance = returns['Bench'].var()
-        beta = returns['Port'].cov(returns['Bench']) / variance if variance != 0 else 1.0
-        
-        return correlation, beta
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("calculate_portfolio_beta: %s", exc)
-        return 0.0, 1.0
-
 def get_macro_interpretation(ticker_data, vix_close=None):
     """Ghidul macro al zilei: semnalele din analytics/macro.py (daily_cross_asset_signals) pe variațiile ultimei ședințe
     a fiecărei serii. Un simbol fără date nu mai contează ca variație 0: regula lui se sare. Randamentul pe 10 ani
@@ -406,35 +382,6 @@ def get_macro_interpretation(ticker_data, vix_close=None):
     out.append("ℹ️ Semnale pe variația unei singure ședințe, praguri orientative, netestate."
                + (f" Fără date azi pentru: {', '.join(missing)} (regulile lor nu s-au evaluat)." if missing else ""))
     return out
-
-def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
-    """
-    Calculează Sortino Ratio izoland exclusiv deviația standard negativă.
-    Standardul de aur pentru hedge-fund-uri.
-    """
-    if portfolio_curve is None or len(portfolio_curve) < 5:
-        return 0.0
-        
-    try:
-        returns = portfolio_curve.pct_change().dropna()
-        # Randament mediu anualizat
-        mean_return = returns.mean() * 252
-        
-        # Păstrăm doar randamentele sub zero (Downside Risk)
-        negative_returns = returns[returns < 0]
-        
-        if len(negative_returns) < 2:
-            return 0.0 # Prea puține date negative pentru calcul
-            
-        # Volatilitate negativă anualizată
-        downside_std = np.sqrt((negative_returns**2).sum() / len(returns)) * np.sqrt(252)
-        
-        if downside_std == 0: return 0.0
-        
-        return (mean_return - risk_free_rate) / downside_std
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("calculate_sortino_ratio: %s", exc)
-        return 0.0
 
 def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, spread_label=None):
     score = 50
@@ -1214,53 +1161,6 @@ def get_macro_data_visuals():
     data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False, auto_adjust=True)
     return tickers, data
 
-@st.cache_data(ttl=3600)
-def get_market_data():
-    try:
-        spy = yf.Ticker("SPY").history(period="1y")['Close']
-        return spy
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("get_market_data: %s", exc)
-        return None
-
-@st.cache_data(ttl=3600)
-def get_risk_free_rate():
-    """Descarcă randamentul titlurilor de stat SUA pe 10 ani (^TNX) ca proxy pentru Risk Free Rate."""
-    try:
-        tnx = yf.Ticker("^TNX").history(period="1d")
-        if not tnx.empty:
-            return tnx['Close'].iloc[-1] / 100
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("get_risk_free_rate: %s", exc)
-        pass
-    return 0.04 # Fallback la 4%
-
-def calculate_alpha(stock_hist, beta):
-    try:
-        spy = get_market_data()
-        if spy is None or stock_hist is None: return None
-        
-        # Sincronizare lungime date
-        min_len = min(len(spy), len(stock_hist))
-        stock_close = stock_hist['Close'].iloc[-min_len:]
-        spy_close = spy.iloc[-min_len:]
-        
-        # Calcul randament total
-        ret_stock = (stock_close.iloc[-1] / stock_close.iloc[0]) - 1
-        ret_market = (spy_close.iloc[-1] / spy_close.iloc[0]) - 1
-        
-        # Rata dinamică
-        risk_free = get_risk_free_rate()
-        
-        if beta is None: beta = 1.0
-        
-        # Formula CAPM: Alpha = R_stock - (R_rf + Beta * (R_market - R_rf))
-        alpha = ret_stock - (risk_free + beta * (ret_market - risk_free))
-        return alpha
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("calculate_alpha: %s", exc)
-        return None
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_financial_statements(symbol):
     """Situațiile financiare anuale și trimestriale din yfinance, pentru analytics/fundamentals.py.
@@ -1485,7 +1385,6 @@ def resolve_beta_alpha(symbol, info, hist):
         return out
     # USD: beta Yahoo (față de S&P 500), benchmark SPY. Fereastra pe date calendaristice (jensen_alpha),
     # nu pe număr de rânduri; rata fără risc citită din ^TNX, fără valoarea de rezervă de 4% (lipsă → N/A).
-    # calculate_alpha / get_risk_free_rate rămân în cod, nefolosite (curățare în Etapa 5, cu acord).
     rf_val, rf_label = get_risk_free_for_currency("USD")
     if rf_val is None:
         out["alpha_label"] = f"indisponibil: {rf_label}"
@@ -1687,7 +1586,7 @@ def get_risk_free_for_currency(currency):
     except RiskFreeUnavailable as exc:
         return None, str(exc)
 
-# --- Pune acest bloc sus, lângă celelalte funcții (calculate_alpha, etc.) ---
+# --- Funcții ajutătoare ---
 
 def calculate_health_score_ext(info):
     score = 5
@@ -2119,44 +2018,6 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
 
 # --- FUNCȚII NOI PENTRU REZUMAT ZILNIC (DAILY BRIEFING) ---
 
-def generate_market_narrative(ticker_data, symbol, name):
-    try:
-        if isinstance(ticker_data.columns, pd.MultiIndex):
-            if symbol in ticker_data.columns.levels[0]:
-                close = ticker_data[symbol]['Close']
-            else:
-                return f"Date indisponibile pentru {name}.", 0, 0
-        else:
-            close = ticker_data['Close']
-
-        close = close.dropna()
-        if len(close) < 2: return "Date insuficiente.", 0, 0
-
-        curr = close.iloc[-1]
-        prev = close.iloc[-2]
-        change_pct = ((curr - prev) / prev) * 100
-        
-        if change_pct > 1.0:
-            trend = "o creștere puternică"
-            sentiment = "pozitiv"
-        elif change_pct > 0.2:
-            trend = "o creștere moderată"
-            sentiment = "ușor optimist"
-        elif change_pct > -0.2:
-            trend = "o evoluție stabilă"
-            sentiment = "neutru"
-        elif change_pct > -1.0:
-            trend = "o scădere moderată"
-            sentiment = "precaut"
-        else:
-            trend = "o scădere semnificativă"
-            sentiment = "negativ"
-            
-        text = f"**{name}** a înregistrat {trend} de **{ro(change_pct):.2f}%**, închizând la {ro(curr):,.2f}. Sentimentul pieței este {sentiment}."
-        return text, change_pct, curr
-    except Exception as e:
-        return f"Nu s-au putut genera date pentru {name}.", 0, 0
-
 BRIEFING_US_INDICES = ["^GSPC", "^IXIC", "^DJI"]
 # Universul SUA urmărit (lista unică: tools/univers_urmarit_sua.txt, prin data/universes.py; nu S&P 500).
 BRIEFING_US_UNIVERSE = universes.symbols("us")
@@ -2201,136 +2062,6 @@ def get_us_index_news(limit=10):
             out.append(item)
     return out[:limit]
 
-def get_bvb_stats(data, tickers):
-    stats = []
-    
-    for t in tickers:
-        if t in ['TVBETETF.RO', '^GSPC', '^DJI', '^IXIC', '^VIX']: continue 
-        
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if t not in data.columns.levels[0]: continue
-                df_t = data[t]
-            else:
-                continue
-
-            series_close = df_t['Close'].dropna()
-            series_vol = df_t['Volume'].dropna()
-            
-            if len(series_close) >= 2:
-                curr = series_close.iloc[-1]
-                prev = series_close.iloc[-2]
-                pct = ((curr - prev) / prev) * 100
-                
-                vol = series_vol.iloc[-1] if not series_vol.empty else 0
-                
-                stats.append({
-                    'Simbol': t.replace('.RO', ''), 
-                    'Preț': curr,
-                    'Variație': pct,
-                    'Volum': vol
-                })
-        except Exception as e:
-            continue
-    
-    df = pd.DataFrame(stats)
-    if df.empty: 
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    
-    gainers = df.sort_values('Variație', ascending=False).head(10)
-    losers = df.sort_values('Variație', ascending=True).head(10)
-    volume_leaders = df.sort_values('Volum', ascending=False).head(10)
-    
-    return gainers, losers, volume_leaders
-
-def calculate_fear_greed_proxy(data):
-    try:
-        if isinstance(data.columns, pd.MultiIndex):
-             vix_series = data['^VIX']['Close'].dropna()
-             sp500_close = data['^GSPC']['Close'].dropna()
-        else:
-             return 50, "Neutral 😐", 0
-
-        if vix_series.empty or sp500_close.empty:
-             return 50, "Neutral 😐", 0
-
-        current_vix = vix_series.iloc[-1]
-        
-        vix_score = 100 - ((current_vix - 10) / (40 - 10) * 100)
-        vix_score = max(0, min(100, vix_score))
-        
-        curr_sp = sp500_close.iloc[-1]
-        mean_5d = sp500_close.mean()
-        
-        diff_pct = (curr_sp / mean_5d) - 1
-        mom_score = 50 + (diff_pct * 100 * 25) 
-        mom_score = max(0, min(100, mom_score))
-        
-        final_score = (vix_score * 0.6) + (mom_score * 0.4)
-        
-        if final_score >= 75: label = "Extreme Greed 🤑"
-        elif final_score >= 55: label = "Greed 😋"
-        elif final_score >= 45: label = "Neutral 😐"
-        elif final_score >= 25: label = "Fear 😨"
-        else: label = "Extreme Fear 😱"
-        
-        return final_score, label, current_vix
-    except Exception as e:
-        return 50, "Neutral 😐", 0
-    
-def calculate_bvb_sentiment(bvb_data):
-    """
-    Algoritm avansat de sentiment BVB (v2.0).
-    Integrează: Preț vs Medie (5z/20z), Volume Relativ și Volatilitatea.
-    """
-    try:
-        # 1. Extragere date proxy BET
-        if isinstance(bvb_data.columns, pd.MultiIndex):
-             bet_df = bvb_data['TVBETETF.RO'].dropna()
-        else:
-             return 50, "Neutral ⚖️"
-
-        if bet_df.empty or len(bet_df) < 5: return 50, "Neutral ⚖️"
-
-        # 2. Parametri Preț
-        curr_bet = bet_df['Close'].iloc[-1]
-        mean_5d = bet_df['Close'].rolling(window=5).mean().iloc[-1]
-        mean_20d = bet_df['Close'].mean() # Media întregului set descărcat (5 zile în codul tău)
-        
-        # Deviația față de termen scurt (5 zile)
-        dev_short = ((curr_bet / mean_5d) - 1) * 100
-        
-        # 3. Parametri Volum (Factorul de confirmare)
-        curr_vol = bet_df['Volume'].iloc[-1]
-        mean_vol = bet_df['Volume'].mean()
-        # Relative Volume (RVOL) - dacă e > 1.5, mișcarea este instituțională, nu retail
-        rvol = curr_vol / mean_vol if mean_vol > 0 else 1.0
-
-        # 4. Calcul Scor de Bază (0-100)
-        # Am calibrat formula: +/- 1.5% mișcare pe BVB este considerată acum prag critic
-        score = 50 + (dev_short * 33.3) 
-        
-        # 5. Ajustare dinamică cu Volum
-        # Dacă prețul scade pe volum mare, scorul scade și mai mult (Panic confirmation)
-        # Dacă prețul crește pe volum mare, scorul crește și mai mult (Buying frenzy)
-        if rvol > 1.3:
-            if dev_short > 0: score += (rvol * 5) # Boost optimism
-            else: score -= (rvol * 10) # Penalizare panică (vânzare pe volum mare e mai gravă)
-
-        score = max(0, min(100, score))
-
-        # 6. Verdict bazat pe praguri profesionale
-        if score >= 80: label = "Optimism Excesiv (Frenzy) 🚀"
-        elif score >= 60: label = "Sentiment Pozitiv 📈"
-        elif score >= 40: label = "Echilibru / Stabilitate ⚖️"
-        elif score >= 20: label = "Precauție (Vânzări sub presiune) ⚠️"
-        else: label = "Panică / Capitulare 🚨"
-        
-        return score, label
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("calculate_bvb_sentiment: %s", exc)
-        return 50, "Neutral ⚖️"
-    
 # --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
 def load_portfolio():
     """Foaia `Portofoliu` (prima foaie) → DataFrame Symbol, Date, Quantity, AvgPrice, Currency, cu numere.
@@ -2392,12 +2123,6 @@ def remove_from_watchlist(symbol):
             pass
     return False
 
-def add_trade(s, q, p, d, c):
-    """Adaugă tranzacția direct în Google Sheets."""
-    sheet = connect_to_gsheets()
-    if sheet:
-        row = [s, str(d), float(q), float(p), c]
-        sheet.append_row(row)
         # load_portfolio nu are cache: nu e nimic de golit
 
 @st.cache_data(ttl=300)
@@ -2950,38 +2675,6 @@ def render_ledger_results():
                 st.write(f"- {problem}")
     return positions
 
-from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
-
-def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
-    """Calculează Max Drawdown, Sharpe Ratio, VaR și Volatilitate Anualizată."""
-    if portfolio_curve is None or portfolio_curve.empty or len(portfolio_curve) < 5:
-        return 0.0, 0.0, 0.0, 0.0
-    
-    try:
-        # 1. Max Drawdown
-        rolling_max = portfolio_curve.cummax()
-        drawdown = (portfolio_curve - rolling_max) / rolling_max
-        max_dd = drawdown.min()
-        
-        # 2. Sharpe Ratio & Volatilitate
-        returns = portfolio_curve.pct_change().dropna()
-        if returns.std() == 0: return max_dd, 0.0, 0.0, 0.0
-        
-        # Volatilitate Anualizată (Standard Deviation * sqrt(252 zile de tranzacționare))
-        volatility_ann = returns.std() * np.sqrt(252)
-        
-        rf_daily = 0.04 / 252 
-        sharpe = np.sqrt(252) * ((returns.mean() - rf_daily) / returns.std())
-        
-        # 3. Value at Risk (VaR)
-        mu, sigma = returns.mean(), returns.std()
-        var_pct = norm.ppf(1 - confidence_level, mu, sigma)
-        var_abs = var_pct * portfolio_curve.iloc[-1]
-        
-        return max_dd, sharpe, var_abs, volatility_ann
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("calculate_risk_metrics: %s", exc)
-        return 0.0, 0.0, 0.0, 0.0
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _yahoo_sector(sym):
@@ -3460,86 +3153,6 @@ def get_cross_asset_correlation():
     except Exception as e:
         print(f"Eroare Cross-Asset: {e}")
         return pd.DataFrame()
-
-@st.cache_data(ttl=3600)
-def get_index_technical_levels(symbol):
-    """Calculează nivelurile critice (SMA 50, SMA 200) pentru un indice."""
-    try:
-        # Descărcăm 1 an de date pentru a avea destule zile pentru SMA 200
-        df = yf.download(symbol, period="1y", progress=False)['Close']
-        if isinstance(df, pd.DataFrame):
-            df = df.iloc[:, 0]
-            
-        df = df.dropna()
-        if len(df) < 200: return None # Nu avem destule date
-        
-        curr_price = df.iloc[-1]
-        sma_50 = df.rolling(window=50).mean().iloc[-1]
-        sma_200 = df.rolling(window=200).mean().iloc[-1]
-        
-        # Calculăm distanța procentuală
-        dist_50 = ((curr_price - sma_50) / sma_50) * 100
-        dist_200 = ((curr_price - sma_200) / sma_200) * 100
-        
-        return {
-            "price": curr_price,
-            "sma50": sma_50,
-            "sma200": sma_200,
-            "dist50": dist_50,
-            "dist200": dist_200
-        }
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("get_index_technical_levels: %s", exc)
-        return None
-
-def calculate_market_breadth(data, tickers):
-    """Calculează Lățimea Pieței (Avans vs Declin)"""
-    adv, dec, flat = 0, 0, 0
-    for t in tickers:
-        # Ignorăm indicii majori (ca să numărăm doar companiile)
-        if t.startswith('^') or t == 'TVBETETF.RO': continue 
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if t not in data.columns.levels[0]: continue
-                series = data[t]['Close'].dropna()
-            else:
-                series = data['Close'].dropna()
-            
-            if len(series) >= 2:
-                change = series.iloc[-1] - series.iloc[-2]
-                if change > 0.001: adv += 1
-                elif change < -0.001: dec += 1
-                else: flat += 1
-        except Exception as exc:  # înainte: except: gol
-            logger.debug("calculate_market_breadth: %s", exc)
-            continue
-    
-    total = adv + dec + flat
-    if total == 0: return 0, 0, 0, 0, 0, 0
-    return adv, dec, flat, (adv/total*100), (dec/total*100), (flat/total*100)
-
-@st.cache_data(ttl=3600)
-def get_volume_analysis(symbol):
-    """Calculează intensitatea volumului față de media de 20 de zile."""
-    try:
-        t = yf.Ticker(symbol)
-        # Avem nevoie de 1 lună de date pentru o medie mobilă de 20 de zile
-        df = t.history(period="1mo")
-        if df.empty or len(df) < 20: return None
-        
-        curr_vol = df['Volume'].iloc[-1]
-        avg_vol = df['Volume'].rolling(window=20).mean().iloc[-1]
-        
-        # Intensitatea (Raportul)
-        intensity = curr_vol / avg_vol
-        return {
-            "current": curr_vol,
-            "average": avg_vol,
-            "intensity": intensity
-        }
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("get_volume_analysis: %s", exc)
-        return None
 
 import pandas_datareader.data as web
 
