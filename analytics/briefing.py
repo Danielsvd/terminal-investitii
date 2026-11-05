@@ -22,6 +22,7 @@ SIGMA_MIN_OBS = 20
 TURNOVER_LOOKBACK = 20
 TURNOVER_MIN_OBS = 10
 MIN_VALUE_RON = 50_000           # pragul de valoare tranzacționată pentru topurile BVB (Daniel, 05.11.2026: coborât de la 100.000)
+SESSION_MIN_SHARE = 0.2          # ședința = ultima zi cu preț la cel puțin 20% din simboluri (nu un singur simbol)
 TOP_N = 10                       # câte creșteri / scăderi arată fiecare top (Daniel, 05.11.2026: de la 5 la 10)
 
 # Orele ședinței continue, ora locală a bursei. Fără sărbători legale: data ultimei ședințe vine din date.
@@ -129,25 +130,42 @@ def daily_move(close):
     return out
 
 
+def session_date(close, min_share=SESSION_MIN_SHARE):
+    """Data ultimei ședințe a universului: cea mai recentă zi în care au preț (> 0) cel puțin `min_share` din simbolurile
+    cu date (minimum 1). Un singur simbol cu un rând mai nou (pre-market, OTC, alt fus) nu mută ședința. None la gol."""
+    c = _clean_frame(close)
+    if c.empty:
+        return None
+    has = c.gt(0)
+    n_syms = int(has.any(axis=0).sum())
+    if n_syms == 0:
+        return None
+    counts = has.sum(axis=1)
+    ok = counts[counts >= max(1, int(np.ceil(min_share * n_syms)))]
+    return ok.index[-1] if len(ok) else None
+
+
 def session_table(close, volume):
     """Tabelul ultimei ședințe pe un univers. `close`, `volume`: DataFrame cu o coloană pe simbol, index de date.
 
     Întoarce (df, session_date): df cu index = simbol și coloanele date (ultima dată cu preț), close, prev, pct
     (fracție), volume, value (close × volume, în moneda pieței), traded (are preț și volum > 0 în ziua ședinței),
-    sigma. session_date = cea mai recentă dată cu preț din univers (None la univers gol).
+    sigma. session_date = `session_date(close)`; rândurile de după ea se ignoră (None la univers gol).
     """
     c = _clean_frame(close)
+    session = session_date(c)
+    if session is not None:
+        c = c.loc[:session]
     v = _clean_frame(volume).reindex(index=c.index, columns=c.columns) if len(c) else pd.DataFrame()
     cols = ["date", "close", "prev", "pct", "volume", "value", "traded", "sigma"]
     if c.empty:
         return pd.DataFrame(columns=cols), None
-    rows, last_dates = {}, []
+    rows = {}
     for sym in c.columns:
         s = c[sym]
         s = s[s > 0].dropna()
         if s.empty:
             continue
-        last_dates.append(s.index[-1])
         m = daily_move(s)
         vol = v[sym].get(s.index[-1]) if sym in v.columns else None
         vol = float(vol) if vol is not None and np.isfinite(vol) else None
@@ -155,7 +173,6 @@ def session_table(close, volume):
                      "value": (m["last"] * vol) if vol is not None else None, "sigma": m["sigma"]}
     if not rows:
         return pd.DataFrame(columns=cols), None
-    session = max(last_dates)
     df = pd.DataFrame.from_dict(rows, orient="index")
     df["traded"] = (df["date"] == session) & df["volume"].fillna(0).gt(0) & df["pct"].notna()
     return df[cols], session
@@ -200,6 +217,9 @@ def turnover_vs_median(close, volume, lookback=TURNOVER_LOOKBACK, min_obs=TURNOV
     Întoarce dict date, today (valoarea), median, ratio, n (ședințe în mediană); None unde nu se poate calcula.
     Zilele cu valoare totală 0 (fără tranzacții în tot universul) nu sunt ședințe și se scot."""
     c, v = _clean_frame(close), _clean_frame(volume)
+    session = session_date(c)
+    if session is not None:
+        c = c.loc[:session]
     out = {"date": None, "today": None, "median": None, "ratio": None, "n": 0}
     if c.empty or v.empty:
         return out
