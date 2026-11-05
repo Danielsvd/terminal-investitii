@@ -767,6 +767,14 @@ def main():
             assert sect is not None and len(sect) == 11, "lipsește tabelul sectoarelor SUA"
             print("Europa, primul top:", eu_tops[0].head(3).values.tolist())
             print("Sectoare SUA:", sect.head(3).values.tolist())
+            # etapa D: evenimentele de azi/mâine și știrile despre pozițiile din registru
+            md = " ".join(str(e.value) for e in at.markdown)
+            assert "Evenimente și știri" in md and "Calendar macro SUA, azi și mâine" in md, "lipsește secțiunea Evenimente"
+            assert "Știri despre acțiunile tale" in md, "lipsesc știrile pe poziții"
+            badges = [str(e.value) for e in at.markdown if "background:#21262D" in str(e.value)]
+            assert badges and "TLV" in badges[0] and "<b>" not in badges[0], "știrile pe poziții: lipsă sau HTML neescapat"
+            print("Evenimente:", [str(e.value)[:90] for e in at.markdown if str(e.value).startswith(("- **Azi", "- **Mâine", "Azi și mâine", "Nicio publicare"))],
+                  [str(e.value)[:90] for e in at.info if "știre" in str(e.value)])
         if section == "5. Import Date":
             # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
             frames = [getattr(d.value, "data", d.value) for d in at.dataframe]

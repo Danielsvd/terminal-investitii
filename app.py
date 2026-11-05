@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
-from data.news import filter_company_news
+from data.news import filter_company_news, holdings_news
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
@@ -2237,6 +2237,91 @@ def render_portfolio_today(sessions, fx, fx_dates):
                 width='stretch', hide_index=True,
                 column_config={"Valoare (lei)": st.column_config.Column(help="Soldul din registru × cursul BNR.")})
     st.markdown("---")
+    return holdings
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _yahoo_names(sym):
+    """(longName, shortName) din Yahoo pentru un simbol, în cache 24 de ore (pentru filtrul de știri).
+    O eroare de rețea nu se salvează în cache (excepția iese din funcție), deci se reîncearcă la următoarea deschidere."""
+    _yf_limiter.wait_if_needed()
+    info = yf.Ticker(sym).info or {}
+    return info.get("longName") or None, info.get("shortName") or None
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_holdings_news(symbols):
+    """Știrile din ultimele 48 de ore despre pozițiile tale (Rezumatul Zilei, etapa D): fluxul Yahoo pe fiecare simbol
+    plus fluxurile generale (RO și internaționale), păstrate doar dacă titlul sau rezumatul menționează compania
+    (data/news.py). Întoarce (știri, simboluri fără nume din Yahoo — filtrate doar după simbol)."""
+    names, no_name, own = {}, [], {}
+    for sym in symbols:
+        try:
+            names[sym] = tuple(n for n in _yahoo_names(sym) if n)
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("știri pe poziții, nume %s: %s", sym, exc)
+            names[sym] = ()
+        if not names[sym]:
+            no_name.append(sym)
+        own[sym] = get_company_news_rss(sym, names=names[sym], limit=10)
+    items = holdings_news(names, fetch_news_data(), own, now=now_ro().replace(tzinfo=None))
+    return items, no_name
+
+
+def render_events_today(holdings):
+    """„📅 Evenimente și știri” (Rezumatul Zilei, etapa D): publicările macro SUA de azi și mâine (același calendar
+    ca în „4. Piață Globală”) și știrile recente despre acțiunile din registru (fără ETF-uri și titluri de stat)."""
+    st.markdown("### 📅 Evenimente și știri")
+    c_cal, c_news = st.columns([2, 3])
+    with c_cal:
+        st.markdown("**Calendar macro SUA, azi și mâine**")
+        today = now_ro().date()
+        cal_data, cal_msg = get_fred_calendar(today)
+        if cal_data is None:
+            st.info(f"Calendarul nu poate fi afișat acum: {cal_msg}")
+        else:
+            cal_rows, _missing = fred_cal.upcoming(cal_data, today)
+            soon, nxt = fred_cal.near(cal_rows)
+            for r in soon:
+                st.markdown(f"- **{'Azi' if r['in_days'] == 0 else 'Mâine'}** ({r['weekday']} {r['date']:%d.%m}): "
+                            f"{html.escape(r['label'])}")
+            if nxt is not None:
+                st.markdown(f"Azi și mâine: nicio publicare urmărită. Următoarea: **{html.escape(nxt['label'])}**, "
+                            f"{nxt['weekday']} {nxt['date']:%d.%m.%Y} (peste {nxt['in_days']} zile).")
+            elif not soon:
+                st.markdown(f"Nicio publicare urmărită în următoarele {fred_cal.CALENDAR_DAYS} zile.")
+            st.caption("Sursa: FRED (doar ziua, fără oră; majoritatea dimineața la New York, după-amiaza în România) și "
+                       "calendarul oficial Fed pentru FOMC (14:00 New York). Calendarul pe 14 zile: „4. Piață Globală”.")
+    with c_news:
+        st.markdown("**Știri despre acțiunile tale (ultimele 48 de ore)**")
+        syms = [] if holdings is None or holdings.empty else sorted(
+            holdings.loc[holdings["Class"].astype(str).str.upper() != "ETF", "Symbol"].astype(str).unique())
+        if not syms:
+            st.info("Nicio acțiune deschisă în registrul `Tranzactii`.")
+            return
+        with st.spinner("Căutăm știrile despre pozițiile tale..."):
+            try:
+                items, no_name = get_holdings_news(tuple(syms))
+            except Exception as exc:  # rețea / RSS
+                logger.warning("știri pe poziții: %s", exc)
+                items, no_name = None, []
+        if items is None:
+            st.info("Știrile nu au putut fi citite acum. Se reîncearcă la următoarea deschidere a paginii.")
+        elif not items:
+            st.info("Nicio știre din ultimele 48 de ore care să menționeze acțiunile tale.")
+        else:
+            st.markdown(compact_html("".join(
+                f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
+                <span style="background:#21262D; color:#C9D1D9; border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; margin-right:6px;">{html.escape(it['symbol'].replace('.RO', ''))}</span>
+                <a href="{html.escape(str(it['link']), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(it['title'])}</a>
+                <div style="font-size:12px; color:#8B949E;">{html.escape(str(it['source']))} • {it['time']:%d.%m %H:%M}</div></div>"""
+                for it in items)), unsafe_allow_html=True)
+        st.caption(f"{len(syms)} acțiuni din registru (fără ETF-uri și titluri de stat). Se păstrează doar știrile al căror "
+                   "titlu sau rezumat conține numele companiei sau simbolul; cel mult 3 pe companie, ora României. "
+                   "Fluxurile RO acoperă puține companii mici, deci lipsa unei știri nu înseamnă că nu s-a întâmplat nimic."
+                   + (f" Fără nume în Yahoo (filtrate doar după simbol): {', '.join(no_name)}." if no_name else ""))
+    st.markdown("---")
+
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_us_index_news(limit=10):
@@ -7135,7 +7220,8 @@ def main():
             if not brief["eu_close"].empty:      # Europa: din universul urmărit (79), nu doar din deținerile tale
                 _rz_sessions["eu"] = briefing_calc.session_date(brief["eu_close"].drop(columns=BRIEFING_EU_INDICES, errors="ignore"))
         rz_fx, rz_fx_dates = rezumat_fx()          # toate sumele din Rezumatul Zilei în lei, la cursul BNR
-        render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates)
+        rz_holdings = render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates)
+        render_events_today(rz_holdings)
 
         tab_bvb, tab_eu, tab_us = st.tabs(["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street"])
 

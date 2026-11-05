@@ -116,3 +116,12 @@ def error_text(status_code, body, api_key):
         msg = str(body.get("error_message") or "")
     text = f"FRED a răspuns HTTP {status_code}" + (f": {msg}" if msg else "")
     return text.replace(api_key, "***") if api_key else text
+
+
+def near(rows, days=2):
+    """Publicările de azi și de mâine (in_days < days) din `upcoming` și, dacă nu e niciuna, prima următoare.
+    Întoarce (lista de azi/mâine, următoarea publicare sau None)."""
+    rows = list(rows or [])
+    soon = [r for r in rows if 0 <= r.get("in_days", -1) < days]
+    later = [r for r in rows if r.get("in_days", -1) >= days]
+    return soon, (None if soon or not later else later[0])

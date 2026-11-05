@@ -93,3 +93,13 @@ def test_fomc_lista_valida_si_expirare():
     assert not fomc_outdated(date(2027, 11, 25))                               # = 08.12, încă acoperit
     assert fomc_outdated(date(2027, 11, 26))
     assert fomc_outdated(TODAY, decisions=())
+
+
+def test_near_azi_maine_si_urmatoarea():
+    from data.fred_calendar import near
+    rows = [{"in_days": 0, "label": "A"}, {"in_days": 1, "label": "B"}, {"in_days": 5, "label": "C"}]
+    soon, nxt = near(rows)
+    assert [r["label"] for r in soon] == ["A", "B"] and nxt is None
+    soon, nxt = near(rows[2:])
+    assert soon == [] and nxt["label"] == "C"
+    assert near([]) == ([], None)

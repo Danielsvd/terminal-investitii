@@ -8,6 +8,7 @@ Sentimentul calculat pe ele nu spune nimic despre emitent. Aici se păstrează d
 Funcții pure, fără rețea și fără `st.*`.
 """
 import re
+from datetime import datetime, timedelta
 
 # Forme juridice și cuvinte care apar în numele multor companii: nu identifică emitentul.
 LEGAL_SUFFIXES = {
@@ -81,3 +82,55 @@ def filter_company_news(items, symbol, names=()):
         return []
     return [it for it in items or []
             if mentions_company(f"{it.get('title', '')} {it.get('summary', '')}", terms)]
+
+
+# --- Rezumatul Zilei, etapa D: știrile despre pozițiile din registru -------------------------------------------------
+NEWS_MAX_AGE_HOURS = 48       # știrile mai vechi de 2 zile nu mai sunt „de azi”
+NEWS_PER_SYMBOL = 3           # cel mult 3 știri pe poziție, ca o companie cu multe titluri să nu le acopere pe celelalte
+NEWS_TOTAL = 15
+
+
+def news_time(item):
+    """Momentul publicării (datetime naiv, ora României): `date_obj` dacă există, altfel `date_str` „AAAA-LL-ZZ HH:MM”.
+    Neinterpretabil → None (știrea nu intră în filtrul de vechime, nu primește o dată inventată)."""
+    d = item.get("date_obj") if isinstance(item, dict) else None
+    if isinstance(d, datetime):
+        return d.replace(tzinfo=None)
+    try:
+        return datetime.strptime(str(item.get("date_str", ""))[:16], "%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return None
+
+
+def holdings_news(holdings, general, own=None, now=None, max_age_hours=NEWS_MAX_AGE_HOURS,
+                  per_symbol=NEWS_PER_SYMBOL, total=NEWS_TOTAL):
+    """Știrile recente care menționează pozițiile tale.
+
+    holdings: {simbol: (nume, ...)} — numele companiei (din Yahoo); fără nume → doar simbolul (`company_terms`).
+    general: știrile din fluxurile generale (RO și internaționale), filtrate aici pe fiecare companie.
+    own: {simbol: știri} din fluxul Yahoo pe simbol, deja filtrate (`get_company_news_rss` cu nume).
+    now: datetime naiv în ora României (implicit acum, pentru teste se dă explicit).
+
+    Întoarce lista de dict symbol, title, link, source, time (datetime), cea mai nouă întâi: cel mult `per_symbol`
+    pe simbol și `total` în total; aceeași știre (același titlu) o singură dată, la primul simbol în ordinea dată.
+    Știrile fără dată sau mai vechi de `max_age_hours` se scot."""
+    own = own or {}
+    now = now or datetime.now()
+    oldest = now - timedelta(hours=max_age_hours)
+    seen, out = set(), []
+    for sym, names in (holdings or {}).items():
+        cands = list(own.get(sym) or []) + filter_company_news(general or [], sym, tuple(n for n in names or () if n))
+        picked = []
+        for it in sorted(cands, key=lambda x: news_time(x) or datetime.min, reverse=True):
+            t, title = news_time(it), str(it.get("title", "")).strip()
+            key = title.casefold()
+            if t is None or t < oldest or t > now + timedelta(hours=1) or not title or key in seen:
+                continue
+            seen.add(key)
+            picked.append({"symbol": sym, "title": title, "link": it.get("link", ""),
+                           "source": it.get("source") or it.get("publisher") or "", "time": t})
+            if len(picked) >= per_symbol:
+                break
+        out.extend(picked)
+    out.sort(key=lambda x: x["time"], reverse=True)
+    return out[:total]
