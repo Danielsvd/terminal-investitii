@@ -2167,15 +2167,25 @@ BRIEFING_US_UNIVERSE = [
 BRIEFING_BET_PROXY = "TVBETETF.RO"
 
 
-def briefing_bvb_universe():
-    """Universul BVB al Rezumatului: tools/univers_bvb.txt (companiile lichide, aceeași listă ca testul istoric)."""
+def _briefing_bvb_text():
+    """Textul fișierului tools/univers_bvb.txt (gol la eroare, cu logare)."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "univers_bvb.txt")
     try:
         with open(path, encoding="utf-8") as fh:
-            return briefing_calc.parse_universe(fh.read())
+            return fh.read()
     except OSError as exc:
         logger.warning("universul BVB: %s", exc)
-        return []
+        return ""
+
+
+def briefing_bvb_universe():
+    """Universul BVB al Rezumatului: tools/univers_bvb.txt (BET Plus + BET-FI + BETAeRO; aceeași listă ca testul istoric)."""
+    return briefing_calc.parse_universe(_briefing_bvb_text())
+
+
+def briefing_bvb_sections():
+    """{simbol: piața} din secțiunile „# == Nume ==” ale tools/univers_bvb.txt."""
+    return briefing_calc.universe_sections(_briefing_bvb_text())
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -7340,17 +7350,23 @@ def main():
                 m2.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=briefing_calc.sigma_label(bet["sigma"]).capitalize()
                           + f". Variația zilei ÷ abaterea standard a variațiilor din ultimele {bet['n']} ședințe (fără ziua curentă).")
                 m3.metric("Lățime (cresc / scad)", f"{bvb_b['up']} / {bvb_b['down']}" if bvb_b["n"] else "N/A",
-                          help="Companiile din universul lichid (tools/univers_bvb.txt) care au tranzacționat în ultima ședință.")
+                          help="Companiile din universul urmărit (tools/univers_bvb.txt: BET Plus, BET-FI, BETAeRO) "
+                               "care au tranzacționat în ultima ședință.")
                 m4.metric("Valoare tranzacționată", briefing_calc.money_short(bvb_turn["today"], "RON"),
                           None if bvb_turn["ratio"] is None else f"×{format_ro(bvb_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
-                          help=f"Suma preț × volum pe universul lichid în ultima ședință, față de mediana celor {bvb_turn['n']} "
+                          help=f"Suma preț × volum pe universul urmărit în ultima ședință, față de mediana celor {bvb_turn['n']} "
                                "ședințe dinainte (minimum 10). Doar universul, nu toată bursa.")
                 st.markdown("#### 🎯 Regimul BET (regula „Moment”)")
                 _regime_metrics(BRIEFING_BET_PROXY, "BET")
                 st.markdown("---")
                 st.markdown("#### ⚖️ Lățimea pieței")
-                _breadth_bar(bvb_b, f"Universul lichid BVB ({len(bvb_t)} companii)")
+                bvb_universe = briefing_bvb_universe()
+                bvb_missing = briefing_calc.missing_symbols(bvb_universe, bvb_t)
+                _breadth_bar(bvb_b, f"Universul urmărit BVB ({len(bvb_universe)} simboluri, {len(bvb_t)} cu date Yahoo)")
+                if bvb_missing:
+                    st.caption(f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(bvb_missing)}), excluse din toate calculele: "
+                               + ", ".join(s.replace(".RO", "") for s in bvb_missing) + ".")
                 st.markdown("---")
                 bvb_up, bvb_down = briefing_calc.top_moves(bvb_t, n=5, min_value=briefing_calc.MIN_VALUE_RON)
                 st.caption(f"Topurile: doar companiile cu valoare tranzacționată ≥ {briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} "
@@ -7375,6 +7391,35 @@ def main():
                     _moves_table(liq, "RON")
                 else:
                     st.info("Nicio companie din univers nu a tranzacționat în ultima ședință.")
+                full = briefing_calc.full_table(bvb_t, briefing_bvb_sections())
+                if full is not None and not full.empty:
+                    n_traded = int(full["traded"].sum())
+                    with st.expander(f"📋 Toate companiile urmărite ({len(full)}; {n_traded} tranzacționate în ședință)"):
+                        st.caption("Fără prag de valoare: la valori mici, o singură tranzacție mișcă prețul. "
+                                   "La titlurile fără tranzacții în ultima ședință variația, σ și valoarea sunt N/A, "
+                                   "iar „Ultima cotație” arată data ultimului preț din Yahoo.")
+                        tr = full["traded"].astype(bool)
+                        fv = pd.DataFrame({
+                            "Piață": full["section"].fillna("N/A").values,
+                            "Simbol": [s.replace(".RO", "") for s in full.index],
+                            "Preț": full["close"].values,
+                            "Variație": (full["pct"] * 100).where(tr).values,
+                            "σ": full["sigma"].where(tr).values,
+                            "Valoare": [briefing_calc.money_short(v, "RON") if t else "N/A"
+                                        for v, t in zip(full["value"], tr)],
+                            "Ultima cotație": [d.strftime("%d.%m.%Y") for d in full["date"]],
+                        })
+                        f_color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
+                        st.dataframe(
+                            fv.style.format({"Preț": ro_spec(",.2f", " lei"), "Variație": ro_spec("+.2f", "%"),
+                                             "σ": ro_spec("+.1f", "σ")}, na_rep="N/A")
+                            .map(f_color, subset=["Variație"]),
+                            width='stretch', hide_index=True, height=min(38 + 35 * len(fv), 600),
+                            column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor "
+                                                                             "din ultimele 60 de ședințe (fără ziua curentă; minimum 20)."),
+                                           "Valoare": st.column_config.Column(help="Preț × volum în ședință."),
+                                           "Piață": st.column_config.Column(help="Secțiunea din tools/univers_bvb.txt "
+                                                                                "(componența BET Plus, BET-FI, BETAeRO la 04.11.2026).")})
 
             st.markdown("---")
             st.subheader("🇷🇴 Top 5 știri financiare (România)")

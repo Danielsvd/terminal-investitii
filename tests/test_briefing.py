@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.briefing import (breadth_counts, daily_move, liquidity_top, market_state, parse_universe,
+from analytics.briefing import (full_table, missing_symbols, universe_sections, breadth_counts, daily_move, liquidity_top, market_state, parse_universe,
                                 relative_day, session_is_partial, session_table, sigma_label, sigma_of_last,
                                 top_moves, turnover_vs_median)
 
@@ -143,3 +143,24 @@ def test_prag_bvb_implicit_50000():
     assert list(up.index) == ["MID"] and list(down.index) == ["EDGE"]
     up, down = top_moves(t, n=5, min_value=100_000)
     assert up.empty and down.empty
+
+
+def test_sectiuni_univers():
+    text = "# antet\nAAA.RO\n# == Principală ==\nBBB.RO  # comentariu\nbbb.ro\n\n# == AeRO ==\nCCC.RO\n# nota\nDDD.RO\n"
+    assert universe_sections(text) == {"AAA.RO": None, "BBB.RO": "Principală", "CCC.RO": "AeRO", "DDD.RO": "AeRO"}
+    assert parse_universe(text) == ["AAA.RO", "BBB.RO", "CCC.RO", "DDD.RO"]          # aceleași simboluri, aceeași ordine
+    assert universe_sections("# ====\nX") == {"X": None}                              # „====” gol nu e secțiune
+
+
+def test_simboluri_fara_date_si_tabel_complet():
+    t = pd.DataFrame({"traded": [True, False, True, True],
+                      "pct":    [-0.01, 0.0, 0.02, np.nan],
+                      "value":  [1.0, 0.0, 2.0, 3.0]},
+                     index=["P1", "A1", "A2", "P2"])
+    assert missing_symbols(["P1", "X", "A1", "Y"], t) == ["X", "Y"]
+    assert missing_symbols(["X"], None) == ["X"]
+    sec = {"P1": "Principală", "P2": "Principală", "A1": "AeRO", "A2": "AeRO"}
+    f = full_table(t, sec)
+    # Principală înainte de AeRO; în secțiune: tranzacționate întâi, apoi după variație (lipsă la coadă)
+    assert list(f.index) == ["P1", "P2", "A2", "A1"]
+    assert list(f["section"]) == ["Principală", "Principală", "AeRO", "AeRO"]
