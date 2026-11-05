@@ -95,3 +95,18 @@ def period_label(period):
         return f"{pd.Timestamp(period):%d.%m.%Y}"
     except (TypeError, ValueError):
         return None
+
+
+def curve_inversion_summary(spread, months=12):
+    """Panta 10 ani − 3 luni (puncte procentuale, zilnic): ultima valoare și data, câte ședințe din ultimele
+    `months` luni (fereastră calendaristică) au avut curba inversată (sub 0), din câte, și ultima zi inversată
+    din tot istoricul. None pe serie goală."""
+    s = to_daily(spread)
+    if s.empty:
+        return None
+    cutoff = s.index[-1] - pd.DateOffset(months=months)
+    win = s[s.index > cutoff]
+    neg = s[s < 0]
+    return {"value": float(s.iloc[-1]), "date": s.index[-1], "start": s.index[0],
+            "n_window": int(len(win)), "inverted_window": int((win < 0).sum()),
+            "last_inverted": None if neg.empty else neg.index[-1]}
