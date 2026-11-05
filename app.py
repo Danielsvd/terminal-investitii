@@ -38,6 +38,7 @@ from analytics import markets as markets_calc
 from analytics import rates as rates_calc
 from analytics import stress as stress_calc
 from analytics import briefing as briefing_calc
+from analytics import scanner as scanner_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -7509,7 +7510,11 @@ def main():
         
         # Slider pentru sensibilitate (Default 1.5)
         threshold = st.slider("Arată doar acțiunile cu Volum de 'X' ori mai mare decât media:", 
-                            min_value=1.2, max_value=5.0, value=1.5, step=0.1)
+                            min_value=1.2, max_value=5.0, value=scanner_calc.RVOL_DEFAULT, step=0.1)
+        st.caption(f"Lichiditate: la BVB intră doar titlurile cu valoare tranzacționată ≥ "
+                   f"{briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} în ultima ședință (coloana „Valoare Azi” = preț × volum, în moneda pieței; ca în "
+                   f"Rezumatul Zilei); la SUA și Europa, media volumului pe 20 de ședințe ≥ "
+                   f"{format_ro(scanner_calc.MIN_AVG_SHARES, 0)} de acțiuni.")
 
         # Listele de scanare: din listele unice (data/universes.py), câte un grup pe secțiune + „toate” pe piață.
         # BVB rămâne separat de Europa; ETF-ul BET (TVBETETF.RO) se scanează împreună cu BVB, ca înainte.
@@ -7544,7 +7549,8 @@ def main():
                         # Calcule clasice matematice
                         curr_vol = vol.iloc[-1]
                         avg_vol_20 = vol.iloc[-21:-1].mean()
-                        if avg_vol_20 < 5000: continue # Ignorăm acțiunile nelichide
+                        # Nelichide: BVB sub 50.000 lei azi (ca în Rezumat), restul sub 5.000 de acțiuni în medie
+                        if not scanner_calc.liquidity_ok(t, close.iloc[-1], curr_vol, avg_vol_20): continue
                         
                         rvol = curr_vol / avg_vol_20
                         
@@ -7560,6 +7566,7 @@ def main():
                             "Preț": curr_p,
                             "Variație %": change_pct,
                             "Volum Azi": curr_vol,
+                            "Valoare Azi": curr_p * curr_vol,
                             "Volum Mediu (20z)": avg_vol_20,
                             "RVOL": rvol,
                             "Alertă AI": "🚨 ATENTIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
@@ -7630,6 +7637,7 @@ def main():
                                 "Preț": ro_spec('.2f'),
                                 "Variație %": ro_spec('+.2f', '%'),
                                 "Volum Azi": ro_spec(',.0f'),
+                                "Valoare Azi": ro_spec(',.0f'),
                                 "Volum Mediu (20z)": ro_spec(',.0f'),
                                 "RVOL": ro_spec('.2f', 'x')
                             }),
