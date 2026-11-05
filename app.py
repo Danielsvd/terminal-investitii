@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
 from data.news import filter_company_news
+from data import fred_calendar as fred_cal
 from ui.card_help import FUND_HELP, fund_help
 import os
 import time
@@ -3096,6 +3097,54 @@ def get_rates_dashboard():
             "BCE + Eurostat, aceeași lună", [ro10, robor]),
     ]
     return rows
+
+class FredCalendarUnavailable(Exception):
+    """Calendarul FRED nu a putut fi citit. Excepțiile nu intră în cache: eșecul se reîncearcă la următoarea afișare."""
+
+
+def fred_api_key():
+    """Cheia FRED din secrets (`FRED_API_KEY`) sau None. Nu se loghează și nu se afișează niciodată."""
+    try:
+        key = st.secrets.get("FRED_API_KEY")
+    except (FileNotFoundError, KeyError) as exc:   # fără secrets.toml (rulare locală)
+        logger.info("FRED_API_KEY indisponibil: %s", type(exc).__name__)
+        return None
+    key = str(key).strip() if key else ""
+    return key or None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fred_calendar_cached(start_iso, end_iso, _api_key):
+    """Lista `release_dates` din FRED pentru [start, end], inclusiv datele viitoare. Cheia (`_api_key`) nu intră în
+    cheia de cache. Erorile aruncă FredCalendarUnavailable cu un mesaj fără cheie (URL-ul cu cheia nu se loghează)."""
+    params = {"api_key": _api_key, "file_type": "json", "realtime_start": start_iso, "realtime_end": end_iso,
+              "include_release_dates_with_no_data": "true", "sort_order": "asc", "limit": 1000}
+    try:
+        resp = requests.get(fred_cal.FRED_RELEASE_DATES_URL, params=params, timeout=15)
+    except requests.RequestException as exc:
+        raise FredCalendarUnavailable(f"FRED nu răspunde ({type(exc).__name__})") from None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if resp.status_code != 200:
+        raise FredCalendarUnavailable(fred_cal.error_text(resp.status_code, body, _api_key))
+    if not isinstance(body, dict) or not isinstance(body.get("release_dates"), list):
+        raise FredCalendarUnavailable("FRED a trimis un răspuns fără lista release_dates")
+    return body["release_dates"]
+
+
+def get_fred_calendar(today):
+    """(release_dates, mesaj): lista FRED pe CALENDAR_DAYS zile de la `today`, sau (None, motivul)."""
+    key = fred_api_key()
+    if key is None:
+        return None, "Cheia FRED lipsește din secrets (FRED_API_KEY)."
+    start, end = fred_cal.window(today)
+    try:
+        return _fred_calendar_cached(start.isoformat(), end.isoformat(), key), None
+    except FredCalendarUnavailable as exc:
+        logger.warning("calendar FRED: %s", exc)
+        return None, str(exc)
 
 def get_us_curve_history(days=3700):
     """Panta SUA 10 ani − 3 luni pe ~10 ani (FRED DGS10 − DGS3MO, aceeași zi), pentru graficul din „Dobânzi”.
@@ -6804,6 +6853,37 @@ def main():
                         """)
             else:
                 st.info("Sincronizare date Cross-Asset...")
+        # --- CALENDAR MACRO SUA (FRED releases/dates, cu cheie) ---
+        st.markdown("---")
+        st.subheader(f"📅 Calendar macro SUA (următoarele {fred_cal.CALENDAR_DAYS} zile)")
+        cal_today = now_ro().date()
+        cal_data, cal_msg = get_fred_calendar(cal_today)
+        if cal_data is None:
+            st.info(f"ℹ️ Calendarul nu poate fi afișat acum: {cal_msg}")
+        else:
+            cal_rows, cal_missing = fred_cal.upcoming(cal_data, cal_today)
+            if not cal_rows:
+                st.info("Nicio publicare urmărită în următoarele zile.")
+            else:
+                st.dataframe(
+                    pd.DataFrame([{"Data": f"{r['date']:%d.%m.%Y}", "Ziua": r["weekday"],
+                                   "Peste": "azi" if r["in_days"] == 0 else ("mâine" if r["in_days"] == 1 else f"{r['in_days']} zile"),
+                                   "Publicare": r["label"], "Actualizează în tabelul de mai jos": r["updates"]} for r in cal_rows]),
+                    hide_index=True, width='stretch',
+                    column_config={
+                        "Data": st.column_config.Column(help="Ziua publicării în SUA, după calendarul FRED. FRED nu dă ora; "
+                                                             "majoritatea se publică dimineața la New York (după-amiaza în România)."),
+                        "Actualizează în tabelul de mai jos": st.column_config.Column(
+                            help="Rândurile din „Barometrul Economiei Reale” care primesc valoarea nouă. FRED preia valoarea "
+                                 "de obicei în aceeași zi sau a doua zi; tabelul de mai jos are cache."),
+                    })
+            st.caption("Sursa: FRED, calendarul publicărilor (releases/dates). Doar ziua, fără oră și fără estimări de consens. "
+                       + (f"Fără dată în interval: {', '.join(cal_missing)}. " if cal_missing else ""))
+            with st.expander("🔎 Toate publicările FRED din interval (verificarea potrivirii numelor)", expanded=False):
+                st.caption("Dacă o publicare urmărită lipsește deși știi că apare în aceste zile, FRED a schimbat probabil numele: "
+                           "caut-o aici și spune-mi numele exact.")
+                st.write(", ".join(fred_cal.all_release_names(cal_data)) or "N/A")
+
         # =================================================================
         # MODUL NOU: TABEL MACROECONOMIE & SĂNĂTATEA ECONOMIEI REALE
         # =================================================================
