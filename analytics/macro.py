@@ -141,6 +141,17 @@ def pillar_credit(ratio):
     return _pillar(score, dev, f"HYG/IEF la {ro(dev * 100):+.2f}% față de media pe {CREDIT_SMA_DAYS} de ședințe")
 
 
+def credit_band_frame(ratio):
+    """Graficul pilonului „Piața de credit”: seria HYG/IEF, media ei pe CREDIT_SMA_DAYS ședințe (aceeași ca în
+    `pillar_credit`) și banda ±CREDIT_BAND în jurul mediei. Coloane ratio, sma, upper, lower; media e NaN până la
+    prima fereastră completă (nu se completează). DataFrame gol pe serie goală."""
+    s = pd.to_numeric(pd.Series(ratio, dtype="float64"), errors="coerce").dropna() if ratio is not None else pd.Series(dtype="float64")
+    if s.empty:
+        return pd.DataFrame(columns=["ratio", "sma", "upper", "lower"], dtype="float64")
+    sma = s.rolling(CREDIT_SMA_DAYS, min_periods=CREDIT_SMA_DAYS).mean()
+    return pd.DataFrame({"ratio": s, "sma": sma, "upper": sma * (1 + CREDIT_BAND), "lower": sma * (1 - CREDIT_BAND)})
+
+
 def pillar_vix(vix):
     """VIX ≤ 15 = 100, ≥ 25 = 0, liniar între (20 = 50)."""
     v = _finite(vix)
