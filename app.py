@@ -2970,7 +2970,7 @@ FX_LIVE_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X", "GBP": "GBPRON=X", "CHF
 def _bnr_xml_frame(url):
     """Un fișier XML BNR → DataFrame (data_bnr.parse_bnr_xml). Eroare HTTP sau fișier fără cursuri → excepție,
     deci un eșec nu se salvează în cache și se reîncearcă la următoarea deschidere."""
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, timeout=15, headers={"User-Agent": "terminal-investitii/1.0 (uz personal)"})
     resp.raise_for_status()
     frame = bnr_data.parse_bnr_xml(resp.content)
     if frame.empty:
@@ -2979,16 +2979,22 @@ def _bnr_xml_frame(url):
 
 def get_bnr_fx_history():
     """Istoricul cursurilor BNR: anul trecut + anul curent + ultimele 10 zile (pentru variația pe un an și de la 1 ianuarie).
-    Întoarce (istoric, fișiere care n-au putut fi citite). Istoricul e gol doar dacă n-a mers niciun fișier."""
+    Fiecare fișier se caută întâi pe curs.bnr.ro (serverul din 2026), apoi pe www.bnr.ro.
+    Întoarce (istoric, fișiere care n-au putut fi citite, cu motivul pe server). Istoricul e gol doar dacă n-a mers niciun fișier."""
     year = now_ro().year
-    urls = [bnr_data.BNR_YEAR_URL.format(year=year - 1), bnr_data.BNR_YEAR_URL.format(year=year), bnr_data.BNR_10DAYS_URL]
+    paths = [bnr_data.BNR_YEAR_PATH.format(year=year - 1), bnr_data.BNR_YEAR_PATH.format(year=year), bnr_data.BNR_10DAYS_PATH]
     frames, failed = [], []
-    for url in urls:
-        try:
-            frames.append(_bnr_xml_frame(url))
-        except (requests.RequestException, ValueError) as exc:
-            logger.warning("BNR %s: %s", url, exc)
-            failed.append(url.rsplit("/", 1)[-1])
+    for path in paths:
+        reasons = []
+        for url in bnr_data.bnr_urls(path):
+            try:
+                frames.append(_bnr_xml_frame(url))
+                break
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning("BNR %s: %s", url, exc)
+                reasons.append(f"{url.split('/')[2]}: {bnr_data.short_error(exc)}")
+        else:
+            failed.append(f"{path.rsplit('/', 1)[-1]} ({'; '.join(reasons)})")
     return bnr_data.merge_histories(*frames), failed
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -6975,7 +6981,8 @@ def main():
                 logger.warning("curs live: %s", exc)
                 fx_live = {}
         if fx_hist.empty:
-            st.info("Cursurile BNR nu au putut fi citite acum (bnr.ro indisponibil). Se reîncearcă la următoarea deschidere a paginii.")
+            st.info("Cursurile BNR nu au putut fi citite acum. Se reîncearcă la următoarea deschidere a paginii. "
+                    f"Detalii: {', '.join(fx_failed) or 'N/A'}.")
         else:
             df_fx = bnr_data.fx_table(fx_hist)
             df_fx.insert(4, "Live (Yahoo)", [

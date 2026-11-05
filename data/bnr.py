@@ -1,10 +1,11 @@
 """Cursurile oficiale BNR (lei pe unitate de valută) din fișierele XML publicate de BNR. Funcții pure.
 
-Surse (publice, fără cheie; BNR publică zilnic, puțin după ora 13:00, în zilele bancare):
-- https://www.bnr.ro/nbrfxrates10days.xml — ultimele 10 zile bancare;
-- https://www.bnr.ro/files/xml/years/nbrfxrates<AAAA>.xml — un an întreg (anul curent ajunge la ziua precedentă).
+Surse (publice, fără cheie; BNR publică zilnic, puțin după ora 13:00, în zilele bancare). Din 2026 fișierele sunt pe
+curs.bnr.ro; www.bnr.ro rămâne ca rezervă (a doua încercare):
+- /nbrfxrates10days.xml — ultimele 10 zile bancare;
+- /files/xml/years/nbrfxrates<AAAA>.xml — un an întreg (anul curent ajunge la ziua precedentă).
 
-Format: <DataSet xmlns="http://www.bnr.ro/xsd"> … <Body><Cube date="AAAA-LL-ZZ"><Rate currency="EUR">5.0866</Rate>
+Format: <DataSet xmlns="https://www.bnr.ro/xsd"> (până în 2026 „http://…”; parserul ignoră namespace-ul) … <Body><Cube date="AAAA-LL-ZZ"><Rate currency="EUR">5.0866</Rate>
 <Rate currency="HUF" multiplier="100">1.3122</Rate> … </Cube></Body>. Cu `multiplier`, cursul e pentru 100 de unități.
 """
 import xml.etree.ElementTree as ET
@@ -12,8 +13,9 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 
-BNR_10DAYS_URL = "https://www.bnr.ro/nbrfxrates10days.xml"
-BNR_YEAR_URL = "https://www.bnr.ro/files/xml/years/nbrfxrates{year}.xml"
+BNR_HOSTS = ("https://curs.bnr.ro", "https://www.bnr.ro")   # în ordinea încercărilor
+BNR_10DAYS_PATH = "/nbrfxrates10days.xml"
+BNR_YEAR_PATH = "/files/xml/years/nbrfxrates{year}.xml"
 
 # Valutele din tabel, în ordinea afișată: (cod, nume, unitatea afișată). Unitatea 100 pentru valutele
 # cu valoare mică pe unitate (cum le publică și BNR). XAU = gramul de aur, în lei.
@@ -118,3 +120,18 @@ def fx_table(history, currencies=FX_CURRENCIES):
                 row["De la 1 ian. %"] = _pct(last, _value_on_or_before(s, prev_year_end))
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def bnr_urls(path):
+    """URL-urile unui fișier BNR, în ordinea încercărilor (curs.bnr.ro, apoi www.bnr.ro)."""
+    return [host + path for host in BNR_HOSTS]
+
+
+def short_error(exc):
+    """Motivul scurt al unui eșec de citire, pentru interfață: „HTTP 404”, „fără cursuri”, „Timeout” etc."""
+    resp = getattr(exc, "response", None)
+    if getattr(resp, "status_code", None) is not None:
+        return f"HTTP {resp.status_code}"
+    if isinstance(exc, ValueError) and "fără cursuri" in str(exc):
+        return "răspuns fără cursuri (probabil pagină HTML)"
+    return type(exc).__name__
