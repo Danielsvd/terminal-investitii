@@ -141,6 +141,19 @@ def pillar_credit(ratio):
     return _pillar(score, dev, f"HYG/IEF la {ro(dev * 100):+.2f}% față de media pe {CREDIT_SMA_DAYS} de ședințe")
 
 
+def credit_sentence(pillar):
+    """Propoziția despre piața de credit din Sinteza AI, din pilonul `pillar_credit` (aceeași regulă și bandă).
+    None dacă pilonul n-are date: Sinteza nu afirmă nimic despre credit."""
+    if not pillar or pillar.get("score") is None or pillar.get("value") is None:
+        return None
+    dev = f"HYG/IEF {ro(pillar['value'] * 100):+.2f}% față de media pe {CREDIT_SMA_DAYS} de ședințe"
+    if pillar["score"] >= 100:
+        return f"Piața de credit: apetit pentru risc ({dev}, peste banda de ±{CREDIT_BAND * 100:.0f}%)."
+    if pillar["score"] <= 0:
+        return f"Piața de credit: retragere din risc ({dev}, sub banda de ±{CREDIT_BAND * 100:.0f}%)."
+    return f"Piața de credit: neutră ({dev}, în banda de ±{CREDIT_BAND * 100:.0f}%)."
+
+
 def credit_band_frame(ratio):
     """Graficul pilonului „Piața de credit”: seria HYG/IEF, media ei pe CREDIT_SMA_DAYS ședințe (aceeași ca în
     `pillar_credit`) și banda ±CREDIT_BAND în jurul mediei. Coloane ratio, sma, upper, lower; media e NaN până la

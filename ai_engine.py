@@ -15,7 +15,7 @@ from datetime import date, datetime
 
 from analytics import options as opt_calc
 from analytics.options import max_pain
-from analytics.macro import period_return
+from analytics.macro import period_return, pillar_credit, credit_sentence
 from data.helpers import num, now_ro, ro
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
@@ -953,12 +953,21 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
             "text": f"PETROL: Preț stabil ({ro(oil_trend*100):+.1f}% într-o lună). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
         })
 
+    # Concluzia despre credit vine din pilonul „Piața de credit” (HYG/IEF față de media pe 50 de ședințe), nu din curbă:
+    # înainte, curba normală afirma „Creditarea corporativă este sănătoasă” chiar cu pilonul de credit la 0 (06.11).
+    credit_p = pillar_credit(credit_ratio_series)
+    credit_txt = credit_sentence(credit_p)
+    credit_tail = f" {credit_txt}" if credit_txt else ""
     if yield_spread is None:
-        pass  # curba indisponibilă: fără bullet (nu o valoare inventată)
+        if credit_txt:  # curba indisponibilă: doar creditul, fără o valoare inventată pentru curbă
+            bullets.append({"icon": "📉" if credit_p["score"] == 0 else "📈" if credit_p["score"] == 100 else "⚖️",
+                            "color": "#F85149" if credit_p["score"] == 0 else "#3FB950" if credit_p["score"] == 100 else "#8B949E",
+                            "text": f"OBLIGAȚIUNI: {credit_txt}"})
     elif yield_spread < 0:
-        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({ro(yield_spread):.2f}). Semnalul istoric de recesiune este în continuare aprins."})
+        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({ro(yield_spread):.2f}). Semnalul istoric de recesiune este în continuare aprins.{credit_tail}"})
     else:
-        bullets.append({"icon": "📈", "color": "#3FB950", "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({ro(yield_spread):.2f}). Creditarea corporativă este sănătoasă."})
+        curve_col = "#D29922" if credit_p["score"] == 0 else "#3FB950"  # curbă normală, dar credit în retragere = semnal mixt
+        bullets.append({"icon": "📈", "color": curve_col, "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({ro(yield_spread):.2f}).{credit_tail}"})
 
     if vix_val is None:
         pass  # VIX indisponibil: fără bullet
