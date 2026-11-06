@@ -6042,6 +6042,23 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
+        # --- 3b. SINTEZA AI (mutată aici de jos, 06.11) ---
+        st.subheader("✨ Sinteza Inteligenței Artificiale")
+        with st.spinner("Sintetizăm intersecțiile de metale, valute, dobânzi și opțiuni..."):
+            from ai_engine import generate_macro_ai_summary
+            macro_bullets = generate_macro_ai_summary(
+                vix_val, curr_yield_spread, macro_risk_ratio, macro_sectors, macro_corr, macro_data, df_fred
+            )
+            if macro_bullets:
+                render_bullet_box(macro_bullets, "Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri "
+                                  "(Aur, Petrol, Cupru), sentimentului și pieței de credit.")
+            else:
+                st.info("Așteptăm date suficiente pentru generarea sintezei.")
+
+        # --- 3c. EXPLICAȚIA SCORULUI MACRO, ÎN PAGINĂ (analytics/macro.macro_explanation) ---
+        st.markdown("#### 🧮 Cum s-a ajuns la scorul macro")
+        st.markdown("\n\n".join(macro_calc.macro_explanation(macro_pillars, mv)["lines"]))
+
         # --- 4. PILONII, FIECARE CU SCORUL LUI ---
         st.markdown("#### 🔍 Pilonii verdictului")
         pillar_rows = []
@@ -6336,22 +6353,7 @@ def main():
                            "prag orientativ, netestat. HYG/IEF (randament total, Yahoo) e un proxy: banii care trec din "
                            "obligațiunile firmelor în titlurile de stat trag raportul în jos.")
 
-        # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
-        st.markdown("---")
-        st.subheader("✨ Sinteza Inteligenței Artificiale")
-        
-        with st.spinner("Sintetizăm intersecțiile de metale, valute, dobânzi și opțiuni..."):
-            from ai_engine import generate_macro_ai_summary
-            macro_bullets = generate_macro_ai_summary(
-                vix_val, curr_yield_spread, macro_risk_ratio, macro_sectors, macro_corr, macro_data, df_fred
-            )
-            
-            if macro_bullets:
-                render_bullet_box(macro_bullets, "Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri "
-                                  "(Aur, Petrol, Cupru), sentimentului și pieței de credit.")
-            else:
-                st.info("Așteptăm date suficiente pentru generarea sintezei.")
-
+        # „✨ Sinteza Inteligenței Artificiale” a fost mutată sus, sub bannerul „Mediul de piață SUA” (06.11, cererea lui Daniel).
         st.markdown("---")
         
         if st.button("🔄 Reîmprospătează Piața"):
