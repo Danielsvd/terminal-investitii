@@ -222,6 +222,48 @@ def macro_verdict(pillars):
     return {"score": score, "label": label, "weight_used": w, "missing": missing}
 
 
+MACRO_SHORT = {"credit": "Credit", "vix": "VIX", "dolar": "Dolar", "sectoare": "Sectoare",
+               "curba": "Curba", "sentiment": "Sentiment"}
+
+
+def macro_explanation(pillars, verdict):
+    """Explicația scorului macro, afișată în pagină (text simplu, fără HTML).
+
+    Pentru fiecare pilon cu date: abaterea față de neutru = (scor − 50) × pondere ÷ ponderea cu date.
+    Suma abaterilor + 50 = scorul. Întoarce dict: lines (listă de propoziții), pulls (listă
+    (cheie, scor, abatere) sortată crescător după abatere), missing (chei fără date)."""
+    w = verdict.get("weight_used") or 0
+    missing = list(verdict.get("missing") or [])
+    score = verdict.get("score")
+    lines = []
+    if score is None:
+        lines.append(f"Fără scor: doar {w}% din ponderi au date (minimum {MACRO_MIN_WEIGHT}%).")
+        if missing:
+            lines.append("Fără date: " + ", ".join(MACRO_SHORT[k] for k in missing) + ".")
+        return {"lines": lines, "pulls": [], "missing": missing}
+    pulls = sorted(((k, pillars[k]["score"], (pillars[k]["score"] - 50.0) * MACRO_WEIGHTS[k] / w)
+                    for k in MACRO_WEIGHTS if k not in missing), key=lambda t: t[2])
+    lines.append(f"Scorul {ro(score):.0f} din 100 = media ponderată a pilonilor cu date ({w}% din ponderi): "
+                 "0 = mediu nefavorabil, 50 = neutru, 100 = favorabil. "
+                 f"FAVORABIL de la {MACRO_FAVORABLE:.0f}, DEFAVORABIL sub {MACRO_ADVERSE:.0f}, între ele MIXT.")
+    parts = [f"{MACRO_SHORT[k]} {ro(sc):.0f} → {ro(d):+.1f}" for k, sc, d in pulls]
+    lines.append(f"Pornind de la neutru (50), fiecare pilon adaugă (scor − 50) × pondere ÷ {w}: "
+                 + "; ".join(parts) + f". Total {ro(score - 50):+.1f} → {ro(score):.0f}.")
+    neg = [t for t in pulls if t[2] < 0]
+    pos = [t for t in pulls if t[2] > 0]
+    tail = []
+    if neg:
+        tail.append(f"a tras cel mai mult în jos {MACRO_NAMES[neg[0][0]]} ({ro(neg[0][2]):+.1f})")
+    if pos:
+        tail.append(f"a ajutat cel mai mult {MACRO_NAMES[pos[-1][0]]} ({ro(pos[-1][2]):+.1f})")
+    if tail:
+        lines.append("Azi " + ", ".join(tail) + ".")
+    if missing:
+        lines.append("Fără date acum: " + ", ".join(MACRO_SHORT[k] for k in missing)
+                     + " — ponderea lor se reîmparte la ceilalți piloni (nu contează ca neutri).")
+    return {"lines": lines, "pulls": pulls, "missing": missing}
+
+
 def period_return(close, months=1):
     """Randamentul pe ultimele `months` luni calendaristice: ultima închidere ÷ ultima închidere
     de la sau înainte de (ultima dată − months) − 1. None dacă istoricul nu acoperă perioada."""

@@ -849,6 +849,16 @@ def main():
             pil_df = getattr(pil, "data", pil)
             assert len(pil_df) == 6 and float(pil_df["Pondere %"].sum()) == 100.0, pil_df
             print("Piloni macro:", list(zip(pil_df["Pilon"], pil_df["Scor"])))
+            # 06.11: Sinteza AI sus, imediat sub banner, apoi explicația scorului, apoi tabelul pilonilor
+            heads = [str(e.value) for e in at.subheader] + [str(e.value) for e in at.markdown]
+            md_vals = [str(e.value) for e in at.markdown]
+            i_expl = next((i for i, v in enumerate(md_vals) if "Cum s-a ajuns la scorul macro" in v), None)
+            i_pil = next((i for i, v in enumerate(md_vals) if "Pilonii verdictului" in v), None)
+            assert i_expl is not None and i_pil is not None and i_expl < i_pil, "explicația scorului nu e deasupra pilonilor"
+            assert any("Sinteza Inteligenței Artificiale" in h for h in heads), "lipsește Sinteza AI"
+            expl = md_vals[i_expl + 1]
+            print("Explicație scor:", expl)
+            assert ("Pornind de la neutru (50)" in expl) or expl.startswith("Fără scor"), expl
             assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
             # calendarul macro FRED: pe răspunsul fals, doar cele 2 publicări urmărite (H.15 nu e urmărită), ordonate
             cal = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Publicare", "Peste"} <= set(
