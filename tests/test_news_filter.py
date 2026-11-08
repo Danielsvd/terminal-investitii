@@ -118,3 +118,19 @@ def test_termeni_stricti_fara_cuvinte_generice_din_nume():
     ]
     out = holdings_news({"BAC": ("Bank of America Corporation",), "AG": ("First Majestic Silver Corp.",)}, general, now=now)
     assert [(x["symbol"], x["title"][:10]) for x in out] == [("BAC", "ETFs Are N"), ("AG", "First Maje")]
+
+
+def test_stiri_pe_pozitii_doar_dupa_titlu_nu_dupa_rezumat():
+    # Captura din 07.11: BofA ca analist, Reddit/Eli Lilly cu compania doar în rezumat → nu sunt despre poziții.
+    now = datetime(2026, 11, 7, 1, 0)
+    general = [
+        {"title": "Tripadvisor downgraded by BofA", "summary": "Bank of America cut the rating.", "date_str": "2026-11-06 20:00"},
+        {"title": "Reddit's (RDDT) traffic jumps", "summary": "Alphabet search changes helped GOOGL referrals.", "date_str": "2026-11-06 19:00"},
+        {"title": "Eli Lilly beats estimates", "summary": "Rival Novo Nordisk lost share.", "date_str": "2026-11-06 18:00"},
+        {"title": "Mundoro signs option with BHP", "summary": "", "date_str": "2026-11-06 17:00"},
+        {"title": "Bank of America raises dividend", "summary": "", "date_str": "2026-11-06 16:00"},
+    ]
+    holdings = {"BAC": ("Bank of America Corporation",), "GOOGL": ("Alphabet Inc.",),
+                "NVO": ("Novo Nordisk A/S",), "BHP": ("BHP Group Limited",)}
+    out = holdings_news(holdings, general, now=now)
+    assert [(x["symbol"], x["title"][:12]) for x in out] == [("BHP", "Mundoro sign"), ("BAC", "Bank of Amer")]
