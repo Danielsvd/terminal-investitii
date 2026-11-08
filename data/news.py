@@ -173,3 +173,32 @@ def holdings_news(holdings, general, own=None, now=None, max_age_hours=NEWS_MAX_
         out.extend(picked)
     out.sort(key=lambda x: x["time"], reverse=True)
     return out[:total]
+
+
+# --- Știri cu data din sursă în viitor -------------------------------------------------------------------------------
+FUTURE_TOLERANCE_MIN = 15     # ceasuri ușor decalate între server și sursă: sub 15 minute nu se marchează
+
+
+def mark_future(items, now, tolerance_min=FUTURE_TOLERANCE_MIN):
+    """Marchează știrile a căror dată din sursă e după `now` (+ toleranță) și le pune la coada listei.
+
+    Unele fluxuri (Ziarul Bursa) pun data ediției tipărite, cu până la o zi înainte: sortate după dată, ar sta
+    mereu primele și ar împinge afară știrile reale. Data din sursă NU se schimbă (nu inventăm alta); știrea primește
+    `future=True` și se afișează cu mențiunea „dată din sursă în viitor”.
+    now: datetime naiv, ora României. Întoarce o listă nouă (dict-uri copiate): întâi știrile cu dată validă, cea mai
+    nouă prima, apoi cele din viitor, tot descrescător; știrile fără dată interpretabilă rămân la final, în ordinea dată."""
+    limit = now + timedelta(minutes=tolerance_min)
+    ok, future, undated = [], [], []
+    for it in items or []:
+        t = news_time(it)
+        row = dict(it)
+        row["future"] = bool(t is not None and t > limit)
+        (undated if t is None else future if row["future"] else ok).append((t, row))
+    ok.sort(key=lambda x: x[0], reverse=True)
+    future.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in ok + future + undated]
+
+
+def future_note(item):
+    """Textul afișat lângă data unei știri marcate de `mark_future` (gol pentru celelalte)."""
+    return " ⚠️ dată din sursă în viitor" if isinstance(item, dict) and item.get("future") else ""

@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
-from data.news import filter_company_news, holdings_news
+from data.news import filter_company_news, future_note, holdings_news, mark_future
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
@@ -1075,8 +1075,8 @@ def fetch_news_data():
         except Exception as exc:  # înainte: except: gol
             logger.debug("fetch_news_data: %s", exc)
             continue
-    all_news.sort(key=lambda x: x['date_obj'], reverse=True)
-    return all_news
+    # Cea mai nouă prima; știrile cu data din sursă în viitor (Ziarul Bursa: data ediției) marcate și puse la coadă.
+    return mark_future(all_news, now_ro().replace(tzinfo=None))
 
 def filter_news(all_news, category):
     keywords = RSS_CONFIG["Categorii"].get(category, [])
@@ -3618,7 +3618,7 @@ def main():
                         st.markdown(f"""
                         <div class="news-card">
                             <a href="{item['link']}" class="news-title" target="_blank">{item['title']}</a>
-                            <div class="news-meta"><b>{item['source']}</b> • {item['date_str']}</div>
+                            <div class="news-meta"><b>{item['source']}</b> • {item['date_str']}{future_note(item)}</div>
                             <div style="color:#B0B8C4; font-size:14px; line-height: 1.5;">{item['summary'][:250]}...</div>
                         </div>
                         """, unsafe_allow_html=True)
@@ -7281,7 +7281,7 @@ def main():
             st.markdown(compact_html("".join(
                 f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
                 <a href="{html.escape(str(it.get('link', '')), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(str(it.get('title', '')))}</a>
-                <div style="font-size:12px; color:#8B949E;">{html.escape(str(it.get(src_key, '')))} • {html.escape(str(it.get('date_str', '')))}</div></div>"""
+                <div style="font-size:12px; color:#8B949E;">{html.escape(str(it.get(src_key, '')))} • {html.escape(str(it.get('date_str', '')))}{future_note(it)}</div></div>"""
                 for it in items)), unsafe_allow_html=True)
             return True
 
