@@ -136,3 +136,17 @@ def test_stiri_cu_data_in_viitor_marcate_si_puse_la_coada():
     assert out[3]["date_str"] == "2026-11-07 18:47"            # data din sursă nu se schimbă
     assert future_note(out[3]) == " ⚠️ dată din sursă în viitor" and future_note(out[0]) == ""
     assert "future" not in items[0]                              # lista primită nu se modifică
+def test_stiri_pe_pozitii_doar_dupa_titlu_nu_dupa_rezumat():
+    # Captura din 07.11: BofA ca analist, Reddit/Eli Lilly cu compania doar în rezumat → nu sunt despre poziții.
+    now = datetime(2026, 11, 7, 1, 0)
+    general = [
+        {"title": "Tripadvisor downgraded by BofA", "summary": "Bank of America cut the rating.", "date_str": "2026-11-06 20:00"},
+        {"title": "Reddit's (RDDT) traffic jumps", "summary": "Alphabet search changes helped GOOGL referrals.", "date_str": "2026-11-06 19:00"},
+        {"title": "Eli Lilly beats estimates", "summary": "Rival Novo Nordisk lost share.", "date_str": "2026-11-06 18:00"},
+        {"title": "Mundoro signs option with BHP", "summary": "", "date_str": "2026-11-06 17:00"},
+        {"title": "Bank of America raises dividend", "summary": "", "date_str": "2026-11-06 16:00"},
+    ]
+    holdings = {"BAC": ("Bank of America Corporation",), "GOOGL": ("Alphabet Inc.",),
+                "NVO": ("Novo Nordisk A/S",), "BHP": ("BHP Group Limited",)}
+    out = holdings_news(holdings, general, now=now)
+    assert [(x["symbol"], x["title"][:12]) for x in out] == [("BHP", "Mundoro sign"), ("BAC", "Bank of Amer")]

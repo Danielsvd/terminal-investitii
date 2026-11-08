@@ -67,3 +67,20 @@ def test_panta_zilnica_aceeasi_zi():
     res = same_day_spread(t10, t3)                                  # 21.10 lipsește la 3 luni: se ia 20.10
     assert res["spread"] == pytest.approx(0.35) and res["date"] == pd.Timestamp("2026-10-20")
     assert same_day_spread(t10, pd.Series(dtype=float)) is None
+
+
+def test_irx_randament_de_discount_in_randament_echivalent():
+    from analytics.macro import tbill_discount_to_bey
+    # 365 × 0,04 ÷ (360 − 0,04 × 91) = 14,6 ÷ 356,36 = 0,040970 → 4,097%
+    assert abs(tbill_discount_to_bey(4.00) - 4.0970) < 1e-3
+    assert tbill_discount_to_bey(0.0) == 0.0
+    assert tbill_discount_to_bey(None) is None and tbill_discount_to_bey(float("nan")) is None
+    s = tbill_discount_to_bey(pd.Series([4.00, None], index=pd.to_datetime(["2026-11-05", "2026-11-06"])))
+    assert abs(s.iloc[0] - 4.0970) < 1e-3 and pd.isna(s.iloc[1])
+
+
+def test_panta_sua_cu_irx_convertit():
+    from analytics.macro import same_day_spread, tbill_discount_to_bey
+    idx = pd.to_datetime(["2026-11-06"])
+    res = same_day_spread(pd.Series([4.86], index=idx), tbill_discount_to_bey(pd.Series([4.00], index=idx)))
+    assert abs(res["spread"] - (4.86 - 4.0970)) < 1e-3      # 0,763 pp, nu 0,86
