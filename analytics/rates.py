@@ -85,6 +85,44 @@ def rate_stats(series):
     return out
 
 
+def freshest(*series):
+    """Dintre mai multe variante ale aceleiași serii (ex. cheia BCE nouă și cea veche), cea cu ultima perioadă cea mai
+    recentă; la egalitate, prima dată. None/goale se ignoră; toate lipsă → None. Nu combină seriile între ele."""
+    best, best_last = None, None
+    for ser in series:
+        if ser is None or len(ser) == 0:
+            continue
+        s = to_monthly(ser)
+        if s.empty:
+            continue
+        last = s.index[-1]
+        if best_last is None or last > best_last:
+            best, best_last = ser, last
+    return best
+
+
+STALE_MONTHS = 3      # serii lunare: BCE/Eurostat publică cu 1–2 luni întârziere; peste 3 luni = depășită
+STALE_DAYS = 10       # serii zilnice: peste 10 zile calendaristice fără valoare nouă = depășită
+
+
+def stale_note(period, today, max_months=STALE_MONTHS, max_days=STALE_DAYS):
+    """Textul de avertizare când ultima valoare e prea veche, altfel None.
+    period: pd.Period lunar sau dată (ca în `rate_stats`); today: date/datetime."""
+    if period is None:
+        return None
+    today = pd.Timestamp(today)
+    if isinstance(period, pd.Period):
+        age = (today.year - period.year) * 12 + (today.month - period.month)
+        return f"ultima valoare din {period_label(period)}, depășită (peste {max_months} luni)" if age > max_months else None
+    try:
+        when = pd.Timestamp(period)
+    except (TypeError, ValueError):
+        return None
+    when = when.tz_localize(None) if when.tzinfo is not None else when
+    age = (today.normalize() - when.normalize()).days
+    return f"ultima valoare din {period_label(when)}, depășită (peste {max_days} zile)" if age > max_days else None
+
+
 def period_label(period):
     """„AAAA-LL” → „LL.AAAA”; dată → „ZZ.LL.AAAA”; lipsă → None."""
     if period is None:
