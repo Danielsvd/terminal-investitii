@@ -2306,7 +2306,7 @@ def _yahoo_names(sym):
 @st.cache_data(ttl=900, show_spinner=False)
 def get_holdings_news(symbols):
     """Știrile din ultimele 48 de ore despre pozițiile tale (Rezumatul Zilei, etapa D): fluxul Yahoo pe fiecare simbol
-    plus fluxurile generale (RO și internaționale), păstrate doar dacă titlul sau rezumatul menționează compania
+    plus fluxurile generale (RO și internaționale), păstrate doar dacă titlul menționează compania
     (data/news.py). Întoarce (știri, simboluri fără nume din Yahoo — filtrate doar după simbol)."""
     names, no_name, own = {}, [], {}
     for sym in symbols:
@@ -2378,7 +2378,7 @@ def render_holdings_news(holdings):
     else:
         st.markdown(_holdings_news_html(items), unsafe_allow_html=True)
     st.caption(f"{len(syms)} acțiuni din registru (fără ETF-uri și titluri de stat). Se păstrează doar știrile al căror "
-               "titlu sau rezumat conține numele întreg al companiei sau simbolul; cel mult 3 pe companie, 15 în total, "
+               "titlu conține numele întreg al companiei sau simbolul (rezumatul nu contează); cel mult 3 pe companie, 15 în total, "
                "ora României. Fluxurile RO acoperă puține companii mici, deci lipsa unei știri nu înseamnă că nu s-a "
                "întâmplat nimic." + (f" Fără nume în Yahoo (filtrate doar după simbol): {', '.join(no_name)}." if no_name else ""))
     return items

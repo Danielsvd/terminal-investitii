@@ -140,7 +140,8 @@ def holdings_news(holdings, general, own=None, now=None, max_age_hours=NEWS_MAX_
     holdings: {simbol: (nume, ...)} — numele companiei (din Yahoo); fără nume → doar simbolul (`strict_terms`).
     general: știrile din fluxurile generale (RO și internaționale).
     own: {simbol: știri} din fluxul Yahoo pe simbol. Toate se filtrează aici cu `strict_terms` (numele întreg sau
-    simbolul), mai strict decât `filter_company_news` (care rămâne neschimbat pentru sentiment).
+    simbolul), mai strict decât `filter_company_news` (care rămâne neschimbat pentru sentiment), și doar în TITLU:
+    rezumatul nu contează.
     now: datetime naiv în ora României (implicit acum, pentru teste se dă explicit).
 
     Întoarce lista de dict symbol, title, link, source, time (datetime), cea mai nouă întâi: cel mult `per_symbol`
@@ -154,8 +155,10 @@ def holdings_news(holdings, general, own=None, now=None, max_age_hours=NEWS_MAX_
         terms = strict_terms(sym, tuple(n for n in names or () if n))
         if not terms[0] and not terms[1]:
             continue
+        # Doar titlul: în rezumat compania apare des ca analist („BofA likes it”), ca sursă sau ca
+        # exemplu dintr-un articol despre altă companie (Eli Lilly → Novo Nordisk, Reddit → Alphabet).
         cands = [it for it in list(own.get(sym) or []) + list(general or [])
-                 if mentions_company(f"{it.get('title', '')} {it.get('summary', '')}", terms)]
+                 if mentions_company(it.get("title", ""), terms)]
         picked = []
         for it in sorted(cands, key=lambda x: news_time(x) or datetime.min, reverse=True):
             t, title = news_time(it), str(it.get("title", "")).strip()
