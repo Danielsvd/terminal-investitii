@@ -118,3 +118,21 @@ def test_termeni_stricti_fara_cuvinte_generice_din_nume():
     ]
     out = holdings_news({"BAC": ("Bank of America Corporation",), "AG": ("First Majestic Silver Corp.",)}, general, now=now)
     assert [(x["symbol"], x["title"][:10]) for x in out] == [("BAC", "ETFs Are N"), ("AG", "First Maje")]
+
+
+def test_stiri_cu_data_in_viitor_marcate_si_puse_la_coada():
+    from data.news import future_note, mark_future
+    now = datetime(2026, 11, 7, 0, 53)
+    items = [
+        {"title": "Bursa: ediția de mâine", "source": "Bursa", "date_str": "2026-11-07 18:47"},   # +18 ore
+        {"title": "Bursa: alta", "source": "Bursa", "date_str": "2026-11-07 17:30"},
+        {"title": "ZF: reală", "source": "ZF", "date_str": "2026-11-07 00:40"},
+        {"title": "Profit: decalaj de 10 minute", "source": "Profit", "date_str": "2026-11-07 01:03"},  # sub toleranță
+        {"title": "Economica: ieri", "source": "Economica", "date_str": "2026-11-06 22:00"},
+    ]
+    out = mark_future(items, now)
+    assert [x["title"][:7] for x in out] == ["Profit:", "ZF: rea", "Economi", "Bursa: ", "Bursa: "]
+    assert [x["future"] for x in out] == [False, False, False, True, True]
+    assert out[3]["date_str"] == "2026-11-07 18:47"            # data din sursă nu se schimbă
+    assert future_note(out[3]) == " ⚠️ dată din sursă în viitor" and future_note(out[0]) == ""
+    assert "future" not in items[0]                              # lista primită nu se modifică
