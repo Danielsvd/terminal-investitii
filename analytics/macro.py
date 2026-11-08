@@ -82,6 +82,25 @@ def monthly_spread(long_rate, short_rate):
     return {"spread": lv - sv, "long": lv, "short": sv, "month": str(month)}
 
 
+TBILL_13W_DAYS = 91
+
+
+def tbill_discount_to_bey(discount_pct, days=TBILL_13W_DAYS):
+    """Randamentul de discount al unui titlu de stat SUA pe termen scurt (ex. ^IRX, în procente) → randament echivalent
+    de obligațiune (bond-equivalent yield), convenția în care sunt ^TNX și FRED DGS3MO:
+    BEY = 365 × d ÷ (360 − d × t), cu d zecimal și t = zilele până la scadență (≤ 182; 13 săptămâni = 91).
+    Exemplu: d = 4,00% → 365 × 0,04 ÷ (360 − 0,04 × 91) = 4,097%.
+    Primește un număr sau o serie; lipsă/neinterpretabil → None (număr) sau NaN (serie)."""
+    if isinstance(discount_pct, pd.Series):
+        d = pd.to_numeric(discount_pct, errors="coerce") / 100.0
+        return 100.0 * 365.0 * d / (360.0 - d * days)
+    v = _finite(discount_pct)
+    if v is None:
+        return None
+    d = v / 100.0
+    return 100.0 * 365.0 * d / (360.0 - d * days)
+
+
 def same_day_spread(long_close, short_close):
     """10 ani − 3 luni din închideri zilnice (ex. ^TNX, ^IRX, în procente), pe ultima zi prezentă în ambele.
     {"spread", "long", "short", "date"} sau None."""

@@ -32,7 +32,7 @@ from threading import Lock
 
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
 from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
-from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
+from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread, tbill_discount_to_bey
 from analytics import macro as macro_calc
 from analytics import markets as markets_calc
 from analytics import rates as rates_calc
@@ -1468,7 +1468,8 @@ def _market_curve_cached(market):
     """Panta curbei randamentelor (10 ani − 3 luni, în puncte procentuale) pe piața acțiunii:
     (spread, descriere) sau (None, motiv). Fără valoare de rezervă.
 
-    US: ^TNX − ^IRX (Yahoo), aceeași zi. EU: curba titlurilor de stat AAA din zona euro (BCE, zilnic,
+    US: ^TNX − ^IRX (Yahoo), aceeași zi; ^IRX e randament de discount și se convertește întâi în randament echivalent
+    de obligațiune (`tbill_discount_to_bey`), convenția lui ^TNX și a FRED DGS3MO. EU: curba titlurilor de stat AAA din zona euro (BCE, zilnic,
     seria gata calculată 10 ani − 3 luni; proxy pentru Bund). RO: titluri de stat 10 ani (BCE, lunar)
     − ROBOR 3M (Eurostat irt_st_m, lunar), pe aceeași lună.
     """
@@ -1479,10 +1480,11 @@ def _market_curve_cached(market):
         try:
             t10 = yf.Ticker("^TNX").history(period="10d", auto_adjust=False)['Close']
             t3 = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)['Close']
-            res = same_day_spread(t10, t3)
+            # ^IRX e cotat ca randament de discount (4,00 ≈ 4,10 echivalent): fără conversie panta ieșea ~0,1 pp mai mare.
+            res = same_day_spread(t10, tbill_discount_to_bey(t3))
             if res is not None and _valid(res["spread"]):
                 return res["spread"], (f"SUA, titluri de stat 10 ani {ro(res['long']):.2f}% − 3 luni {ro(res['short']):.2f}% "
-                                       f"(^TNX − ^IRX, {res['date']:%d.%m.%Y})")
+                                       f"(^TNX − ^IRX convertit în randament echivalent, {res['date']:%d.%m.%Y})")
         except Exception as e:
             logger.warning(f"curba SUA (^TNX/^IRX) indisponibilă: {e}")
         raise CurveUnavailable("curba SUA (^TNX − ^IRX) nu a putut fi citită")
@@ -6233,7 +6235,9 @@ def main():
                        "Sub linia punctată (0) curba e inversată: în SUA, inversarea 10 ani − 3 luni a precedat recesiunile din 1969 "
                        "încoace, cu un decalaj de 6–24 de luni și cel puțin un semnal fals; nu dă momentul. "
                        f"Sursa: FRED DGS10 − DGS3MO, aceeași zi, din {cv_sum['start']:%m.%Y}. Pilonul din verdict folosește "
-                       "^TNX − ^IRX (Yahoo), deci ultima valoare poate diferi cu câteva sutimi.")
+                       "^TNX − ^IRX (Yahoo, ^IRX convertit din randament de discount în randament echivalent de obligațiune), "
+                       "din ultima ședință; FRED vine de obicei cu o zi în urmă, deci în zilele cu mișcări mari (ex. raportul "
+                       "privind locurile de muncă) cele două pot diferi cu până la ~0,2 pp.")
 
         # --- PRIMA DE RISC A ACȚIUNILOR (proxy) ---
         st.markdown("**Acțiunile față de titlurile de stat** (prima de risc a acțiunilor, proxy)")
