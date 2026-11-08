@@ -66,3 +66,27 @@ def test_goale():
     assert rate_stats(None)["value"] is None
     assert monthly_diff(None, pd.Series({"2026-01": 1.0})).empty
     assert period_label(None) is None
+
+
+# --- HICP: cheia BCE nouă (setul HICP din 04.02.2026) vs cea veche (ICP, oprită la 12.2025) ---------------------------
+from datetime import date
+from analytics import rates as rates_calc
+
+
+def test_freshest_alege_seria_cu_luna_cea_mai_recenta():
+    old = pd.Series({"2025-11": 2.6, "2025-12": 2.0})
+    new = pd.Series({"2026-08": 2.1, "2026-09": 2.4})
+    assert rates_calc.freshest(new, old) is new
+    assert rates_calc.freshest(old, new) is new
+    assert rates_calc.freshest(None, old) is old
+    assert rates_calc.freshest(None, pd.Series(dtype=float)) is None
+
+
+def test_stale_note_lunar_si_zilnic():
+    today = date(2026, 11, 8)
+    assert rates_calc.stale_note(pd.Period("2025-12", "M"), today) == "ultima valoare din 12.2025, depășită (peste 3 luni)"
+    assert rates_calc.stale_note(pd.Period("2026-08", "M"), today) is None      # 3 luni: întârzierea normală BCE
+    assert rates_calc.stale_note(pd.Period("2026-07", "M"), today) is not None  # 4 luni
+    assert rates_calc.stale_note(pd.Timestamp("2026-11-05"), today) is None
+    assert rates_calc.stale_note(pd.Timestamp("2026-10-20"), today) == "ultima valoare din 20.10.2026, depășită (peste 10 zile)"
+    assert rates_calc.stale_note(None, today) is None

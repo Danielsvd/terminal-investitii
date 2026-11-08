@@ -3146,15 +3146,21 @@ def get_rates_dashboard():
     us_cpi = rates_calc.yoy_monthly(cpi) if cpi is not None else None
     dfr = load(_ecb_rate_series, "FM/B.U2.EUR.4F.KR.DFR.LEV", 600)
     bund = load(_ecb_rate_series, "IRS/M.DE.L.L40.CI.0000.EUR.N.Z", 30)
-    de_hicp = load(_ecb_rate_series, "ICP/M.DE.N.000000.4.ANR", 30)
+    # BCE a închis setul ICP pe 04.02.2026 (ultima lună: 12.2025) și l-a înlocuit cu setul HICP (ECOICOP v2,
+    # furnizor Eurostat = „4D0”). Se citesc ambele chei și se păstrează seria cu luna cea mai recentă.
+    de_hicp = rates_calc.freshest(load(_ecb_rate_series, "HICP/M.DE.N.000000.4D0.ANR", 30),
+                                  load(_ecb_rate_series, "ICP/M.DE.N.000000.4.ANR", 30))
     ro10 = load(_ecb_rate_series, "IRS/M.RO.L.L40.CI.0000.RON.N.Z", 30)
-    ro_hicp = load(_ecb_rate_series, "ICP/M.RO.N.000000.4.ANR", 30)
+    ro_hicp = rates_calc.freshest(load(_ecb_rate_series, "HICP/M.RO.N.000000.4D0.ANR", 30),
+                                  load(_ecb_rate_series, "ICP/M.RO.N.000000.4.ANR", 30))
     robor = load(_robor3m_series)
 
     def row(market, label, ser, source, inputs):
         ok = ser is not None and len(ser) > 0 and all(x is not None for x in inputs)
         st_ = rates_calc.rate_stats(ser) if ok else rates_calc.rate_stats(None)
-        return {"Piață": market, "Indicator": label, **st_, "Sursă": source if ok else f"{source} — indisponibil"}
+        stale = rates_calc.stale_note(st_["period"], now_ro().date()) if ok else None
+        src = (f"{source} — ⚠️ {stale}" if stale else source) if ok else f"{source} — indisponibil"
+        return {"Piață": market, "Indicator": label, **st_, "Sursă": src}
 
     rows = [
         row("SUA", "Dobânda Fed (efectivă)", d(us["DFF"]), "FRED DFF, zilnic", [us["DFF"]]),
@@ -3168,12 +3174,12 @@ def get_rates_dashboard():
             "FRED, aceeași lună", [us["DGS10"], us_cpi]),
         row("Zona euro", "Dobânda de depozit BCE", d(dfr) if dfr is not None else None, "BCE FM DFR", [dfr]),
         row("Germania", "Bund 10 ani", m(bund) if bund is not None else None, "BCE IRS, lunar", [bund]),
-        row("Germania", "Inflația HICP, an/an", m(de_hicp) if de_hicp is not None else None, "BCE ICP, lunar", [de_hicp]),
+        row("Germania", "Inflația HICP, an/an", m(de_hicp) if de_hicp is not None else None, "BCE HICP, lunar", [de_hicp]),
         row("Germania", "Dobânda reală Bund (10 ani − HICP)", rates_calc.monthly_diff(bund, de_hicp) if bund is not None and de_hicp is not None else None,
             "BCE, aceeași lună", [bund, de_hicp]),
         row("România", "ROBOR 3 luni", m(robor) if robor is not None else None, "Eurostat irt_st_m, lunar", [robor]),
         row("România", "Titluri de stat 10 ani", m(ro10) if ro10 is not None else None, "BCE IRS, lunar", [ro10]),
-        row("România", "Inflația HICP, an/an", m(ro_hicp) if ro_hicp is not None else None, "BCE ICP, lunar", [ro_hicp]),
+        row("România", "Inflația HICP, an/an", m(ro_hicp) if ro_hicp is not None else None, "BCE HICP, lunar", [ro_hicp]),
         row("România", "Dobânda reală 10 ani (10 ani − HICP)", rates_calc.monthly_diff(ro10, ro_hicp) if ro10 is not None and ro_hicp is not None else None,
             "BCE, aceeași lună", [ro10, ro_hicp]),
         row("România", "Prima de risc de țară (RO 10 ani − Bund 10 ani)", rates_calc.monthly_diff(ro10, bund) if ro10 is not None and bund is not None else None,
