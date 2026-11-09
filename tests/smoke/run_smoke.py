@@ -959,6 +959,14 @@ def main():
                 assert {"Ședința", "Monedă", "Volum", "Valoare"} <= set(sc.columns), list(sc.columns)
                 assert not sc["Monedă"].isna().any(), "Scanner: monedă lipsă"
                 assert set(sc["Anomalie model (nevalidat)"]) <= {"da", "-", "N/A"}, set(sc["Anomalie model (nevalidat)"])
+        if section == "8. Watchlist":
+            wt = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Simbol" in
+                       getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert wt is not None, "Watchlist: lipsește tabelul"
+            print("Watchlist:", wt.drop(columns=[c for c in wt.columns if c.startswith("_")]).values.tolist())
+            assert set(wt["Simbol"]) == {"MSFT", "TLV.RO"}, list(wt["Simbol"])
+            assert wt["Preț Curent"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
+            assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
 
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
