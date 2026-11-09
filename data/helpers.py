@@ -364,6 +364,21 @@ def ro_spec(spec, suffix=""):
     return _fmt
 
 
+SMALL_PRICE = 10.0   # sub acest preț se afișează 4 zecimale (BVB are titluri sub 1 leu: 0,2350, nu 0,23)
+
+
+def price_ro(value):
+    """Un preț în format românesc: 4 zecimale sub SMALL_PRICE, 2 peste („0,2350”, „53,60”, „1.234,50”).
+    Lipsă, NaN, ≤ 0 sau text → „N/A”, niciodată 0."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v != v or v <= 0:
+        return "N/A"
+    return format_ro(v, 4 if v < SMALL_PRICE else 2)
+
+
 def format_ro(value, decimals=2, suffix="", trim=False):
     """Număr în format românesc: punct la mii, virgulă la zecimale („1.250”, „4.562,50”).
 

@@ -304,3 +304,13 @@ def test_text_frame_lipsa_devine_na_si_restul_formatat():
     assert out["x"].tolist() == [1, 2]            # coloană neformatată: neschimbată
     assert df["ep"].iloc[1] is None or pd.isna(df["ep"].iloc[1])   # originalul nu e modificat
     assert "lipsa" not in out.columns
+
+
+def test_price_ro_zecimale_dupa_marime():
+    from data.helpers import price_ro
+    assert price_ro(0.235) == "0,2350"        # HAI: 0,23 pierdea a treia zecimală
+    assert price_ro(9.9999) == "9,9999"
+    assert price_ro(10) == "10,00" and price_ro(53.6) == "53,60"
+    assert price_ro(1234.5) == "1.234,50"
+    for missing in (None, float("nan"), 0, -1, "abc"):
+        assert price_ro(missing) == "N/A"
