@@ -1013,7 +1013,7 @@ def main():
             print("Watchlist, scor fundamental:", fsc)
             assert fsc["TLV.RO"] == "N/A (bancă)", fsc       # TLV are șablon de bancă în fișierele simulate
             assert re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL|FĂRĂ TREAPTĂ) \d+", fsc["SNP.RO"]), fsc
-            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+ · netestat|N/A.*", fsc[s]) for s in ("MSFT", "EGLN.L")), fsc
+            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+,\d · netestat|N/A.*", fsc[s]) for s in ("MSFT", "EGLN.L")), fsc
             assert "—" not in fsc.values(), fsc
             assert any("calculate între" in str(c.value) for c in at.caption), "lipsește ora calculului scorurilor"
             # adăugarea unui simbol existent (cu litere mici și spații) e refuzată, cu mesaj

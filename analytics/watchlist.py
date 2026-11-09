@@ -221,8 +221,11 @@ def bvb_fundamental_cell(score, tier):
 
 
 def global_fundamental_cell(score, label):
-    """Textul coloanei Scor fundamental în afara BVB: eticheta benzii + scorul, marcat „netestat”
-    („NEUTRU 63 · netestat”). Sub 2 piloni cu date → „N/A”."""
+    """Textul coloanei Scor fundamental în afara BVB: eticheta benzii + scorul cu o zecimală, marcat „netestat”
+    („NEUTRU 63,4 · netestat”). O zecimală, ca în Analiză: banda se decide pe scorul nerotunjit (≥ 70 FAVORABIL),
+    deci 69,6 rotunjit la „70” ar fi contrazis eticheta NEUTRU (Daniel a văzut „NEUTRU 70” pe test1, 09.11).
+    Sub 2 piloni cu date → „N/A”."""
+    from data.helpers import ro
     if score is None or pd.isna(score):
         return "N/A"
-    return f"{label} {score:.0f} · netestat"
+    return f"{label} {ro(score):.1f} · netestat"

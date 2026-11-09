@@ -178,5 +178,7 @@ def test_fundamental_cells():
     assert wl.bvb_fundamental_cell(72.4, 2.0) == "FAVORABIL 72"
     assert wl.bvb_fundamental_cell(55.0, np.nan) == "FĂRĂ TREAPTĂ 55"
     assert wl.bvb_fundamental_cell(np.nan, 1.0) == "N/A"
-    assert wl.global_fundamental_cell(63.0, "NEUTRU") == "NEUTRU 63 · netestat"
+    assert wl.global_fundamental_cell(63.0, "NEUTRU") == "NEUTRU 63,0 · netestat"
+    # 69,6 e sub pragul 70 (NEUTRU): fără zecimală ar fi apărut „NEUTRU 70”, în contradicție cu banda
+    assert wl.global_fundamental_cell(69.6, "NEUTRU") == "NEUTRU 69,6 · netestat"
     assert wl.global_fundamental_cell(None, "DATE INSUFICIENTE") == "N/A"
