@@ -7,7 +7,6 @@ import pandas as pd
 from analytics.briefing import MIN_VALUE_RON
 
 RVOL_DEFAULT = 1.2           # pragul RVOL implicit al cursorului (Daniel, 05.11.2026: de la 1,5 la 1,2)
-MIN_AVG_SHARES = 5000        # SUA / Europa: media volumului pe 20 de ședințe, în acțiuni (regula existentă)
 
 
 def _num(x):
@@ -21,15 +20,15 @@ def _num(x):
 def liquidity_ok(symbol, last_close, last_volume, avg_volume_20):
     """True dacă titlul trece filtrul de lichiditate al Scanner-ului.
 
-    BVB (`.RO`): valoarea tranzacționată în ultima ședință (preț × volum) ≥ MIN_VALUE_RON (50.000 lei), aceeași regulă
-    ca topurile din Rezumatul Zilei. Restul: media volumului pe 20 de ședințe ≥ MIN_AVG_SHARES acțiuni.
-    Valoare lipsă → False (titlul nu se afișează, nu primește o valoare inventată).
+    BVB (`.RO`): valoarea tranzacționată în ședința evaluată (preț × volum) ≥ MIN_VALUE_RON (50.000 lei), aceeași
+    regulă ca topurile din Rezumatul Zilei. SUA și Europa: fără prag (Daniel, 09.11.2026: pragul de 5.000 de acțiuni
+    scos; listele au doar companii mari, iar `rvol_stats` cere oricum 20 de ședințe cu volum).
+    Valoare lipsă la BVB → False (titlul nu se afișează, nu primește o valoare inventată).
     """
     if str(symbol).upper().endswith(".RO"):
         p, v = _num(last_close), _num(last_volume)
         return p is not None and v is not None and p * v >= MIN_VALUE_RON
-    a = _num(avg_volume_20)
-    return a is not None and a >= MIN_AVG_SHARES
+    return True
 
 
 RVOL_WINDOW = 20             # media volumului: ultimele 20 de ședințe cu volum, fără ședința evaluată
