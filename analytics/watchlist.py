@@ -1,9 +1,10 @@
 """Reguli pure pentru pagina Watchlist (fără rețea, fără `st.*`)."""
 import math
 
+import numpy as np
 import pandas as pd
 
-from data.helpers import positive_or_none
+from data.helpers import NEAR_TARGET_PCT, positive_or_none, target_zone
 
 WATCHLIST_COLUMNS = ("Symbol", "TargetPrice", "Notes")
 
@@ -104,3 +105,36 @@ def symbol_candidates(symbol):
     if not s:
         return []
     return [s] if s.endswith(".RO") else [s, s + ".RO"]
+
+
+# Statusul rândului: o alertă de preț față de ținta ta, nu o recomandare (ținta e a ta, nu un calcul al aplicației)
+STATUS_LABELS = {
+    "sub": "✅ La/sub țintă",
+    "aproape": f"🟡 Aproape (<{NEAR_TARGET_PCT:.0f}%)",
+    "peste": "⏳ Peste țintă",
+}
+STALE_BDAYS = 3   # ultimul preț mai vechi de 3 zile lucrătoare primește ⚠️ (titlu netranzacționat, simbol suspendat)
+
+
+def status_label(price, target):
+    """Eticheta din coloana Status: zona din `target_zone` sau ce lipsește („Fără preț” / „Fără țintă”)."""
+    zone = target_zone(price, target)
+    if zone is not None:
+        return STATUS_LABELS[zone]
+    return "Fără preț" if positive_or_none(price) is None else "Fără țintă"
+
+
+def price_date_text(date, today, partial=False):
+    """Textul coloanei „Data prețului”: „06.11.2026”, plus „⏳ ședință în curs” când prețul e din bara de azi a unei
+    burse deschise (preț cu întârziere, se mai schimbă) și „⚠️ veche (N zile lucrătoare)” peste STALE_BDAYS.
+    Zilele lucrătoare nu țin cont de sărbători: o zi liberă a bursei poate adăuga 1. Lipsă → „N/A”."""
+    if date is None or pd.isna(date):
+        return "N/A"
+    d = pd.Timestamp(date).date()
+    text = d.strftime("%d.%m.%Y")
+    if partial:
+        text += " ⏳ ședință în curs"
+    age = int(np.busday_count(d, pd.Timestamp(today).date()))
+    if age > STALE_BDAYS:
+        text += f" ⚠️ veche ({age} zile lucrătoare)"
+    return text
