@@ -314,3 +314,15 @@ def test_price_ro_zecimale_dupa_marime():
     assert price_ro(1234.5) == "1.234,50"
     for missing in (None, float("nan"), 0, -1, "abc"):
         assert price_ro(missing) == "N/A"
+
+
+def test_score_ro_taie_nu_rotunjeste():
+    from data.helpers import score_ro
+    # Eticheta se decide pe scorul exact; afișat, scorul nu trece niciodată peste valoarea reală (pragurile 40/70/80)
+    assert score_ro(39.96) == "39,9"
+    assert score_ro(69.96) == "69,9"
+    assert score_ro(79.6) == "79,6"
+    assert score_ro(80.04) == "80,0"
+    assert score_ro(2.3) == "2,3"          # 2,3 × 10 = 22,999… în virgulă mobilă: fără round ar ieși „2,2”
+    assert score_ro(100) == "100,0"
+    assert score_ro(None) == "N/A" and score_ro(float("nan")) == "N/A"

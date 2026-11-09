@@ -63,7 +63,7 @@ from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_li
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data import bnr as bnr_data
-from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, price_ro, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
+from data.helpers import format_ro, score_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, price_ro, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -758,7 +758,7 @@ def render_bvb_decision(real_sym, hist):
 
     st.markdown("**Pasul 2 · Momentul** (tehnic, doar pentru intrare)")
     t1, t2, t3, t4, t5 = st.columns(5)
-    t1.metric("Moment", "N/A" if moment is None else f"{ro(moment):.0f}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
+    t1.metric("Moment", "N/A" if moment is None else f"{score_ro(moment)}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
     trend = comp["trend"]
     t2.metric("Trend SMA 50/200", "N/A" if trend is None else f"{ro(trend * 3):.0f} din 3" if len(close.dropna()) >= 200 else f"{ro(trend):.0f} din 1",
               help="Câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200 (sub 200 de ședințe: doar preț > SMA 50).")
@@ -903,8 +903,8 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     m_label, m_color, m_note = moment_label(moment, False)
     n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
     fund_detail = ("N/A" if res["score"] is None
-                   else f"{ro(res['score']):.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date · descriptiv")
-    moment_detail = "N/A" if moment is None else f"tehnic {ro(moment):.0f}/100, descriptiv"
+                   else f"{score_ro(res['score'])}/100 · {n_ok} din {len(res['pillars'])} piloni cu date · descriptiv")
+    moment_detail = "N/A" if moment is None else f"tehnic {score_ro(moment)}/100, descriptiv"
 
     st.markdown(f"""
         <div style="background:#161B22; border:1px solid {res['color']}88; border-radius:12px; padding:14px; margin:8px 0 14px 0;">

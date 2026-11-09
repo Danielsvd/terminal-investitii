@@ -16,7 +16,7 @@ def test_characterize_bvb_neutru_moment_favorabil():
     txt = characterize(is_bvb=True, fund_label="NEUTRU", fund_score=54, moment_score=100,
                        history_text="Istoric, combinația aceasta: +4,6% față de media BVB la 6 luni.")
     assert txt.startswith("Fundamental, compania e la mijloc față de celelalte companii BVB din fișierele tale (54/100)")  # BVB: întreg
-    assert "trendul și momentumul sunt pozitive (100/100)" in txt
+    assert "trendul și momentumul sunt pozitive (100,0/100)" in txt
     assert "Tehnicul e mai bun decât fundamentalul." in txt
     assert txt.endswith("+4,6% față de media BVB la 6 luni.")
     assert "netestat" not in txt
@@ -27,7 +27,7 @@ def test_characterize_global_pillars_and_untested():
     txt = characterize(is_bvb=False, fund_label="NEUTRU", fund_score=66.8, moment_score=30,
                        pillars=pillars, n_alerts=2)
     assert "pe pilonii cu date (66,8/100)" in txt
-    assert "; trendul e negativ (30/100)." in txt
+    assert "; trendul e negativ (30,0/100)." in txt
     assert "Punct tare: Sănătate 100/100; punct slab: Evaluare 12/100." in txt
     assert "2 alerte de context" in txt
     assert txt.endswith("(netestat).")

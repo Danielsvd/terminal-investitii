@@ -1002,8 +1002,8 @@ def main():
             assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
             # Moment automat (BVB cu etichetă testată, restul fără verdict); scorul fundamental doar la buton
             mom = wt.set_index("Simbol")["Moment"].to_dict()
-            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+", mom[s]) for s in ("TLV.RO", "SNP.RO")), mom
-            assert all(re.fullmatch(r"\d+ · fără verdict", mom[s]) for s in ("MSFT", "EGLN.L")), mom
+            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+,\d", mom[s]) for s in ("TLV.RO", "SNP.RO")), mom
+            assert all(re.fullmatch(r"\d+,\d · fără verdict", mom[s]) for s in ("MSFT", "EGLN.L")), mom
             assert set(wt["Scor fundamental"]) == {"—"}, wt["Scor fundamental"].tolist()
             next(b for b in at.button if b.label == "📊 Calculează scorurile fundamentale").click().run()
             check(at, "8. Watchlist (scoruri fundamentale)")
