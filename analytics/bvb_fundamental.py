@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from data.company_files import period_label
-from data.helpers import ro
+from data.helpers import ro, score_ro
 
 GN_LIMIT = 22.5
 SCORED = ("EP", "BP", "DY", "PIO")
@@ -225,7 +225,7 @@ def verdict_banner(tier, score, rank, n, moment_score):
         moment_label, moment_color, moment_detail = "N/A", "#8B949E", "istoric de preț insuficient"
     else:
         moment_label, moment_color = MOMENT_LABELS[band]
-        moment_detail = f"{ro(moment_score):.0f}/100"
+        moment_detail = f"{score_ro(moment_score)}/100"   # tăiat la o zecimală: 79,6 sub pragul 80 nu apare „80” (09.11)
     _, border, text = final_verdict(tier, moment_score)
     return {"fund_label": fund_label, "fund_color": fund_color, "fund_detail": fund_detail,
             "moment_label": moment_label, "moment_color": moment_color, "moment_detail": moment_detail,

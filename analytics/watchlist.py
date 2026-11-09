@@ -194,9 +194,10 @@ def moment_cells(closes, symbols):
     """{simbol: textul coloanei Moment} din închiderile AJUSTATE (`closes`: o coloană pe simbol, index de date).
 
     Același sub-scor ca în Analiză (`scoring.technical_subscore`: trend SMA 50/200 + momentum 12-1, fără RSI).
-    BVB (.RO): eticheta pe pragurile testate + scorul („FAVORABIL 85”). Celelalte piețe: doar scorul,
+    BVB (.RO): eticheta pe pragurile testate + scorul („FAVORABIL 85,3”, o zecimală). Celelalte piețe: doar scorul,
     „fără verdict” (testul pe SUA nu a găsit putere de predicție). Simbol fără date sau istoric prea scurt → „N/A”."""
     from analytics.scoring import moment_label, technical_subscore
+    from data.helpers import score_ro
     out = {}
     for sym in symbols:
         series = closes[sym] if closes is not None and sym in getattr(closes, "columns", []) else pd.Series(dtype="float64")
@@ -206,7 +207,8 @@ def moment_cells(closes, symbols):
             continue
         is_bvb = normalize_symbol(sym).endswith(".RO")
         label, _, _ = moment_label(score, is_bvb)
-        out[sym] = f"{label} {score:.0f}" if is_bvb else f"{score:.0f} · fără verdict"
+        # O zecimală, ca în Analiză: eticheta se decide pe scorul nerotunjit (pragurile 80 și 40), deci 79,6 nu apare „80”.
+        out[sym] = f"{label} {score_ro(score)}" if is_bvb else f"{score_ro(score)} · fără verdict"
     return out
 
 
@@ -225,7 +227,7 @@ def global_fundamental_cell(score, label):
     („NEUTRU 63,4 · netestat”). O zecimală, ca în Analiză: banda se decide pe scorul nerotunjit (≥ 70 FAVORABIL),
     deci 69,6 rotunjit la „70” ar fi contrazis eticheta NEUTRU (Daniel a văzut „NEUTRU 70” pe test1, 09.11).
     Sub 2 piloni cu date → „N/A”."""
-    from data.helpers import ro
+    from data.helpers import score_ro
     if score is None or pd.isna(score):
         return "N/A"
-    return f"{label} {ro(score):.1f} · netestat"
+    return f"{label} {score_ro(score)} · netestat"

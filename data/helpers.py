@@ -3,6 +3,7 @@ import calendar
 import csv
 import html
 import io
+import math
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -377,6 +378,27 @@ def price_ro(value):
     if v != v or v <= 0:
         return "N/A"
     return format_ro(v, 4 if v < SMALL_PRICE else 2)
+
+
+def score_ro(value, decimals=1):
+    """Un scor afișat lângă o etichetă cu prag, TĂIAT (nu rotunjit) la `decimals` zecimale, în format românesc.
+
+    Eticheta se decide pe scorul exact (de ex. moment ≥ 80 FAVORABIL, scor fundamental ≥ 70 FAVORABIL).
+    Rotunjit, un scor de 39,96 ar apărea „40,0” lângă NEFAVORABIL, iar 69,6 fără zecimale „70” lângă NEUTRU
+    (văzut de Daniel pe test1, 09.11). Tăiat, valoarea afișată nu trece niciodată peste scorul real:
+    39,96 → „39,9”; 79,6 → „79,6”; 80,04 → „80,0”. Lipsă sau NaN → „N/A”.
+    """
+    if value is None or isinstance(value, bool):
+        return "N/A"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v != v:
+        return "N/A"
+    factor = 10 ** decimals
+    # round(…, 6) înainte de floor: 2,3 × 10 = 22,999999999999996 în virgulă mobilă, care ar deveni 22
+    return format_ro(math.floor(round(v * factor, 6)) / factor, decimals)
 
 
 def format_ro(value, decimals=2, suffix="", trim=False):

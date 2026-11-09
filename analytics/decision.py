@@ -10,7 +10,7 @@ Pașii se afișează separat și NU se adună:
 """
 import numpy as np
 
-from data.helpers import ro
+from data.helpers import ro, score_ro
 
 MOMENT_HIGH, MOMENT_LOW = 80.0, 40.0
 FUND_LABELS = ("FAVORABIL", "NEUTRU", "NEFAVORABIL")
@@ -95,7 +95,8 @@ def characterize(*, is_bvb, fund_label, fund_score=None, moment_score=None, pill
     parts = []
     if fund_label in FUND_LABELS:
         # Același număr de zecimale ca în secțiunea de scor: BVB întreg, SUA/UE o zecimală.
-        score_txt = "" if _num(fund_score) is None else f" ({ro(_num(fund_score)):{'.0f' if is_bvb else '.1f'}}/100)"
+        score_txt = "" if _num(fund_score) is None else (f" ({ro(_num(fund_score)):.0f}/100)" if is_bvb
+                                                          else f" ({score_ro(_num(fund_score))}/100)")
         first = f"Fundamental, {_FUND_TEXT[fund_label]}{ref}{score_txt}"
     else:
         first = "Fundamentalul nu se poate evalua (date insuficiente)"
@@ -103,7 +104,7 @@ def characterize(*, is_bvb, fund_label, fund_score=None, moment_score=None, pill
         parts.append(first + "; momentul nu se poate calcula (istoric de preț insuficient).")
     else:
         conn = _connector(fund_label, band) if fund_label in FUND_LABELS else "; "
-        parts.append(f"{first}{conn}{_MOMENT_TEXT[band]} ({ro(_num(moment_score)):.0f}/100).")
+        parts.append(f"{first}{conn}{_MOMENT_TEXT[band]} ({score_ro(_num(moment_score))}/100).")
         if fund_label in FUND_LABELS:
             cons = _consequence(fund_label, band, is_bvb)
             if cons:
