@@ -847,6 +847,7 @@ def main():
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
+            assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Portofoliu: lipsește timpul paginii"
             at.button(key="manual_prices_reload").click().run()
             check(at, "3. Portofoliu după reîncărcarea prețurilor manuale")
             at.toggle(key="ledger_curve").set_value(True).run()
