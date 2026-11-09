@@ -2336,7 +2336,10 @@ def render_portfolio_today(sessions, fx, fx_dates):
             "Valoare (lei)": bonds["Value_RON"].values,
             "Stare": ["nominal 100 (proxy)" if s == ledger_calc.PRICE_NOMINAL else "preț manual" for s in bonds["PriceSource"]],
         })
-        view = pd.concat([eq_view, bond_view], ignore_index=True) if len(bond_view) else eq_view
+        # object pe ambele: coloanele goale ale titlurilor de stat (Variație, σ, P/L) nu mai schimbă tipul
+        # la concatenare (FutureWarning pandas 2.1); text_frame face oricum totul text
+        view = (pd.concat([eq_view.astype(object), bond_view.astype(object)], ignore_index=True)
+                if len(bond_view) else eq_view)
         st.dataframe(
             text_frame(view, {
                 "Ședința": lambda d: f"{pd.Timestamp(d):%d.%m.%Y}",

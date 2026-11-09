@@ -22,5 +22,6 @@ def test_credit_sentence_pe_banda():
 
 def test_sinteza_nu_mai_spune_credit_sanatos_cand_pilonul_e_0():
     import ai_engine
-    src = open(ai_engine.__file__, encoding="utf-8").read()
+    with open(ai_engine.__file__, encoding="utf-8") as f:
+        src = f.read()
     assert ":.2f}). Creditarea corporativă este sănătoasă." not in src  # fraza veche din bullet (comentariul o citează)

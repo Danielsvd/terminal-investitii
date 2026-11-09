@@ -17,6 +17,7 @@ import re
 import sys
 import time
 import types
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -619,8 +620,28 @@ def _ro_num(text):
     return float(str(text).replace("%", "").replace("+", "").replace(".", "").replace(",", "."))
 
 
+def _collect_app_warnings():
+    """Avertismentele Python (pandas FutureWarning, DeprecationWarning etc.) emise din codul aplicației
+    (nu din biblioteci și nu din teste) se adună aici; la final smoke-ul pică dacă există vreunul."""
+    found = []
+    repo = os.path.realpath(APP_DIR) + os.sep
+    tests_dir = os.path.join(repo, "tests") + os.sep
+    original = warnings.showwarning
+
+    def show(message, category, filename, lineno, file=None, line=None):
+        path = os.path.realpath(filename or "")
+        if path.startswith(repo) and not path.startswith(tests_dir):
+            found.append(f"{os.path.relpath(path, repo)}:{lineno}: {category.__name__}: {str(message)[:200]}")
+        original(message, category, filename, lineno, file, line)
+
+    warnings.simplefilter("always")
+    warnings.showwarning = show
+    return found
+
+
 def main():
     install_fakes()
+    app_warnings = _collect_app_warnings()
     from streamlit.testing.v1 import AppTest
 
     problems, notes = [], []
@@ -1046,6 +1067,8 @@ def main():
             oks = [str(s.value) for s in at.success]
             assert any(s.startswith("Șters ") for s in oks), oks
 
+    for w in sorted(set(app_warnings)):
+        problems.append(f"[avertisment în codul aplicației] {w}")
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
     if problems:
