@@ -41,6 +41,7 @@ from analytics import briefing as briefing_calc
 from analytics import day_notes
 from analytics import portfolio_day as pday_calc
 from analytics import scanner as scanner_calc
+from analytics import watchlist as watchlist_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -2418,18 +2419,26 @@ def load_portfolio():
     df.attrs["problems"] = problems
     return df
 
-# --- FUNCȚII WATCHLIST (CORECȚIE BUG) ---
+# --- FUNCȚII WATCHLIST ---
+@st.cache_data(ttl=300, show_spinner=False)
+def load_watchlist_values():
+    """Conținutul brut al foii `watchlist` (antet + rânduri, numere neformatate); None dacă foaia lipsește
+    sau nu poate fi citită. Cache 5 minute: cardul „Țintă intrare” din Analiză o citește la fiecare rerun."""
+    ws = connect_to_gsheets("watchlist")
+    if ws is None:
+        return None
+    try:
+        # UNFORMATTED_VALUE: ținta vine ca număr; textul formatat românesc „1.250” ar fi citit ca 1,25
+        return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+    except gspread.exceptions.GSpreadException as e:
+        logger.warning(f"foaia watchlist nu a putut fi citită: {e}")
+        return None
+
 def load_watchlist():
-    """Citește datele din foaia 'watchlist'."""
-    ws = connect_to_gsheets("watchlist")  # Direct, fără sheet.spreadsheet.worksheet()
-    if ws:
-        try:
-            data = ws.get_all_records()
-            return pd.DataFrame(data)
-        except Exception as e:
-            logger.warning("load_watchlist: %s", e)
-            return pd.DataFrame()
-    return pd.DataFrame()
+    """Foaia `watchlist` ca DataFrame (Symbol, TargetPrice număr sau None, Notes); `attrs["problems"]` = ce nu s-a putut citi."""
+    df, problems = watchlist_calc.parse_watchlist(load_watchlist_values())
+    df.attrs["problems"] = problems
+    return df
 
 def add_to_watchlist(symbol, target, note):
     """Adaugă o intrare nouă în watchlist."""
@@ -2437,7 +2446,7 @@ def add_to_watchlist(symbol, target, note):
     if ws:
         try:
             ws.append_row([symbol, float(target), note])
-            # load_watchlist nu are cache: nu e nimic de golit (înainte: st.cache_data.clear() global)
+            load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
             return True
         except Exception as e:
             st.error(f"Eroare salvare: {e}")
@@ -2452,7 +2461,7 @@ def remove_from_watchlist(symbol):
             cell = ws.find(symbol)
             if cell:
                 ws.delete_rows(cell.row)
-                # load_watchlist nu are cache: nu e nimic de golit
+                load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
                 return True
         except Exception as exc:  # înainte: except: gol
             logger.warning("remove_from_watchlist: %s", exc)
@@ -2649,6 +2658,29 @@ def get_last_closes(symbols):
         if not series.empty:
             out[sym] = float(series.iloc[-1])
     return out
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _download_watchlist_quotes(symbols):
+    """Ultimul preț și data lui pentru simbolurile din watchlist (tuplu), din `yf.download` pe o lună.
+
+    O lună, nu 5 zile: după o săptămână de sărbători la BVB tot există un ultim preț (data lui se afișează).
+    auto_adjust=False: prețul real tranzacționat, cel cu care se compară ținta. Excepțiile urcă la apelant,
+    ca o cerere eșuată să nu rămână în cache 15 minute."""
+    symbols = list(symbols)
+    _yf_limiter.wait_if_needed()
+    data = yf.download(symbols, period="1mo", group_by='ticker', progress=False, auto_adjust=False)
+    return watchlist_calc.last_quotes(close_frame(data, symbols))
+
+def get_watchlist_quotes(symbols):
+    """{simbol: {"price", "date"}} pentru watchlist; simbolurile fără date lipsesc (apar „N/A”), eroarea Yahoo → {}."""
+    symbols = tuple(sorted(set(symbols)))
+    if not symbols:
+        return {}
+    try:
+        return _download_watchlist_quotes(symbols)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        logger.warning(f"Watchlist, prețuri: {e}")
+        return {}
 
 def _naive_index(frame):
     """Index de date fără fus orar (Yahoo întoarce uneori index cu fus)."""
@@ -7868,51 +7900,24 @@ def main():
 
         # --- AFIȘARE TABEL ---
         df_wl = load_watchlist()
+        for problem in df_wl.attrs.get("problems", []):
+            st.warning(problem)
         
         if not df_wl.empty:
-            # 1. Luăm prețurile live pentru toate simbolurile din listă
+            # 1. Ultimul preț pentru fiecare simbol (close_frame, cache 15 minute)
             tickers_list = df_wl['Symbol'].unique().tolist()
-            live_data = pd.Series()
-
-            if tickers_list:
-                with st.spinner("Actualizăm prețurile (Global)..."):
-                    try:
-                        # DESCĂRCARE DATE PE 5 ZILE (pentru siguranță)
-                        data_bulk = yf.download(tickers_list, period="5d", progress=False, auto_adjust=True)['Close']
-                        
-                        # Tratare caz un singur ticker (Series -> DataFrame)
-                        if isinstance(data_bulk, pd.Series):
-                             data_bulk = data_bulk.to_frame(name=tickers_list[0])
-                        
-                        # --- LOGICĂ DE EXTRAGERE PREȚ VALID INDIFERENT DE ORĂ ---
-                        current_prices = {}
-                        
-                        for col in data_bulk.columns:
-                            # Luăm coloana și ștergem valorile goale (NaN)
-                            valid_values = data_bulk[col].dropna()
-                            
-                            if not valid_values.empty:
-                                # Luăm ultima valoare existentă (chiar dacă e de ieri)
-                                current_prices[col] = valid_values.iloc[-1]
-                            # fără date: simbolul lipsește din serie și apare „N/A”, nu preț 0
-                        
-                        # Convertim înapoi în Series pentru restul codului
-                        live_data = pd.Series(current_prices)
-                        # --------------------------------------------------------
-
-                    except Exception as e:
-                        logger.warning("Watchlist, prețuri live: %s", e)
-                        live_data = pd.Series(dtype=float)
+            with st.spinner("Actualizăm prețurile..."):
+                quotes = get_watchlist_quotes(tickers_list)
 
             # 2. Construim tabelul final
             display_rows = []
             for index, row in df_wl.iterrows():
                 sym = row['Symbol']
-                target = smart_to_float(row['TargetPrice'])  # acceptă și formatul românesc ("25,5")
                 note = row['Notes']
+                quote = quotes.get(sym) or {}
                 
                 # Preț sau țintă lipsă rămân lipsă („N/A”), nu 0; distanța e față de țintă, ca în cardul din analiză.
-                curr, target, dist_pct, is_buy = watchlist_status(live_data.get(sym), target)
+                curr, target, dist_pct, is_buy = watchlist_status(quote.get("price"), row['TargetPrice'])
                 if curr is None:
                     status = "Fără preț"
                 elif target is None:
@@ -7958,7 +7963,7 @@ def main():
                         st.warning(f"Șters {del_sym}.")
                         st.rerun()
 
-        else:
+        elif not df_wl.attrs.get("problems"):
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
 
 if __name__ == "__main__":

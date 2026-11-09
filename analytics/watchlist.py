@@ -1,0 +1,72 @@
+"""Reguli pure pentru pagina Watchlist (fără rețea, fără `st.*`)."""
+import math
+
+import pandas as pd
+
+from data.helpers import positive_or_none
+
+WATCHLIST_COLUMNS = ("Symbol", "TargetPrice", "Notes")
+
+
+def _positive(x):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) and x > 0 else None
+
+
+def last_quotes(close):
+    """{simbol: {"price": float, "date": pd.Timestamp}} din închiderile `close_frame` (o coloană per simbol).
+
+    Pentru fiecare simbol: ultima valoare strict pozitivă și data ei (fără fus orar, ora 00:00). Coloanele
+    au calendare diferite (BVB, SUA, Europa), deci ultima dată se caută pe fiecare coloană separat, nu pe tabel.
+    Simbolurile fără nicio valoare lipsesc din rezultat: în interfață apar „N/A”, nu un preț 0.
+    """
+    out = {}
+    if close is None or len(close) == 0:
+        return out
+    for sym in close.columns:
+        s = pd.to_numeric(close[sym], errors="coerce")
+        s = s[s > 0].dropna()
+        if s.empty:
+            continue
+        ts = pd.Timestamp(s.index[-1])
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        out[sym] = {"price": float(s.iloc[-1]), "date": ts.normalize()}
+    return out
+
+
+def parse_watchlist(values):
+    """Foaia `watchlist` (antet + rânduri, din `get_all_values`) → (DataFrame, probleme).
+
+    Coloanele se caută după nume în antet (ordinea din foaie nu contează). Rezultat: Symbol (text, fără spații,
+    cu majuscule), TargetPrice (număr > 0 sau None: celula goală/0/text nu devine țintă 0), Notes (text).
+    Rândurile fără simbol se ignoră. `values` None → foaie necitită: DataFrame gol și o problemă.
+    """
+    problems = []
+    empty = pd.DataFrame(columns=list(WATCHLIST_COLUMNS))
+    if values is None:
+        return empty, ["Foaia watchlist nu a putut fi citită."]
+    if not values:
+        return empty, problems
+    header = [str(h).strip() for h in values[0]]
+    missing = [c for c in WATCHLIST_COLUMNS if c not in header]
+    if "Symbol" in missing or "TargetPrice" in missing:
+        return empty, [f"Foaia watchlist nu are coloana {', '.join(c for c in missing if c != 'Notes')} în antet (rândul 1)."]
+    idx = {c: header.index(c) for c in WATCHLIST_COLUMNS if c in header}
+
+    def cell(row, col):
+        i = idx.get(col)
+        return row[i] if i is not None and i < len(row) else ""
+
+    rows = []
+    for row in values[1:]:
+        sym = str(cell(row, "Symbol")).strip().upper()
+        if not sym:
+            continue
+        rows.append({"Symbol": sym, "TargetPrice": positive_or_none(cell(row, "TargetPrice")),
+                     "Notes": str(cell(row, "Notes") or "").strip()})
+    df = pd.DataFrame(rows, columns=list(WATCHLIST_COLUMNS)) if rows else empty
+    return df, problems
