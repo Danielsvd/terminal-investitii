@@ -1113,25 +1113,41 @@ def filter_news(all_news, category):
             
     return filtered
 
+class _NoRssNews(Exception):
+    """Fluxul RSS nu a dat nicio știre. Excepțiile nu intră în cache: o listă goală (Yahoo limitează uneori) se reîncearcă."""
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _yahoo_rss_news(symbol):
+    """Primele 30 de știri din fluxul Yahoo RSS al simbolului, nefiltrate (cache 15 min). Înainte fluxul se descărca
+    la fiecare rerulare a paginii (orice clic pe un widget). Flux gol → _NoRssNews; eroare → excepția (fără cache)."""
+    rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
+    feed = feedparser.parse(rss_url)
+    if not feed.entries:
+        raise _NoRssNews(symbol)
+    news_list = []
+    for entry in feed.entries[:30]:
+        dt = parse_date(entry)
+        news_list.append({
+            "title": entry.title,
+            "link": entry.link,
+            "summary": getattr(entry, "summary", ""),
+            "publisher": "Yahoo Finance",
+            "date_str": dt.strftime("%Y-%m-%d %H:%M")
+        })
+    return news_list
+
+
 def get_company_news_rss(symbol, names=None, limit=7):
     """Știrile Yahoo (RSS) pe simbol. Cu `names` (numele companiei din `info`), se păstrează doar
     știrile care menționează emitentul (data/news.py): fluxul pe simbol aduce des știri despre alte
     companii. Fără `names` (indici: ^GSPC, ^IXIC) lista rămâne nefiltrată."""
-    rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
-    news_list = []
     try:
-        feed = feedparser.parse(rss_url)
-        if not feed.entries: return []
-        for entry in feed.entries[:30]:
-            dt = parse_date(entry)
-            news_list.append({
-                "title": entry.title,
-                "link": entry.link,
-                "summary": getattr(entry, "summary", ""),
-                "publisher": "Yahoo Finance",
-                "date_str": dt.strftime("%Y-%m-%d %H:%M")
-            })
-    except Exception as exc:  # înainte: except: gol
+        news_list = [dict(n) for n in _yahoo_rss_news(symbol)]   # copie: lista din cache nu se modifică
+    except _NoRssNews:
+        logger.info("get_company_news_rss %s: flux fără știri", symbol)
+        return []
+    except Exception as exc:  # rețea / format RSS
         logger.warning("get_company_news_rss: %s", exc)
         return []
     if names is not None:
