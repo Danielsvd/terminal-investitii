@@ -114,15 +114,31 @@ async def get_all_portfolio_prices(tickers):
         results = await asyncio.gather(*tasks)
         return dict(results)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _live_prices_cached(tickers):
+    """Prețurile live pentru un tuplu de simboluri, în cache 5 minute (inclusiv golurile None; get_fast_live_prices
+    le recere separat la fiecare apel). Eroarea generală (event loop, httpx) iese ca excepție și nu intră în cache."""
+    return asyncio.run(get_all_portfolio_prices(list(tickers)))
+
 # Wrapper pentru a putea rula cod asincron în interiorul Streamlit (care e sincron)
 def get_fast_live_prices(tickers):
-    """Prețuri curente: dict simbol -> preț, sau None pentru simbolurile care nu au putut fi citite."""
+    """Prețuri curente: dict simbol -> preț, sau None pentru simbolurile care nu au putut fi citite.
+
+    Prețurile citite stau 5 minute în cache (`_live_prices_cached`): înainte, fiecare clic din Portofoliu cerea din nou
+    prețul fiecărei poziții (o dată pentru registru și încă o dată în fiecare tab de monedă). Simbolurile rămase fără
+    preț se recer la fiecare apel, fără cache, ca un refuz temporar Yahoo (429) să nu țină 5 minute."""
     if not tickers: return {}
+    key = tuple(dict.fromkeys(tickers))   # ordinea păstrată, fără dubluri
     try:
-        return asyncio.run(get_all_portfolio_prices(tickers))
+        prices = dict(_live_prices_cached(key))
+        missing = [t for t in key if prices.get(t) is None]
+        if missing:
+            retry = asyncio.run(get_all_portfolio_prices(missing))
+            prices.update({t: v for t, v in retry.items() if v is not None})
+        return prices
     except (RuntimeError, httpx.HTTPError) as e:
         logger.warning(f"prețuri live indisponibile: {e}")
-        return {t: None for t in tickers}
+        return {t: None for t in key}
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
@@ -1967,6 +1983,19 @@ def render_diversification_cards(corr_matrix):
                f"sub {ro(CORR_MID):.2f} (inclusiv negativă): bună. Praguri orientative, netestate.")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _benchmark_since(bench_ticker, start_iso):
+    """Închiderile ajustate ale benchmark-ului de la `start_iso` (YYYY-MM-DD), în cache 1 oră. Înainte se descărcau la
+    fiecare clic, o dată pe fiecare tab. Fără date → excepție (nu intră în cache)."""
+    _yf_limiter.wait_if_needed()
+    spy_data = yf.download(bench_ticker, start=start_iso, progress=False, auto_adjust=True)['Close']
+    if isinstance(spy_data, pd.DataFrame):
+        spy_data = spy_data.iloc[:, 0]
+    spy_data = spy_data.dropna()
+    if spy_data.empty:
+        raise ValueError(f"Yahoo: {bench_ticker} fără închideri de la {start_iso}")
+    return spy_data
+
 def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name="S&P 500"):
     """Compară performanța portofoliului cu benchmark-ul folosind procente în tooltip."""
     if portfolio_curve is None or portfolio_curve.empty:
@@ -1974,10 +2003,11 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
     
     try:
         start_date = portfolio_curve.index[0]
-        spy_data = yf.download(bench_ticker, start=start_date, progress=False, auto_adjust=True)['Close']
-        
-        if isinstance(spy_data, pd.DataFrame):
-            spy_data = spy_data.iloc[:, 0]
+        try:
+            spy_data = _benchmark_since(bench_ticker, f"{pd.Timestamp(start_date):%Y-%m-%d}")
+        except ValueError as exc:   # Yahoo fără date: mesajul de sincronizare de mai jos, ca înainte
+            logger.warning("benchmark %s: %s", bench_ticker, exc)
+            spy_data = pd.Series(dtype=float)
         
         combined = pd.DataFrame({'Portfolio': portfolio_curve, 'Benchmark': spy_data}).ffill().dropna()
         
@@ -2534,6 +2564,18 @@ def get_portfolio_history_data(tickers):
     data = yf.download(tickers, period="5y", group_by='ticker', auto_adjust=True)
     return data
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _portfolio_history_closes(tickers):
+    """Închiderile ajustate pe 5 ani pentru simbolurile unui tab de monedă (tuplu), în cache 15 minute. Înainte se
+    descărcau la fiecare clic din pagină, o dată pe fiecare tab. Fără nicio închidere → excepție (nu intră în cache)."""
+    tickers = list(tickers)
+    _yf_limiter.wait_if_needed()
+    hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False, auto_adjust=True)
+    closes = close_frame(hist_data, tickers)   # tratează toate formele întoarse de yf.download (un simbol sau mai multe)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru pozițiile din tab")
+    return closes
+
 def calculate_portfolio_performance(df, history_range="1A"):
     """Evaluează pozițiile și construiește curba de valoare a portofoliului.
 
@@ -2553,12 +2595,12 @@ def calculate_portfolio_performance(df, history_range="1A"):
     # --- Descărcăm totul dintr-o singură lovitură ---
     with st.spinner("Actualizăm portofoliul prin Motor Asincron..."):
         current_prices = get_fast_live_prices(tickers)
-        # Descărcăm istoricul bulk pentru grafic (cu rate limiter)
-        _yf_limiter.wait_if_needed()
-        hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False, auto_adjust=True)
-
-    # close_frame tratează toate formele întoarse de yf.download (un simbol sau mai multe)
-    closes = close_frame(hist_data, tickers)
+        # Istoricul pentru grafic, o cerere pe tab (cache 15 min în _portfolio_history_closes)
+        try:
+            closes = _portfolio_history_closes(tuple(tickers))
+        except Exception as exc:  # rețea / Yahoo: fără istoric, valorile rămân N/A (value_positions)
+            logger.warning("istoric portofoliu %s: %s", tickers, exc)
+            closes = pd.DataFrame()
 
     df_result, total_daily_pl_abs, total_daily_pl_pct, notes = value_positions(positions, current_prices, closes)
     portfolio_curve, curve_notes = build_portfolio_curve(positions, closes)
@@ -5569,6 +5611,9 @@ def main():
     # ==================================================
     elif sectiune == "3. Portofoliu":
         st.title("💼 Portofoliu Personal")
+        # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
+        _pf_t0 = time.perf_counter()
+        _pf_timer = st.empty()
         
         # Formularul „Adaugă Tranzacție Nouă” (scria în foaia Portofoliu) a fost scos la 04.11.2026, cu acordul
         # lui Daniel: tranzacțiile intră doar prin importul exporturilor de la broker (deduplicare pe ID).
@@ -6070,6 +6115,7 @@ def main():
                 df_ron = df_pf[df_pf['Currency'] == 'RON']
                 # Folosim simbolul monedei locale
                 render_portfolio_tab(df_ron, "RON")      
+        _pf_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _pf_t0, 1)} s, la {now_ro():%H:%M:%S}.")
 
             # Butonul de reset nu poate șterge datele din Google Drive, doar le ignoră temporar
             # Așa că l-am comentat sau ar trebui scos, deoarece gestionarea datelor se face acum în Sheets.
