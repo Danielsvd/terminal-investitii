@@ -60,3 +60,33 @@ def rvol_stats(df, window=RVOL_WINDOW):
     return {"date": d.index[-1], "close": float(last["Close"]), "prev_close": float(prev["Close"]),
             "change_pct": (float(last["Close"]) / float(prev["Close"]) - 1.0) * 100.0,
             "volume": vol, "avg_volume": avg, "rvol": vol / avg, "n_avg": len(hist)}
+
+
+def hours_key(symbol):
+    """Bursa pentru orarul ședinței (cheile din `briefing.MARKET_HOURS`): .RO → BVB, fără sufix → NYSE, restul → XETRA
+    (reper pentru Europa: Londra, Paris, Amsterdam au aceeași oră a României pentru deschidere și închidere)."""
+    sym = str(symbol or "").upper()
+    if sym.endswith(".RO"):
+        return "BVB"
+    return "XETRA" if "." in sym.replace("-", "") else "NYSE"
+
+
+def rvol_session(df, is_partial, include_partial=False, window=RVOL_WINDOW):
+    """`rvol_stats` pe ședința potrivită.
+
+    is_partial(date) → True dacă ședința din acea zi e încă în desfășurare (volum parțial).
+    - implicit (include_partial=False): dacă ultima bară e parțială, se evaluează ultima ședință ÎNCHEIATĂ
+      (volumul parțial ÷ media pe zile întregi ar subestima RVOL-ul);
+    - include_partial=True: se evaluează bara în curs, marcată cu partial=True.
+    Rezultatul are în plus cheia `partial` (bool)."""
+    rs = rvol_stats(df, window)
+    if rs is None:
+        return None
+    partial = bool(is_partial(rs["date"]))
+    if partial and not include_partial:
+        rs = rvol_stats(df[df.index < rs["date"]], window)
+        if rs is None:
+            return None
+        partial = False
+    rs["partial"] = partial
+    return rs

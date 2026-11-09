@@ -54,3 +54,26 @@ def test_rvol_fara_istoric_suficient_e_none():
     assert scanner_calc.rvol_stats(_frame([10.0] * 15, [1000.0] * 15)) is None
     assert scanner_calc.rvol_stats(None) is None
     assert scanner_calc.rvol_stats(pd.DataFrame({"Close": [1.0]})) is None
+
+
+def test_rvol_sedinta_partiala_implicit_ultima_incheiata():
+    # 21 de ședințe; ultima (în curs) are doar 400 din ~1.000: implicit se evaluează ședința de ieri (2.000 → RVOL 2)
+    closes = [10.0] * 20 + [10.2, 10.1]
+    vols = [1000.0] * 20 + [2000.0, 400.0]
+    df = _frame(closes, vols)
+    today = df.index[-1]
+    is_partial = lambda d: pd.Timestamp(d) == today
+    rs = scanner_calc.rvol_session(df, is_partial)
+    assert rs["date"] == df.index[-2] and rs["rvol"] == 2.0 and rs["partial"] is False
+    rs_live = scanner_calc.rvol_session(df, is_partial, include_partial=True)
+    assert rs_live["date"] == today and rs_live["partial"] is True
+    assert abs(rs_live["rvol"] - 400.0 / ((19 * 1000.0 + 2000.0) / 20)) < 1e-12
+    # bursa închisă: ultima bară e completă
+    rs_closed = scanner_calc.rvol_session(df, lambda d: False)
+    assert rs_closed["date"] == today and rs_closed["partial"] is False
+
+
+def test_hours_key():
+    assert scanner_calc.hours_key("TLV.RO") == "BVB" and scanner_calc.hours_key("AAPL") == "NYSE"
+    assert scanner_calc.hours_key("BRK-B") == "NYSE" and scanner_calc.hours_key("SAP.DE") == "XETRA"
+    assert scanner_calc.hours_key("ULVR.L") == "XETRA"
