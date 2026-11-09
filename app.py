@@ -7723,33 +7723,22 @@ def main():
             try:
                 # Descărcăm date pe 3 luni pentru a avea destul istoric de "învățare" pt ML
                 data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False, auto_adjust=True)
+                closes, volumes = field_frame(data, "Close", ticker_list), field_frame(data, "Volume", ticker_list)
                 results = []
                 
                 for t in ticker_list:
                     try:
-                        # Gestionare MultiIndex vs Single Index
-                        if isinstance(data.columns, pd.MultiIndex):
-                            if t not in data.columns.levels[0]: continue
-                            df_t = data[t]
-                        else:
-                            df_t = data
-                        
-                        vol = df_t['Volume'].dropna()
-                        close = df_t['Close'].dropna()
-                        
-                        if len(vol) < 25: continue 
-                        
-                        # Calcule clasice matematice
-                        curr_vol = vol.iloc[-1]
-                        avg_vol_20 = vol.iloc[-21:-1].mean()
+                        if t not in closes.columns or t not in volumes.columns: continue
+                        df_t = pd.DataFrame({"Close": closes[t], "Volume": volumes[t]})
+                        # Preț și volum aliniate pe aceeași zi; media pe 20 de ședințe cu volum (fără zilele cu 0)
+                        rs = scanner_calc.rvol_stats(df_t)
+                        if rs is None: continue
+                        curr_p, curr_vol, avg_vol_20 = rs["close"], rs["volume"], rs["avg_volume"]
                         # Nelichide: BVB sub 50.000 lei azi (ca în Rezumat), restul sub 5.000 de acțiuni în medie
-                        if not scanner_calc.liquidity_ok(t, close.iloc[-1], curr_vol, avg_vol_20): continue
+                        if not scanner_calc.liquidity_ok(t, curr_p, curr_vol, avg_vol_20): continue
                         
-                        rvol = curr_vol / avg_vol_20
-                        
-                        curr_p = close.iloc[-1]
-                        prev_p = close.iloc[-2]
-                        change_pct = ((curr_p - prev_p) / prev_p) * 100
+                        rvol = rs["rvol"]
+                        change_pct = rs["change_pct"]
                         
                         # --- MAGIA AI: Interogăm modelul Isolation Forest ---
                         is_anomaly = detect_volume_anomaly_ai(df_t)

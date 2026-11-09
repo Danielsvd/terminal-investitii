@@ -1,5 +1,8 @@
+import pandas as pd
+import numpy as np
 import math
 
+from analytics import scanner as scanner_calc
 from analytics.scanner import MIN_AVG_SHARES, RVOL_DEFAULT, liquidity_ok
 
 
@@ -17,3 +20,37 @@ def test_sua_si_europa_pastreaza_regula_in_actiuni():
     assert not liquidity_ok("SAP.DE", 200.0, 10**6, MIN_AVG_SHARES - 1)
     assert not liquidity_ok("AAPL", 200.0, 1, None)
     assert RVOL_DEFAULT == 1.2
+
+
+def _frame(closes, vols):
+    idx = pd.bdate_range("2026-09-01", periods=len(closes))
+    return pd.DataFrame({"Close": closes, "Volume": vols}, index=idx)
+
+
+def test_rvol_media_pe_20_de_sedinte_cu_volum_fara_ziua_evaluata():
+    vols = [1000.0] * 20 + [3000.0]
+    rs = scanner_calc.rvol_stats(_frame([10.0] * 20 + [10.5], vols))
+    assert rs["avg_volume"] == 1000.0 and rs["rvol"] == 3.0 and rs["n_avg"] == 20
+    assert abs(rs["change_pct"] - 5.0) < 1e-12
+
+
+def test_rvol_zilele_cu_volum_zero_nu_intra_in_medie():
+    # 21 de ședințe cu 1.000, intercalate cu 14 zile fără tranzacții (BVB): media rămâne 1.000, nu ~600
+    vols = [1000.0, 0.0, 1000.0, 1000.0, 0.0] * 7 + [2000.0]
+    rs = scanner_calc.rvol_stats(_frame([10.0] * 35 + [10.0], vols))
+    assert rs["avg_volume"] == 1000.0 and rs["rvol"] == 2.0
+
+
+def test_rvol_pret_si_volum_aliniate_pe_aceeasi_zi():
+    # Ultima zi are volum dar fără preț: ședința evaluată e penultima (preț și volum din aceeași zi)
+    closes = [10.0] * 20 + [11.0, np.nan]
+    vols = [1000.0] * 20 + [1500.0, 9999.0]
+    rs = scanner_calc.rvol_stats(_frame(closes, vols))
+    assert rs["volume"] == 1500.0 and abs(rs["change_pct"] - 10.0) < 1e-12
+    assert rs["date"] == pd.bdate_range("2026-09-01", periods=22)[20]
+
+
+def test_rvol_fara_istoric_suficient_e_none():
+    assert scanner_calc.rvol_stats(_frame([10.0] * 15, [1000.0] * 15)) is None
+    assert scanner_calc.rvol_stats(None) is None
+    assert scanner_calc.rvol_stats(pd.DataFrame({"Close": [1.0]})) is None

@@ -950,6 +950,11 @@ def main():
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")
+            sc = next((getattr(d.value, "data", d.value) for d in at.dataframe if "RVOL" in
+                       getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            msgs = [str(e.value) for e in list(at.success) + list(at.info) + list(at.warning)]
+            print("Scanner:", msgs[-1:] if sc is None else sc.head(3).values.tolist())
+            assert sc is not None or any("Nicio acțiune" in m for m in msgs), f"Scanner fără rezultat: {msgs}"
 
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
