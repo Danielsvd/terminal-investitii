@@ -955,6 +955,21 @@ def main():
             assert fx_df.loc["Euro", "1 an %"] == "N/A", "1 an fără istoric trebuie N/A"
             assert fx_df.loc["Liră sterlină", "Curs BNR"] == "N/A", "valută absentă la BNR trebuie N/A"
             assert any(f"nbrfxrates{TODAY.year - 1}.xml" in str(c.value) for c in at.caption), "lipsește nota fișierului BNR necitit"
+            # tabelele vechi în bloc (09.11): indici și mărfuri dintr-o cerere, cu data pe rând; topurile din datele Rezumatului
+            qts = [getattr(d.value, "data", d.value) for d in at.dataframe if {"Instrument", "Simbol", "Variație %", "Data"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))]
+            assert len(qts) == 2 and [len(q) for q in qts] == [6, 6], [len(q) for q in qts]
+            assert not any(q.isna().any().any() for q in qts), "celule nule în indici / mărfuri (se afișează „None”)"
+            print("Indici:", qts[0][["Simbol", "Preț", "Variație %", "Data"]].values.tolist())
+            tops = [getattr(d.value, "data", d.value) for d in at.dataframe if list(getattr(getattr(d.value, "data", d.value), "columns", []))
+                    == ["Instrument", "Preț", "Monedă", "Variație %"]]
+            assert len(tops) >= 2, f"topurile SUA / Europa lipsesc ({len(tops)} tabele)"
+            for tp in tops:
+                pcts = [_ro_num(v.rstrip("%")) for v in tp["Variație %"]]
+                assert all(x > 0 for x in pcts) or all(x < 0 for x in pcts), tp["Variație %"].tolist()
+                assert len(tp) <= 10
+            print("Top Piață Globală:", tops[0].head(3).values.tolist())
+            assert sum("Ședința:" in str(c.value) for c in at.caption) == 2, "lipsește ședința topurilor"
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")

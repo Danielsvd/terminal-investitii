@@ -2090,6 +2090,30 @@ def _briefing_market(syms):
     return data
 
 
+def briefing_market_symbols(key):
+    """Simbolurile cererii Yahoo a unei piețe din Rezumatul Zilei (`bvb`, `us`, `eu`). Aceeași listă oriunde e
+    folosită (Rezumatul, topurile din Piață Globală), ca piața să fie descărcată o singură dată și citită din cache."""
+    if key == "bvb":
+        return briefing_bvb_universe() + [BRIEFING_BET_PROXY]
+    if key == "us":
+        return BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES + BRIEFING_US_SECTORS
+    if key == "eu":
+        return universes.symbols("eu") + BRIEFING_EU_INDICES
+    raise KeyError(key)
+
+
+def get_briefing_market(key):
+    """(data, partial) pentru o piață a Rezumatului: data = {"close", "volume"}; partial = True dacă Yahoo a dat sub
+    BRIEF_MIN_COVERAGE din simboluri (datele se folosesc, dar nu intră în cache)."""
+    syms = briefing_market_symbols(key)
+    try:
+        return _briefing_market(tuple(syms)), False
+    except _PartialBriefing as exc:
+        logger.warning("rezumat %s: citire parțială (%d din %d simboluri fără preț)", key,
+                       len(briefing_calc.symbols_without_prices(exc.data["close"], syms)), len(syms))
+        return exc.data, True
+
+
 def get_daily_briefing_data():
     """Închiderile NEAJUSTATE și volumele pe ~6 luni (Yahoo), pentru Rezumatul Zilei: dict bvb_close, bvb_volume
     (universul BVB + ETF-ul BET), us_close, us_volume (universul SUA + indicii + ETF-urile sectoriale), eu_close,
@@ -2098,15 +2122,8 @@ def get_daily_briefing_data():
     Prețul neajustat dă variația zilei cum o raportează bursa; 6 luni ajung pentru σ pe 60 de ședințe.
     Fără niciun preț pe nicio piață → excepție."""
     out = {"partial": {}}
-    for key, syms in (("bvb", briefing_bvb_universe() + [BRIEFING_BET_PROXY]),
-                      ("us", BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES + BRIEFING_US_SECTORS),
-                      ("eu", universes.symbols("eu") + BRIEFING_EU_INDICES)):
-        try:
-            data, partial = _briefing_market(tuple(syms)), False
-        except _PartialBriefing as exc:
-            data, partial = exc.data, True
-            logger.warning("rezumat %s: citire parțială (%d din %d simboluri fără preț)", key,
-                           len(briefing_calc.symbols_without_prices(data["close"], syms)), len(syms))
+    for key in ("bvb", "us", "eu"):
+        data, partial = get_briefing_market(key)
         out[f"{key}_close"], out[f"{key}_volume"] = data["close"], data["volume"]
         out["partial"][key] = partial
     if out["bvb_close"].empty and out["us_close"].empty and out["eu_close"].empty:
@@ -3400,64 +3417,55 @@ def get_rotation_ratio():
     return both['^IXIC'] / both['^DJI']
 
 # --- FUNCȚIE GLOBAL MARKET ---
-@st.cache_data(ttl=300)
+GLOBAL_INDICES = {
+    'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC',
+    'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE', 'Bursa RO (BET) 🇷🇴': 'TVBETETF.RO'
+}
+GLOBAL_COMMODITIES = {
+    'Aur (Gold)': 'GC=F', 'Argint (Silver)': 'SI=F',
+    'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Copper': 'HG=F', 'Gaz Natural': 'NG=F'
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _global_quote_closes():
+    """Închiderile zilnice NEAJUSTATE pe o lună pentru indicii și mărfurile din „4. Piață Globală”, într-o singură
+    cerere Yahoo (înainte: câte un `fast_info` pe simbol). Fără nicio închidere → excepție (nu intră în cache)."""
+    syms = list(GLOBAL_INDICES.values()) + list(GLOBAL_COMMODITIES.values())
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(syms, period="1mo", progress=False, auto_adjust=False, group_by="ticker"), syms)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru indici și mărfuri")
+    return closes
+
+
 def get_global_market_data():
-    indices = {
-        'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC', 
-        'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE','Bursa RO (BET) 🇷🇴': 'TVBETETF.RO'
-    }
-    commodities = {
-        'Aur (Gold)': 'GC=F', 'Argint (Silver)': 'SI=F', 
-        'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Copper': 'HG=F', 'Gaz Natural': 'NG=F'
-    }
-    
-    # Listele unice (data/universes.py): SUA = tot ce se tranzacționează în SUA (inclusiv ADR), Europa = bursele europene.
-    us_stocks = universes.symbols("us")
-    eu_stocks = universes.symbols("eu")
+    """Tabelele vechi din „4. Piață Globală”: indicii, mărfurile și topurile SUA / Europa.
 
-    all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
-    tickers = yf.Tickers(' '.join(all_symbols))
-    
-    def process_tickers(symbol_dict, is_list=False):
-        data = []
-        source = symbol_dict if is_list else symbol_dict.items()
-        for item in source:
-            name = item if is_list else item[0]
-            sym = item if is_list else item[1]
-            try:
-                t = tickers.tickers[sym]
-                info = t.fast_info
-                price = info.last_price
-                prev = info.previous_close
-                # Fără închiderea precedentă variația e necunoscută (N/A), nu 0.
-                if prev and price is not None:
-                    change = price - prev
-                    pct = (change / prev) * 100
-                else: change = None; pct = None
-                
-                data.append({
-                    'Instrument': name, 'Simbol': sym, 'Preț': price, 'Variație': change, 'Variație %': pct
-                })
-            except Exception as exc:  # înainte: except: gol
-                logger.debug("process_tickers: %s", exc)
-                continue
-        return pd.DataFrame(data)
-
-    df_indices = process_tickers(indices)
-    df_commodities = process_tickers(commodities)
-    df_us = process_tickers(us_stocks, is_list=True)
-    if not df_us.empty:
-        us_gainers = df_us.sort_values(by='Variație %', ascending=False).head(10)
-        us_losers = df_us.sort_values(by='Variație %', ascending=True).head(10)
-    else: us_gainers = us_losers = pd.DataFrame()
-        
-    df_eu = process_tickers(eu_stocks, is_list=True)
-    if not df_eu.empty:
-        eu_gainers = df_eu.sort_values(by='Variație %', ascending=False).head(10)
-        eu_losers = df_eu.sort_values(by='Variație %', ascending=True).head(10)
-    else: eu_gainers = eu_losers = pd.DataFrame()
-
-    return df_indices, df_commodities, us_gainers, us_losers, eu_gainers, eu_losers
+    Indici și mărfuri: o cerere Yahoo (`_global_quote_closes`, cache 5 min), variația fiecărei serii față de
+    închiderea ei precedentă (analytics/briefing.quote_table). Topurile: aceleași date și reguli ca în
+    „6. Rezumatul Zilei” (`get_briefing_market`, cache comun de 15 min; ultima ședință a pieței, doar titlurile
+    tranzacționate). Înainte: ~230 de cereri `fast_info`, una după alta, la fiecare 5 minute.
+    Întoarce un dict: indices, commodities, us_gain, us_lose, us_session, us_partial, eu_gain, eu_lose, eu_session,
+    eu_partial. O sursă picată dă tabele goale / N/A, nu valori presupuse."""
+    try:
+        closes = _global_quote_closes()
+    except Exception as exc:  # rețea / Yahoo
+        logger.warning("Piață Globală indici și mărfuri: %s", exc)
+        closes = pd.DataFrame()
+    out = {"indices": briefing_calc.quote_table(closes, GLOBAL_INDICES),
+           "commodities": briefing_calc.quote_table(closes, GLOBAL_COMMODITIES)}
+    for key in ("us", "eu"):
+        try:
+            data, partial = get_briefing_market(key)
+        except Exception as exc:  # rețea / Yahoo: topul rămâne gol
+            logger.warning("Piață Globală topuri %s: %s", key, exc)
+            data, partial = {"close": pd.DataFrame(), "volume": pd.DataFrame()}, True
+        cols = [x for x in universes.symbols(key) if x in data["close"].columns]
+        table, session = briefing_calc.session_table(data["close"][cols], data["volume"].reindex(columns=cols))
+        out[f"{key}_gain"], out[f"{key}_lose"] = briefing_calc.top_frames(table)
+        out[f"{key}_session"], out[f"{key}_partial"] = session, partial
+    return out
 
 @st.cache_data(ttl=300)
 def get_sector_performance():
@@ -6441,7 +6449,8 @@ def main():
         st.markdown("---")
         
         if st.button("🔄 Reîmprospătează Piața"):
-            get_global_market_data.clear()
+            _global_quote_closes.clear()
+            _briefing_market.clear()
             get_macro_data_visuals.clear()
             st.rerun()
 
@@ -7037,33 +7046,43 @@ def main():
             else:
                 st.warning("Datele FRED sunt momentan indisponibile. Verifică conexiunea.")
         
-        # --- TABELELE VECHI ---
+        # --- TABELELE VECHI (în bloc, 09.11: o cerere pentru indici + mărfuri, topurile din datele Rezumatului) ---
         st.markdown("---")
         with st.spinner("Descărcăm datele acțiunilor..."):
-            df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
+            gm = get_global_market_data()
 
-        def color_change_val(val):
-            if val is None or pd.isna(val): return ''
-            color = '#3FB950' if val >= 0 else '#F85149'
-            return f'color: {color}'
+        def color_signed_txt(val):
+            # celulele sunt text gata formatat („+1,23%”, „-0,50”, „N/A”): culoarea după semn
+            txt = str(val)
+            if txt.startswith("+"):
+                return 'color: #3FB950'
+            if txt.startswith("-"):
+                return 'color: #F85149'
+            return ''
+
+        signed = lambda v: f"{ro(v):+.2f}"
+        signed_pct = lambda v: f"{ro(v):+.2f}%"
+        quote_help = {
+            "Preț": st.column_config.Column(help="Ultima închidere zilnică din Yahoo (neajustată). În timpul ședinței e "
+                                                 "prețul curent, întârziat câteva minute."),
+            "Variație": st.column_config.Column(help="Preț − închiderea precedentă a aceleiași serii, în unitățile instrumentului."),
+            "Variație %": st.column_config.Column(help="(Preț ÷ închiderea precedentă − 1) × 100."),
+            "Data": st.column_config.Column(help="Ziua ultimei închideri. Fiecare rând are ziua lui: bursele din SUA, Europa "
+                                                 "și România și contractele futures pe mărfuri nu se închid la aceeași oră."),
+        }
 
         col_m1, col_m2 = st.columns(2)
-        
-        with col_m1:
-            st.subheader("📊 Indici Principali")
-            st.dataframe(
-                df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                width='stretch', hide_index=True
-            )
-            
-        with col_m2:
-            st.subheader("🛢️ Mărfuri (Commodities)")
-            st.dataframe(
-                df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                width='stretch', hide_index=True
-            )
+        for col_, title_, key_ in ((col_m1, "📊 Indici Principali", "indices"), (col_m2, "🛢️ Mărfuri (Commodities)", "commodities")):
+            with col_:
+                st.subheader(title_)
+                st.dataframe(
+                    text_frame(gm[key_], {"Preț": lambda v: format_ro(v, 2), "Variație": signed,
+                                          "Variație %": signed_pct, "Data": lambda d: f"{d:%d.%m.%Y}"})
+                    .style.map(color_signed_txt, subset=['Variație', 'Variație %']),
+                    width='stretch', hide_index=True, column_config=quote_help
+                )
+        st.caption("Indici și mărfuri: o singură cerere Yahoo, închideri zilnice (cache 5 min). Mărfurile sunt contractele "
+                   "futures cu scadența cea mai apropiată, în USD; BET prin ETF-ul TVBETETF, în lei.")
 
         # --- CURS VALUTAR FAȚĂ DE LEU ---
         st.markdown("---")
@@ -7110,54 +7129,33 @@ def main():
                        + (f" Nu s-au putut citi: {', '.join(fx_failed)}; orizonturile neacoperite apar N/A." if fx_failed else ""))
 
         st.markdown("---")
-        
-        st.subheader("🇺🇸 Top Mișcări SUA (Blue Chips)")
-        c_us1, c_us2 = st.columns(2)
-        
-        with c_us1:
-            st.markdown("**🚀 Top Creșteri (Gainers)**")
-            if not us_gain.empty:
-                st.dataframe(
-                    us_gain[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
-        
-        with c_us2:
-            st.markdown("**🔻 Top Scăderi (Losers)**")
-            if not us_lose.empty:
-                st.dataframe(
-                    us_lose[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
-
-        st.markdown("---")
-
-        st.subheader("🇪🇺 Top Mișcări EUROPA")
-        c_eu1, c_eu2 = st.columns(2)
-        
-        with c_eu1:
-            st.markdown("**🚀 Top Creșteri (Gainers)**")
-            if not eu_gain.empty:
-                st.dataframe(
-                    eu_gain[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
-        
-        with c_eu2:
-            st.markdown("**🔻 Top Scăderi (Losers)**")
-            if not eu_lose.empty:
-                st.dataframe(
-                    eu_lose[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
+        top_help = {
+            "Instrument": st.column_config.Column(help="Simbolul Yahoo."),
+            "Preț": st.column_config.Column(help="Închiderea din ultima ședință a pieței (neajustată), în moneda cotației."),
+            "Monedă": st.column_config.Column(help="Moneda cotației, după sufixul bursei. `.L` = pence (GBp), nu lire."),
+            "Variație %": st.column_config.Column(help="Închiderea ultimei ședințe față de închiderea precedentă, în procente."),
+        }
+        for key_, title_ in (("us", "🇺🇸 Top Mișcări SUA (Blue Chips)"), ("eu", "🇪🇺 Top Mișcări EUROPA")):
+            st.subheader(title_)
+            c_g, c_l = st.columns(2)
+            for col_, label_, frame_ in ((c_g, "**🚀 Top Creșteri (Gainers)**", gm[f"{key_}_gain"]),
+                                         (c_l, "**🔻 Top Scăderi (Losers)**", gm[f"{key_}_lose"])):
+                with col_:
+                    st.markdown(label_)
+                    if frame_.empty:
+                        st.info("Niciun titlu în această listă pentru ultima ședință (sau datele Yahoo lipsesc acum).")
+                    else:
+                        st.dataframe(
+                            text_frame(frame_, {"Preț": price_ro, "Variație %": signed_pct})
+                            .style.map(color_signed_txt, subset=['Variație %']),
+                            width='stretch', hide_index=True, column_config=top_help
+                        )
+            sess_ = gm[f"{key_}_session"]
+            st.caption(f"Ședința: {sess_:%d.%m.%Y}. " if sess_ is not None else "Ședința: N/A. ")
+            st.caption("Doar titlurile tranzacționate în ședință (volum > 0), maximum 10 pe fiecare parte, fără prag de valoare; "
+                       "aceleași date ca în „6. Rezumatul Zilei” (cache comun de 15 min)."
+                       + (" ⚠️ Yahoo a dat prețuri pentru mai puțin de 80% din listă: topul poate fi incomplet." if gm[f"{key_}_partial"] else ""))
+            st.markdown("---")
 
     # ==================================================
     # 5. IMPORT DATE (GOOGLE SHEETS) - BVB EXTINS & GLOBAL FIX
