@@ -80,3 +80,10 @@ def test_symbol_rows_doar_coloana_symbol_de_jos_in_sus():
 def test_normalize_symbol():
     assert wl.normalize_symbol(" tlv.ro ") == "TLV.RO"
     assert wl.normalize_symbol(None) == ""
+
+
+def test_symbol_candidates_ca_in_analiza():
+    assert wl.symbol_candidates(" tlv ") == ["TLV", "TLV.RO"]
+    assert wl.symbol_candidates("TLV.RO") == ["TLV.RO"]
+    assert wl.symbol_candidates("SAP.DE") == ["SAP.DE", "SAP.DE.RO"]   # ca get_stock_data; al doilea nu are preț
+    assert wl.symbol_candidates("") == []

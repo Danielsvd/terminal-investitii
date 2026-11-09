@@ -2444,8 +2444,14 @@ def add_to_watchlist(symbol, target, note):
     """Adaugă o intrare nouă în watchlist. Întoarce (reușit, mesaj).
 
     Simbolul deja prezent nu se adaugă a doua oară: cardul din Analiză ar lua doar prima țintă.
-    Duplicatul se verifică pe foaia recitită acum (nu pe cache), ca o editare manuală recentă să conteze."""
-    symbol = watchlist_calc.normalize_symbol(symbol)
+    Duplicatul se verifică pe foaia recitită acum (nu pe cache), ca o editare manuală recentă să conteze.
+    Simbolul se rezolvă ca în Analiză: întâi cel scris, apoi cu `.RO`; se salvează primul care are preț Yahoo,
+    ca tabelul și cardul „Țintă intrare” să găsească același simbol. Fără preț → nu se salvează."""
+    written = watchlist_calc.normalize_symbol(symbol)
+    symbol = next((c for c in watchlist_calc.symbol_candidates(written) if c in get_watchlist_quotes([c])), None)
+    if symbol is None:
+        return False, (f"{written}: Yahoo nu are preț pentru {', nici pentru '.join(watchlist_calc.symbol_candidates(written))}. "
+                       "Verifică simbolul (Europa: cu sufixul bursei, ex. SAP.DE; BVB: TLV sau TLV.RO).")
     ws = connect_to_gsheets("watchlist")
     if ws is None:
         return False, "Foaia watchlist nu poate fi accesată."
@@ -2461,7 +2467,9 @@ def add_to_watchlist(symbol, target, note):
         logger.warning(f"watchlist, adăugare {symbol}: {e}")
         return False, f"Eroare la salvarea în foaia watchlist: {e}"
     load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
-    return True, f"Adăugat {symbol} la ținta {format_ro(target, 4, trim=True)}."
+    currency = briefing_calc.quote_currency(symbol) or "monedă necunoscută"
+    resolved = f" (scris {written}; găsit ca {symbol})" if symbol != written else ""
+    return True, f"Adăugat {symbol} la ținta {format_ro(target, 4, trim=True)} {currency}{resolved}."
 
 def remove_from_watchlist(symbol):
     """Șterge simbolul din watchlist: toate rândurile cu el în coloana Symbol, nu prima celulă egală din foaie
@@ -7905,6 +7913,9 @@ def main():
                 s_wl = c1.text_input("Simbol (ex: TSLA)").upper()
                 p_wl = c2.number_input("Preț Țintă (Target)", min_value=0.0, step=0.1)
                 n_wl = c3.text_input("Notă (ex: Suport major, aștept earnings)")
+                st.caption("Simbolul se caută ca în Analiză: întâi cel scris, apoi cu .RO. La BVB scrie-l cu .RO când "
+                           "există și o acțiune americană cu același simbol (EL = Estée Lauder, EL.RO = Electrica). "
+                           "Ținta e în moneda cotației (la Londra, .L, în pence).")
                 
                 if st.form_submit_button("Adaugă în Listă"):
                     if s_wl.strip() and p_wl > 0:
@@ -7954,6 +7965,10 @@ def main():
                 })
             
             df_res = pd.DataFrame(display_rows)
+            no_price = [s for s in tickers_list if s not in quotes]
+            if no_price:
+                st.caption(f"Fără preț Yahoo: {', '.join(no_price)}. La BVB simbolul are sufixul .RO (ex: TLV.RO): "
+                           "șterge rândul și adaugă-l din nou din formular, care găsește singur simbolul corect.")
 
             # 3. Stilizare și Afișare
             def highlight_buy(row):

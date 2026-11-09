@@ -28,7 +28,7 @@ sys.path.insert(0, APP_DIR)
 from data import fred_calendar as fred_cal   # noqa: E402  (deciziile FOMC din calendarul Fed)
 
 TODAY = pd.Timestamp.today().normalize()
-NO_DATA = {"NODATA.RO"}            # simbol fără nicio cotație
+NO_DATA = {"NODATA.RO", "NODATA", "BVBONLY"}   # simboluri fără nicio cotație (BVBONLY.RO are: rezolvarea .RO din Watchlist)
 NEW_LISTING = {"NEWCO"}            # simbol listat de 60 de ședințe
 
 
@@ -599,6 +599,7 @@ EXPECTED_MESSAGES = (
     "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
     "e deja în watchlist",                         # smoke-ul încearcă intenționat un duplicat
+    "Yahoo nu are preț pentru NODATA",             # ... și un simbol fără preț
     "zile comune de tranzacționare; sunt necesare",  # tabul EUR din datele de test: o poziție listată de 60 de zile
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )
@@ -975,6 +976,16 @@ def main():
             check(at, "8. Watchlist (adăugare duplicat)")
             warns = [str(w.value) for w in at.warning]
             assert any("MSFT e deja în watchlist" in w for w in warns), warns
+            # simbol fără preț nici cu .RO: refuzat; „bvbonly” → găsit ca BVBONLY.RO
+            next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value("nodata")
+            next(b for b in at.button if b.label == "Adaugă în Listă").click().run()
+            warns = [str(w.value) for w in at.warning]
+            assert any("NODATA: Yahoo nu are preț pentru NODATA, nici pentru NODATA.RO" in w for w in warns), warns
+            next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value("bvbonly")
+            next(b for b in at.button if b.label == "Adaugă în Listă").click().run()
+            check(at, "8. Watchlist (adăugare cu .RO)")
+            oks = [str(s.value) for s in at.success]
+            assert any("Adăugat BVBONLY.RO la ținta 280 RON (scris BVBONLY; găsit ca BVBONLY.RO)" in s for s in oks), oks
             # ștergerea: mesajul de confirmare apare după rerun
             next(b for b in at.button if b.label == "Șterge").click().run()
             check(at, "8. Watchlist (ștergere)")

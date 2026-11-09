@@ -95,3 +95,12 @@ def symbol_rows(values, symbol):
         return []
     rows = [n for n, row in enumerate(values[1:], start=2) if i < len(row) and normalize_symbol(row[i]) == target]
     return sorted(rows, reverse=True)
+
+
+def symbol_candidates(symbol):
+    """Simbolurile încercate la adăugare, în ordine, ca în pagina de Analiză (`get_stock_data`):
+    întâi cel scris, apoi cu `.RO` (BVB) dacă nu îl are deja. „TLV” → ["TLV", "TLV.RO"]; gol → []."""
+    s = normalize_symbol(symbol)
+    if not s:
+        return []
+    return [s] if s.endswith(".RO") else [s, s + ".RO"]
