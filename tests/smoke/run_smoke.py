@@ -738,6 +738,7 @@ def main():
             for lbl in ("BET (proxy: ETF TVBETETF)", "Mișcarea BET în σ", "VIX / VIX3M", "RSP − SPY (o zi)", "S&P 500"):
                 assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
             assert any("Ultima ședință:" in str(e.value) for e in at.markdown), "lipsește data ultimei ședințe"
+            assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Rezumat: lipsește timpul paginii"
             sig_tabs = [getattr(d.value, "data", d.value) for d in at.dataframe if "σ" in getattr(getattr(d.value, "data", d.value), "columns", [])]
             assert len(sig_tabs) >= 3, "lipsesc topurile cu σ"
             all_text = " ".join(str(e.value) for e in list(at.markdown) + list(at.info) + list(at.caption))

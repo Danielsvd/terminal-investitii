@@ -7331,6 +7331,9 @@ def main():
         st.title("🗞️ Rezumatul Zilei")
         st.caption("Ultima ședință a fiecărei piețe, din prețurile de închidere neajustate (Yahoo). Pragurile textelor "
                    "(1σ, 2σ) sunt descriptive, netestate. Fără recomandări: datele și baza lor.")
+        # Timpul rulării complete (Etapa 5), scris la final; fără st.fragment (vezi Piață Globală).
+        _rz_t0 = time.perf_counter()
+        _rz_timer = st.empty()
         rz_top = st.container()        # „3 lucruri de știut azi” (etapa E): se completează după ce sunt calculate toate
 
         try:
@@ -7838,6 +7841,7 @@ def main():
                        "macro SUA de azi/mâine, pozițiile tale peste 2σ, sectorul S&P 500 cu abaterea cea mai mare (≥ 1 pp) și "
                        "cea mai nouă știre despre pozițiile tale (lista în tabul „📰 Știri”). Detaliile sunt mai jos.")
             st.markdown("---")
+        _rz_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _rz_t0, 1)} s, la {now_ro():%H:%M:%S}.")
 
     # ==================================================
     # 7. SCANNER VOLUM (RVOL) - NOU
