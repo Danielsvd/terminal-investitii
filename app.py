@@ -31,7 +31,7 @@ from collections import deque
 from threading import Lock
 
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
-from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
+from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines, price_changes
 from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread, tbill_discount_to_bey
 from analytics import macro as macro_calc
 from analytics import markets as markets_calc
@@ -3970,23 +3970,19 @@ def main():
             # Fereastră calendaristică: "1 An" înseamnă un an de date, nu 365 de rânduri (~1,45 ani)
             subset = slice_window(hist, time_opt)
             
-            if not subset.empty and len(hist) >= 2:
-                curr_price = subset['Close'].iloc[-1]
-                start_price = subset['Close'].iloc[0]
-                diff_val = curr_price - start_price
-                diff_pct = (diff_val / start_price) * 100
-                prev_close = hist['Close'].iloc[-2]
-                day_val = curr_price - prev_close
-                day_pct = (day_val / prev_close) * 100
-            else:
-                curr_price = 0; diff_val = 0; diff_pct = 0; day_val = 0; day_pct = 0
+            # Lipsă (interval gol, o singură ședință) → N/A, nu 0 (analytics.technical.price_changes)
+            pc = price_changes(subset['Close'] if not subset.empty else None, hist['Close'])
+            curr_price = pc['last']
+            _chg = lambda v, p: None if v is None or p is None else f"{ro(v):.2f} ({ro(p):.2f}%)"
 
             with col_price_info:
                  m1, m2 = st.columns(2)
-                 m1.metric(f"Interval ({time_opt})", f"{ro(curr_price):.2f} {info.get('currency', '')}", f"{ro(diff_val):.2f} ({ro(diff_pct):.2f}%)",
+                 m1.metric(f"Interval ({time_opt})", "N/A" if curr_price is None else f"{ro(curr_price):.2f} {info.get('currency', '')}",
+                           _chg(pc['diff'], pc['diff_pct']),
                            help="Ultima închidere și variația față de prima închidere din intervalul ales (fereastră "
                                 "calendaristică). Prețuri ajustate pentru dividende și splituri, ca în grafic.")
-                 m2.metric("Evoluție Azi", f"{ro(curr_price):.2f}", f"{ro(day_val):.2f} ({ro(day_pct):.2f}%)",
+                 m2.metric("Evoluție Azi", "N/A" if curr_price is None else f"{ro(curr_price):.2f}",
+                           _chg(pc['day'], pc['day_pct']),
                            help="Ultima închidere față de închiderea ședinței precedente. În timpul ședinței, „ultima "
                                 "închidere” e prețul de acum (ședință în curs).")
 
