@@ -6256,7 +6256,7 @@ def main():
             "MIXT": "Pilonii dau semnale contradictorii; mediul de piață nu înclină clar într-o parte.",
             "DEFAVORABIL": "Majoritatea pilonilor ponderați indică stres: credit în retragere, volatilitate mare sau rotație defensivă.",
         }.get(mv["label"], f"Prea puține date: doar {mv['weight_used']}% din ponderi au valori (minimum {macro_calc.MACRO_MIN_WEIGHT}%).")
-        m_score_txt = "N/A" if m_score is None else f"{m_score:.0f}"
+        m_score_txt = score_ro(m_score)  # o zecimală, tăiat: eticheta vine din pragurile 60/40 (#153)
 
         # --- 3. AFIȘARE BANNER ---
         st.markdown(f"""
