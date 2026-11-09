@@ -63,7 +63,7 @@ from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_li
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data import bnr as bnr_data
-from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
+from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, price_ro, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -7895,7 +7895,7 @@ def main():
                         
                         st.dataframe(
                             df_filtered.style.apply(style_scanner_rows, axis=1).format({
-                                "Preț": ro_spec('.2f'),
+                                "Preț": price_ro,   # 4 zecimale sub 10 (HAI 0,2350, nu 0,23)
                                 "Variație %": ro_spec('+.2f', '%'),
                                 "Volum": ro_spec(',.0f'),
                                 "Valoare": ro_spec(',.0f'),
@@ -8003,13 +8003,9 @@ def main():
             def highlight_zone(row):
                 return [zone_style.get(row['_zone'], '')] * len(row)
 
-            def price_fmt(v):
-                # 4 zecimale sub 10 (BVB sub 1 leu: 0,4950), 2 altfel; lipsă → „N/A”
-                return format_ro(v, 4 if pd.notna(v) and v < 10 else 2)
-
             st.dataframe(
                 df_res.style.apply(highlight_zone, axis=1)
-                .format({"Ultimul preț": price_fmt, "Preț Țintă 🎯": price_fmt, "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
+                .format({"Ultimul preț": price_ro, "Preț Țintă 🎯": price_ro, "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={
