@@ -184,3 +184,45 @@ def currency_label(yahoo_currency, symbol):
     if guess is None:
         return "N/A"
     return f"{guess} (dedusă)" if needs_yahoo_currency(symbol) else guess
+
+
+# --- Coloanele „Moment” și „Scor fundamental” (aprobate de Daniel 09.11; scorul la buton, decizia din 09.11 seara) ---
+NOT_COMPUTED = "—"   # scorul fundamental încă necalculat (butonul nu a fost apăsat), diferit de „N/A” = fără date
+
+
+def moment_cells(closes, symbols):
+    """{simbol: textul coloanei Moment} din închiderile AJUSTATE (`closes`: o coloană pe simbol, index de date).
+
+    Același sub-scor ca în Analiză (`scoring.technical_subscore`: trend SMA 50/200 + momentum 12-1, fără RSI).
+    BVB (.RO): eticheta pe pragurile testate + scorul („FAVORABIL 85”). Celelalte piețe: doar scorul,
+    „fără verdict” (testul pe SUA nu a găsit putere de predicție). Simbol fără date sau istoric prea scurt → „N/A”."""
+    from analytics.scoring import moment_label, technical_subscore
+    out = {}
+    for sym in symbols:
+        series = closes[sym] if closes is not None and sym in getattr(closes, "columns", []) else pd.Series(dtype="float64")
+        score = technical_subscore(pd.Series(series, dtype="float64").dropna())
+        if score is None or (isinstance(score, float) and math.isnan(score)):
+            out[sym] = "N/A"
+            continue
+        is_bvb = normalize_symbol(sym).endswith(".RO")
+        label, _, _ = moment_label(score, is_bvb)
+        out[sym] = f"{label} {score:.0f}" if is_bvb else f"{score:.0f} · fără verdict"
+    return out
+
+
+def bvb_fundamental_cell(score, tier):
+    """Textul coloanei Scor fundamental la BVB: treapta testată + scorul („FAVORABIL 72”). Scor lipsă → „N/A”;
+    scor fără treaptă (sub 6 companii comparate) → „FĂRĂ TREAPTĂ 55”."""
+    from analytics.bvb_fundamental import TIER_LABELS
+    if score is None or pd.isna(score):
+        return "N/A"
+    label = TIER_LABELS[int(tier)][0] if tier is not None and not pd.isna(tier) else "FĂRĂ TREAPTĂ"
+    return f"{label} {score:.0f}"
+
+
+def global_fundamental_cell(score, label):
+    """Textul coloanei Scor fundamental în afara BVB: eticheta benzii + scorul, marcat „netestat”
+    („NEUTRU 63 · netestat”). Sub 2 piloni cu date → „N/A”."""
+    if score is None or pd.isna(score):
+        return "N/A"
+    return f"{label} {score:.0f} · netestat"

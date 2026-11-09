@@ -2800,6 +2800,75 @@ def get_watchlist_quotes(symbols):
         logger.warning(f"Watchlist, prețuri: {e}")
         return {}
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _watchlist_moment_closes(symbols):
+    """Închiderile AJUSTATE pe 2 ani pentru coloana Moment din Watchlist (tuplu de simboluri), într-o singură cerere.
+    2 ani ajung: trendul folosește ultimele 200 de ședințe, momentumul 12-1 ultimele 12 luni (aceleași valori ca pe
+    istoricul de 5 ani din Analiză). Excepțiile urcă la apelant, ca o cerere eșuată să nu rămână în cache."""
+    symbols = list(symbols)
+    _yf_limiter.wait_if_needed()
+    data = yf.download(symbols, period="2y", group_by='ticker', progress=False, auto_adjust=True)
+    return _naive_index(close_frame(data, symbols))
+
+def get_watchlist_moments(symbols):
+    """{simbol: textul coloanei Moment}; Yahoo indisponibil → „N/A” peste tot (mesajul e în log)."""
+    symbols = tuple(sorted(set(symbols)))
+    try:
+        closes = _watchlist_moment_closes(symbols) if symbols else pd.DataFrame()
+    except (requests.RequestException, ValueError, KeyError, yf.exceptions.YFException) as e:
+        logger.warning(f"Watchlist, moment: {e}")
+        closes = pd.DataFrame()
+    return watchlist_calc.moment_cells(closes, symbols)
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=300)
+def _watchlist_global_fundamental(symbol):
+    """Scorul fundamental SUA/UE al unui rând din Watchlist, cu aceleași funcții ca secțiunea din Analiză Companie
+    (`get_stock_data`, `resolve_beta_alpha`, `global_fundamental_inputs`, `gfund.fundamental_score`). Cache 24 h:
+    prețul din evaluare (DCF invers, E/P) e cel de la momentul calculului, afișat în „at”.
+    Întoarce {"cell", "at"}. ETF / fond / indice → „N/A (ETF)” etc. Yahoo fără răspuns complet (info refuzat,
+    situațiile anuale lipsă) → excepție: rezultatul degradat nu intră în cache și se reîncearcă la următorul calcul."""
+    hist, info, _, real_sym = get_stock_data(symbol)
+    if hist is None or hist.empty or not info:
+        raise ValueError(f"Yahoo: fără istoric sau fără info pentru {symbol}")
+    if info.get("_info_error"):
+        raise ValueError(f"Yahoo: info incomplet pentru {symbol} ({info['_info_error']})")
+    qtype = (info.get('quoteType') or "").upper()
+    if qtype in NON_COMPANY_QUOTE_TYPES:
+        return {"cell": f"N/A ({qtype})", "at": now_ro()}
+    risk_stats = resolve_beta_alpha(real_sym, info, hist)
+    inp = global_fundamental_inputs(real_sym, info, hist, risk_stats)
+    if not inp["financial"] and {"financials", "balance_sheet", "cashflow"} <= set(inp["statement_errors"]):
+        raise ValueError(f"Yahoo: situațiile financiare anuale indisponibile pentru {symbol}")
+    res = gfund.fundamental_score(inp)
+    return {"cell": watchlist_calc.global_fundamental_cell(res["score"], res["label"]), "at": now_ro()}
+
+def watchlist_bvb_fundamentals(ro_symbols, fallback_prices):
+    """{simbol .RO: textul coloanei Scor fundamental} din fișierele „Analiză companii”, exact ca secțiunea din Analiză:
+    prețurile curente din `get_bvb_file_prices`, iar pentru emitentul evaluat, dacă lipsește, ultimul preț din
+    Watchlist (`fallback_prices`; în Analiză e ultimul preț din istoric). Secțiunea transversală se reface pe fiecare
+    emitent, ca prețul de rezervă să schimbe doar rândul lui. Întoarce (dict, eroare sau None).
+    Bancă (alt șablon, sărită) → „N/A (bancă)”; fără fișier cu date → „N/A (fără fișier)”."""
+    files, err = list_company_files()
+    if err:
+        return {s: "N/A" for s in ro_symbols}, err
+    data = build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+    prices = get_bvb_file_prices(tuple(sorted(data["companii"])))
+    base = {t: current_indicators(df, prices.get(t)) for t, df in data["companii"].items()}
+    banks = {ticker_from_title(s.split(" (")[0]) for s in data["sarite"] if "bancă" in s}
+    out = {}
+    for sym in ro_symbols:
+        tk = sym[:-3]
+        if tk not in data["companii"]:   # aceleași cazuri ca mesajul din Analiză
+            out[sym] = "N/A (bancă)" if tk in banks else "N/A (fără fișier)"
+            continue
+        indicators = dict(base)
+        if prices.get(tk) is None:
+            indicators[tk] = current_indicators(data["companii"][tk], positive_or_none(fallback_prices.get(sym)))
+        cs = cross_section(indicators)
+        out[sym] = (watchlist_calc.bvb_fundamental_cell(cs.loc[tk, "scor"], cs.loc[tk, "treapta"])
+                    if tk in cs.index and "scor" in cs.columns else "N/A")
+    return out, None
+
 def _naive_index(frame):
     """Index de date fără fus orar (Yahoo întoarce uneori index cu fus)."""
     if getattr(frame.index, "tz", None) is not None:
@@ -8036,6 +8105,38 @@ def main():
             tickers_list = df_wl['Symbol'].unique().tolist()
             with st.spinner("Actualizăm prețurile..."):
                 quotes = get_watchlist_quotes(tickers_list)
+            with st.spinner("Calculăm momentul..."):
+                moments = get_watchlist_moments(tickers_list)
+
+            # Scorul fundamental: la buton (decizia lui Daniel, 09.11 seara), ~8 cereri Yahoo pe acțiune SUA/UE.
+            # Rezultatele stau 24 h în cache pe simbol; butonul doar pornește afișarea în sesiunea curentă.
+            fund_cells, fund_times, fund_failed, fund_note = {}, [], [], None
+            b1, b2, _ = st.columns([1.4, 1.4, 2])
+            if b1.button("📊 Calculează scorurile fundamentale", key="wl_fund_btn"):
+                st.session_state["wl_fund_on"] = True
+            if st.session_state.get("wl_fund_on") and b2.button("🔄 Recalculează (golește cache-ul de 24 h)", key="wl_fund_clear"):
+                _watchlist_global_fundamental.clear()
+            if st.session_state.get("wl_fund_on"):
+                ro_syms = [s for s in tickers_list if str(s).upper().endswith(".RO")]
+                other_syms = [s for s in tickers_list if s not in ro_syms]
+                if ro_syms:
+                    with st.spinner("Citesc fișierele din „Analiză companii” (prima dată durează până la ~30 de secunde)..."):
+                        bvb_cells, fund_note = watchlist_bvb_fundamentals(
+                            ro_syms, {s: (quotes.get(s) or {}).get("price") for s in ro_syms})
+                    fund_cells.update(bvb_cells)
+                bar = st.progress(0.0, text="Scoruri fundamentale SUA/UE...")
+                for k, sym in enumerate(other_syms, 1):
+                    bar.progress(k / max(len(other_syms), 1), text=f"Scoruri fundamentale SUA/UE: {sym} ({k} din {len(other_syms)})")
+                    try:
+                        res = _watchlist_global_fundamental(sym)
+                        fund_cells[sym] = res["cell"]
+                        fund_times.append(res["at"])
+                    except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError,
+                            yf.exceptions.YFException) as e:
+                        logger.warning(f"Watchlist, scor fundamental {sym}: {e}")
+                        fund_cells[sym] = "N/A (Yahoo)"
+                        fund_failed.append(sym)
+                bar.empty()
 
             # 2. Construim tabelul final
             today_ro = now_ro()
@@ -8060,6 +8161,8 @@ def main():
                     "Preț Țintă 🎯": target,
                     "Distanță (%)": dist_pct,
                     "Status": watchlist_calc.status_label(curr, target),
+                    "Moment": moments.get(sym, "N/A"),
+                    "Scor fundamental": fund_cells.get(sym, watchlist_calc.NOT_COMPUTED),
                     "Data țintei": row['Date'].strftime("%d.%m.%Y") if pd.notna(row['Date']) else "N/A",
                     "Notă": note,
                     "_zone": target_zone(curr, target),
@@ -8102,6 +8205,18 @@ def main():
                     "Status": st.column_config.Column(help="✅ prețul e la sau sub țintă; 🟡 peste țintă cu mai puțin de "
                                                            f"{NEAR_TARGET_PCT:.0f}%; ⏳ peste. Alertă față de ținta ta, nu o recomandare: "
                                                            "verifică fundamentalele în Analiză înainte de a cumpăra."),
+                    "Moment": st.column_config.Column(help="Sub-scorul tehnic 0–100, același ca în Analiză Companie: media trendului "
+                                                           "(câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200) și a momentumului "
+                                                           "12-1 (−30% → 0, +30% → 100), pe prețuri ajustate; RSI nu intră. BVB: eticheta pe "
+                                                           "pragurile testate 2012–2025 (≥ 80 FAVORABIL, 40–80 NEUTRU, < 40 NEFAVORABIL). "
+                                                           "Celelalte piețe: fără verdict (testul pe SUA nu a găsit putere de predicție). "
+                                                           "N/A = istoric sub 50 de ședințe sau fără date. Nu se adună cu scorul fundamental."),
+                    "Scor fundamental": st.column_config.Column(help="Scorul companiei, același ca în Analiză Companie. BVB: media "
+                                                                     "percentilelor E/P, B/P, randament dividend și Piotroski simplificat față "
+                                                                     "de companiile din fișierele „Analiză companii”, cu treapta testată. SUA/UE: "
+                                                                     "evaluare, calitate, sănătate (rentabilitate la financiare), praguri netestate. "
+                                                                     "— = necalculat (butonul de deasupra tabelului); N/A (ETF) = nu se aplică; "
+                                                                     "N/A (Yahoo) = date incomplete acum, se reîncearcă la următorul calcul."),
                     "Data țintei": st.column_config.Column(help="Când ai pus ținta (coloana Date din foaie). O țintă veche poate să nu mai "
                                                                 "corespundă fundamentalelor actuale. N/A = rând adăugat înainte de coloana Date."),
                 },
@@ -8111,6 +8226,14 @@ def main():
                        f"plus = peste țintă. „Aproape” = sub {NEAR_TARGET_PCT:.0f}% peste țintă, același prag ca în cardul „Țintă intrare”. "
                        "Prețul e ultima închidere Yahoo; în timpul ședinței, prețul de azi cu întârziere (⏳).")
             
+            if fund_times:
+                st.caption(f"Scorurile fundamentale SUA/UE din cache-ul de 24 h, calculate între {min(fund_times):%d.%m %H:%M} și "
+                           f"{max(fund_times):%d.%m %H:%M}: evaluarea folosește prețul de atunci. „🔄 Recalculează” le reface.")
+            if fund_failed:
+                st.caption(f"Fără scor acum (Yahoo a răspuns incomplet): {', '.join(fund_failed)}. Se reîncearcă la următorul calcul.")
+            if fund_note:
+                st.caption(f"Scorul BVB indisponibil: {fund_note}")
+
             # Buton ștergere
             with st.expander("🗑️ Șterge din listă"):
                 del_sym = st.selectbox("Alege simbol de șters:", tickers_list)
