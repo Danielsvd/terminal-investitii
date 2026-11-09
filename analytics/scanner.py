@@ -90,3 +90,23 @@ def rvol_session(df, is_partial, include_partial=False, window=RVOL_WINDOW):
         partial = False
     rs["partial"] = partial
     return rs
+
+
+# Etichetele de stare (praguri fixe, NETESTATE istoric: nu s-a măsurat ce urmează după ele)
+STRONG_RVOL = 2.0            # BREAKOUT / PANIC SELL: RVOL peste 2
+STRONG_MOVE_PCT = 1.5        # ... și variația peste +1,5% / sub −1,5%
+ACCUM_RVOL = 1.2             # ACUMULARE: RVOL peste 1,2 și variație pozitivă
+
+
+def status_label(rvol, change_pct):
+    """Eticheta descriptivă a ședinței după RVOL și variație, cu „(netestat)”. Lipsă → „N/A”."""
+    r, c = _num(rvol), _num(change_pct)
+    if r is None or c is None:
+        return "N/A"
+    if r > STRONG_RVOL and c > STRONG_MOVE_PCT:
+        return "🚀 BREAKOUT (netestat)"
+    if r > STRONG_RVOL and c < -STRONG_MOVE_PCT:
+        return "⚠️ PANIC SELL (netestat)"
+    if r > ACCUM_RVOL and c > 0:
+        return "✅ ACUMULARE (netestat)"
+    return "Normal"

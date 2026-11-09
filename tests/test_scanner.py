@@ -77,3 +77,13 @@ def test_hours_key():
     assert scanner_calc.hours_key("TLV.RO") == "BVB" and scanner_calc.hours_key("AAPL") == "NYSE"
     assert scanner_calc.hours_key("BRK-B") == "NYSE" and scanner_calc.hours_key("SAP.DE") == "XETRA"
     assert scanner_calc.hours_key("ULVR.L") == "XETRA"
+
+
+def test_status_label_netestat():
+    sl = scanner_calc.status_label
+    assert sl(2.5, 2.0) == "🚀 BREAKOUT (netestat)"
+    assert sl(2.5, -2.0) == "⚠️ PANIC SELL (netestat)"
+    assert sl(2.5, 1.0) == "✅ ACUMULARE (netestat)"       # RVOL mare, mișcare mică pozitivă
+    assert sl(2.0, 2.0) == "✅ ACUMULARE (netestat)"       # pragul 2 e strict
+    assert sl(1.2, 0.5) == "Normal" and sl(1.5, -0.5) == "Normal"
+    assert sl(None, 1.0) == "N/A" and sl(2.5, float("nan")) == "N/A"
