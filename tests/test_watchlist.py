@@ -112,3 +112,28 @@ def test_price_date_text():
     assert wl.price_date_text(pd.Timestamp("2026-11-04"), today) == "04.11.2026"              # 3 zile: încă fără ⚠️
     assert wl.price_date_text(pd.Timestamp("2026-11-03"), today) == "03.11.2026 ⚠️ veche (4 zile lucrătoare)"
     assert wl.price_date_text(None, today) == "N/A"
+
+
+def test_coloana_date_citire_si_scriere_dupa_antet():
+    values = [
+        ["Symbol", "TargetPrice", "Notes", "Date"],
+        ["AAPL", 150, "", "2026-11-09"],     # scrisă de aplicație
+        ["MSFT", 300, "", "05.10.2026"],     # scrisă de mână, format românesc: 5 octombrie, nu 10 mai
+        ["NVDA", 120, ""],                   # rând vechi, fără dată
+        ["TSLA", 250, "", "nu e dată"],
+    ]
+    df, problems = wl.parse_watchlist(values)
+    assert problems == []
+    assert df["Date"].tolist()[:2] == [pd.Timestamp("2026-11-09"), pd.Timestamp("2026-10-05")]
+    assert pd.isna(df["Date"].iloc[2]) and pd.isna(df["Date"].iloc[3])
+    # foaie fără coloana Date: coloana există în DataFrame, goală
+    df, _ = wl.parse_watchlist([["Symbol", "TargetPrice"], ["AAPL", 1]])
+    assert "Date" in df.columns and pd.isna(df["Date"].iloc[0])
+
+    # scrierea urmează antetul, nu poziția
+    assert wl.sheet_row(["Symbol", "TargetPrice", "Notes", "Date"], "AAPL", 150, "n", "2026-11-09") == ["AAPL", 150.0, "n", "2026-11-09"]
+    assert wl.sheet_row(["Symbol", "TargetPrice", "Notes"], "AAPL", 150, "n", "2026-11-09") == ["AAPL", 150.0, "n"]
+    assert wl.sheet_row(["Date", "Notes", "Symbol", "TargetPrice", "Alta"], "AAPL", 0.495, None, "2026-11-09") == \
+        ["2026-11-09", "", "AAPL", 0.495, ""]
+    assert wl.sheet_row(["Simbol", "Tinta"], "AAPL", 1, "", "x") is None
+    assert wl.sheet_row([], "AAPL", 1, "", "x") is None

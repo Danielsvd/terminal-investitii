@@ -2462,7 +2462,10 @@ def add_to_watchlist(symbol, target, note):
             t = current.loc[current["Symbol"] == symbol, "TargetPrice"].iloc[0]
             t_txt = format_ro(t, 4, trim=True) if pd.notna(t) else "fără țintă"
             return False, f"{symbol} e deja în watchlist (ținta {t_txt}). Șterge-l întâi dacă vrei altă țintă."
-        ws.append_row([symbol, float(target), note])
+        row = watchlist_calc.sheet_row(values[0] if values else [], symbol, target, note, f"{now_ro():%Y-%m-%d}")
+        if row is None:
+            return False, "Foaia watchlist nu are coloanele Symbol și TargetPrice în antet (rândul 1)."
+        ws.append_row(row)  # în ordinea antetului; data intră doar dacă foaia are coloana Date
     except (gspread.exceptions.GSpreadException, requests.RequestException) as e:
         logger.warning(f"watchlist, adăugare {symbol}: {e}")
         return False, f"Eroare la salvarea în foaia watchlist: {e}"
@@ -7898,7 +7901,7 @@ def main():
                 else:
                     st.warning("Eroare la preluarea datelor. Yahoo Finance ar putea limita cererile.")
     # ==================================================
-    # 8. WATCHLIST (FINAL FIX - TIMEZONE PROOF)
+    # 8. WATCHLIST (logica în analytics/watchlist.py)
     # ==================================================
     elif sectiune == "8. Watchlist":
         st.title("Lista de Urmărire (Watchlist)")
@@ -7911,7 +7914,8 @@ def main():
             with st.form("wl_form"):
                 c1, c2, c3 = st.columns([1, 1, 2])
                 s_wl = c1.text_input("Simbol (ex: TSLA)").upper()
-                p_wl = c2.number_input("Preț Țintă (Target)", min_value=0.0, step=0.1)
+                # 4 zecimale: la BVB sunt acțiuni sub 1 leu (0,4950); formatul implicit are 2
+                p_wl = c2.number_input("Preț Țintă (Target)", min_value=0.0, step=0.01, format="%.4f")
                 n_wl = c3.text_input("Notă (ex: Suport major, aștept earnings)")
                 st.caption("Simbolul se caută ca în Analiză: întâi cel scris, apoi cu .RO. La BVB scrie-l cu .RO când "
                            "există și o acțiune americană cu același simbol (EL = Estée Lauder, EL.RO = Electrica). "
@@ -7961,6 +7965,7 @@ def main():
                     "Preț Țintă 🎯": target,
                     "Distanță (%)": dist_pct,
                     "Status": watchlist_calc.status_label(curr, target),
+                    "Data țintei": row['Date'].strftime("%d.%m.%Y") if pd.notna(row['Date']) else "N/A",
                     "Notă": note,
                     "_zone": target_zone(curr, target),
                 })
@@ -7979,13 +7984,32 @@ def main():
             def highlight_zone(row):
                 return [zone_style.get(row['_zone'], '')] * len(row)
 
+            def price_fmt(v):
+                # 4 zecimale sub 10 (BVB sub 1 leu: 0,4950), 2 altfel; lipsă → „N/A”
+                return format_ro(v, 4 if pd.notna(v) and v < 10 else 2)
+
             st.dataframe(
                 df_res.style.apply(highlight_zone, axis=1)
-                .format({"Ultimul preț": ro_spec('.2f'), "Preț Țintă 🎯": ro_spec('.2f'), "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
+                .format({"Ultimul preț": price_fmt, "Preț Țintă 🎯": price_fmt, "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={
-                    "_zone": None, 
+                    "_zone": None,
+                    "Monedă": st.column_config.Column(help="Moneda cotației Yahoo, dedusă din sufixul simbolului (.RO → RON, .DE → EUR, "
+                                                           ".L → GBp = pence, fără sufix → USD). Ținta e în aceeași monedă."),
+                    "Ultimul preț": st.column_config.Column(help="Ultima închidere Yahoo (preț real, neajustat cu dividende). În timpul "
+                                                                 "ședinței e prețul de azi, cu întârziere de ~15 minute."),
+                    "Data prețului": st.column_config.Column(help="Ziua prețului. ⏳ = ședință în curs (prețul se mai schimbă). "
+                                                                  f"⚠️ = mai vechi de {watchlist_calc.STALE_BDAYS} zile lucrătoare "
+                                                                  "(titlu netranzacționat sau suspendat; sărbătorile nu sunt scăzute)."),
+                    "Preț Țintă 🎯": st.column_config.Column(help="Prețul la care vrei să cumperi, scris de tine în foaia watchlist."),
+                    "Distanță (%)": st.column_config.Column(help="(Ultimul preț − țintă) ÷ țintă × 100. Plus = prețul e peste țintă "
+                                                                 "(cât mai are de scăzut, raportat la țintă); minus = sub țintă."),
+                    "Status": st.column_config.Column(help="✅ prețul e la sau sub țintă; 🟡 peste țintă cu mai puțin de "
+                                                           f"{NEAR_TARGET_PCT:.0f}%; ⏳ peste. Alertă față de ținta ta, nu o recomandare: "
+                                                           "verifică fundamentalele în Analiză înainte de a cumpăra."),
+                    "Data țintei": st.column_config.Column(help="Când ai pus ținta (coloana Date din foaie). O țintă veche poate să nu mai "
+                                                                "corespundă fundamentalelor actuale. N/A = rând adăugat înainte de coloana Date."),
                 },
                 hide_index=True 
             )
