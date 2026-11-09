@@ -7718,20 +7718,26 @@ def main():
                 tickers_map[f"{flag} – {sec} ({len(syms)})"] = syms
         
         # Funcție internă de calcul RVOL + AI Isolation Forest
-        def get_rvol_data(ticker_list):
+        def get_rvol_data(ticker_list, include_partial=False):
             from ai_engine import detect_volume_anomaly_ai # Importăm funcția nouă AI
             try:
                 # Descărcăm date pe 3 luni pentru a avea destul istoric de "învățare" pt ML
                 data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False, auto_adjust=True)
                 closes, volumes = field_frame(data, "Close", ticker_list), field_frame(data, "Volume", ticker_list)
                 results = []
+                states = {}   # starea bursei, o dată pe bursă: ședința de azi e încă în desfășurare?
                 
                 for t in ticker_list:
                     try:
                         if t not in closes.columns or t not in volumes.columns: continue
+                        hk = scanner_calc.hours_key(t)
+                        if hk not in states:
+                            states[hk] = briefing_calc.market_state(hk, now_ro())
                         df_t = pd.DataFrame({"Close": closes[t], "Volume": volumes[t]})
                         # Preț și volum aliniate pe aceeași zi; media pe 20 de ședințe cu volum (fără zilele cu 0)
-                        rs = scanner_calc.rvol_stats(df_t)
+                        # În timpul ședinței: implicit ultima ședință încheiată; opțional bara în curs, marcată „parțial”
+                        rs = scanner_calc.rvol_session(df_t, lambda d, s=states[hk]: briefing_calc.session_is_partial(d, s),
+                                                       include_partial)
                         if rs is None: continue
                         curr_p, curr_vol, avg_vol_20 = rs["close"], rs["volume"], rs["avg_volume"]
                         # Nelichide: BVB sub 50.000 lei azi (ca în Rezumat), restul sub 5.000 de acțiuni în medie
@@ -7745,6 +7751,7 @@ def main():
                         
                         results.append({
                             "Simbol": t.replace('.RO', ''),
+                            "Ședința": f"{pd.Timestamp(rs['date']):%d.%m}" + (" ⏳ parțial" if rs["partial"] else ""),
                             "Preț": curr_p,
                             "Variație %": change_pct,
                             "Volum Azi": curr_vol,
@@ -7772,6 +7779,10 @@ def main():
         # Extragem tickerii pentru selecția făcută
         selected_tickers = tickers_map[market_choice]
         
+        include_partial = st.checkbox("Include ședința în curs (volum parțial)", value=False, key="scanner_partial",
+                                      help="Implicit, RVOL se calculează pe ultima ședință ÎNCHEIATĂ: în timpul zilei volumul e "
+                                           "parțial, iar împărțit la media pe 20 de ședințe întregi ar ieși prea mic. Bifat: "
+                                           "se folosește bara de azi, marcată „⏳ parțial” în coloana „Ședința”.")
         col_scan_btn, col_info = st.columns([1, 3])
         
         with col_scan_btn:
@@ -7782,7 +7793,7 @@ def main():
 
         if run_scan:
             with st.spinner(f"Analizăm {market_choice}... (Poate dura 10-20 secunde)"):
-                df_res = get_rvol_data(selected_tickers)
+                df_res = get_rvol_data(selected_tickers, include_partial)
                 
                 if not df_res.empty:
                     # Filtrare după Threshold-ul ales de user
