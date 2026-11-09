@@ -958,6 +958,7 @@ def main():
             if sc is not None:
                 assert {"Ședința", "Monedă", "Volum", "Valoare"} <= set(sc.columns), list(sc.columns)
                 assert not sc["Monedă"].isna().any(), "Scanner: monedă lipsă"
+                assert set(sc["Anomalie model (nevalidat)"]) <= {"da", "-", "N/A"}, set(sc["Anomalie model (nevalidat)"])
 
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
