@@ -3894,9 +3894,14 @@ def main():
             # 1. Informații Generaley
             st.markdown(f"## {info.get('longName') or real_sym}")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Sector", info.get('sector') or bvb_sector(real_sym) or 'N/A')
-            c2.metric("Industrie", info.get('industry') or 'N/A')
-            c3.metric("Capitalizare", format_num(info.get('marketCap')))             
+            c1.metric("Sector", info.get('sector') or bvb_sector(real_sym) or 'N/A',
+                      help="Sectorul după clasificarea Yahoo. La BVB Yahoo nu îl trimite: vine din harta sectoarelor "
+                           "ținută în aplicație. Sectorul alege comparabilii din Peer Review.")
+            c2.metric("Industrie", info.get('industry') or 'N/A',
+                      help="Industria (subdiviziunea sectorului) după Yahoo. La BVB lipsește de obicei (N/A).")
+            c3.metric("Capitalizare", format_num(info.get('marketCap')),
+                      help="Capitalizarea bursieră = prețul acțiunii × numărul de acțiuni în circulație, în moneda de "
+                           "tranzacționare (Yahoo, `marketCap`). Arată mărimea companiei, nu cât valorează ea fundamental.")
             from_statements = [STATEMENT_RATIO_LABELS[k] for k in info.get('_from_statements', [])]
             if not info.get('_fundamentals_available', True):
                 if from_statements:
@@ -3978,8 +3983,12 @@ def main():
 
             with col_price_info:
                  m1, m2 = st.columns(2)
-                 m1.metric(f"Interval ({time_opt})", f"{ro(curr_price):.2f} {info.get('currency', '')}", f"{ro(diff_val):.2f} ({ro(diff_pct):.2f}%)")
-                 m2.metric("Evoluție Azi", f"{ro(curr_price):.2f}", f"{ro(day_val):.2f} ({ro(day_pct):.2f}%)")
+                 m1.metric(f"Interval ({time_opt})", f"{ro(curr_price):.2f} {info.get('currency', '')}", f"{ro(diff_val):.2f} ({ro(diff_pct):.2f}%)",
+                           help="Ultima închidere și variația față de prima închidere din intervalul ales (fereastră "
+                                "calendaristică). Prețuri ajustate pentru dividende și splituri, ca în grafic.")
+                 m2.metric("Evoluție Azi", f"{ro(curr_price):.2f}", f"{ro(day_val):.2f} ({ro(day_pct):.2f}%)",
+                           help="Ultima închidere față de închiderea ședinței precedente. În timpul ședinței, „ultima "
+                                "închidere” e prețul de acum (ședință în curs).")
 
             rows_needed = 1 + (1 if show_rsi else 0) + (1 if show_macd else 0)
             row_heights = [0.6] + ([0.2] if show_rsi else []) + ([0.2] if show_macd else [])
@@ -4276,13 +4285,20 @@ def main():
                 p_med, p_n = medians[p_label]
                 p_diff = versus_median(p_own, p_med)
                 p_title = p_label.replace(" (%)", "")
+                p_help = (f"{p_title} al companiei față de mediana comparabililor din același sector și aceeași regiune. "
+                          "Diferența = (valoarea − mediana) ÷ |mediana|; n = câți comparabili au valoarea. Mediana apare de la "
+                          "3 comparabili; la P/E se iau doar valorile pozitive. Fără verdict: eșantionul e mic. Sursa: foaia BVB "
+                          "la emitenții BVB, altfel Yahoo, completat din situațiile financiare.")
                 if p_own is None:
-                    p_col.metric(p_title, "N/A")
+                    p_col.metric(p_title, "N/A",
+                                  help=p_help)
                 elif p_diff is None:
-                    p_col.metric(p_title, p_fmt.format(ro(p_own)), "fără mediană de comparație", delta_color="off")
+                    p_col.metric(p_title, p_fmt.format(ro(p_own)), "fără mediană de comparație", delta_color="off",
+                                  help=p_help)
                 else:
                     p_col.metric(p_title, p_fmt.format(ro(p_own)),
-                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})", delta_color="off")
+                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})", delta_color="off",
+                                  help=p_help)
 
             st.write("")
 
@@ -4353,10 +4369,18 @@ def main():
             rev = info.get('totalRevenue'); net_inc = info.get('netIncomeToCommon'); cash = info.get('totalCash')
             exp = (rev - net_inc) if (rev and net_inc) else None
             cf1, cf2, cf3, cf4 = st.columns(4)
-            cf1.metric("Venituri Totale", format_num(rev))
-            cf2.metric("Profit Net", format_num(net_inc))
-            cf3.metric("Cheltuieli (Est.)", format_num(exp))
-            cf4.metric("Numerar Disponibil", format_num(cash))
+            cf1.metric("Venituri Totale", format_num(rev),
+                       help="Cifra de afaceri pe ultimele 12 luni (TTM, Yahoo `totalRevenue`); fără ea, din situațiile "
+                            "financiare: TTM din 4 trimestre sau ultimul an fiscal. În moneda de raportare.")
+            cf2.metric("Profit Net", format_num(net_inc),
+                       help="Profitul net atribuibil acționarilor ordinari, ultimele 12 luni (Yahoo `netIncomeToCommon`; "
+                            "fără el, din situațiile financiare). În moneda de raportare.")
+            cf3.metric("Cheltuieli (Est.)", format_num(exp),
+                       help="Proxy: venituri − profit net = toate costurile, inclusiv dobânzi, impozit și elemente "
+                            "excepționale. Nu e un rând din situațiile financiare.")
+            cf4.metric("Numerar Disponibil", format_num(cash),
+                       help="Numerar și echivalente (plus plasamente pe termen scurt, unde Yahoo le include) din cel mai "
+                            "recent bilanț (Yahoo `totalCash`; fără el, din bilanț). Nu scade datoriile.")
             
             st.markdown("<br>", unsafe_allow_html=True)
             col_an_left, col_an_right = st.columns([1, 2])
@@ -4370,7 +4394,9 @@ def main():
                 if rec_mean:
                     pos_p = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
                     st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left:{pos_p}%;"></div></div>""", unsafe_allow_html=True)
-                st.metric("Preț Țintă (Mediu)", f"{ro(target):,.2f} {info.get('currency','USD')}" if target else "N/A")
+                st.metric("Preț Țintă (Mediu)", f"{ro(target):,.2f} {info.get('currency','USD')}" if target else "N/A",
+                          help="Media prețurilor țintă ale analiștilor care acoperă compania (Yahoo `targetMeanPrice`), de "
+                               "obicei la 12 luni. Opinia analiștilor, nu o evaluare a aplicației; la BVB lipsește des.")
 
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
@@ -5732,9 +5758,15 @@ def main():
                     st.caption(f"ℹ️ Preț live indisponibil pentru {', '.join(pf_notes['price_from_close'])}: s-a folosit ultima închidere.")
 
                 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{format_ro(total_invested)} {currency_symbol}")
-                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{format_ro(total_current)} {currency_symbol}")
-                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{format_ro(total_profit_val)} {currency_symbol}", f"{format_ro(total_profit_pct)}%")
+                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{format_ro(total_invested)} {currency_symbol}",
+                              help="Σ cantitate × preț mediu de cost, pe toate pozițiile deschise din tab (din registrul "
+                                   "`Tranzactii`), inclusiv cele fără preț curent.")
+                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{format_ro(total_current)} {currency_symbol}",
+                              help="Σ cantitate × prețul de acum (live, sau ultima închidere dacă live lipsește). "
+                                   "Pozițiile fără niciun preț nu intră (sunt listate în avertismentul de deasupra).")
+                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{format_ro(total_profit_val)} {currency_symbol}", f"{format_ro(total_profit_pct)}%",
+                              help="Nerealizat: valoarea curentă − costul pozițiilor cu preț; procentul = profit ÷ acel cost. "
+                                   "Fără dividende încasate și fără vânzările închise (acelea sunt în performanța din registru, mai sus).")
 
                 if pf_notes.get('curve_start') is not None:
                     st.caption(
