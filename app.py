@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
-from data.news import filter_company_news, future_note, holdings_news, mark_future
+from data.news import filter_company_news, future_note, holdings_news, mark_future, news_card_html
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
@@ -3619,13 +3619,8 @@ def main():
                 items = filter_news(raw_news, cat)
                 if items:
                     for item in items:
-                        st.markdown(f"""
-                        <div class="news-card">
-                            <a href="{item['link']}" class="news-title" target="_blank">{item['title']}</a>
-                            <div class="news-meta"><b>{item['source']}</b> • {item['date_str']}{future_note(item)}</div>
-                            <div style="color:#B0B8C4; font-size:14px; line-height: 1.5;">{item['summary'][:250]}...</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Text RSS extern: curățat de tag-uri, tăiat la cuvânt și escapat (data.news.news_card_html).
+                        st.markdown(news_card_html(item, future_note(item)), unsafe_allow_html=True)
                 else:
                     st.info(f"Nu există știri recente pentru: {cat}.")
 

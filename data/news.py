@@ -7,6 +7,7 @@ Sentimentul calculat pe ele nu spune nimic despre emitent. Aici se păstrează d
 
 Funcții pure, fără rețea și fără `st.*`.
 """
+import html
 import re
 from datetime import datetime, timedelta
 
@@ -202,3 +203,43 @@ def mark_future(items, now, tolerance_min=FUTURE_TOLERANCE_MIN):
 def future_note(item):
     """Textul afișat lângă data unei știri marcate de `mark_future` (gol pentru celelalte)."""
     return " ⚠️ dată din sursă în viitor" if isinstance(item, dict) and item.get("future") else ""
+
+
+# --- Cardul de știre din Agregator: text RSS extern → HTML sigur ---------------------------------------------------
+_TAG = re.compile(r"<[^>]*>")
+_SPACES = re.compile(r"\s+")
+SUMMARY_CHARS = 250
+
+
+def plain_text(raw):
+    """Text RSS (adesea HTML: <p>, <img>, entități) → text simplu, fără tag-uri și cu spațiile comprimate."""
+    if raw is None:
+        return ""
+    return _SPACES.sub(" ", html.unescape(_TAG.sub(" ", str(raw)))).strip()
+
+
+def shorten(text, limit=SUMMARY_CHARS):
+    """Taie textul simplu la `limit` caractere, la granița unui cuvânt, cu „…” doar dacă a tăiat ceva."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0] or text[:limit]
+    return cut.rstrip(" ,;:.-") + "…"
+
+
+def safe_link(url):
+    """Linkul știrii doar dacă e http(s); altfel None (ex. „javascript:”)."""
+    u = str(url or "").strip()
+    return u if re.match(r"^https?://", u, re.I) else None
+
+
+def news_card_html(item, future_suffix=""):
+    """Cardul unei știri pentru st.markdown(unsafe_allow_html=True). Titlul, sursa, data și rezumatul trec prin
+    `html.escape`; rezumatul e întâi curățat de tag-uri și abia apoi tăiat (tăierea HTML-ului rupea tag-urile)."""
+    title = html.escape(plain_text(item.get("title")) or "(fără titlu)")
+    link = safe_link(item.get("link"))
+    head = (f'<a href="{html.escape(link, quote=True)}" class="news-title" target="_blank" rel="noopener noreferrer">{title}</a>'
+            if link else f'<span class="news-title">{title}</span>')
+    meta = f'<b>{html.escape(plain_text(item.get("source")))}</b> • {html.escape(str(item.get("date_str") or ""))}{html.escape(future_suffix)}'
+    summary = html.escape(shorten(plain_text(item.get("summary"))))
+    body = f'<div style="color:#B0B8C4; font-size:14px; line-height: 1.5;">{summary}</div>' if summary else ""
+    return f'<div class="news-card">{head}<div class="news-meta">{meta}</div>{body}</div>'

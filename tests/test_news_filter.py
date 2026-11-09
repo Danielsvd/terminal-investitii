@@ -150,3 +150,20 @@ def test_stiri_pe_pozitii_doar_dupa_titlu_nu_dupa_rezumat():
                 "NVO": ("Novo Nordisk A/S",), "BHP": ("BHP Group Limited",)}
     out = holdings_news(holdings, general, now=now)
     assert [(x["symbol"], x["title"][:12]) for x in out] == [("BHP", "Mundoro sign"), ("BAC", "Bank of Amer")]
+
+
+def test_cardul_din_agregator_escapeaza_textul_rss():
+    from data.news import news_card_html, plain_text, safe_link, shorten
+    item = {"title": "Profit <b>record</b> & dividend", "link": "https://ex.ro/a?x=1&y=2", "source": "Bursa",
+            "date_str": "2026-11-09 10:00",
+            "summary": '<p>Compania <img src="x" onerror="alert(1)"> a raportat &amp; a anunțat</p>' + " cuvânt" * 60}
+    out = news_card_html(item, " ⚠️ dată din sursă în viitor")
+    assert "<img" not in out and "onerror" not in out and "<p>" not in out and "<b>record" not in out
+    assert "Profit record &amp; dividend" in out                     # tag-ul scos, „&” escapat
+    assert 'href="https://ex.ro/a?x=1&amp;y=2"' in out and 'rel="noopener noreferrer"' in out
+    assert "⚠️ dată din sursă în viitor" in out
+    assert plain_text('<p>A &amp; B</p>\n  C') == "A & B C"
+    assert shorten("unu doi trei", 7) == "unu…" and shorten("scurt", 250) == "scurt"
+    assert safe_link("javascript:alert(1)") is None and safe_link(" https://x.ro ") == "https://x.ro"
+    no_link = news_card_html({"title": "<script>x</script>T", "link": "javascript:alert(1)"})
+    assert "href" not in no_link and "<script>" not in no_link
