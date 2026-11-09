@@ -7705,7 +7705,7 @@ def main():
         threshold = st.slider("Arată doar acțiunile cu Volum de 'X' ori mai mare decât media:", 
                             min_value=1.2, max_value=5.0, value=scanner_calc.RVOL_DEFAULT, step=0.1)
         st.caption(f"Lichiditate: la BVB intră doar titlurile cu valoare tranzacționată ≥ "
-                   f"{briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} în ultima ședință (coloana „Valoare Azi” = preț × volum, în moneda pieței; ca în "
+                   f"{briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} în ședința evaluată (coloana „Valoare” = preț × volum, în moneda din coloana „Monedă”; ca în "
                    f"Rezumatul Zilei); la SUA și Europa, media volumului pe 20 de ședințe ≥ "
                    f"{format_ro(scanner_calc.MIN_AVG_SHARES, 0)} de acțiuni.")
 
@@ -7754,8 +7754,9 @@ def main():
                             "Ședința": f"{pd.Timestamp(rs['date']):%d.%m}" + (" ⏳ parțial" if rs["partial"] else ""),
                             "Preț": curr_p,
                             "Variație %": change_pct,
-                            "Volum Azi": curr_vol,
-                            "Valoare Azi": curr_p * curr_vol,
+                            "Monedă": briefing_calc.quote_currency(t) or "N/A",
+                            "Volum": curr_vol,
+                            "Valoare": curr_p * curr_vol,
                             "Volum Mediu (20z)": avg_vol_20,
                             "RVOL": rvol,
                             "Alertă AI": "🚨 ATENTIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
@@ -7829,8 +7830,8 @@ def main():
                             df_filtered.style.apply(style_scanner_rows, axis=1).format({
                                 "Preț": ro_spec('.2f'),
                                 "Variație %": ro_spec('+.2f', '%'),
-                                "Volum Azi": ro_spec(',.0f'),
-                                "Valoare Azi": ro_spec(',.0f'),
+                                "Volum": ro_spec(',.0f'),
+                                "Valoare": ro_spec(',.0f'),
                                 "Volum Mediu (20z)": ro_spec(',.0f'),
                                 "RVOL": ro_spec('.2f', 'x')
                             }),

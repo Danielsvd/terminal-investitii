@@ -955,6 +955,9 @@ def main():
             msgs = [str(e.value) for e in list(at.success) + list(at.info) + list(at.warning)]
             print("Scanner:", msgs[-1:] if sc is None else sc.head(3).values.tolist())
             assert sc is not None or any("Nicio acțiune" in m for m in msgs), f"Scanner fără rezultat: {msgs}"
+            if sc is not None:
+                assert {"Ședința", "Monedă", "Volum", "Valoare"} <= set(sc.columns), list(sc.columns)
+                assert not sc["Monedă"].isna().any(), "Scanner: monedă lipsă"
 
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
