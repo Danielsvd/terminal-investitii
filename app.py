@@ -2825,7 +2825,8 @@ def _watchlist_global_fundamental(symbol):
     """Scorul fundamental SUA/UE al unui rând din Watchlist, cu aceleași funcții ca secțiunea din Analiză Companie
     (`get_stock_data`, `resolve_beta_alpha`, `global_fundamental_inputs`, `gfund.fundamental_score`). Cache 24 h:
     prețul din evaluare (DCF invers, E/P) e cel de la momentul calculului, afișat în „at”.
-    Întoarce {"cell", "at"}. ETF / fond / indice → „N/A (ETF)” etc. Yahoo fără răspuns complet (info refuzat,
+    Întoarce {"score", "label", "na", "at"}: valorile, nu textul (formatul se aplică la afișare, deci o schimbare de
+    format nu rămâne 24 h în cache). ETF / fond / indice → na „N/A (ETF)” etc. Yahoo fără răspuns complet (info refuzat,
     situațiile anuale lipsă) → excepție: rezultatul degradat nu intră în cache și se reîncearcă la următorul calcul."""
     hist, info, _, real_sym = get_stock_data(symbol)
     if hist is None or hist.empty or not info:
@@ -2834,13 +2835,13 @@ def _watchlist_global_fundamental(symbol):
         raise ValueError(f"Yahoo: info incomplet pentru {symbol} ({info['_info_error']})")
     qtype = (info.get('quoteType') or "").upper()
     if qtype in NON_COMPANY_QUOTE_TYPES:
-        return {"cell": f"N/A ({qtype})", "at": now_ro()}
+        return {"score": None, "label": None, "na": f"N/A ({qtype})", "at": now_ro()}
     risk_stats = resolve_beta_alpha(real_sym, info, hist)
     inp = global_fundamental_inputs(real_sym, info, hist, risk_stats)
     if not inp["financial"] and {"financials", "balance_sheet", "cashflow"} <= set(inp["statement_errors"]):
         raise ValueError(f"Yahoo: situațiile financiare anuale indisponibile pentru {symbol}")
     res = gfund.fundamental_score(inp)
-    return {"cell": watchlist_calc.global_fundamental_cell(res["score"], res["label"]), "at": now_ro()}
+    return {"score": res["score"], "label": res["label"], "na": None, "at": now_ro()}
 
 def watchlist_bvb_fundamentals(ro_symbols, fallback_prices):
     """{simbol .RO: textul coloanei Scor fundamental} din fișierele „Analiză companii”, exact ca secțiunea din Analiză:
@@ -8129,7 +8130,7 @@ def main():
                     bar.progress(k / max(len(other_syms), 1), text=f"Scoruri fundamentale SUA/UE: {sym} ({k} din {len(other_syms)})")
                     try:
                         res = _watchlist_global_fundamental(sym)
-                        fund_cells[sym] = res["cell"]
+                        fund_cells[sym] = res["na"] or watchlist_calc.global_fundamental_cell(res["score"], res["label"])
                         fund_times.append(res["at"])
                     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError,
                             yf.exceptions.YFException) as e:
