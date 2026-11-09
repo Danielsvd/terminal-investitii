@@ -259,6 +259,21 @@ def positive_or_none(value):
     return float(number)
 
 
+NEAR_TARGET_PCT = 5.0   # „aproape de țintă”: prețul la mai puțin de 5% peste ea (cardul din Analiză și tabelul Watchlist)
+
+
+def target_zone(price, target):
+    """Zona prețului față de ținta din watchlist: "sub" (la sau sub țintă), "aproape" (peste, cu mai puțin de
+    NEAR_TARGET_PCT %), "peste"; None când prețul sau ținta lipsesc (≤ 0, NaN, None). O singură regulă pentru
+    cardul „Țintă intrare” și tabelul Watchlist."""
+    price, target = positive_or_none(price), positive_or_none(target)
+    if price is None or target is None:
+        return None
+    if price <= target:
+        return "sub"
+    return "aproape" if (price - target) / target * 100 < NEAR_TARGET_PCT else "peste"
+
+
 def entry_target_view(price, target):
     """Textele și culoarea cardului „Țintă intrare": (text țintă, status, culoare).
 
@@ -268,10 +283,11 @@ def entry_target_view(price, target):
     """
     if target is None or target != target or target <= 0:
         return "N/A", "Fără preț țintă în watchlist", "#8B949E"
-    if price <= target:
+    zone = target_zone(price, target)
+    if zone == "sub":
         return f"{ro(target):.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
     dist_pct = (price - target) / target * 100
-    color = "#D29922" if dist_pct < 5 else "#8B949E"
+    color = "#D29922" if zone == "aproape" else "#8B949E"
     return f"{ro(target):.2f}", f"⏳ +{ro(dist_pct):.1f}% peste țintă", color
 
 

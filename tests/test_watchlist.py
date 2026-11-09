@@ -87,3 +87,28 @@ def test_symbol_candidates_ca_in_analiza():
     assert wl.symbol_candidates("TLV.RO") == ["TLV.RO"]
     assert wl.symbol_candidates("SAP.DE") == ["SAP.DE", "SAP.DE.RO"]   # ca get_stock_data; al doilea nu are preț
     assert wl.symbol_candidates("") == []
+
+
+def test_target_zone_si_status_aceeasi_regula_ca_in_card():
+    from data.helpers import entry_target_view, target_zone
+    assert target_zone(100.0, 100.0) == "sub" and target_zone(95.0, 100.0) == "sub"
+    assert target_zone(104.99, 100.0) == "aproape"       # +4,99% < 5%
+    assert target_zone(105.0, 100.0) == "peste"           # exact +5%: nu mai e „aproape”, ca în card
+    assert target_zone(None, 100.0) is None and target_zone(50.0, 0) is None
+    # aceeași zonă → aceeași culoare în cardul din Analiză
+    assert entry_target_view(104.99, 100.0)[2] == "#D29922" and entry_target_view(105.0, 100.0)[2] == "#8B949E"
+    assert wl.status_label(95.0, 100.0) == "✅ La/sub țintă"
+    assert wl.status_label(103.0, 100.0) == "🟡 Aproape (<5%)"
+    assert wl.status_label(110.0, 100.0) == "⏳ Peste țintă"
+    assert wl.status_label(None, 100.0) == "Fără preț"
+    assert wl.status_label(50.0, None) == "Fără țintă"
+    assert wl.status_label(None, None) == "Fără preț"
+
+
+def test_price_date_text():
+    today = pd.Timestamp("2026-11-09 14:00")                 # luni
+    assert wl.price_date_text(pd.Timestamp("2026-11-06"), today) == "06.11.2026"              # vineri: 1 zi lucrătoare
+    assert wl.price_date_text(pd.Timestamp("2026-11-09"), today, partial=True) == "09.11.2026 ⏳ ședință în curs"
+    assert wl.price_date_text(pd.Timestamp("2026-11-04"), today) == "04.11.2026"              # 3 zile: încă fără ⚠️
+    assert wl.price_date_text(pd.Timestamp("2026-11-03"), today) == "03.11.2026 ⚠️ veche (4 zile lucrătoare)"
+    assert wl.price_date_text(None, today) == "N/A"

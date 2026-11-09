@@ -63,7 +63,7 @@ from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_li
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data import bnr as bnr_data
-from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html, text_frame
+from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -7939,29 +7939,30 @@ def main():
                 quotes = get_watchlist_quotes(tickers_list)
 
             # 2. Construim tabelul final
+            today_ro = now_ro()
+            states = {}   # starea fiecărei burse (BVB, NYSE, XETRA), calculată o dată
             display_rows = []
             for index, row in df_wl.iterrows():
                 sym = row['Symbol']
                 note = row['Notes']
                 quote = quotes.get(sym) or {}
+                hk = scanner_calc.hours_key(sym)
+                if hk not in states:
+                    states[hk] = briefing_calc.market_state(hk, today_ro)
+                partial = briefing_calc.session_is_partial(quote.get("date"), states[hk])
                 
                 # Preț sau țintă lipsă rămân lipsă („N/A”), nu 0; distanța e față de țintă, ca în cardul din analiză.
-                curr, target, dist_pct, is_buy = watchlist_status(quote.get("price"), row['TargetPrice'])
-                if curr is None:
-                    status = "Fără preț"
-                elif target is None:
-                    status = "Fără țintă"
-                else:
-                    status = "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă"
-                
+                curr, target, dist_pct, _ = watchlist_status(quote.get("price"), row['TargetPrice'])
                 display_rows.append({
                     "Simbol": sym,
-                    "Preț Curent": curr,
+                    "Monedă": briefing_calc.quote_currency(sym) or "N/A",
+                    "Ultimul preț": curr,
+                    "Data prețului": watchlist_calc.price_date_text(quote.get("date"), today_ro, partial),
                     "Preț Țintă 🎯": target,
                     "Distanță (%)": dist_pct,
-                    "Recomandare": status,
+                    "Status": watchlist_calc.status_label(curr, target),
                     "Notă": note,
-                    "_is_buy": is_buy 
+                    "_zone": target_zone(curr, target),
                 })
             
             df_res = pd.DataFrame(display_rows)
@@ -7969,24 +7970,28 @@ def main():
             if no_price:
                 st.caption(f"Fără preț Yahoo: {', '.join(no_price)}. La BVB simbolul are sufixul .RO (ex: TLV.RO): "
                            "șterge rândul și adaugă-l din nou din formular, care găsește singur simbolul corect.")
+            if any(str(s).upper().endswith(".L") for s in tickers_list):
+                st.caption("Londra (.L): Yahoo cotează în pence (GBp), deci și ținta trebuie scrisă în pence (1 GBP = 100 GBp).")
 
-            # 3. Stilizare și Afișare
-            def highlight_buy(row):
-                if row['_is_buy']:
-                    return ['background-color: rgba(63, 185, 80, 0.2); font-weight: bold'] * len(row)
-                else:
-                    return [''] * len(row)
+            # 3. Stilizare și Afișare: verde la/sub țintă, galben aproape (aceleași culori ca în cardul din Analiză)
+            zone_style = {"sub": 'background-color: rgba(63, 185, 80, 0.2); font-weight: bold',
+                          "aproape": 'background-color: rgba(210, 153, 34, 0.18)'}
+            def highlight_zone(row):
+                return [zone_style.get(row['_zone'], '')] * len(row)
 
             st.dataframe(
-                df_res.style.apply(highlight_buy, axis=1)
-                .format({"Preț Curent": ro_spec('.2f'), "Preț Țintă 🎯": ro_spec('.2f'), "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
+                df_res.style.apply(highlight_zone, axis=1)
+                .format({"Ultimul preț": ro_spec('.2f'), "Preț Țintă 🎯": ro_spec('.2f'), "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={
-                    "_is_buy": None, 
+                    "_zone": None, 
                 },
                 hide_index=True 
             )
+            st.caption("Status = prețul față de ținta ta (o alertă de preț, nu o recomandare). Distanța = (preț − țintă) ÷ țintă: "
+                       f"plus = peste țintă. „Aproape” = sub {NEAR_TARGET_PCT:.0f}% peste țintă, același prag ca în cardul „Țintă intrare”. "
+                       "Prețul e ultima închidere Yahoo; în timpul ședinței, prețul de azi cu întârziere (⏳).")
             
             # Buton ștergere
             with st.expander("🗑️ Șterge din listă"):

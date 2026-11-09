@@ -967,7 +967,10 @@ def main():
             assert wt is not None, "Watchlist: lipsește tabelul"
             print("Watchlist:", wt.drop(columns=[c for c in wt.columns if c.startswith("_")]).values.tolist())
             assert set(wt["Simbol"]) == {"MSFT", "TLV.RO"}, list(wt["Simbol"])
-            assert wt["Preț Curent"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
+            assert wt["Ultimul preț"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
+            assert wt.set_index("Simbol")["Monedă"].to_dict() == {"MSFT": "USD", "TLV.RO": "RON"}, wt["Monedă"].tolist()
+            assert all(len(d) >= 10 and d[2] == "." for d in wt["Data prețului"]), wt["Data prețului"].tolist()
+            assert set(wt["Status"]) <= {"✅ La/sub țintă", "🟡 Aproape (<5%)", "⏳ Peste țintă", "Fără preț", "Fără țintă"}
             assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
             # adăugarea unui simbol existent (cu litere mici și spații) e refuzată, cu mesaj
             next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value(" msft ")
