@@ -26,10 +26,10 @@ def test_abateri_insumate_dau_scorul():
     assert ex["pulls"][0][0] == "credit"
     assert ex["missing"] == ["sentiment"]
     txt = " ".join(ex["lines"])
-    assert "Scorul 36 din 100" in txt
+    assert "Scorul 36,1 din 100" in txt
     assert "Credit 0 → -16,7" in txt
     assert "Dolar 100 → +8,3" in txt
-    assert "Total -13,9 → 36" in txt
+    assert "Total -13,9 → 36,1" in txt
     assert "Piața de credit (HYG/IEF) (-16,7)" in txt
     assert "Dolar vs acțiuni (corelație SPY/UUP) (+8,3)" in txt
     assert "Fără date acum: Sentiment" in txt
@@ -50,3 +50,27 @@ def test_toti_neutri_fara_extreme():
     ex = m.macro_explanation(pillars, m.macro_verdict(pillars))
     assert not any(l.startswith("Azi ") for l in ex["lines"])
     assert ex["missing"] == []
+
+
+def test_scor_langa_prag_taiat_nu_rotunjit():
+    # credit 100 (30), vix 49,8 (20), dolar/sectoare/curba 50 (15+15+10), sentiment 0 (10)
+    # scor = (3000 + 996 + 750 + 750 + 500 + 0) / 100 = 59,96 → MIXT (FAVORABIL de la 60)
+    pillars = {"credit": _p(100), "vix": _p(49.8), "dolar": _p(50), "sectoare": _p(50),
+               "curba": _p(50), "sentiment": _p(0)}
+    mv = m.macro_verdict(pillars)
+    assert mv["score"] == pytest.approx(59.96)
+    assert mv["label"] == "MIXT"
+    txt = " ".join(m.macro_explanation(pillars, mv)["lines"])
+    assert "Scorul 59,9 din 100" in txt          # rotunjit ar fi fost „60” lângă MIXT
+    assert "Total +9,9 → 59,9" in txt
+    assert "60 din 100" not in txt
+
+
+def test_scor_sub_prag_defavorabil():
+    # credit 0 (30), restul 50, sentiment 50, vix 49,8 → (0 + 996 + 750 + 750 + 500 + 500) / 100 = 34,96
+    pillars = {"credit": _p(0), "vix": _p(49.8), "dolar": _p(50), "sectoare": _p(50),
+               "curba": _p(50), "sentiment": _p(50)}
+    mv = m.macro_verdict(pillars)
+    assert mv["label"] == "DEFAVORABIL"
+    txt = " ".join(m.macro_explanation(pillars, mv)["lines"])
+    assert "Total -15,1 → 34,9" in txt

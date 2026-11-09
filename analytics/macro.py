@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from data.helpers import ro
+from data.helpers import ro, score_ro
 
 
 def yoy_pct(series, max_gap_days=45):
@@ -275,12 +275,12 @@ def macro_explanation(pillars, verdict):
         return {"lines": lines, "pulls": [], "missing": missing}
     pulls = sorted(((k, pillars[k]["score"], (pillars[k]["score"] - 50.0) * MACRO_WEIGHTS[k] / w)
                     for k in MACRO_WEIGHTS if k not in missing), key=lambda t: t[2])
-    lines.append(f"Scorul {ro(score):.0f} din 100 = media ponderată a pilonilor cu date ({w}% din ponderi): "
+    lines.append(f"Scorul {score_ro(score)} din 100 = media ponderată a pilonilor cu date ({w}% din ponderi): "
                  "0 = mediu nefavorabil, 50 = neutru, 100 = favorabil. "
                  f"FAVORABIL de la {MACRO_FAVORABLE:.0f}, DEFAVORABIL sub {MACRO_ADVERSE:.0f}, între ele MIXT.")
     parts = [f"{MACRO_SHORT[k]} {ro(sc):.0f} → {ro(d):+.1f}" for k, sc, d in pulls]
     lines.append(f"Pornind de la neutru (50), fiecare pilon adaugă (scor − 50) × pondere ÷ {w}: "
-                 + "; ".join(parts) + f". Total {ro(score - 50):+.1f} → {ro(score):.0f}.")
+                 + "; ".join(parts) + f". Total {'+' if score >= 50 else ''}{score_ro(score - 50)} → {score_ro(score)}.")
     neg = [t for t in pulls if t[2] < 0]
     pos = [t for t in pulls if t[2] > 0]
     tail = []

@@ -872,6 +872,11 @@ def main():
             expl = md_vals[i_expl + 1]
             print("Explicație scor:", expl)
             assert ("Pornind de la neutru (50)" in expl) or expl.startswith("Fără scor"), expl
+            # #154: scorul macro (bannerul și explicația) cu o zecimală, tăiat, ca la celelalte scoruri cu prag
+            if not expl.startswith("Fără scor"):
+                assert re.search(r"Scorul \d+,\d din 100", expl), expl
+                banner = next(str(e.value) for e in at.markdown if "SCOR MACRO" in str(e.value))
+                assert re.search(r">\s*\d+,\d\s*</div>", banner), banner[-400:]
             assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
             # calendarul macro FRED: pe răspunsul fals, doar cele 2 publicări urmărite (H.15 nu e urmărită), ordonate
             cal = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Publicare", "Peste"} <= set(
