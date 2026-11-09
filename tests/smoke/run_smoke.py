@@ -679,6 +679,11 @@ def main():
     assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
     assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
     print(f"AAPL componente: {by_comp}")
+    # cardurile Interval / Evoluție Azi: cu istoric, valoare și variație (nu N/A, nu „0,00 (0,00%)”)
+    iv = next(m for m in at.metric if m.label.startswith("Interval ("))
+    day_card = next(m for m in at.metric if m.label == "Evoluție Azi")
+    assert iv.value != "N/A" and iv.delta and day_card.delta, (iv.value, iv.delta, day_card.delta)
+    print("Interval / Azi:", iv.value, iv.delta, "|", day_card.value, day_card.delta)
     assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Analiză: lipsește timpul paginii"
     page_text = lambda: " ".join(str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.success) + list(at.error) + list(at.warning))
     curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4,20% − 3 luni 3,99%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
