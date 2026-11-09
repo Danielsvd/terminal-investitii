@@ -2441,32 +2441,46 @@ def load_watchlist():
     return df
 
 def add_to_watchlist(symbol, target, note):
-    """Adaugă o intrare nouă în watchlist."""
+    """Adaugă o intrare nouă în watchlist. Întoarce (reușit, mesaj).
+
+    Simbolul deja prezent nu se adaugă a doua oară: cardul din Analiză ar lua doar prima țintă.
+    Duplicatul se verifică pe foaia recitită acum (nu pe cache), ca o editare manuală recentă să conteze."""
+    symbol = watchlist_calc.normalize_symbol(symbol)
     ws = connect_to_gsheets("watchlist")
-    if ws:
-        try:
-            ws.append_row([symbol, float(target), note])
-            load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
-            return True
-        except Exception as e:
-            st.error(f"Eroare salvare: {e}")
-            return False
-    return False
+    if ws is None:
+        return False, "Foaia watchlist nu poate fi accesată."
+    try:
+        values = ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+        if watchlist_calc.symbol_rows(values, symbol):
+            current = watchlist_calc.parse_watchlist(values)[0]
+            t = current.loc[current["Symbol"] == symbol, "TargetPrice"].iloc[0]
+            t_txt = format_ro(t, 4, trim=True) if pd.notna(t) else "fără țintă"
+            return False, f"{symbol} e deja în watchlist (ținta {t_txt}). Șterge-l întâi dacă vrei altă țintă."
+        ws.append_row([symbol, float(target), note])
+    except (gspread.exceptions.GSpreadException, requests.RequestException) as e:
+        logger.warning(f"watchlist, adăugare {symbol}: {e}")
+        return False, f"Eroare la salvarea în foaia watchlist: {e}"
+    load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
+    return True, f"Adăugat {symbol} la ținta {format_ro(target, 4, trim=True)}."
 
 def remove_from_watchlist(symbol):
-    """Șterge un simbol din watchlist (căutând după nume)."""
+    """Șterge simbolul din watchlist: toate rândurile cu el în coloana Symbol, nu prima celulă egală din foaie
+    (înainte `ws.find` căuta în toată foaia, inclusiv în note). Întoarce (reușit, mesaj)."""
     ws = connect_to_gsheets("watchlist")
-    if ws:
-        try:
-            cell = ws.find(symbol)
-            if cell:
-                ws.delete_rows(cell.row)
-                load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
-                return True
-        except Exception as exc:  # înainte: except: gol
-            logger.warning("remove_from_watchlist: %s", exc)
-            pass
-    return False
+    if ws is None:
+        return False, "Foaia watchlist nu poate fi accesată."
+    try:
+        rows = watchlist_calc.symbol_rows(ws.get_all_values(), symbol)
+        if not rows:
+            return False, f"{symbol} nu mai e în coloana Symbol a foii watchlist (poate a fost șters între timp)."
+        for r in rows:  # de jos în sus: numerele rândurilor rămase nu se schimbă
+            ws.delete_rows(r)
+    except (gspread.exceptions.GSpreadException, requests.RequestException) as e:
+        logger.warning(f"watchlist, ștergere {symbol}: {e}")
+        return False, f"Eroare la ștergerea din foaia watchlist: {e}"
+    finally:
+        load_watchlist_values.clear()  # golește doar cache-ul foii watchlist (și după o ștergere parțială)
+    return True, f"Șters {symbol}" + (f" ({len(rows)} rânduri)." if len(rows) > 1 else ".")
 
         # load_portfolio nu are cache: nu e nimic de golit
 
@@ -7881,6 +7895,8 @@ def main():
     elif sectiune == "8. Watchlist":
         st.title("Lista de Urmărire (Watchlist)")
         st.markdown("Monitorizează acțiunile pe care vrei să le cumperi când prețul scade.")
+        if st.session_state.get("wl_msg"):
+            st.success(st.session_state.pop("wl_msg"))
 
         # --- FORMULAR ADĂUGARE ---
         with st.expander("➕ Adaugă Alertă Nouă", expanded=False):
@@ -7891,10 +7907,12 @@ def main():
                 n_wl = c3.text_input("Notă (ex: Suport major, aștept earnings)")
                 
                 if st.form_submit_button("Adaugă în Listă"):
-                    if s_wl and p_wl > 0:
-                        if add_to_watchlist(s_wl, p_wl, n_wl):
-                            st.success(f"Adăugat {s_wl} la ținta {p_wl}!")
+                    if s_wl.strip() and p_wl > 0:
+                        ok, msg = add_to_watchlist(s_wl, p_wl, n_wl)
+                        if ok:
+                            st.session_state["wl_msg"] = msg  # afișat după rerun (altfel mesajul dispare)
                             st.rerun()
+                        st.warning(msg)
                     else:
                         st.warning("Introdu un simbol și un preț valid.")
 
@@ -7959,9 +7977,11 @@ def main():
             with st.expander("🗑️ Șterge din listă"):
                 del_sym = st.selectbox("Alege simbol de șters:", tickers_list)
                 if st.button("Șterge"):
-                    if remove_from_watchlist(del_sym):
-                        st.warning(f"Șters {del_sym}.")
+                    ok, msg = remove_from_watchlist(del_sym)
+                    if ok:
+                        st.session_state["wl_msg"] = msg  # afișat după rerun
                         st.rerun()
+                    st.error(msg)
 
         elif not df_wl.attrs.get("problems"):
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")

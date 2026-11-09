@@ -70,3 +70,28 @@ def parse_watchlist(values):
                      "Notes": str(cell(row, "Notes") or "").strip()})
     df = pd.DataFrame(rows, columns=list(WATCHLIST_COLUMNS)) if rows else empty
     return df, problems
+
+
+def normalize_symbol(symbol):
+    """Simbolul așa cum se păstrează în foaie: fără spații, cu majuscule; None/gol → ""."""
+    return str(symbol or "").strip().upper()
+
+
+def symbol_rows(values, symbol):
+    """Numerele de rând din foaie (1 = antetul) care au `symbol` în coloana Symbol, de jos în sus.
+
+    Se caută doar în coloana Symbol (găsită după antet), nu în toată foaia: o notă care conține simbolul
+    nu duce la ștergerea altui rând. Comparația ignoră spațiile și literele mici. De jos în sus, ca la
+    ștergerea mai multor rânduri numerele celor rămase să nu se schimbe. Fără coloana Symbol → [].
+    """
+    if not values:
+        return []
+    header = [str(h).strip() for h in values[0]]
+    if "Symbol" not in header:
+        return []
+    i = header.index("Symbol")
+    target = normalize_symbol(symbol)
+    if not target:
+        return []
+    rows = [n for n, row in enumerate(values[1:], start=2) if i < len(row) and normalize_symbol(row[i]) == target]
+    return sorted(rows, reverse=True)

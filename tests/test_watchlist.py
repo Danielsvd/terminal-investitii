@@ -57,3 +57,26 @@ def test_parse_watchlist_foaie_necitita_antet_gresit_goala():
     # fără Notes: se citește, notele rămân goale
     df, problems = wl.parse_watchlist([["Symbol", "TargetPrice"], ["AAPL", 100]])
     assert problems == [] and df["Notes"].tolist() == [""]
+
+
+def test_symbol_rows_doar_coloana_symbol_de_jos_in_sus():
+    values = [
+        ["Symbol", "TargetPrice", "Notes"],
+        ["AAPL", 150, "TSLA"],        # nota conține exact „TSLA”: nu se șterge rândul ăsta
+        ["TSLA", 250, ""],
+        ["MSFT", 300, ""],
+        [" tsla ", 240, "duplicat"],  # spații și litere mici: același simbol
+    ]
+    assert wl.symbol_rows(values, "TSLA") == [5, 3]
+    assert wl.symbol_rows(values, "tsla ") == [5, 3]
+    assert wl.symbol_rows(values, "MSFT") == [4]
+    assert wl.symbol_rows(values, "NVDA") == []
+    assert wl.symbol_rows(values, "") == []
+    assert wl.symbol_rows([["Notes", "Symbol"], ["x", "AAPL"]], "AAPL") == [2]   # coloana după antet
+    assert wl.symbol_rows([["Simbol"], ["AAPL"]], "AAPL") == []                   # fără coloana Symbol
+    assert wl.symbol_rows([], "AAPL") == [] and wl.symbol_rows(None, "AAPL") == []
+
+
+def test_normalize_symbol():
+    assert wl.normalize_symbol(" tlv.ro ") == "TLV.RO"
+    assert wl.normalize_symbol(None) == ""

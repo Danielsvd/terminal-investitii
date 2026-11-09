@@ -598,6 +598,7 @@ EXPECTED_MESSAGES = (
     "Companii Small-Cap", "AMENINȚĂRI",
     "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
+    "e deja în watchlist",                         # smoke-ul încearcă intenționat un duplicat
     "zile comune de tranzacționare; sunt necesare",  # tabul EUR din datele de test: o poziție listată de 60 de zile
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )
@@ -967,6 +968,18 @@ def main():
             assert set(wt["Simbol"]) == {"MSFT", "TLV.RO"}, list(wt["Simbol"])
             assert wt["Preț Curent"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
             assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
+            # adăugarea unui simbol existent (cu litere mici și spații) e refuzată, cu mesaj
+            next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value(" msft ")
+            next(n for n in at.number_input if n.label.startswith("Preț Țintă")).set_value(280.0)
+            next(b for b in at.button if b.label == "Adaugă în Listă").click().run()
+            check(at, "8. Watchlist (adăugare duplicat)")
+            warns = [str(w.value) for w in at.warning]
+            assert any("MSFT e deja în watchlist" in w for w in warns), warns
+            # ștergerea: mesajul de confirmare apare după rerun
+            next(b for b in at.button if b.label == "Șterge").click().run()
+            check(at, "8. Watchlist (ștergere)")
+            oks = [str(s.value) for s in at.success]
+            assert any(s.startswith("Șters ") for s in oks), oks
 
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
