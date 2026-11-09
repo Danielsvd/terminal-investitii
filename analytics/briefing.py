@@ -426,3 +426,42 @@ def merge_price_frames(base, extra):
     if b.empty:
         return a
     return a.combine_first(b).sort_index()
+
+
+def quote_table(closes, names):
+    """Tabelul „Indici” / „Mărfuri” din „4. Piață Globală”, din închiderile zilnice ale unei singure cereri Yahoo.
+
+    `closes`: DataFrame cu o coloană pe simbol; `names`: {nume afișat: simbol}, în ordinea de afișare.
+    Un rând pe instrument: Preț = ultima închidere, Variație = față de închiderea precedentă A ACELEIAȘI serii,
+    Variație % în procente, Data = ziua ultimei închideri. Fiecare serie are ziua ei (indicii SUA, Europa, BVB și
+    contractele futures nu se închid în aceeași zi), de aceea data se arată pe rând. Simbol fără date → rând cu
+    None (N/A în interfață), nu 0 și nu rând ascuns.
+    """
+    c = _clean_frame(closes)
+    rows = []
+    for name, sym in names.items():
+        m = daily_move(c[sym] if sym in c.columns else None)
+        change = (m["last"] - m["prev"]) if m["last"] is not None and m["prev"] is not None else None
+        rows.append({"Instrument": name, "Simbol": sym, "Preț": m["last"], "Variație": change,
+                     "Variație %": m["pct"] * 100.0 if m["pct"] is not None else None, "Data": m["date"]})
+    return pd.DataFrame(rows, columns=["Instrument", "Simbol", "Preț", "Variație", "Variație %", "Data"])
+
+
+def top_frames(table, n=TOP_N):
+    """(creșteri, scăderi) pentru topurile din „4. Piață Globală”, din tabelul de ședință (`session_table`).
+
+    Aceleași reguli ca topurile Rezumatului (`top_moves`, fără prag de valoare): doar simbolurile tranzacționate în
+    ultima ședință a pieței; creșterile > 0, scăderile < 0, cel mult `n`. Coloane: Instrument (simbolul Yahoo),
+    Preț (închiderea neajustată), Monedă (după sufix, `quote_currency`), Variație % (în procente).
+    """
+    cols = ["Instrument", "Preț", "Monedă", "Variație %"]
+
+    def view(t):
+        if t is None or t.empty:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame({"Instrument": list(t.index), "Preț": t["close"].astype(float).values,
+                             "Monedă": [quote_currency(s) for s in t.index],
+                             "Variație %": (t["pct"].astype(float) * 100.0).values}, columns=cols)
+
+    gain, lose = top_moves(table, n=n)
+    return view(gain), view(lose)
