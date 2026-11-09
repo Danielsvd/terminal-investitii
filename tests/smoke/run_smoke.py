@@ -970,6 +970,7 @@ def main():
                 assert len(tp) <= 10
             print("Top Piață Globală:", tops[0].head(3).values.tolist())
             assert sum("Ședința:" in str(c.value) for c in at.caption) == 2, "lipsește ședința topurilor"
+            assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "lipsește timpul paginii"
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")
