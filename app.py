@@ -7760,9 +7760,8 @@ def main():
                             "Volum Mediu (20z)": avg_vol_20,
                             "RVOL": rvol,
                             "Alertă AI": "🚨 ATENTIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
-                            "Status": "🚀 BREAKOUT" if (rvol > 2.0 and change_pct > 1.5) 
-                                     else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
-                                     else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
+                            # Praguri fixe, netestate istoric (analytics/scanner.py: status_label)
+                            "Status": scanner_calc.status_label(rvol, change_pct)
                         })
                     except Exception as exc:  # înainte: except: gol
                         logger.debug("get_rvol_data: %s", exc)
@@ -7840,7 +7839,9 @@ def main():
                             hide_index=True  # <--- ACEASTA ESTE LINIA CARE ELIMINĂ NUMERELE DIN STÂNGA
                         )
                         
-                        st.caption("🟢 **Verde Aprins:** Breakout Confirmat | 🟢 **Verde Pal:** Acumulare Discretă | 🔴 **Roșu:** Panic Sell")
+                        st.caption("🟢 **Verde aprins:** BREAKOUT (RVOL > 2 și variație > +1,5%) | 🟢 **Verde pal:** ACUMULARE "
+                                   "(RVOL > 1,2 și variație pozitivă) | 🔴 **Roșu:** PANIC SELL (RVOL > 2 și variație < −1,5%). "
+                                   "Etichete descriptive cu praguri fixe, **netestate istoric**: nu s-a măsurat ce face prețul după ele.")
                     else:
                         st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
                 else:
