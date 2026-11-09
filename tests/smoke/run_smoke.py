@@ -267,7 +267,7 @@ class FakeTickers:
         self.tickers = {s: FakeTicker(s) for s in symbols}
 
 
-FRED_DAILY = {"DFF": 4.33, "DGS3MO": 4.20, "DGS2": 3.90, "DGS10": 4.40, "BAMLH0A0HYM2": 3.10, "BAMLC0A0CM": 0.85}
+FRED_DAILY = {"DFEDTARL": 4.25, "DFEDTARU": 4.50, "DFF": 4.33, "DGS3MO": 4.20, "DGS2": 3.90, "DGS10": 4.40, "BAMLH0A0HYM2": 3.10, "BAMLC0A0CM": 0.85}
 
 
 def fake_fred(code, source, start, end):
@@ -522,7 +522,7 @@ def install_fakes():
             days = pd.bdate_range(end=TODAY, periods=300)
             return types.SimpleNamespace(status_code=200, raise_for_status=ok, text="KEY,TIME_PERIOD,OBS_VALUE\n" + "".join(
                 f"X,{d:%Y-%m-%d},{2.0 if i > 150 else 2.25}\n" for i, d in enumerate(days)))
-        if "/IRS/M.DE" in url or "/ICP/" in url:  # Bund 10 ani / inflația HICP, lunar
+        if "/IRS/M.DE" in url or "ICP/" in url:   # Bund 10 ani / inflația HICP (cheia nouă HICP și cea veche ICP), lunar
             base = 2.6 if "/IRS/" in url else (5.0 if "M.RO" in url else 2.1)
             return types.SimpleNamespace(status_code=200, raise_for_status=ok, text="KEY,TIME_PERIOD,OBS_VALUE\n" + "".join(
                 f"X,{m_},{base + 0.01 * i:.2f}\n" for i, m_ in enumerate(months)))
@@ -575,6 +575,7 @@ EXPECTED_MESSAGES = (
     "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
     "Fără opțiuni listate în Yahoo", "Yahoo nu a trimis lista de expirări", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
+    "Ședința e în desfășurare",                   # Rezumatul Zilei rulat în timpul ședinței (depinde de ceas)
     "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
     "Marja de siguranță indisponibilă",            # DCF neaplicabil (sector financiar, FCF negativ, fără situații)
@@ -890,10 +891,12 @@ def main():
                     print("Randament 1 lună:", rr1[["Randament local", "Efect curs față de leu", "Randament în lei"]].to_dict("index"))
                     sp = rr1.loc["S&P 500"]
                     assert abs((1 + sp["Randament local"]) * (1 + sp["Efect curs față de leu"]) - 1 - sp["Randament în lei"]) < 1e-12
-            # dobânzi și risc de țară: 17 rânduri; lipsa unei serii = rând N/A marcat, nu valoare presupusă
+            # dobânzi și risc de țară: 19 rânduri; lipsa unei serii = rând N/A marcat, nu valoare presupusă
             rt = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Indicator", "Δ 3 luni (pp)", "Sursă"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
-            assert rt is not None and len(rt) == 17, "lipsește tabelul dobânzilor"
+            assert rt is not None and len(rt) == 19, "lipsește tabelul dobânzilor"
+            fed = rt.set_index("Indicator")["Valoare (%)"]
+            assert abs(fed["Dobânda Fed, interval țintă: limita de sus"] - fed["Dobânda Fed, interval țintă: limita de jos"] - 0.25) < 1e-9, fed.head(3).to_dict()
             print("Dobânzi:", rt[["Indicator", "Valoare (%)", "Perioadă", "Sursă"]].values.tolist())
             for _, r_ in rt.iterrows():
                 assert pd.isna(r_["Valoare (%)"]) == r_["Sursă"].endswith("indisponibil"), r_.to_dict()

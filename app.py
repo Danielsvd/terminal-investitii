@@ -3143,7 +3143,7 @@ def get_rates_dashboard():
             return None
     d = rates_calc.to_daily
     m = rates_calc.to_monthly
-    us = {c: load(_fred_rate_series, c) for c in ("DFF", "DGS3MO", "DGS2", "DGS10")}
+    us = {c: load(_fred_rate_series, c) for c in ("DFEDTARL", "DFEDTARU", "DFF", "DGS3MO", "DGS2", "DGS10")}
     cpi = load(_fred_rate_series, "CPIAUCSL", 900)
     us_cpi = rates_calc.yoy_monthly(cpi) if cpi is not None else None
     dfr = load(_ecb_rate_series, "FM/B.U2.EUR.4F.KR.DFR.LEV", 600)
@@ -3165,6 +3165,10 @@ def get_rates_dashboard():
         return {"Piață": market, "Indicator": label, **st_, "Sursă": src}
 
     rows = [
+        row("SUA", "Dobânda Fed, interval țintă: limita de jos", d(us["DFEDTARL"]) if us["DFEDTARL"] is not None else None,
+            "FRED DFEDTARL, zilnic (decizia FOMC)", [us["DFEDTARL"]]),
+        row("SUA", "Dobânda Fed, interval țintă: limita de sus", d(us["DFEDTARU"]) if us["DFEDTARU"] is not None else None,
+            "FRED DFEDTARU, zilnic (decizia FOMC)", [us["DFEDTARU"]]),
         row("SUA", "Dobânda Fed (efectivă)", d(us["DFF"]), "FRED DFF, zilnic", [us["DFF"]]),
         row("SUA", "Titluri de stat 3 luni", d(us["DGS3MO"]), "FRED DGS3MO, zilnic", [us["DGS3MO"]]),
         row("SUA", "Titluri de stat 2 ani", d(us["DGS2"]), "FRED DGS2, zilnic", [us["DGS2"]]),
