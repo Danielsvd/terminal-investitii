@@ -29,31 +29,36 @@ def get_finbert_pipeline():
     logger.info("[AI SYSTEM] Se încarcă motorul financiar FinBERT...")
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _finbert_mean(titles):
+    """Media FinBERT pe titlurile date (tuple, nevid): +încredere la „positive”, −încredere la „negative”, 0 la „neutral”.
+    Cheia de cache = titlurile: aceleași titluri → același scor, fără a rula modelul din nou la fiecare rerulare a
+    paginii; titluri noi → cheie nouă. O eroare FinBERT iese ca excepție (nu intră în cache)."""
+    analyzer = get_finbert_pipeline()
+    total_score = 0
+    for title in titles:
+        result = analyzer(title)[0]
+        # Adăugăm sau scădem scorul de încredere (între 0 și 1)
+        if result['label'] == 'positive':
+            total_score += result['score']
+        elif result['label'] == 'negative':
+            total_score -= result['score']
+    # Returnăm o medie între -1.0 și 1.0
+    return total_score / len(titles)
+
 def analyze_sentiment_ai(news_list):
     """
     Calculează scorul general (Barometrul) folosind FinBERT: media pe primele 10 titluri,
     +încredere la „positive”, −încredere la „negative”, 0 la „neutral” → între −1 și +1.
     Fără știri, fără titluri analizate sau la eroare FinBERT → None (lipsă, nu sentiment neutru 0).
+    Scorul pe aceleași titluri vine din cache (`_finbert_mean`, 24 h).
     """
     if not news_list: return None
     try:
-        analyzer = get_finbert_pipeline()
-        total_score = 0
-        count = 0
-        
         # Analizăm top 10 știri
-        for n in news_list[:10]:
-            result = analyzer(n['title'])[0]
-            # Adăugăm sau scădem scorul de încredere (între 0 și 1)
-            if result['label'] == 'positive':
-                total_score += result['score']
-            elif result['label'] == 'negative':
-                total_score -= result['score']
-            count += 1
-            
-        if count == 0: return None
-        # Returnăm o medie între -1.0 și 1.0
-        return total_score / count
+        titles = tuple(n['title'] for n in news_list[:10])
+        if not titles: return None
+        return _finbert_mean(titles)
     except Exception as e:
         logger.warning(f"[FinBERT ERROR] la scor general: {e}")
         return None
