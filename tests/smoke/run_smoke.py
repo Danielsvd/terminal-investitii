@@ -657,6 +657,7 @@ def main():
     assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
     assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
     print(f"AAPL componente: {by_comp}")
+    assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Analiză: lipsește timpul paginii"
     page_text = lambda: " ".join(str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.success) + list(at.error) + list(at.warning))
     curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4,20% − 3 luni 3,99%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
                     "SNP.RO": "România, titluri de stat 10 ani 7,12% (BCE) − ROBOR 3M 5,87% (Eurostat), 2026-08"}

@@ -3737,6 +3737,10 @@ def main():
         show_rsi = st.sidebar.checkbox("RSI 14", value=True)
         show_macd = st.sidebar.checkbox("MACD", value=True)
 
+        # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
+        _an_t0 = time.perf_counter()
+        _an_timer = st.empty()
+
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
             info = info or {}
@@ -3997,11 +4001,13 @@ def main():
             
             with st.spinner("Extragem datele contabile..."):
                 try:
-                    t_fin = yf.Ticker(real_sym)
+                    # Aceleași situații Yahoo (financials, quarterly_financials) ca scorurile, din cache-ul de 1 oră
+                    # al get_financial_statements; înainte se descărcau din nou la fiecare clic din pagină.
+                    _fs = get_financial_statements(real_sym)
                     
                     # Preluăm datele (yfinance le aduce cu datele pe coloane, deci facem Transpose .T)
-                    df_ann = t_fin.financials.T
-                    df_qtr = t_fin.quarterly_financials.T
+                    df_ann = _fs["income"].T if _fs.get("income") is not None else pd.DataFrame()
+                    df_qtr = _fs["q_income"].T if _fs.get("q_income") is not None else pd.DataFrame()
                     
                     # Curățăm și ordonăm cronologic (cele mai vechi primele)
                     if not df_ann.empty and not df_qtr.empty:
@@ -5556,6 +5562,7 @@ def main():
                         # Folosim label_txt, variabila definită mai sus
                         st.markdown(f'<span class="{css_cls}">{icon} {label_txt}</span>', unsafe_allow_html=True)
                     st.divider()
+        _an_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _an_t0, 1)} s, la {now_ro():%H:%M:%S}.")
                                 
     # ==================================================
     # 3. PORTOFOLIU (MODIFICAT PENTRU MOBIL)
