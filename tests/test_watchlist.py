@@ -137,3 +137,14 @@ def test_coloana_date_citire_si_scriere_dupa_antet():
         ["2026-11-09", "", "AAPL", 0.495, ""]
     assert wl.sheet_row(["Simbol", "Tinta"], "AAPL", 1, "", "x") is None
     assert wl.sheet_row([], "AAPL", 1, "", "x") is None
+
+
+def test_moneda_din_yahoo_cu_rezerva_sufixul():
+    assert not wl.needs_yahoo_currency("AAPL") and not wl.needs_yahoo_currency("TLV.RO")
+    assert wl.needs_yahoo_currency("EGLN.L") and wl.needs_yahoo_currency("SAP.DE") and wl.needs_yahoo_currency("brk-b.sw")
+    assert wl.currency_label("EUR", "EGLN.L") == "EUR"          # Yahoo are prioritate față de sufix (.L → GBp)
+    assert wl.currency_label("GBp", "SHEL.L") == "GBp"
+    assert wl.currency_label(None, "EGLN.L") == "GBp (dedusă)"  # fără Yahoo: ghicit, marcat
+    assert wl.currency_label(None, "AAPL") == "USD"
+    assert wl.currency_label(None, "TLV.RO") == "RON"
+    assert wl.currency_label(None, "XYZ.QQ") == "N/A"

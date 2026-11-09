@@ -163,3 +163,24 @@ def price_date_text(date, today, partial=False):
     if age > STALE_BDAYS:
         text += f" ⚠️ veche ({age} zile lucrătoare)"
     return text
+
+
+def needs_yahoo_currency(symbol):
+    """True când moneda nu se poate deduce sigur din sufix: orice bursă în afara SUA (fără sufix → USD) și a BVB
+    (.RO → RON). La Londra, Amsterdam, Zürich etc. același emitent are linii în monede diferite (un ETF pe aur
+    poate cota în USD sau EUR la Londra, nu în pence), deci moneda se cere de la Yahoo."""
+    s = normalize_symbol(symbol)
+    return "." in s and not s.endswith(".RO")
+
+
+def currency_label(yahoo_currency, symbol):
+    """Eticheta din coloana Monedă: moneda raportată de Yahoo („GBp” = pence, „GBP”, „USD”…) sau, fără ea,
+    cea dedusă din sufix (`briefing.quote_currency`), marcată „(dedusă)” dacă trebuia cerută de la Yahoo.
+    Sufix necunoscut și fără Yahoo → „N/A”."""
+    from analytics.briefing import quote_currency
+    if yahoo_currency:
+        return str(yahoo_currency).strip()
+    guess = quote_currency(symbol)
+    if guess is None:
+        return "N/A"
+    return f"{guess} (dedusă)" if needs_yahoo_currency(symbol) else guess
