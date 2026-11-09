@@ -148,3 +148,35 @@ def test_moneda_din_yahoo_cu_rezerva_sufixul():
     assert wl.currency_label(None, "AAPL") == "USD"
     assert wl.currency_label(None, "TLV.RO") == "RON"
     assert wl.currency_label(None, "XYZ.QQ") == "N/A"
+
+
+# --- Coloanele Moment și Scor fundamental ---
+def _closes(**series):
+    idx = pd.bdate_range(end="2026-11-06", periods=300)    # ~14 luni: ajunge pentru momentumul 12-1
+    return pd.DataFrame({k: v(np.arange(300)) for k, v in series.items()}, index=idx)
+
+
+def test_moment_cells_pret_constant():
+    # Preț constant: trend 0 din 3 (comparațiile sunt stricte) → 0; momentum 0% → (0 + 0,3) / 0,6 = 0,5.
+    # Scor = (0 + 0,5) / 2 × 100 = 25 → BVB sub 40 = NEFAVORABIL.
+    c = _closes(**{"TLV.RO": lambda i: np.full(len(i), 30.0), "AAPL": lambda i: np.full(len(i), 200.0)})
+    cells = wl.moment_cells(c, ["TLV.RO", "AAPL", "LIPSA"])
+    assert cells["TLV.RO"] == "NEFAVORABIL 25"
+    assert cells["AAPL"] == "25 · fără verdict"
+    assert cells["LIPSA"] == "N/A"
+
+
+def test_moment_cells_crestere_si_istoric_scurt():
+    # +0,2%/zi: preț peste SMA 50 și SMA 200, SMA 50 peste SMA 200 → trend 1; momentum 12-1 ≈ +58% (> +30%) → 1.
+    c = _closes(**{"SNP.RO": lambda i: 0.5 * 1.002 ** i, "NOU": lambda i: np.where(i >= 260, 10.0, np.nan)})
+    cells = wl.moment_cells(c, ["SNP.RO", "NOU"])
+    assert cells["SNP.RO"] == "FAVORABIL 100"
+    assert cells["NOU"] == "N/A"      # 40 de ședințe: nici trend (cere 50), nici momentum
+
+
+def test_fundamental_cells():
+    assert wl.bvb_fundamental_cell(72.4, 2.0) == "FAVORABIL 72"
+    assert wl.bvb_fundamental_cell(55.0, np.nan) == "FĂRĂ TREAPTĂ 55"
+    assert wl.bvb_fundamental_cell(np.nan, 1.0) == "N/A"
+    assert wl.global_fundamental_cell(63.0, "NEUTRU") == "NEUTRU 63 · netestat"
+    assert wl.global_fundamental_cell(None, "DATE INSUFICIENTE") == "N/A"

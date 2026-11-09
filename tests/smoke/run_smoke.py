@@ -314,6 +314,7 @@ SHEETS = {
         {"Symbol": "MSFT", "TargetPrice": 300, "Notes": "test", "Date": "2026-10-01"},
         {"Symbol": "TLV.RO", "TargetPrice": "25,5", "Notes": "", "Date": ""},   # rând de dinainte de coloana Date
         {"Symbol": "EGLN.L", "TargetPrice": 65, "Notes": "", "Date": ""},       # Londra, dar în EUR (nu pence)
+        {"Symbol": "SNP.RO", "TargetPrice": 0.8, "Notes": "", "Date": ""},      # BVB cu fișier „Analiză companii”: scor
     ],
     "BVB": [["Multipli", "Indicator", "TLV", "SNP"], ["", "Multipli de preț", "", ""],
             ["", "P/E TTM ", "8,5", "6,1"], ["", "Rentabilitate capital (ROE)", "22,10%", "#DIV/0!"],
@@ -991,14 +992,30 @@ def main():
                        getattr(getattr(d.value, "data", d.value), "columns", [])), None)
             assert wt is not None, "Watchlist: lipsește tabelul"
             print("Watchlist:", wt.drop(columns=[c for c in wt.columns if c.startswith("_")]).values.tolist())
-            assert set(wt["Simbol"]) == {"MSFT", "TLV.RO", "EGLN.L"}, list(wt["Simbol"])
+            assert set(wt["Simbol"]) == {"MSFT", "TLV.RO", "EGLN.L", "SNP.RO"}, list(wt["Simbol"])
             assert wt["Ultimul preț"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
-            assert wt.set_index("Simbol")["Monedă"].to_dict() == {"MSFT": "USD", "TLV.RO": "RON", "EGLN.L": "EUR"}, wt["Monedă"].tolist()
+            assert wt.set_index("Simbol")["Monedă"].to_dict() == {"MSFT": "USD", "TLV.RO": "RON", "EGLN.L": "EUR", "SNP.RO": "RON"}, wt["Monedă"].tolist()
             assert not any("În pence (GBp)" in str(c.value) for c in at.caption), "nota despre pence la un rând în EUR"
             assert all(len(d) >= 10 and d[2] == "." for d in wt["Data prețului"]), wt["Data prețului"].tolist()
-            assert wt.set_index("Simbol")["Data țintei"].to_dict() == {"MSFT": "01.10.2026", "TLV.RO": "N/A", "EGLN.L": "N/A"}, wt["Data țintei"].tolist()
+            assert wt.set_index("Simbol")["Data țintei"].to_dict() == {"MSFT": "01.10.2026", "TLV.RO": "N/A", "EGLN.L": "N/A", "SNP.RO": "N/A"}, wt["Data țintei"].tolist()
             assert set(wt["Status"]) <= {"✅ La/sub țintă", "🟡 Aproape (<5%)", "⏳ Peste țintă", "Fără preț", "Fără țintă"}
             assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
+            # Moment automat (BVB cu etichetă testată, restul fără verdict); scorul fundamental doar la buton
+            mom = wt.set_index("Simbol")["Moment"].to_dict()
+            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+", mom[s]) for s in ("TLV.RO", "SNP.RO")), mom
+            assert all(re.fullmatch(r"\d+ · fără verdict", mom[s]) for s in ("MSFT", "EGLN.L")), mom
+            assert set(wt["Scor fundamental"]) == {"—"}, wt["Scor fundamental"].tolist()
+            next(b for b in at.button if b.label == "📊 Calculează scorurile fundamentale").click().run()
+            check(at, "8. Watchlist (scoruri fundamentale)")
+            wt = next(getattr(d.value, "data", d.value) for d in at.dataframe if "Simbol" in
+                      getattr(getattr(d.value, "data", d.value), "columns", []))
+            fsc = wt.set_index("Simbol")["Scor fundamental"].to_dict()
+            print("Watchlist, scor fundamental:", fsc)
+            assert fsc["TLV.RO"] == "N/A (bancă)", fsc       # TLV are șablon de bancă în fișierele simulate
+            assert re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL|FĂRĂ TREAPTĂ) \d+", fsc["SNP.RO"]), fsc
+            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+ · netestat|N/A.*", fsc[s]) for s in ("MSFT", "EGLN.L")), fsc
+            assert "—" not in fsc.values(), fsc
+            assert any("calculate între" in str(c.value) for c in at.caption), "lipsește ora calculului scorurilor"
             # adăugarea unui simbol existent (cu litere mici și spații) e refuzată, cu mesaj
             next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value(" msft ")
             next(n for n in at.number_input if n.label.startswith("Preț Țintă")).set_value(280.0)
