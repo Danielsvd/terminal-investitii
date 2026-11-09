@@ -7746,8 +7746,8 @@ def main():
                         rvol = rs["rvol"]
                         change_pct = rs["change_pct"]
                         
-                        # --- MAGIA AI: Interogăm modelul Isolation Forest ---
-                        is_anomaly = detect_volume_anomaly_ai(df_t)
+                        # Isolation Forest pe aceeași ședință ca RVOL, antrenat doar pe zilele dinaintea ei (nevalidat)
+                        is_anomaly = detect_volume_anomaly_ai(df_t[df_t.index <= rs["date"]])
                         
                         results.append({
                             "Simbol": t.replace('.RO', ''),
@@ -7759,7 +7759,7 @@ def main():
                             "Valoare": curr_p * curr_vol,
                             "Volum Mediu (20z)": avg_vol_20,
                             "RVOL": rvol,
-                            "Alertă AI": "🚨 ATENTIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
+                            "Anomalie model (nevalidat)": "da" if is_anomaly else ("N/A" if is_anomaly is None else "-"),
                             # Praguri fixe, netestate istoric (analytics/scanner.py: status_label)
                             "Status": scanner_calc.status_label(rvol, change_pct)
                         })
@@ -7814,12 +7814,6 @@ def main():
                                 styles = ['background-color: rgba(248, 81, 73, 0.2)'] * len(row)
                             else:
                                 styles = [''] * len(row)
-                                
-                            # Evidențiem DOAR coloana de AI dacă e anomalie (O colorăm diferit, gen Wall Street Alert)
-                            if "ATENTIE" in str(row['Alertă AI']):
-                                idx = row.index.get_loc('Alertă AI')
-                                styles[idx] += '; color: #FFAB00; font-weight: bold; background-color: rgba(255, 171, 0, 0.2); border: 1px solid #FFAB00;'
-                                
                             return styles
 
                         # --- AFIȘARE TABEL FĂRĂ INDEX ȘI CU STIL ---
@@ -7842,6 +7836,10 @@ def main():
                         st.caption("🟢 **Verde aprins:** BREAKOUT (RVOL > 2 și variație > +1,5%) | 🟢 **Verde pal:** ACUMULARE "
                                    "(RVOL > 1,2 și variație pozitivă) | 🔴 **Roșu:** PANIC SELL (RVOL > 2 și variație < −1,5%). "
                                    "Etichete descriptive cu praguri fixe, **netestate istoric**: nu s-a măsurat ce face prețul după ele.")
+                        st.caption("„Anomalie model (nevalidat)”: Isolation Forest pe randament, volum și volatilitatea pe 5 zile, "
+                                   "antrenat pe ~3 luni dinaintea ședinței evaluate. Pragul e fixat ca ~5% din zilele de antrenare "
+                                   "să fie anomalii, prin construcție; modelul nu a fost validat pe date nevăzute, deci nu e un "
+                                   "semnal mai puternic decât RVOL. N/A = istoric prea scurt.")
                     else:
                         st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
                 else:

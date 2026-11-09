@@ -318,36 +318,17 @@ def optimize_portfolio_ai(hist_data):
 
 def detect_volume_anomaly_ai(df_t):
     """
-    Machine Learning (Isolation Forest): Învață comportamentul 'normal'
-    al acțiunii (Preț vs Volum vs Volatilitate) și detectează dacă
-    mișcarea de azi este o anomalie generată de fonduri instituționale.
+    Isolation Forest pe (randament, volum, volatilitate pe 5 zile): ultima zi din `df_t` față de zilele dinaintea ei.
+    Model NEVALIDAT; ~5% din zilele de antrenare sunt marcate anomalii prin construcție (contamination = 0,05).
+    Întoarce True / False, sau None când istoricul e prea scurt ori calculul eșuează (fără verdict).
+    Calculul: analytics.scanner.volume_anomaly (pur, testat).
     """
     try:
-        if len(df_t) < 30: return False # Prea puține date pentru antrenament
-            
-        # 1. Extragem datele relevante pentru AI
-        df_ml = pd.DataFrame()
-        df_ml['Return'] = df_t['Close'].pct_change(fill_method=None) * 100
-        df_ml['Volume'] = df_t['Volume']
-        df_ml['Volatility'] = df_ml['Return'].rolling(window=5).std()
-        
-        df_ml = df_ml.dropna()
-        if len(df_ml) < 20: return False
-
-        # 2. Antrenăm modelul pe istoric (Zilele anterioare)
-        X = df_ml[['Return', 'Volume', 'Volatility']].values
-        
-        # Setăm 5% rata de anomalii ('contamination' - cât de strict e filtrul)
-        iso_forest = IsolationForest(contamination=0.05, random_state=42)
-        df_ml['Anomaly'] = iso_forest.fit_predict(X)
-        
-        # 3. IsolationForest returnează -1 pentru o anomalie, 1 pentru normal
-        current_status = df_ml['Anomaly'].iloc[-1]
-        
-        return current_status == -1
-    except Exception as exc:  # înainte: except: gol
+        from analytics.scanner import volume_anomaly
+        return volume_anomaly(df_t)
+    except (ValueError, KeyError, TypeError, ImportError) as exc:
         logger.warning("detect_volume_anomaly_ai: %s", exc)
-        return False
+        return None
 
 def calculate_and_plot_seasonality(hist_data):
     """

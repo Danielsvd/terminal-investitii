@@ -87,3 +87,26 @@ def test_status_label_netestat():
     assert sl(2.0, 2.0) == "✅ ACUMULARE (netestat)"       # pragul 2 e strict
     assert sl(1.2, 0.5) == "Normal" and sl(1.5, -0.5) == "Normal"
     assert sl(None, 1.0) == "N/A" and sl(2.5, float("nan")) == "N/A"
+
+
+def _anomaly_frame(last_vol, last_close, n=60, seed=1):
+    rng = np.random.default_rng(seed)
+    closes = 100 * np.cumprod(1 + rng.normal(0, 0.005, n))
+    vols = rng.normal(1_000_000, 50_000, n)
+    closes = np.append(closes, closes[-1] * last_close)
+    vols = np.append(vols, last_vol)
+    return _frame(list(closes), list(vols))
+
+
+def test_anomalie_ziua_evaluata_nu_intra_in_antrenare():
+    # volum de 10× și +8% într-o zi: anomalie; o zi obișnuită: nu
+    assert scanner_calc.volume_anomaly(_anomaly_frame(10_000_000, 1.08)) is True
+    assert scanner_calc.volume_anomaly(_anomaly_frame(1_000_000, 1.0)) is False
+
+
+def test_anomalie_fara_istoric_e_none():
+    df = _anomaly_frame(1_000_000, 1.0, n=15)
+    assert scanner_calc.volume_anomaly(df) is None          # 10 zile de antrenare < 20
+    assert scanner_calc.volume_anomaly(None) is None
+    feats = scanner_calc.anomaly_features(_anomaly_frame(1_000_000, 1.0, n=30))
+    assert list(feats.columns) == ["Return", "Volume", "Volatility"] and len(feats) == 31 - 5
