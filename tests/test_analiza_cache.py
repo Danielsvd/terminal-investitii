@@ -122,3 +122,19 @@ def test_eticheta_finbert_pe_titlu_din_cache(ai_engine, monkeypatch):
     assert ai_engine.get_gemini_sentiment_label("profit up") == ("Pozitiv", "impact-poz", "📈")
     assert calls["n"] == 2                             # titlul repetat nu mai trece prin model
     ai_engine._finbert_label.clear()
+
+
+def test_eticheta_finbert_eroare_este_na_nu_neutru(ai_engine, monkeypatch):
+    def broken(text):
+        raise RuntimeError("model indisponibil")
+
+    monkeypatch.setattr(ai_engine, "get_finbert_pipeline", lambda: broken)
+    ai_engine._finbert_label.clear()
+    assert ai_engine.get_gemini_sentiment_label("shares down") == ("N/A", "impact-neu", "❔")
+    # eroarea nu rămâne în cache: când modelul merge, titlul primește eticheta reală
+    monkeypatch.setattr(ai_engine, "get_finbert_pipeline", lambda: (lambda t: [{"label": "neutral", "score": 0.7}]))
+    assert ai_engine.get_gemini_sentiment_label("shares down") == ("Neutru", "impact-neu", "➡️")
+    ai_engine._finbert_label.clear()
+    monkeypatch.setattr(ai_engine, "get_finbert_pipeline", lambda: (lambda t: [{"label": "LABEL_7", "score": 0.7}]))
+    assert ai_engine.get_gemini_sentiment_label("altceva") == ("N/A", "impact-neu", "❔")
+    ai_engine._finbert_label.clear()

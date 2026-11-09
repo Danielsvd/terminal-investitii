@@ -1013,6 +1013,8 @@ def _finbert_label(title):
     (nu intră în cache)."""
     return get_finbert_pipeline()(title)[0]['label']
 
+FINBERT_NA_LABEL = ("N/A", "impact-neu", "❔")   # eroare FinBERT sau etichetă necunoscută
+
 def get_gemini_sentiment_label(title):
     """
     Am păstrat numele funcției ca să nu modificăm app.py, 
@@ -1028,8 +1030,11 @@ def get_gemini_sentiment_label(title):
             return "Pozitiv", "impact-poz", "📈"
         elif label == "negative":
             return "Negativ", "impact-neg", "📉"
-        else:
+        elif label == "neutral":
             return "Neutru", "impact-neu", "➡️"
+        logger.warning(f"[FinBERT] etichetă necunoscută: {label!r}")
+        return FINBERT_NA_LABEL
     except Exception as e:
+        # Lipsa etichetei nu e un sentiment neutru: se afișează N/A (standardul „lipsă ≠ valoare plauzibilă”).
         logger.warning(f"[FinBERT ERROR] {e}")
-        return "Neutru", "impact-neu", "➡️"
+        return FINBERT_NA_LABEL
