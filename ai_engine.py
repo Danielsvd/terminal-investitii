@@ -415,7 +415,10 @@ def get_options_analysis_ai(ticker_sym, dividend_rate=None):
     """(date, mesaj). Doar rezultatele reușite stau în cache (15 minute); un răspuns gol
     sau o eroare Yahoo se reîncearcă la următoarea afișare, nu rămâne blocat 15 minute."""
     try:
-        return _options_analysis_cached(ticker_sym, dividend_rate), "Succes"
+        data = _options_analysis_cached(ticker_sym, dividend_rate)
+        if data is None:   # simbol cu sufix de bursă fără opțiuni în Yahoo (rezultat păstrat în cache 15 min)
+            return None, NO_LISTED_OPTIONS_MSG
+        return data, "Succes"
     except _OptionsUnavailable as e:
         return None, str(e)
     except Exception as e:
@@ -427,7 +430,10 @@ def get_options_analysis_ai(ticker_sym, dividend_rate=None):
         return None, f"Eroare Opțiuni: {error_msg}"
 
 
-@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute, doar pentru rezultate reușite
+NO_LISTED_OPTIONS_MSG = "Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE)."
+
+
+@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute: rezultatele reușite și „fără opțiuni” la simbolurile cu sufix
 def _options_analysis_cached(ticker_sym, dividend_rate=None):
     """Lanțul de opțiuni pe expirarea din 20–45 de zile (cea mai apropiată de 30).
 
@@ -441,7 +447,9 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
     expirations = t.options
     if not expirations:
         if "." in ticker_sym:
-            raise _OptionsUnavailable("Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE).")
+            # BVB / Europa: lipsa expirărilor e starea normală, nu un răspuns gol întâmplător. Se păstrează în cache
+            # (None), altfel fiecare clic din pagină trimitea o cerere Yahoo. La SUA, golul se reîncearcă (mai jos).
+            return None
         raise _OptionsUnavailable(
             f"Yahoo nu a trimis lista de expirări pentru {ticker_sym}. La acțiunile SUA asta înseamnă de obicei "
             "un răspuns gol sau limitat de la Yahoo, nu lipsa opțiunilor. Se reîncearcă la următoarea afișare.")
@@ -712,7 +720,22 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
 
     return final_score, action, color, advice, reasons
 
+class _OwnershipUnavailable(Exception):
+    """Acționariatul nu a putut fi citit (eroare Yahoo). Excepțiile nu intră în cache: se reîncearcă la următoarea afișare."""
+
+
 def get_detailed_ownership_and_execs(ticker_sym):
+    """(sumar, detalii, CEO, % instituții) din Yahoo; valorile lipsă sunt None. Rezultatul vine din `_ownership_cached`
+    (cache 6 h: acționariatul se schimbă trimestrial); înainte se citeau 3 resurse Yahoo la fiecare clic din pagină."""
+    try:
+        return _ownership_cached(ticker_sym)
+    except _OwnershipUnavailable as e:
+        logger.warning(f"acționariat {ticker_sym} indisponibil: {e}")
+        return None, None, "N/A", None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _ownership_cached(ticker_sym):
     try:
         t = yf.Ticker(ticker_sym)
         info = t.info or {}
@@ -787,9 +810,8 @@ def get_detailed_ownership_and_execs(ticker_sym):
             df_details = pd.DataFrame()
 
         return df_summary, df_details, ceo_name, inst_pct
-    except Exception as e:
-        logger.warning(f"acționariat {ticker_sym} indisponibil: {e}")
-        return None, None, "N/A", None
+    except Exception as e:  # yfinance: rețea, JSON, 429 — nu se păstrează în cache
+        raise _OwnershipUnavailable(f"{type(e).__name__}: {e}") from e
 
 def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data, df_fred):
     """
@@ -985,16 +1007,20 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
                         "datele FRED pe ultima lună publicată." + (f" Fără date: {', '.join(missing)} (regulile lor nu s-au evaluat)." if missing else "")})
     return bullets
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _finbert_label(title):
+    """Eticheta FinBERT a unui titlu (positive / negative / neutral), în cache 24 h după text. Eroarea iese ca excepție
+    (nu intră în cache)."""
+    return get_finbert_pipeline()(title)[0]['label']
+
 def get_gemini_sentiment_label(title):
     """
     Am păstrat numele funcției ca să nu modificăm app.py, 
-    dar acum folosește FinBERT în loc de Gemini.
+    dar acum folosește FinBERT în loc de Gemini. Același titlu nu mai trece prin model la fiecare clic (`_finbert_label`).
     """
     try:
-        analyzer = get_finbert_pipeline()
         # FinBERT returnează un dicționar: [{'label': 'positive', 'score': 0.92}]
-        result = analyzer(title)[0]
-        label = result['label']
+        label = _finbert_label(title)
         
         logger.debug(f"🔍 [FinBERT] Titlu: {title[:30]}... -> Răspuns: {label.upper()}")
 
