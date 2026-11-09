@@ -7706,8 +7706,7 @@ def main():
                             min_value=1.2, max_value=5.0, value=scanner_calc.RVOL_DEFAULT, step=0.1)
         st.caption(f"Lichiditate: la BVB intră doar titlurile cu valoare tranzacționată ≥ "
                    f"{briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} în ședința evaluată (coloana „Valoare” = preț × volum, în moneda din coloana „Monedă”; ca în "
-                   f"Rezumatul Zilei); la SUA și Europa, media volumului pe 20 de ședințe ≥ "
-                   f"{format_ro(scanner_calc.MIN_AVG_SHARES, 0)} de acțiuni.")
+                   f"Rezumatul Zilei). La SUA și Europa nu există prag de lichiditate: listele au doar companii mari.")
 
         # Listele de scanare: din listele unice (data/universes.py), câte un grup pe secțiune + „toate” pe piață.
         # BVB rămâne separat de Europa; ETF-ul BET (TVBETETF.RO) se scanează împreună cu BVB, ca înainte.
@@ -7740,7 +7739,7 @@ def main():
                                                        include_partial)
                         if rs is None: continue
                         curr_p, curr_vol, avg_vol_20 = rs["close"], rs["volume"], rs["avg_volume"]
-                        # Nelichide: BVB sub 50.000 lei azi (ca în Rezumat), restul sub 5.000 de acțiuni în medie
+                        # Lichiditate: doar la BVB, valoare ≥ 50.000 lei în ședința evaluată (ca în Rezumat); SUA/UE fără prag
                         if not scanner_calc.liquidity_ok(t, curr_p, curr_vol, avg_vol_20): continue
                         
                         rvol = rs["rvol"]

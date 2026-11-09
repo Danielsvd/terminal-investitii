@@ -3,7 +3,7 @@ import numpy as np
 import math
 
 from analytics import scanner as scanner_calc
-from analytics.scanner import MIN_AVG_SHARES, RVOL_DEFAULT, liquidity_ok
+from analytics.scanner import RVOL_DEFAULT, liquidity_ok
 
 
 def test_prag_bvb_in_lei_ca_in_rezumat():
@@ -15,10 +15,12 @@ def test_prag_bvb_in_lei_ca_in_rezumat():
     assert not liquidity_ok("X.RO", None, 50_000, 0) and not liquidity_ok("X.RO", 1.0, math.nan, 0)
 
 
-def test_sua_si_europa_pastreaza_regula_in_actiuni():
-    assert liquidity_ok("AAPL", 200.0, 1, MIN_AVG_SHARES)
-    assert not liquidity_ok("SAP.DE", 200.0, 10**6, MIN_AVG_SHARES - 1)
-    assert not liquidity_ok("AAPL", 200.0, 1, None)
+def test_sua_si_europa_fara_prag_de_lichiditate():
+    # Daniel, 09.11.2026: pragul de 5.000 de acțiuni scos; filtrul rămâne doar la BVB (50.000 lei)
+    assert liquidity_ok("AAPL", 200.0, 1, 10)
+    assert liquidity_ok("SAP.DE", 200.0, 100, 4_999)
+    assert liquidity_ok("ULVR.L", None, None, None)
+    assert not liquidity_ok("TLV.RO", 30.0, 1_000, 10**6)          # 30.000 lei < 50.000, oricât de mare e media
     assert RVOL_DEFAULT == 1.2
 
 
