@@ -309,8 +309,8 @@ SHEETS = {
         {"Symbol": "NODATA.RO", "Date": "2024-02-10", "Quantity": 100, "AvgPrice": 2.0, "Currency": "RON"},
     ],
     "watchlist": [
-        {"Symbol": "MSFT", "TargetPrice": 300, "Notes": "test"},
-        {"Symbol": "TLV.RO", "TargetPrice": "25,5", "Notes": ""},
+        {"Symbol": "MSFT", "TargetPrice": 300, "Notes": "test", "Date": "2026-10-01"},
+        {"Symbol": "TLV.RO", "TargetPrice": "25,5", "Notes": "", "Date": ""},   # rând de dinainte de coloana Date
     ],
     "BVB": [["Multipli", "Indicator", "TLV", "SNP"], ["", "Multipli de preț", "", ""],
             ["", "P/E TTM ", "8,5", "6,1"], ["", "Rentabilitate capital (ROE)", "22,10%", "#DIV/0!"],
@@ -345,6 +345,9 @@ SHEETS = {
 }
 
 
+APPENDED = []   # rândurile adăugate de aplicație (foaie, rând), pentru verificări
+
+
 class FakeWorksheet:
     def __init__(self, name):
         self.name = name
@@ -359,7 +362,7 @@ class FakeWorksheet:
         return [list(r) for r in data]
 
     def append_row(self, row, *a, **k):
-        pass
+        APPENDED.append((self.name, list(row)))
 
     def append_rows(self, rows, *a, **k):
         pass
@@ -970,6 +973,7 @@ def main():
             assert wt["Ultimul preț"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
             assert wt.set_index("Simbol")["Monedă"].to_dict() == {"MSFT": "USD", "TLV.RO": "RON"}, wt["Monedă"].tolist()
             assert all(len(d) >= 10 and d[2] == "." for d in wt["Data prețului"]), wt["Data prețului"].tolist()
+            assert wt.set_index("Simbol")["Data țintei"].to_dict() == {"MSFT": "01.10.2026", "TLV.RO": "N/A"}, wt["Data țintei"].tolist()
             assert set(wt["Status"]) <= {"✅ La/sub țintă", "🟡 Aproape (<5%)", "⏳ Peste țintă", "Fără preț", "Fără țintă"}
             assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
             # adăugarea unui simbol existent (cu litere mici și spații) e refuzată, cu mesaj
@@ -989,6 +993,8 @@ def main():
             check(at, "8. Watchlist (adăugare cu .RO)")
             oks = [str(s.value) for s in at.success]
             assert any("Adăugat BVBONLY.RO la ținta 280 RON (scris BVBONLY; găsit ca BVBONLY.RO)" in s for s in oks), oks
+            name, row = APPENDED[-1]   # în ordinea antetului; data de azi (ora României) în coloana Date
+            assert name == "watchlist" and row[:3] == ["BVBONLY.RO", 280.0, ""] and len(row) == 4 and row[3][:2] == "20", APPENDED[-1:]
             # ștergerea: mesajul de confirmare apare după rerun
             next(b for b in at.button if b.label == "Șterge").click().run()
             check(at, "8. Watchlist (ștergere)")

@@ -7,6 +7,7 @@ import pandas as pd
 from data.helpers import NEAR_TARGET_PCT, positive_or_none, target_zone
 
 WATCHLIST_COLUMNS = ("Symbol", "TargetPrice", "Notes")
+OPTIONAL_COLUMNS = ("Date",)   # data la care ai pus ținta (Daniel, 09.11.2026); rândurile vechi fără ea → N/A
 
 
 def _positive(x):
@@ -47,7 +48,7 @@ def parse_watchlist(values):
     Rândurile fără simbol se ignoră. `values` None → foaie necitită: DataFrame gol și o problemă.
     """
     problems = []
-    empty = pd.DataFrame(columns=list(WATCHLIST_COLUMNS))
+    empty = pd.DataFrame(columns=list(WATCHLIST_COLUMNS) + list(OPTIONAL_COLUMNS))
     if values is None:
         return empty, ["Foaia watchlist nu a putut fi citită."]
     if not values:
@@ -62,15 +63,39 @@ def parse_watchlist(values):
         i = idx.get(col)
         return row[i] if i is not None and i < len(row) else ""
 
+    if "Date" in header:
+        idx["Date"] = header.index("Date")
+
     rows = []
     for row in values[1:]:
         sym = str(cell(row, "Symbol")).strip().upper()
         if not sym:
             continue
         rows.append({"Symbol": sym, "TargetPrice": positive_or_none(cell(row, "TargetPrice")),
-                     "Notes": str(cell(row, "Notes") or "").strip()})
-    df = pd.DataFrame(rows, columns=list(WATCHLIST_COLUMNS)) if rows else empty
+                     "Notes": str(cell(row, "Notes") or "").strip(), "Date": parse_sheet_date(cell(row, "Date"))})
+    cols = list(WATCHLIST_COLUMNS) + list(OPTIONAL_COLUMNS)
+    df = pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
     return df, problems
+
+
+def parse_sheet_date(value):
+    """Data țintei din foaie: „2026-11-09” (scrisă de aplicație) sau „09.11.2026” (scrisă de mână, format românesc)
+    → pd.Timestamp; goală sau de necitit → None (afișată „N/A”, nu data de azi)."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    ts = pd.to_datetime(text, dayfirst=not text[:4].isdigit(), errors="coerce")
+    return None if pd.isna(ts) else pd.Timestamp(ts).normalize()
+
+
+def sheet_row(header, symbol, target, note, date_text):
+    """Rândul de adăugat, în ordinea coloanelor din antet (nu pe poziție fixă): Symbol, TargetPrice, Notes și,
+    dacă antetul are coloana Date, data. Coloanele necunoscute rămân goale. Fără Symbol/TargetPrice în antet → None."""
+    header = [str(h).strip() for h in (header or [])]
+    if "Symbol" not in header or "TargetPrice" not in header:
+        return None
+    by_name = {"Symbol": symbol, "TargetPrice": float(target), "Notes": note or "", "Date": date_text}
+    return [by_name.get(h, "") for h in header]
 
 
 def normalize_symbol(symbol):
