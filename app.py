@@ -2470,7 +2470,7 @@ def add_to_watchlist(symbol, target, note):
         logger.warning(f"watchlist, adăugare {symbol}: {e}")
         return False, f"Eroare la salvarea în foaia watchlist: {e}"
     load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
-    currency = briefing_calc.quote_currency(symbol) or "monedă necunoscută"
+    currency = watchlist_currency(symbol)
     resolved = f" (scris {written}; găsit ca {symbol})" if symbol != written else ""
     return True, f"Adăugat {symbol} la ținta {format_ro(target, 4, trim=True)} {currency}{resolved}."
 
@@ -2695,6 +2695,24 @@ def _download_watchlist_quotes(symbols):
     _yf_limiter.wait_if_needed()
     data = yf.download(symbols, period="1mo", group_by='ticker', progress=False, auto_adjust=False)
     return watchlist_calc.last_quotes(close_frame(data, symbols))
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False, max_entries=500)
+def _yahoo_currency(symbol):
+    """Moneda cotației raportată de Yahoo (`fast_info.currency`, de ex. „GBp”, „USD”) sau None.
+    Cache 7 zile: moneda unei linii de cotare nu se schimbă. Excepțiile urcă (nu se pun în cache)."""
+    _yf_limiter.wait_if_needed()
+    cur = yf.Ticker(symbol).fast_info.currency
+    return str(cur).strip() if cur else None
+
+def watchlist_currency(symbol):
+    """Eticheta de monedă pentru un simbol din watchlist: din Yahoo în afara SUA și BVB, altfel după sufix."""
+    yahoo = None
+    if watchlist_calc.needs_yahoo_currency(symbol):
+        try:
+            yahoo = _yahoo_currency(symbol)
+        except (requests.RequestException, KeyError, ValueError, AttributeError, TypeError) as e:
+            logger.warning(f"monedă Yahoo indisponibilă pentru {symbol}: {e}")
+    return watchlist_calc.currency_label(yahoo, symbol)
 
 def get_watchlist_quotes(symbols):
     """{simbol: {"price", "date"}} pentru watchlist; simbolurile fără date lipsesc (apar „N/A”), eroarea Yahoo → {}."""
@@ -7919,7 +7937,7 @@ def main():
                 n_wl = c3.text_input("Notă (ex: Suport major, aștept earnings)")
                 st.caption("Simbolul se caută ca în Analiză: întâi cel scris, apoi cu .RO. La BVB scrie-l cu .RO când "
                            "există și o acțiune americană cu același simbol (EL = Estée Lauder, EL.RO = Electrica). "
-                           "Ținta e în moneda cotației (la Londra, .L, în pence).")
+                           "Ținta e în moneda cotației, cea din coloana Monedă (la Londra poate fi GBp = pence, GBP, USD sau EUR).")
                 
                 if st.form_submit_button("Adaugă în Listă"):
                     if s_wl.strip() and p_wl > 0:
@@ -7959,7 +7977,7 @@ def main():
                 curr, target, dist_pct, _ = watchlist_status(quote.get("price"), row['TargetPrice'])
                 display_rows.append({
                     "Simbol": sym,
-                    "Monedă": briefing_calc.quote_currency(sym) or "N/A",
+                    "Monedă": watchlist_currency(sym),
                     "Ultimul preț": curr,
                     "Data prețului": watchlist_calc.price_date_text(quote.get("date"), today_ro, partial),
                     "Preț Țintă 🎯": target,
@@ -7975,8 +7993,9 @@ def main():
             if no_price:
                 st.caption(f"Fără preț Yahoo: {', '.join(no_price)}. La BVB simbolul are sufixul .RO (ex: TLV.RO): "
                            "șterge rândul și adaugă-l din nou din formular, care găsește singur simbolul corect.")
-            if any(str(s).upper().endswith(".L") for s in tickers_list):
-                st.caption("Londra (.L): Yahoo cotează în pence (GBp), deci și ținta trebuie scrisă în pence (1 GBP = 100 GBp).")
+            pence = df_res.loc[df_res["Monedă"].str.startswith("GBp"), "Simbol"].tolist()
+            if pence:
+                st.caption(f"În pence (GBp): {', '.join(pence)}. Ținta acestor rânduri se scrie tot în pence (1 GBP = 100 GBp).")
 
             # 3. Stilizare și Afișare: verde la/sub țintă, galben aproape (aceleași culori ca în cardul din Analiză)
             zone_style = {"sub": 'background-color: rgba(63, 185, 80, 0.2); font-weight: bold',
@@ -7995,8 +8014,10 @@ def main():
                 height=500,
                 column_config={
                     "_zone": None,
-                    "Monedă": st.column_config.Column(help="Moneda cotației Yahoo, dedusă din sufixul simbolului (.RO → RON, .DE → EUR, "
-                                                           ".L → GBp = pence, fără sufix → USD). Ținta e în aceeași monedă."),
+                    "Monedă": st.column_config.Column(help="Moneda cotației. SUA (fără sufix) → USD, BVB (.RO) → RON; la celelalte burse "
+                                                           "moneda vine de la Yahoo, pentru că aceeași bursă are linii în monede diferite "
+                                                           "(la Londra: GBp = pence, GBP, USD, EUR). „(dedusă)” = Yahoo n-a răspuns, moneda "
+                                                           "e ghicită după sufix. Ținta e în aceeași monedă ca prețul."),
                     "Ultimul preț": st.column_config.Column(help="Ultima închidere Yahoo (preț real, neajustat cu dividende). În timpul "
                                                                  "ședinței e prețul de azi, cu întârziere de ~15 minute."),
                     "Data prețului": st.column_config.Column(help="Ziua prețului. ⏳ = ședință în curs (prețul se mai schimbă). "
