@@ -11,6 +11,10 @@ from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
 from ui.card_help import FUND_HELP, fund_help
+from ui import theme as ui_theme
+from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
+# Cardurile HTML vechi au culori din paleta GitHub dark: la afișare trec pe tokenurile temei (ui/theme.py).
+ui_theme.install(st, _DeltaGenerator)
 import os
 import time
 from datetime import datetime, timedelta
@@ -195,6 +199,9 @@ def connect_to_gsheets(sheet_name=None):
         st.error(f"Eroare acces worksheet '{sheet_name}': {e}")
         return None
 
+# Tokenurile de culoare ale temei (ui/theme.py, DESIGN.md): --tk-* cu light-dark(), urmează modul ales în meniu.
+st.markdown(f"<style>{ui_theme.root_css()}</style>", unsafe_allow_html=True)
+
 # --- CSS MODERNIZAT (UI PREMIUM) ---
 st.markdown("""
     <style>
@@ -215,14 +222,14 @@ st.markdown("""
 
     /* Stilizare Metrici (KPIs) */
     div[data-testid="stMetric"] {
-        background-color: #21262D;
+        background-color: var(--tk-surface);
         padding: 15px;
         border-radius: 12px;
         border: 1px solid #30363D;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
-    div[data-testid="stMetricLabel"] { font-size: 14px; color: #8B949E; }
-    div[data-testid="stMetricValue"] { font-size: 24px; font-weight: 600; color: #FFFFFF; }
+    div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] * { font-size: 14px; color: var(--tk-muted); }
+    div[data-testid="stMetricValue"] { font-size: 24px; font-weight: 600; color: var(--tk-text); font-variant-numeric: tabular-nums; }
 
     /* Stilizare Știri */
     .news-card { border-left: 5px solid #238636; }
@@ -315,8 +322,11 @@ def parse_date(entry):
 # smart_to_float este acum în data/helpers.py (aceeași logică, cu teste în tests/test_helpers.py)
 def plot_ro(fig, **kwargs):
     """st.plotly_chart cu separatori românești: punct la mii, virgulă la zecimale („1.234,5”).
-    Se aplică axelor, etichetelor și casetelor de hover; nu schimbă datele graficului."""
+    Se aplică axelor, etichetelor și casetelor de hover; nu schimbă datele graficului.
+    Culorile scrise pentru fundal închis (fundal #0E1117, grilă #30363D, galben, cyan) trec pe valori
+    vizibile în ambele teme (ui/theme.theme_figure_dict); restul stilului vine din tema Streamlit."""
     fig.update_layout(separators=",.")
+    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict()))
     return st.plotly_chart(fig, **kwargs)
 
 def format_large_currency(val):
@@ -1907,7 +1917,7 @@ def render_diversification_cards(corr_matrix):
                             <span style="color: #8B949E; font-size: 12px; font-weight: bold; text-transform: uppercase;">{label}</span>
                             <span style="font-size: 20px;">{icon}</span>
                         </div>
-                        <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
+                        <h4 style="margin: 10px 0; color: var(--tk-text);">{t1} <span style="color: {color};">↔</span> {t2}</h4>
                         <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
                             <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{ro(score):.2f}</span>
                         </div>
@@ -3870,7 +3880,7 @@ def main():
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                             <div style="flex: 1; min-width: 100px;">
                                 <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Țintă Intrare</p>
-                                <h2 style="color:white; margin:5px 0; font-size:22px;">{target_text} <span style="font-size:12px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
+                                <h2 style="color:var(--tk-text); margin:5px 0; font-size:22px;">{target_text} <span style="font-size:12px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: center; border-left: 1px solid #30363D; border-right: 1px solid #30363D;">
                                 <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
@@ -4265,7 +4275,7 @@ def main():
                     else:
                         df_peers[p_label] = [format_peer_value(p_label, v) for v in df_peers[p_label]]
                 st.dataframe(df_peers.style.apply(
-                    lambda row: ["font-weight: bold; background-color: #21262D" if row.name < 2 else "" for _ in row], axis=1),
+                    lambda row: ["font-weight: bold; background-color: rgba(59, 130, 246, 0.14)" if row.name < 2 else "" for _ in row], axis=1),
                     width='stretch', hide_index=True)
                 p_counts = ", ".join(f"{label.replace(' (%)', '')} n={medians[label][1]}" for _, label, _ in PEER_METRICS)
                 p_note = (f"Mediana e calculată din {len(peer_rows)} comparabili, fără {real_sym}; observații pe indicator: {p_counts}. "
@@ -4327,7 +4337,7 @@ def main():
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
                 if earn_df is not None and not earn_df.empty:
                     def style_surprise(val):
-                        color = '#3FB950' if val > 0 else '#F85149' if val < 0 else '#8B949E'
+                        color = '#3A8854' if val > 0 else '#E82C2C' if val < 0 else '#707A8F'
                         return f'color: {color}; font-weight: bold'
                     e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
@@ -4393,7 +4403,7 @@ def main():
                     st.markdown(f"""
                     <div style='background:#161B22; padding:20px; border-radius:15px; border-top: 4px solid #58A6FF; text-align:center; height:130px;'>
                         <p style='color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;'>Director Executiv (CEO)</p>
-                        <h3 style='margin:10px 0; color:white; font-size:18px;'>{ceo_name}</h3>
+                        <h3 style='margin:10px 0; color:var(--tk-text); font-size:18px;'>{ceo_name}</h3>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -4583,7 +4593,7 @@ def main():
                         'box-sizing:border-box; min-height:200px; padding:18px 16px; text-align:center; '
                         'display:flex; flex-direction:column;">'
                         f'<div style="color:#8B949E; font-size:13px; line-height:18px; text-transform:uppercase; letter-spacing:0.3px;">{html.escape(title)}</div>'
-                        f'<div style="color:{"white" if color == "#30363D" else color}; font-size:40px; line-height:46px; font-weight:700; flex:1; display:flex; align-items:center; justify-content:center; gap:8px;">{html.escape(value)}{unit_html}</div>'
+                        f'<div style="color:{"#C9D1D9" if color == "#30363D" else color}; font-size:40px; line-height:46px; font-weight:700; flex:1; display:flex; align-items:center; justify-content:center; gap:8px;">{html.escape(value)}{unit_html}</div>'
                         f'<div style="color:{color if color != "#30363D" else "#8B949E"}; font-size:13px; line-height:18px; font-weight:700; min-height:18px;">{html.escape(verdict)}</div>'
                         f'<div style="color:#C9D1D9; font-size:12px; line-height:16px; min-height:16px;">{html.escape(note)}</div>'
                         '</div>'
@@ -4640,8 +4650,8 @@ def main():
 
                 def _sens_color(v):
                     if pd.isna(v) or not price_f:
-                        return "color: #8B949E"
-                    return "color: #3FB950" if v > price_f else "color: #F85149"
+                        return "color: #707A8F"
+                    return "color: #3A8854" if v > price_f else "color: #E82C2C"
 
                 st.dataframe(sens.style.format(ro_spec(",.2f")).map(_sens_color), width='stretch')
                 st.caption(
@@ -5191,7 +5201,7 @@ def main():
                                 <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{gex_txt}</h1>
                             </div>
                             <div style="text-align:right;">
-                                <span style="background:{opt_data['gex_color']}; color:white; padding:8px 16px; border-radius:25px; font-weight:bold; font-size:13px;">
+                                <span style="background:{opt_data['gex_color']}; color:var(--tk-on-fill); padding:8px 16px; border-radius:25px; font-weight:bold; font-size:13px;">
                                     {gex_head}
                                 </span>
                             </div>
@@ -5505,7 +5515,7 @@ def main():
                         <div style="background:#161B22; padding:30px; border-radius:15px; border:3px solid {m_col}; text-align:center; height: 100%; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
                             <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing: 1px;">Scor Algoritmic Integrat</p>
                             <h1 style="color:{m_col}; margin:15px 0; font-size:80px; text-shadow: 0 0 10px {m_col}44;">{int(m_score)}<span style="font-size: 20px; color:#8B949E; text-shadow: none;">/100</span></h1>
-                            <div style="background:{m_col}; color:white; padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
+                            <div style="background:{m_col}; color:var(--tk-on-fill); padding:12px; border-radius:8px; font-weight:bold; font-size:18px; letter-spacing: 1px;">
                                 {m_action}
                             </div>
                             <p style="color:#8B949E; font-size:13px; margin-top:15px; line-height:1.4;">
@@ -5890,7 +5900,7 @@ def main():
 
                     def color_profit(val):
                         if pd.isna(val): return ''
-                        color = '#3FB950' if val >= 0 else '#F85149'
+                        color = '#3A8854' if val >= 0 else '#E82C2C'
                         return f'color: {color}'
 
                     st.dataframe(
@@ -6834,7 +6844,7 @@ def main():
                         <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
                             Trend Rotație (1 lună)
                         </div>
-                        <div style="font-size: 22px; font-weight: bold; color: #FFFFFF; margin-bottom: 18px;">
+                        <div style="font-size: 22px; font-weight: bold; color: var(--tk-text); margin-bottom: 18px;">
                             {rot_status}
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -6842,7 +6852,7 @@ def main():
                                 {ro(rot_change):+.2f}%
                             </div>
                             <div style="color: #8B949E; font-size: 13px;">
-                                Scor real: <span style="color: #FFFFFF; font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{ro(current_ratio):.4f}</span>
+                                Scor real: <span style="color: var(--tk-text); font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{ro(current_ratio):.4f}</span>
                             </div>
                         </div>
                     </div>
@@ -6896,7 +6906,9 @@ def main():
                     marker_color=bar_colors,
                     text=[f"{ro(val):+.2f}%" for val in df_sectors['Variație %']],
                     textposition='auto',
-                    textfont=dict(color='white', weight='bold')
+                    textfont=dict(weight='bold'),
+                    # alb doar în bară; eticheta de lângă barele scurte ia culoarea textului temei (altfel e albă pe alb)
+                    insidetextfont=dict(color='white', weight='bold')
                 ))
                 
                 fig_sec_heat.update_layout(
@@ -7117,8 +7129,8 @@ def main():
                     # Stilizare tabel: Evidențiem creșterile/scăderile
                     def color_macro_trend(val):
                         if isinstance(val, str):
-                            if '+' in val: return 'color: #3FB950; font-weight: bold'
-                            elif '-' in val: return 'color: #F85149; font-weight: bold'
+                            if '+' in val: return 'color: #3A8854; font-weight: bold'
+                            elif '-' in val: return 'color: #E82C2C; font-weight: bold'
                         return ''
                     
                     st.dataframe(
@@ -7161,9 +7173,9 @@ def main():
             # celulele sunt text gata formatat („+1,23%”, „-0,50”, „N/A”): culoarea după semn
             txt = str(val)
             if txt.startswith("+"):
-                return 'color: #3FB950'
+                return 'color: #3A8854'
             if txt.startswith("-"):
-                return 'color: #F85149'
+                return 'color: #E82C2C'
             return ''
 
         signed = lambda v: f"{ro(v):+.2f}"
@@ -7445,7 +7457,7 @@ def main():
                 **({"Valoare": [briefing_calc.money_short(v if (v is not None and pd.notna(v)) else None, "RON")
                                 for v in values_ron]} if show_value else {}),
             })
-            color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
+            color = lambda v: "" if v is None or pd.isna(v) else ("color: #3A8854" if v > 0 else "color: #E82C2C" if v < 0 else "")
             st.dataframe(
                 view.style.format({"Preț": ro_spec(",.2f", unit), "Variație": ro_spec("+.2f", "%"), "σ": ro_spec("+.1f", "σ")})
                 .map(color, subset=["Variație"]),
@@ -7563,7 +7575,7 @@ def main():
                                         for v, t in zip(full["value"], tr)],
                             "Ultima cotație": [d.strftime("%d.%m.%Y") for d in full["date"]],
                         })
-                        f_color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
+                        f_color = lambda v: "" if v is None or pd.isna(v) else ("color: #3A8854" if v > 0 else "color: #E82C2C" if v < 0 else "")
                         st.dataframe(
                             fv.style.format({"Preț": ro_spec(",.2f", " lei"), "Variație": ro_spec("+.2f", "%"),
                                              "σ": ro_spec("+.1f", "σ")}, na_rep="N/A")
@@ -7684,8 +7696,8 @@ def main():
                         }), {"Preț": lambda v: format_ro(v, 2),
                              "Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
                              "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ")})
-                        s_color = lambda v: ("color: #3FB950" if str(v).startswith("+") and str(v) != "+0,00%"
-                                             else "color: #F85149" if str(v).startswith("-") else "")
+                        s_color = lambda v: ("color: #3A8854" if str(v).startswith("+") and str(v) != "+0,00%"
+                                             else "color: #E82C2C" if str(v).startswith("-") else "")
                         st.dataframe(fv.style.map(s_color, subset=["Variație"]), width='stretch', hide_index=True,
                                      height=min(38 + 35 * len(fv), 600),
                                      column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a "
@@ -7773,8 +7785,8 @@ def main():
                     }), {"Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
                          "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ"),
                          "Față de S&P 500": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, " pp")})
-                    s_color = lambda v: ("color: #3FB950" if str(v).startswith("+") and not str(v).startswith("+0,00")
-                                         else "color: #F85149" if str(v).startswith("-") else "")
+                    s_color = lambda v: ("color: #3A8854" if str(v).startswith("+") and not str(v).startswith("+0,00")
+                                         else "color: #E82C2C" if str(v).startswith("-") else "")
                     st.dataframe(sv.style.map(s_color, subset=["Variație", "Față de S&P 500"]), width='stretch', hide_index=True,
                                  column_config={
                                      "Variație": st.column_config.Column(help="Față de închiderea precedentă, preț neajustat: în ziua "
