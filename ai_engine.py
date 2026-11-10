@@ -16,6 +16,7 @@ from analytics import options as opt_calc
 from analytics.options import max_pain
 from analytics.macro import period_return, pillar_credit, credit_sentence
 from data.helpers import num, now_ro, ro
+from ui import theme as ui_theme
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
 @st.cache_resource
@@ -163,6 +164,12 @@ def render_ai_chart(forecast, hist):
     fig.update_xaxes(showticklabels=False, row=1, col=1)
     
     fig.update_layout(separators=",.")   # punct la mii, virgulă la zecimale
+    try:
+        _mode = st.context.theme.type
+    except (AttributeError, RuntimeError):
+        _mode = None
+    # verdele de creștere = verdele temei active (ca în app.plot_ro); grila/fundalul pentru ambele teme
+    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict(), up=ui_theme.df_colors(_mode)[0]))
     st.plotly_chart(fig, width='stretch')
 
 def _altman_distress(z):
