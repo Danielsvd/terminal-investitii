@@ -726,6 +726,10 @@ def _ownership_cached(ticker_sym):
         # Fără nicio sursă: datele lipsesc (None), nu „0% instituții". Altfel scorurile penalizau
         # orice acțiune pentru care Yahoo nu trimite acționariatul (BVB, ETF-uri, erori de rețea).
         if not found_inst:
+            # La o acțiune SUA (fără sufix, nu fond) sau cu `info` gol, lipsa e de obicei limitarea Yahoo:
+            # nu se păstrează 6 h în cache, se reîncearcă la următoarea afișare. BVB/UE și fondurile rămân în cache.
+            if not info or ("." not in ticker_sym and str(info.get("quoteType") or "").upper() not in ("ETF", "MUTUALFUND")):
+                raise _OwnershipUnavailable("Yahoo a răspuns fără acționariat")
             return None, None, ceo_name, None
 
         retail_pct = max(0, 100 - (insider_pct + inst_pct))
