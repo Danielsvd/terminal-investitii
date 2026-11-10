@@ -5,6 +5,8 @@ yfinance==1.7.0
 pandas==2.1.4
 numpy==1.26.4
 pandas_datareader==0.10.0
+# six: cerut de pandas_datareader 0.10.0 (naver.py), dar nedeclarat in metadatele lui; venea prin html5lib (scos in #159)
+six==1.17.0
 plotly==7.1.0
 feedparser==6.0.14
 lxml==6.1.3
