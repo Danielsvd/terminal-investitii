@@ -2370,7 +2370,7 @@ def _holdings_news_html(items):
 
 
 def render_holdings_news(holdings):
-    """„Despre acțiunile tale” (tabul „📰 Știri” din Rezumatul Zilei): știrile din ultimele 48 de ore despre acțiunile
+    """„Despre acțiunile tale” (tabul „Știri” din Rezumatul Zilei): știrile din ultimele 48 de ore despre acțiunile
     din registru (fără ETF-uri și titluri de stat). Întoarce lista de știri (pentru „3 lucruri”)."""
     st.subheader("💼 Despre acțiunile tale (ultimele 48 de ore)")
     syms = [] if holdings is None or holdings.empty else sorted(
@@ -3726,16 +3726,19 @@ def interpret_macro_data_ai(df_macro):
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
-    sectiune = st.sidebar.radio("Mergi la:", [
-        "1. Agregator Știri", 
-        "2. Analiză Companie", 
-        "3. Portofoliu", 
-        "4. Piață Globală", 
-        "5. Import Date", 
-        "6. Rezumatul Zilei",
-        "7. Scanner Volum",
-        "8. Watchlist" 
-    ])
+    # Valorile rămân „1. Agregator Știri” etc. (toate condițiile `sectiune == ...` le folosesc);
+    # doar eticheta afișată are icon Material și nu mai are număr (DESIGN.md §6, decis 10.11).
+    _MENU_LABEL = {
+        "1. Agregator Știri": ":material/newspaper: Știri",
+        "2. Analiză Companie": ":material/query_stats: Analiză companie",
+        "3. Portofoliu": ":material/account_balance_wallet: Portofoliu",
+        "4. Piață Globală": ":material/public: Piață globală",
+        "5. Import Date": ":material/upload_file: Import date",
+        "6. Rezumatul Zilei": ":material/today: Rezumatul zilei",
+        "7. Scanner Volum": ":material/radar: Scanner volum",
+        "8. Watchlist": ":material/visibility: Watchlist",
+    }
+    sectiune = st.sidebar.radio("Mergi la:", list(_MENU_LABEL), format_func=_MENU_LABEL.get)
     st.sidebar.markdown("---")
 
     # Versiunile instalate pe server: necesare ca requirements.txt să fixeze exact ce funcționează
@@ -4074,7 +4077,7 @@ def main():
                         df_qtr = df_qtr.sort_index(ascending=True)
                         
                         # Creăm Tab-uri exact ca în XTB
-                        tab_anual, tab_trimestrial = st.tabs(["🗓️ Anual", "📅 Trimestrial"])
+                        tab_anual, tab_trimestrial = st.tabs([":material/calendar_month: Anual", ":material/date_range: Trimestrial"])
                         
                         def draw_financial_chart(df, title, is_quarterly=False):
                             from plotly.subplots import make_subplots # Asigură-te că e importat
@@ -7292,7 +7295,7 @@ def main():
                 _fn.clear()
             st.rerun()
 
-        tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", "🌍 Internațional (Global)"])
+        tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", ":material/public: Internațional (Global)"])
 
         # --- TAB BVB: indicatorii pe rânduri în foaie → companiile pe rânduri aici ---
         with tab_bvb:
@@ -7491,7 +7494,7 @@ def main():
         rz_pday = render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates) or {}
         rz_soon = render_calendar_line()
 
-        tab_bvb, tab_eu, tab_us, tab_news = st.tabs(["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street", "📰 Știri"])
+        tab_bvb, tab_eu, tab_us, tab_news = st.tabs(["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 SUA", ":material/newspaper: Știri"])
 
         # === BVB ===
         with tab_bvb:
@@ -7883,7 +7886,7 @@ def main():
             st.caption("Text din reguli fixe, descriptiv (analytics/day_notes.py): 1) portofoliul în ultima ședință; 2) indicele "
                        "cu cea mai mare mișcare în σ dintre BET (prin ETF-ul TVBETETF), STOXX 600 și S&P 500; 3) primul disponibil dintre calendarul "
                        "macro SUA de azi/mâine, pozițiile tale peste 2σ, sectorul S&P 500 cu abaterea cea mai mare (≥ 1 pp) și "
-                       "cea mai nouă știre despre pozițiile tale (lista în tabul „📰 Știri”). Detaliile sunt mai jos.")
+                       "cea mai nouă știre despre pozițiile tale (lista în tabul „Știri”). Detaliile sunt mai jos.")
             st.markdown("---")
         _rz_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _rz_t0, 1)} s, la {now_ro():%H:%M:%S}.")
 
