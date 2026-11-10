@@ -6690,178 +6690,180 @@ def main():
                 )
                 
                 plot_ro(fig_macro, width='stretch')
-                # --- NOU: MODUL INTERPRETARE DINAMICĂ MACRO ---
-                st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
-                
-                # Trimitem tot bulk-ul de date macro descărcat anterior
-                try:
-                    _vix_for_guide = get_vix_curve_closes().get("^VIX")
-                except Exception as exc:  # rețea / Yahoo
-                    logger.warning("ghid macro VIX: %s", exc)
-                    _vix_for_guide = None
-                macro_verdicts = get_macro_interpretation(macro_data, _vix_for_guide)
-                
-                for v in macro_verdicts:
-                    st.info(v)
-                
-                # --- TABEL IMPACT SECTORIAL DINAMIC (AMBELE SCENARII) ---
-                st.markdown("---")
-                st.subheader("📊 Matricea de Sensibilitate Economică (Scenarii)")
-                
-                with st.expander("📖 Cum reacționează sectoarele la dobânzi (ghid static, nu date de azi)", expanded=False):
-                    impact_data = {
-                        "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
-                        "Dacă Dobânzile CRESC (↑)": [
-                            "🔴 NEGATIV (Evaluări scăzute)", 
-                            "🟢 POZITIV (Marje mai mari)", 
-                            "🔴 NEGATIV (Costuri datorie)", 
-                            "🟡 NEUTRU/POZITIV (Hedge)", 
-                            "🟡 NEUTRU (Cerere stabilă)"
-                        ],
-                        "Dacă Dobânzile SCAD (↓)": [
-                            "🟢 POZITIV (Expansiune multipli)", 
-                            "🔴 NEGATIV (Venituri scăzute)", 
-                            "🟢 POZITIV (Refinanțare ieftină)", 
-                            "🔴 NEGATIV (Semnal încetinire)", 
-                            "🟢 POZITIV (Randament dividend)"
-                        ]
-                    }
-                
-                    # Afișare tabel profesional
-                    st.table(pd.DataFrame(impact_data))
-
-                    # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
-                    col_c1, col_c2 = st.columns(2)
-                    with col_c1:
-                        st.success("**🏢 Companii Large-Cap (Gigant)**")
-                        st.markdown("""
-                        * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
-                        * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
-                        """)
-                    with col_c2:
-                        st.warning("**🚜 Companii Small-Cap (Mici)**")
-                        st.markdown("""
-                        * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
-                        * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
-                        """)
-                with st.expander("📖 Vezi Minighid de Macroeconomie"):
-                    st.markdown("""
-                    **1. Aurul: Refugiu Financiar**
-                    * Tinde să aibă o corelație negativă cu dolarul.
-                    * Indicator de stres: Creșterea rapidă indică temeri financiare.
-                    
-                    **2. Monedele de Refugiu**
-                    * USD, CHF, JPY: Investitorii migrează aici în crize.
-                    
-                    **3. Petrolul & Mărfurile**
-                    * Corelat invers cu USD: Dolarul puternic = Petrol mai ieftin.
-                    * Gazele naturale: Influențate masiv de contextul geopolitic și sezonier.
-                    """)
-
-                # =================================================================
-                # MODUL ACTUALIZAT: INDICATOR DE ROTAȚIE (CHART TOP - TEXT BOTTOM)
-                # =================================================================
-                st.markdown("---")
-                st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
-                
-                rot_change = None
-                try:
-                    # Raportul pe zilele comune; variația pe o lună calendaristică (nu 22 de rânduri)
-                    ratio = get_rotation_ratio()
-                    ratio_sma = ratio.rolling(window=50).mean()
-                    
-                    current_ratio = ratio.iloc[-1]
-                    rot_ret = macro_calc.period_return(ratio, months=1)
-                    if rot_ret is None:
-                        raise ValueError("raportul Nasdaq/Dow nu acoperă o lună")
-                    rot_change = rot_ret * 100
-
-                    # --- PASUL A: GRAFICUL PE TOATĂ LĂȚIMEA (SUS) ---
-                    fig_rot = go.Figure()
-                    
-                    # Linia Principală
-                    fig_rot.add_trace(go.Scatter(
-                        x=ratio.index, y=ratio.values, 
-                        mode='lines', name='Ratio Actual',
-                        line=dict(color='#BF91FF', width=2.5),
-                        fill='tozeroy', fillcolor='rgba(191, 145, 255, 0.05)'
-                    ))
-                    
-                    # Linia de Trend (Media SMA 50)
-                    fig_rot.add_trace(go.Scatter(
-                        x=ratio.index, y=ratio_sma, 
-                        mode='lines', name='Trend (SMA 50)',
-                        line=dict(color='rgba(255, 255, 255, 0.4)', dash='dot', width=1.5)
-                    ))
-
-                    # Zoom Dinamic pe Axa Y
-                    y_min = ratio.min() * 0.98 
-                    y_max = ratio.max() * 1.02
-
-                    fig_rot.update_layout(
-                        height=400, # Am mărit puțin înălțimea pentru a profita de lățime
-                        margin=dict(l=0, r=0, t=10, b=0), 
-                        template="plotly_dark",
-                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                        yaxis=dict(
-                            showgrid=True, gridcolor='#30363D',
-                            range=[y_min, y_max],
-                            tickformat=".3f"
-                        ),
-                        xaxis=dict(showgrid=False),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
-                    # Afișăm graficul întâi
-                    plot_ro(fig_rot, width='stretch')
-
-                    # --- PASUL B: METRICILE ȘI EXPLICAȚIA (JOS) ---
-                    st.write("") # Mic spațiu între grafic și text
-                    c_inf1, c_inf2 = st.columns([1, 2]) # Organizăm detaliile pe două coloane sub grafic
-                    
-                    with c_inf1:
-                        # Păstrăm logica de determinare a statusului
-                        rot_status = "🚀 CREȘTERE (Nasdaq)" if rot_change > 0 else "🏭 VALUE (Dow Jones)"
-                        delta_color = "#3FB950" if rot_change > 0 else "#F85149"
-                        
-                        # Randăm cardul consolidat cu HTML/CSS
-                        st.markdown(f"""
-                            <div style="background-color: #161B22; padding: 22px; border-radius: 12px; border: 1px solid #30363D; height: 100%;">
-                                <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
-                                    Trend Rotație (1 lună)
-                                </div>
-                                <div style="font-size: 22px; font-weight: bold; color: #FFFFFF; margin-bottom: 18px;">
-                                    {rot_status}
-                                </div>
-                                <div style="display: flex; align-items: center; justify-content: space-between;">
-                                    <div style="background: {delta_color}22; color: {delta_color}; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; border: 1px solid {delta_color}44;">
-                                        {ro(rot_change):+.2f}%
-                                    </div>
-                                    <div style="color: #8B949E; font-size: 13px;">
-                                        Scor real: <span style="color: #FFFFFF; font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{ro(current_ratio):.4f}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        
-                    with c_inf2:
-                        if rot_change > 1.5:
-                            st.success("🔥 **DOMINANȚĂ TECH:** Banii intră agresiv în sectoarele de creștere. Piața caută profituri mari și are apetit pentru risc.")
-                        elif rot_change < -1.5:
-                            st.warning("🛡️ **MOD DEFENSIV:** Investitorii fug în Industriale și Value. Se caută siguranța dividendelor și a companiilor stabile.")
-                        else:
-                            st.info("⚖️ **ECHILIBRU:** Rotația este neutră între 'Creștere' și 'Valoare'. Piața își caută o direcție clară.")
-                        st.caption("Variația raportului Nasdaq Composite / Dow Jones într-o lună calendaristică. Prag ±1,5%, orientativ, netestat. "
-                                   "Dow Jones e ponderat cu prețul, deci e doar un proxy pentru „value”.")
-                            
-                except Exception as e:  # rețea / Yahoo / istoric scurt
-                    logger.warning("rotație Nasdaq/Dow: %s", e)
-                    st.info("Indicatorul de rotație nu are date acum (Yahoo): N/A.")
-                    
-                # „Barometru Sentiment Global al Media” a fost scos (05.11, decizia lui Daniel): același scor FinBERT e
-                # pilonul „Sentimentul știrilor” din verdictul de sus.
 
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
+
+        # Ghidul, matricea, minighidul și rotația: pe toată lățimea, independent de indicatorul ales (10.11).
+        # --- NOU: MODUL INTERPRETARE DINAMICĂ MACRO ---
+        st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
+                
+        # Trimitem tot bulk-ul de date macro descărcat anterior
+        try:
+            _vix_for_guide = get_vix_curve_closes().get("^VIX")
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("ghid macro VIX: %s", exc)
+            _vix_for_guide = None
+        macro_verdicts = get_macro_interpretation(macro_data, _vix_for_guide)
+                
+        for v in macro_verdicts:
+            st.info(v)
+                
+        # --- TABEL IMPACT SECTORIAL DINAMIC (AMBELE SCENARII) ---
+        st.markdown("---")
+        st.subheader("📊 Matricea de Sensibilitate Economică (Scenarii)")
+                
+        with st.expander("📖 Cum reacționează sectoarele la dobânzi (ghid static, nu date de azi)", expanded=False):
+            impact_data = {
+                "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
+                "Dacă Dobânzile CRESC (↑)": [
+                    "🔴 NEGATIV (Evaluări scăzute)", 
+                    "🟢 POZITIV (Marje mai mari)", 
+                    "🔴 NEGATIV (Costuri datorie)", 
+                    "🟡 NEUTRU/POZITIV (Hedge)", 
+                    "🟡 NEUTRU (Cerere stabilă)"
+                ],
+                "Dacă Dobânzile SCAD (↓)": [
+                    "🟢 POZITIV (Expansiune multipli)", 
+                    "🔴 NEGATIV (Venituri scăzute)", 
+                    "🟢 POZITIV (Refinanțare ieftină)", 
+                    "🔴 NEGATIV (Semnal încetinire)", 
+                    "🟢 POZITIV (Randament dividend)"
+                ]
+            }
+                
+            # Afișare tabel profesional
+            st.table(pd.DataFrame(impact_data))
+
+            # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                st.success("**🏢 Companii Large-Cap (Gigant)**")
+                st.markdown("""
+                * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
+                * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
+                """)
+            with col_c2:
+                st.warning("**🚜 Companii Small-Cap (Mici)**")
+                st.markdown("""
+                * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
+                * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
+                """)
+        with st.expander("📖 Vezi Minighid de Macroeconomie"):
+            st.markdown("""
+            **1. Aurul: Refugiu Financiar**
+            * Tinde să aibă o corelație negativă cu dolarul.
+            * Indicator de stres: Creșterea rapidă indică temeri financiare.
+                    
+            **2. Monedele de Refugiu**
+            * USD, CHF, JPY: Investitorii migrează aici în crize.
+                    
+            **3. Petrolul & Mărfurile**
+            * Corelat invers cu USD: Dolarul puternic = Petrol mai ieftin.
+            * Gazele naturale: Influențate masiv de contextul geopolitic și sezonier.
+            """)
+
+        # =================================================================
+        # MODUL ACTUALIZAT: INDICATOR DE ROTAȚIE (CHART TOP - TEXT BOTTOM)
+        # =================================================================
+        st.markdown("---")
+        st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
+                
+        rot_change = None
+        try:
+            # Raportul pe zilele comune; variația pe o lună calendaristică (nu 22 de rânduri)
+            ratio = get_rotation_ratio()
+            ratio_sma = ratio.rolling(window=50).mean()
+                    
+            current_ratio = ratio.iloc[-1]
+            rot_ret = macro_calc.period_return(ratio, months=1)
+            if rot_ret is None:
+                raise ValueError("raportul Nasdaq/Dow nu acoperă o lună")
+            rot_change = rot_ret * 100
+
+            # --- PASUL A: GRAFICUL PE TOATĂ LĂȚIMEA (SUS) ---
+            fig_rot = go.Figure()
+                    
+            # Linia Principală
+            fig_rot.add_trace(go.Scatter(
+                x=ratio.index, y=ratio.values, 
+                mode='lines', name='Ratio Actual',
+                line=dict(color='#BF91FF', width=2.5),
+                fill='tozeroy', fillcolor='rgba(191, 145, 255, 0.05)'
+            ))
+                    
+            # Linia de Trend (Media SMA 50)
+            fig_rot.add_trace(go.Scatter(
+                x=ratio.index, y=ratio_sma, 
+                mode='lines', name='Trend (SMA 50)',
+                line=dict(color='rgba(255, 255, 255, 0.4)', dash='dot', width=1.5)
+            ))
+
+            # Zoom Dinamic pe Axa Y
+            y_min = ratio.min() * 0.98 
+            y_max = ratio.max() * 1.02
+
+            fig_rot.update_layout(
+                height=400, # Am mărit puțin înălțimea pentru a profita de lățime
+                margin=dict(l=0, r=0, t=10, b=0), 
+                template="plotly_dark",
+                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                yaxis=dict(
+                    showgrid=True, gridcolor='#30363D',
+                    range=[y_min, y_max],
+                    tickformat=".3f"
+                ),
+                xaxis=dict(showgrid=False),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            # Afișăm graficul întâi
+            plot_ro(fig_rot, width='stretch')
+
+            # --- PASUL B: METRICILE ȘI EXPLICAȚIA (JOS) ---
+            st.write("") # Mic spațiu între grafic și text
+            c_inf1, c_inf2 = st.columns([1, 2]) # Organizăm detaliile pe două coloane sub grafic
+                    
+            with c_inf1:
+                # Păstrăm logica de determinare a statusului
+                rot_status = "🚀 CREȘTERE (Nasdaq)" if rot_change > 0 else "🏭 VALUE (Dow Jones)"
+                delta_color = "#3FB950" if rot_change > 0 else "#F85149"
+                        
+                # Randăm cardul consolidat cu HTML/CSS
+                st.markdown(f"""
+                    <div style="background-color: #161B22; padding: 22px; border-radius: 12px; border: 1px solid #30363D; height: 100%;">
+                        <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
+                            Trend Rotație (1 lună)
+                        </div>
+                        <div style="font-size: 22px; font-weight: bold; color: #FFFFFF; margin-bottom: 18px;">
+                            {rot_status}
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <div style="background: {delta_color}22; color: {delta_color}; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; border: 1px solid {delta_color}44;">
+                                {ro(rot_change):+.2f}%
+                            </div>
+                            <div style="color: #8B949E; font-size: 13px;">
+                                Scor real: <span style="color: #FFFFFF; font-weight: bold; font-family: 'Courier New', monospace; font-size: 16px;">{ro(current_ratio):.4f}</span>
+                            </div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+                        
+            with c_inf2:
+                if rot_change > 1.5:
+                    st.success("🔥 **DOMINANȚĂ TECH:** Banii intră agresiv în sectoarele de creștere. Piața caută profituri mari și are apetit pentru risc.")
+                elif rot_change < -1.5:
+                    st.warning("🛡️ **MOD DEFENSIV:** Investitorii fug în Industriale și Value. Se caută siguranța dividendelor și a companiilor stabile.")
+                else:
+                    st.info("⚖️ **ECHILIBRU:** Rotația este neutră între 'Creștere' și 'Valoare'. Piața își caută o direcție clară.")
+                st.caption("Variația raportului Nasdaq Composite / Dow Jones într-o lună calendaristică. Prag ±1,5%, orientativ, netestat. "
+                           "Dow Jones e ponderat cu prețul, deci e doar un proxy pentru „value”.")
+                            
+        except Exception as e:  # rețea / Yahoo / istoric scurt
+            logger.warning("rotație Nasdaq/Dow: %s", e)
+            st.info("Indicatorul de rotație nu are date acum (Yahoo): N/A.")
+                    
+        # „Barometru Sentiment Global al Media” a fost scos (05.11, decizia lui Daniel): același scor FinBERT e
+        # pilonul „Sentimentul știrilor” din verdictul de sus.
         
         # =================================================================
         # MODUL NOU: HARTA TERMICĂ A SECTOARELOR (MONEY FLOW)
