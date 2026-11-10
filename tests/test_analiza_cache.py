@@ -138,3 +138,61 @@ def test_eticheta_finbert_eroare_este_na_nu_neutru(ai_engine, monkeypatch):
     monkeypatch.setattr(ai_engine, "get_finbert_pipeline", lambda: (lambda t: [{"label": "LABEL_7", "score": 0.7}]))
     assert ai_engine.get_gemini_sentiment_label("altceva") == ("N/A", "impact-neu", "❔")
     ai_engine._finbert_label.clear()
+
+
+def _empty_ownership_factory(state, info):
+    """Yahoo răspunde fără acționariat (major_holders/institutional_holders goale, `info` fără procente)."""
+    class T:
+        def __init__(self, sym, *a, **k):
+            self.sym = sym
+
+        @property
+        def info(self):
+            state["info"] += 1
+            return dict(info)
+
+        @property
+        def major_holders(self):
+            state["major"] += 1
+            return None
+
+        @property
+        def institutional_holders(self):
+            state["inst"] += 1
+            return None
+    return T
+
+
+def test_actionariatul_gol_la_actiune_sua_nu_ramane_in_cache(ai_engine, monkeypatch):
+    st_ = _state()
+    monkeypatch.setattr(ai_engine.yf, "Ticker", _empty_ownership_factory(st_, {"quoteType": "EQUITY"}))
+    ai_engine._ownership_cached.clear()
+    assert ai_engine.get_detailed_ownership_and_execs("XYZ") == (None, None, "N/A", None)
+    assert ai_engine.get_detailed_ownership_and_execs("XYZ") == (None, None, "N/A", None)
+    assert st_["info"] == 2                            # gol = limitare probabilă: se recere
+    monkeypatch.setattr(ai_engine.yf, "Ticker", _ticker_factory(st_))
+    assert ai_engine.get_detailed_ownership_and_execs("XYZ")[3] == pytest.approx(60.0)   # Yahoo și-a revenit
+    ai_engine._ownership_cached.clear()
+
+
+def test_actionariatul_info_gol_nu_ramane_in_cache(ai_engine, monkeypatch):
+    st_ = _state()
+    monkeypatch.setattr(ai_engine.yf, "Ticker", _empty_ownership_factory(st_, {}))
+    ai_engine._ownership_cached.clear()
+    for _ in range(2):
+        assert ai_engine.get_detailed_ownership_and_execs("TLV.RO") == (None, None, "N/A", None)
+    assert st_["info"] == 2
+    ai_engine._ownership_cached.clear()
+
+
+@pytest.mark.parametrize("sym,info", [("TLV.RO", {"quoteType": "EQUITY", "longName": "Banca"}),
+                                      ("SAP.DE", {"quoteType": "EQUITY", "longName": "SAP"}),
+                                      ("SPY", {"quoteType": "ETF", "longName": "SPDR"})])
+def test_actionariatul_gol_bvb_ue_fond_ramane_in_cache(ai_engine, monkeypatch, sym, info):
+    st_ = _state()
+    monkeypatch.setattr(ai_engine.yf, "Ticker", _empty_ownership_factory(st_, info))
+    ai_engine._ownership_cached.clear()
+    for _ in range(3):
+        assert ai_engine.get_detailed_ownership_and_execs(sym) == (None, None, "N/A", None)
+    assert st_["info"] == 1                            # lipsă reală (BVB/UE/fond): o singură cerere, apoi din cache
+    ai_engine._ownership_cached.clear()
