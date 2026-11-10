@@ -10,14 +10,6 @@ WATCHLIST_COLUMNS = ("Symbol", "TargetPrice", "Notes")
 OPTIONAL_COLUMNS = ("Date",)   # data la care ai pus ținta (Daniel, 09.11.2026); rândurile vechi fără ea → N/A
 
 
-def _positive(x):
-    try:
-        x = float(x)
-    except (TypeError, ValueError):
-        return None
-    return x if math.isfinite(x) and x > 0 else None
-
-
 def last_quotes(close):
     """{simbol: {"price": float, "date": pd.Timestamp}} din închiderile `close_frame` (o coloană per simbol).
 

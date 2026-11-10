@@ -26,7 +26,6 @@ import pandas_datareader.data as web
 import gspread
 from google.oauth2.service_account import Credentials
 import concurrent.futures
-from scipy.stats import norm
 from collections import deque
 from threading import Lock
 
@@ -452,23 +451,6 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, s
         details.append("🚩 **Datorii:** Grad de îndatorare ridicat.")
     
     return max(0, min(100, score)), details
-
-def get_score_highlights(data):
-    highlights = []
-    
-    # Verificare Profitabilitate
-    if data['roe'] > 0.15:
-        highlights.append("✅ Profitabilitate: ROE excelent susține creșterea organică.")
-    
-    # Verificare Marjă de Siguranță
-    if data['margin_of_safety'] < 0.10:
-        highlights.append("⚠️ Evaluare: Marjă de siguranță redusă sub nivelul ideal de 20%.")
-        
-    # Verificare Balene (Instituționali)
-    if data['inst_ownership'] > 0.50:
-        highlights.append("✅ Smart Money: Suport instituțional solid detectat.")
-        
-    return highlights
 
 def get_watchlist_target(symbol):
     """Extrage prețul țintă din foaia 'watchlist' pentru simbolul analizat."""
@@ -1031,34 +1013,6 @@ def get_bvb_yahoo_peer_rows(yahoo_symbols):
     """Comparabilii BVB care nu au indicatori în foaia BVB (tuplu de simboluri Yahoo, ex. „BRD.RO"),
     citiți din Yahoo. Datele Yahoo pentru BVB sunt mai rare decât cele din foaie; sursa se afișează."""
     return _read_peer_rows(list(yahoo_symbols))
-
-def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
-    """
-    Rulează o simulare stocastică pentru a prezice evoluția portofoliului.
-    """
-    if portfolio_curve is None or len(portfolio_curve) < 10:
-        return None, 0
-    
-    # Calculăm randamentele logaritmice pentru stabilitate matematică
-    returns = np.log(portfolio_curve / portfolio_curve.shift(1)).dropna()
-    mu = returns.mean()
-    var = returns.var()
-    # Drift-ul reprezintă direcția medie ajustată cu volatilitatea
-    drift = mu - (0.5 * var)
-    stdev = returns.std()
-    
-    # Generăm șocuri aleatorii (Z ~ N(0,1))
-    # Matrice de (zile x simulări)
-    daily_returns = np.exp(drift + stdev * norm.ppf(np.random.rand(days_ahead, simulations)))
-    
-    # Proiecția prețului
-    price_paths = np.zeros_like(daily_returns)
-    price_paths[0] = portfolio_curve.iloc[-1]
-    
-    for t in range(1, days_ahead):
-        price_paths[t] = price_paths[t-1] * daily_returns[t]
-        
-    return price_paths, portfolio_curve.iloc[-1]
 
 def calculate_atr_trailing_stop(df, window=14, multiplier=2.5):
     """
@@ -1717,24 +1671,6 @@ def calculate_altman_z(info, symbol, fin):
     out.update(value=value, zone=zone, label=ALTMAN_ZONE_TEXT[zone][0], color=ALTMAN_ZONE_TEXT[zone][1],
                message=ALTMAN_ZONE_TEXT[zone][2])
     return out
-
-def calculate_margin_of_safety(current_price, fair_value):
-    """Calculează marja de siguranță între prețul actual și valoarea intrinsecă."""
-    if fair_value <= 0: return 0, "N/A"
-    
-    # Diferența procentuală
-    mos = (fair_value - current_price) / fair_value
-    
-    if mos > 0.30:
-        verdict = "🚀 Deep Value: Acțiunea este sever subevaluată. Marjă de siguranță excelentă."
-    elif mos > 0.10:
-        verdict = "✅ Fair Value: Preț rezonabil. Există o marjă de siguranță acceptabilă."
-    elif mos > -0.10:
-        verdict = "⚖️ Evaluare Corectă: Prețul pieței reflectă valoarea reală. Fără marjă de siguranță."
-    else:
-        verdict = "⚠️ Supraevaluare: Prețul este mult peste valoarea intrinsecă. Risc mare de corecție."
-        
-    return mos * 100, verdict
 
 def analyze_dividend_quality(info):
     """Analizează dacă dividendele și profitul sunt sustenabile.
@@ -2560,12 +2496,6 @@ def remove_from_watchlist(symbol):
     return True, f"Șters {symbol}" + (f" ({len(rows)} rânduri)." if len(rows) > 1 else ".")
 
         # load_portfolio nu are cache: nu e nimic de golit
-
-@st.cache_data(ttl=300)
-def get_portfolio_history_data(tickers):
-    if not tickers: return pd.DataFrame()
-    data = yf.download(tickers, period="5y", group_by='ticker', auto_adjust=True)
-    return data
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _portfolio_history_closes(tickers):

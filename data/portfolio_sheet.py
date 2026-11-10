@@ -16,7 +16,6 @@ import pandas as pd
 from data.helpers import smart_to_float
 
 PORTFOLIO_COLUMNS = ["Symbol", "Date", "Quantity", "AvgPrice", "Currency"]
-QTY_TOL = 1e-6
 
 
 def _norm(text):
@@ -115,63 +114,3 @@ def infer_class(symbol, currency, known=None):
         return "Actiuni SUA", True
     return "Actiuni UE", True
 
-
-def merge_positions(sheet, ledger_positions, keep_from_ledger=("Obligatiuni",)):
-    """Pozițiile deschise după foaia `Portofoliu`, cu istoricul din registru.
-
-    - Cantitatea și costul (cantitate × preț mediu) vin din foaie pentru fiecare simbol din foaie.
-    - Simbolurile din registru care nu sunt în foaie au cantitate 0 (închise), cu excepția
-      claselor din `keep_from_ledger` (titlurile de stat nu se trec în foaie): acelea rămân din registru.
-    - Realizatul, dividendele, impozitele și comisioanele rămân din registru, pe simbol.
-    Întoarce (poziții în formatul `ledger.build_positions`, diferențe, simboluri cu clasă dedusă).
-    `diferențe`: listă de (simbol, cantitate în foaie, cantitate în registru), pentru afișare.
-    """
-    cols = ["Symbol", "Class", "Currency", "Quantity", "CostBasis", "Realized", "Income", "Taxes", "Fees", "Bought", "Sold"]
-    base = (ledger_positions.copy() if ledger_positions is not None and len(ledger_positions)
-            else pd.DataFrame(columns=cols + ["AvgCost"]))
-    base = base.reindex(columns=cols)
-    ledger_qty = dict(zip(base["Symbol"], base["Quantity"].astype(float)))
-    known = dict(zip(base["Symbol"], base["Class"]))
-    from_sheet = set(sheet["Symbol"]) if sheet is not None and len(sheet) else set()
-
-    keep = base["Class"].isin(keep_from_ledger) & ~base["Symbol"].isin(from_sheet)
-    base.loc[~keep, ["Quantity", "CostBasis"]] = 0.0
-
-    inferred, new_rows = [], []
-    for rec in (sheet.itertuples(index=False) if from_sheet else []):
-        cost = rec.Quantity * rec.AvgPrice if pd.notna(rec.AvgPrice) else np.nan
-        if rec.Symbol in known:
-            mask = base["Symbol"] == rec.Symbol
-            base.loc[mask, "Quantity"] = rec.Quantity
-            base.loc[mask, "CostBasis"] = cost
-            base.loc[mask, "Currency"] = rec.Currency
-        else:
-            cls, was_inferred = infer_class(rec.Symbol, rec.Currency, known)
-            if was_inferred:
-                inferred.append(rec.Symbol)
-            new_rows.append({"Symbol": rec.Symbol, "Class": cls, "Currency": rec.Currency, "Quantity": rec.Quantity,
-                             "CostBasis": cost, "Realized": 0.0, "Income": 0.0, "Taxes": 0.0, "Fees": 0.0,
-                             "Bought": 0.0, "Sold": 0.0})
-    if new_rows:
-        extra = pd.DataFrame(new_rows, columns=cols)
-        base = extra if base.empty else pd.concat([base, extra], ignore_index=True)
-    base["Quantity"] = base["Quantity"].astype(float)
-    base["AvgCost"] = np.where(base["Quantity"] > QTY_TOL,
-                               base["CostBasis"] / base["Quantity"].where(base["Quantity"] > QTY_TOL), np.nan)
-
-    diffs = []
-    sheet_qty = dict(zip(sheet["Symbol"], sheet["Quantity"])) if from_sheet else {}
-    for sym in sorted(set(sheet_qty) | {s for s, q in ledger_qty.items() if q > QTY_TOL}):
-        if sym not in sheet_qty and known.get(sym) in keep_from_ledger:
-            continue
-        sq, lq = sheet_qty.get(sym, 0.0), ledger_qty.get(sym, 0.0)
-        if abs(sq - lq) > QTY_TOL:
-            diffs.append((sym, sq, lq))
-    return base.sort_values(["Class", "Symbol"]).reset_index(drop=True), diffs, sorted(inferred)
-
-
-def classes_with_diffs(positions, diffs):
-    """Perechile (clasă, monedă) care conțin un simbol unde foaia diferă de registru."""
-    syms = {d[0] for d in diffs}
-    part = positions[positions["Symbol"].isin(syms)]
-    return set(zip(part["Class"], part["Currency"]))
