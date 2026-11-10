@@ -925,7 +925,8 @@ def main():
             print("Regim:", reg[["Piață", "Trend", "Scor moment"]].values.tolist())
             print("Randament în lei:", rr[["Piață", "Randament local", "Efect curs față de leu", "Randament în lei"]].values.tolist())
             bet = rr.set_index("Piață").loc["BET (prin ETF TVBETETF)"]
-            assert bet["Efect curs față de leu"] == 0.0 or pd.isna(bet["Randament local"]), "BET are efect valutar"
+            # tabelul e text gata formatat (text_frame): 0 → „+0,0%”, lipsă → „N/A”
+            assert bet["Efect curs față de leu"] in (0.0, "+0,0%") or bet["Randament local"] in ("N/A",) or pd.isna(bet["Randament local"]), "BET are efect valutar"
             for hz in ("1 lună", "De la 1 ian."):
                 at.radio(key="mk_horizon").set_value(hz).run()
                 check(at, f"4. Piață Globală orizont {hz}")
@@ -934,7 +935,10 @@ def main():
                                getattr(getattr(d.value, "data", d.value), "columns", [])).set_index("Piață")
                     print("Randament 1 lună:", rr1[["Randament local", "Efect curs față de leu", "Randament în lei"]].to_dict("index"))
                     sp = rr1.loc["S&P 500"]
-                    assert abs((1 + sp["Randament local"]) * (1 + sp["Efect curs față de leu"]) - 1 - sp["Randament în lei"]) < 1e-12
+                    # celulele sunt text „+1,2%” (o zecimală): se citesc înapoi, toleranță din rotunjire (3 × 0,05 pp)
+                    _p = lambda t: float(t.replace("%", "").replace(".", "").replace(",", ".").replace("\u2212", "-")) / 100
+                    assert abs((1 + _p(sp["Randament local"])) * (1 + _p(sp["Efect curs față de leu"])) - 1
+                               - _p(sp["Randament în lei"])) < 2e-3, sp.to_dict()
             # dobânzi și risc de țară: 19 rânduri; lipsa unei serii = rând N/A marcat, nu valoare presupusă
             rt = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Indicator", "Δ 3 luni (pp)", "Sursă"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)

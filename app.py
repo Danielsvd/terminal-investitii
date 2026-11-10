@@ -21,6 +21,7 @@ try:
 except (AttributeError, RuntimeError):
     _THEME_TYPE = None
 DF_UP, DF_DOWN, DF_MUTED = ui_theme.df_colors(_THEME_TYPE)
+sign_color = lambda v: ui_theme.sign_css(v, DF_UP, DF_DOWN)  # celule text „+x” verde, „-x” roșu
 import os
 import time
 from datetime import datetime, timedelta
@@ -2296,9 +2297,9 @@ def render_portfolio_today(sessions, fx, fx_dates):
         st.dataframe(
             text_frame(view, {
                 "Ședința": lambda d: f"{pd.Timestamp(d):%d.%m.%Y}",
-                "Variație": lambda v: _pp(v), "σ": lambda v: format_ro(v, 1, "σ"),
+                "Variație": lambda v: _pp(v), "σ": lambda v: ("+" if v > 0 else "") + format_ro(v, 1, "σ"),
                 "P/L (lei)": _lei, "Contribuție": _cpp, "Valoare (lei)": _val,
-            }),
+            }).style.map(sign_color, subset=["Variație", "σ", "P/L (lei)", "Contribuție"]),
             width='stretch', hide_index=True,
             column_config={"σ": st.column_config.Column(help=PDAY_HELP["σ"]),
                            "Contribuție": st.column_config.Column(help=PDAY_HELP["Contribuție"]),
@@ -6327,10 +6328,10 @@ def main():
                                  "Momentum 12-1": r["momentum"], "Scor moment": r["score"], "De la maximul pe 52 săpt.": r["from_high"]})
             st.markdown("**Regimul tehnic** (aceeași regulă ca eticheta „Moment” din Analiză Companie)")
             st.dataframe(
-                pd.DataFrame(reg_rows).style.format({
-                    "Ultima închidere": lambda v: format_ro(v, 2), "Data": lambda d: "N/A" if d is None or pd.isna(d) else f"{d:%d.%m.%Y}",
-                    "Momentum 12-1": pct1, "Scor moment": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.0f}",
-                    "De la maximul pe 52 săpt.": pct1}, na_rep="N/A"),
+                text_frame(pd.DataFrame(reg_rows), {
+                    "Ultima închidere": lambda v: format_ro(v, 2), "Data": lambda d: f"{d:%d.%m.%Y}",
+                    "Trend": str, "Momentum 12-1": pct1, "Scor moment": lambda v: f"{ro(v):.0f}",
+                    "De la maximul pe 52 săpt.": pct1}).style.map(sign_color, subset=["Momentum 12-1"]),
                 hide_index=True, width='stretch',
                 column_config={
                     "Trend": st.column_config.Column(help="Câte din 3 condiții sunt îndeplinite: închiderea peste media pe 50 de ședințe, "
@@ -6351,7 +6352,8 @@ def main():
                                  "Efect curs față de leu": rr["fx"], "Randament în lei": rr["ron"], "Notă": note})
             st.markdown(f"**Randamentul în lei** ({hz})")
             st.dataframe(
-                pd.DataFrame(ret_rows).style.format({"Randament local": pct1, "Efect curs față de leu": pct1, "Randament în lei": pct1}, na_rep="N/A"),
+                text_frame(pd.DataFrame(ret_rows), {"Randament local": pct1, "Efect curs față de leu": pct1, "Randament în lei": pct1})
+                .style.map(sign_color, subset=["Randament local", "Efect curs față de leu", "Randament în lei"]),
                 hide_index=True, width='stretch',
                 column_config={
                     "Randament local": st.column_config.Column(help="Variația indicelui în valuta lui, de la ultima închidere de la sau înainte de începutul orizontului."),
@@ -7239,7 +7241,7 @@ def main():
                     "Curs BNR": lambda v: format_ro(v, 4), "Live (Yahoo)": lambda v: format_ro(v, 4),
                     "Data": lambda d: f"{d:%d.%m.%Y}",
                     "Zi %": pct_fmt, "1 lună %": pct_fmt, "De la 1 ian. %": pct_fmt, "1 an %": pct_fmt,
-                }),
+                }).style.map(sign_color, subset=["Zi %", "1 lună %", "De la 1 ian. %", "1 an %"]),
                 width='stretch', hide_index=True,
                 column_config={
                     "Unitate": st.column_config.Column(help="Câți lei costă această cantitate de valută (cum publică BNR: 100 de unități la yen și forint)."),
