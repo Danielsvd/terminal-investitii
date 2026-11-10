@@ -43,7 +43,7 @@ def test_ordinea_regulilor_si_completarea():
     assert dn.sector_note([{"name": "A", "etf": "XLA", "pct": 0.01, "vs_index_pp": 0.4}]) is None   # sub 1 pp
     nw = dn.news_note([{"symbol": "TLV.RO", "title": "Profit record", "source": "ZF", "time": datetime(2026, 11, 5, 9, 0)},
                        {"symbol": "AAPL", "title": "x", "source": "Y", "time": datetime(2026, 11, 5, 8, 0)}])
-    assert nw["text"] == "Știre despre TLV: „Profit record” (ZF, 05.11 09:00); încă 1 în tabul „📰 Știri”."
+    assert nw["text"] == "Știre despre TLV: „Profit record” (ZF, 05.11 09:00); încă 1 în tabul „Știri”."
 
     # 1 și 2 fixe, al treilea = primul disponibil (calendarul)
     assert [x["text"] for x in dn.three_things(p, m, ev, al, sec, nw)] == ["P", "M", ev["text"]]

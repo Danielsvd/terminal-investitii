@@ -825,13 +825,14 @@ def main():
             i_us = next(i for i, x in enumerate(subs) if "Top 10 știri Wall Street" in x)
             assert i_own < i_ro < i_us, "ordinea din tabul Știri"
             assert len([x for x in subs if "Top 5 știri financiare (România)" in x]) == 1, "știrile RO apar de două ori"
-            assert len(at.tabs) >= 4 and [t.label for t in at.tabs][-4:] == ["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street", "📰 Știri"], [t.label for t in at.tabs]
+            assert len(at.tabs) >= 4 and [t.label for t in at.tabs][-4:] == ["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 SUA", ":material/newspaper: Știri"], [t.label for t in at.tabs]
             # etapa E: „3 lucruri de știut azi”, sus, din reguli; în smoke există P/L, deci primul rând e portofoliul
             assert "3 lucruri de știut azi" in md, "lipsește „3 lucruri de știut azi”"
             box = next(str(e.value) for e in at.markdown if "<b>1.</b>" in str(e.value))
             assert "<b>3.</b>" in box and "Portofoliul (acțiuni și ETF)" in box and "Piața: cea mai mare mișcare" in box, box
             print("3 lucruri:", box[:600])
-            badges = [str(e.value) for e in at.markdown if "background:#21262D" in str(e.value)]
+            # culorile vechi trec pe tokenurile temei la afișare (ui/theme.py): #21262D → var(--tk-surface-2)
+            badges = [str(e.value) for e in at.markdown if "background:var(--tk-surface-2)" in str(e.value)]
             assert badges and "TLV" in badges[0] and "<b>" not in badges[0], "știrile pe poziții: lipsă sau HTML neescapat"
             print("Calendar:", [str(e.value)[:120] for e in at.markdown if "Calendar macro SUA:" in str(e.value)])
         if section == "5. Import Date":
@@ -924,7 +925,8 @@ def main():
             print("Regim:", reg[["Piață", "Trend", "Scor moment"]].values.tolist())
             print("Randament în lei:", rr[["Piață", "Randament local", "Efect curs față de leu", "Randament în lei"]].values.tolist())
             bet = rr.set_index("Piață").loc["BET (prin ETF TVBETETF)"]
-            assert bet["Efect curs față de leu"] == 0.0 or pd.isna(bet["Randament local"]), "BET are efect valutar"
+            # tabelul e text gata formatat (text_frame): 0 → „+0,0%”, lipsă → „N/A”
+            assert bet["Efect curs față de leu"] in (0.0, "+0,0%") or bet["Randament local"] in ("N/A",) or pd.isna(bet["Randament local"]), "BET are efect valutar"
             for hz in ("1 lună", "De la 1 ian."):
                 at.radio(key="mk_horizon").set_value(hz).run()
                 check(at, f"4. Piață Globală orizont {hz}")
@@ -933,7 +935,10 @@ def main():
                                getattr(getattr(d.value, "data", d.value), "columns", [])).set_index("Piață")
                     print("Randament 1 lună:", rr1[["Randament local", "Efect curs față de leu", "Randament în lei"]].to_dict("index"))
                     sp = rr1.loc["S&P 500"]
-                    assert abs((1 + sp["Randament local"]) * (1 + sp["Efect curs față de leu"]) - 1 - sp["Randament în lei"]) < 1e-12
+                    # celulele sunt text „+1,2%” (o zecimală): se citesc înapoi, toleranță din rotunjire (3 × 0,05 pp)
+                    _p = lambda t: float(t.replace("%", "").replace(".", "").replace(",", ".").replace("\u2212", "-")) / 100
+                    assert abs((1 + _p(sp["Randament local"])) * (1 + _p(sp["Efect curs față de leu"])) - 1
+                               - _p(sp["Randament în lei"])) < 2e-3, sp.to_dict()
             # dobânzi și risc de țară: 19 rânduri; lipsa unei serii = rând N/A marcat, nu valoare presupusă
             rt = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Indicator", "Δ 3 luni (pp)", "Sursă"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
