@@ -266,6 +266,8 @@ st.markdown("""
     .impact-neu { color: #8B949E; font-weight: bold; background: rgba(139, 148, 158, 0.1); padding: 2px 6px; border-radius: 4px; }
     </style>
     """, unsafe_allow_html=True)
+# Suprafețe „premium” (ui/theme.premium_css, DESIGN.md §4): după CSS-ul vechi, ca să-l înlocuiască.
+st.markdown(f"<style>{ui_theme.premium_css()}</style>", unsafe_allow_html=True)
 
 # --- 1. CONFIGURARE AGREGATOR ---
 RSS_CONFIG = {

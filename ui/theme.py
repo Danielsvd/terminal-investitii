@@ -15,23 +15,29 @@ Funcții pure, fără `st.*`, cu teste în tests/test_theme.py. Singura legătur
 """
 import re
 
-# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1
+# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Indigo profund”, aleasă pe 10.11)
 TOKENS = {
-    "bg": ("#F3F5F9", "#0B1220"),
-    "surface": ("#FFFFFF", "#111A2E"),
-    "surface-2": ("#F8FAFC", "#18233B"),
-    "border": ("#DCE2EC", "#1F2A44"),
-    "border-strong": ("#C4CDDB", "#2E3B5C"),
-    "text": ("#0F172A", "#E5ECF6"),
-    "muted": ("#526079", "#8A97AD"),
-    "accent": ("#1D4ED8", "#3B82F6"),
-    "accent-text": ("#1D4ED8", "#60A5FA"),
-    "up": ("#15803D", "#22C55E"),
+    "bg": ("#F4F4FB", "#141230"),
+    "surface": ("#FFFFFF", "#1C1940"),
+    "surface-top": ("#FFFFFF", "#221F4C"),      # capătul de sus al gradientului fin de pe carduri
+    "surface-2": ("#F8F8FD", "#242150"),
+    "border": ("#E3E1F3", "#2E2A5C"),
+    "border-strong": ("#CFCCE8", "#3D3874"),
+    "text": ("#16133A", "#ECEAFB"),
+    "muted": ("#5F5A8A", "#A09BC8"),
+    "accent": ("#4F46E5", "#818CF8"),
+    "accent-text": ("#4338CA", "#A5B4FC"),
+    "up": ("#047857", "#34D399"),
     "down": ("#B91C1C", "#F87171"),
     "warn": ("#B45309", "#FBBF24"),
     # textul de pe un fundal plin colorat (verdict, GEX): alb pe culorile închise din modul luminos,
-    # bleumarin închis pe culorile luminoase din modul întunecat
-    "on-fill": ("#FFFFFF", "#0B1220"),
+    # indigo închis pe culorile luminoase din modul întunecat
+    "on-fill": ("#FFFFFF", "#141230"),
+    # adâncime: linia luminoasă de pe muchia de sus, umbra de sub card, strălucirea din capul paginii
+    # (hex cu 8 cifre = culoare + transparență; nu sunt atinse de themed_html)
+    "highlight": ("#FFFFFFE6", "#FFFFFF0F"),
+    "shadow": ("#16133A12", "#05041473"),
+    "glow": ("#4F46E50F", "#818CF81A"),
 }
 
 # Paleta veche (GitHub dark) → token. Culorile care nu sunt aici rămân neschimbate.
@@ -60,7 +66,7 @@ LEGACY_RGB = {
 }
 
 # Tabele (st.dataframe cu Styler): grila se desenează pe canvas, unde var() și light-dark() nu merg.
-# Culori de mijloc, lizibile pe ambele fundaluri (contrast ≈ 4:1 pe alb și pe bleumarin; DESIGN.md §5.6).
+# Culori de mijloc, lizibile pe ambele fundaluri (contrast ≈ 4:1 pe alb și pe fundalul indigo; DESIGN.md §5.6).
 DF_UP = "#3A8854"
 DF_DOWN = "#E82C2C"
 DF_MUTED = "#707A8F"
@@ -82,6 +88,31 @@ def root_css():
     """Blocul `:root { --tk-*: light-dark(luminos, întunecat); }`."""
     body = " ".join(f"--tk-{k}: light-dark({lt}, {dk});" for k, (lt, dk) in TOKENS.items())
     return f":root {{ {body} }}"
+
+
+_CARD_SHADOW = "inset 0 1px 0 var(--tk-highlight), 0 1px 2px var(--tk-shadow), 0 10px 28px var(--tk-shadow)"
+
+
+def premium_css():
+    """Tratamentul „premium” al suprafețelor (DESIGN.md §4): gradient fin pe carduri, contur de 1px,
+    linie luminoasă sus, umbră moale, colțuri de 14px și o strălucire discretă în capul paginii.
+    Se injectează DUPĂ CSS-ul vechi din app.py, ca să-l înlocuiască la aceeași specificitate."""
+    card = ("background: linear-gradient(180deg, var(--tk-surface-top) 0%, var(--tk-surface) 100%);"
+            " border: 1px solid var(--tk-border); border-radius: 14px;"
+            f" box-shadow: {_CARD_SHADOW};")
+    # cardurile HTML vechi au fundalul scris inline; după themed_html() el conține „var(--tk-surface)”
+    inline = ", ".join(f'div[style*="{p}var(--tk-surface)"]' for p in (
+        "background:", "background: ", "background-color:", "background-color: ",
+        "linear-gradient(90deg, ", "linear-gradient(135deg, "))
+    return (
+        '[data-testid="stAppViewContainer"] { background:'
+        " radial-gradient(1100px 420px at 50% -160px, var(--tk-glow), transparent 70%), var(--tk-bg); }"
+        f" .fin-card, .news-card, div[data-testid=\"stMetric\"] {{ {card} }}"
+        " .fin-card:hover, .news-card:hover { border-color: var(--tk-border-strong); }"
+        ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
+        " background: var(--tk-surface); }"
+        f" {inline} {{ box-shadow: {_CARD_SHADOW}; }}"
+    )
 
 
 def _hex_sub(m):

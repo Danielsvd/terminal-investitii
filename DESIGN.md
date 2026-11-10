@@ -1,8 +1,8 @@
 # DESIGN.md — Terminal Investiții PRO
 
-Direcția: **Bleumarin + Revolut** (aleasă de Daniel pe 10.11.2026).
+Direcția: **Bleumarin + Revolut** (aleasă de Daniel pe 10.11.2026), cu **paleta „Indigo profund”** (schimbată de Daniel pe 10.11, 19:12; PR #169). Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
 Baza e Bleumarin: un terminal sobru, cu margini fine și densitate mare pe tabele. Din stilul Revolut se iau doar cifra mare de sus, colțurile mari și cardurile fără margine pe ecranele de sinteză, plus butonul principal complet rotunjit.
-Starea documentului: **aprobat** (10.11.2026). PR 1 (`config.toml`) unit pe test1 prin #165.
+Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #166 (tokenuri light-dark), #167 (banner mobil), #168 (iconuri).
 
 > Direcția nu vine din comparația cu site-uri reale (UXKIN nu e conectat). Vine din cele 7 machete arătate în conversație, din CSS-ul actual din `app.py` și din constrângerile Streamlit 1.65.
 
@@ -22,7 +22,23 @@ Starea documentului: **aprobat** (10.11.2026). PR 1 (`config.toml`) unit pe test
 
 ## 1. Culoare
 
-### 1.1 Suprafețe și text
+### 1.0 Paleta curentă — „Indigo profund” (#169, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
+
+| Token | Întunecat | Luminos | Rol |
+|---|---|---|---|
+| `bg` | `#141230` | `#F4F4FB` | fundalul paginii, cu strălucire discretă `glow` în capul paginii |
+| `surface` / `surface-top` | `#1C1940` / `#221F4C` | `#FFFFFF` / `#FFFFFF` | carduri: gradient fin de sus în jos |
+| `surface-2` | `#242150` | `#F8F8FD` | antet de tabel, interiorul unui card |
+| `border` / `border-strong` | `#2E2A5C` / `#3D3874` | `#E3E1F3` / `#CFCCE8` | contur de 1px, hover |
+| `text` / `muted` | `#ECEAFB` / `#A09BC8` | `#16133A` / `#5F5A8A` | text și etichete |
+| `accent` / `accent-text` | `#818CF8` / `#A5B4FC` | `#4F46E5` / `#4338CA` | selecție, bare / linkuri; butonul principal: `#6366F1` (întunecat), `#4F46E5` (luminos) |
+| `up` / `down` / `warn` | `#34D399` / `#F87171` / `#FBBF24` | `#047857` / `#B91C1C` / `#B45309` | câștig / pierdere / atenție |
+| `highlight`, `shadow`, `glow` | `#FFFFFF0F`, `#05041473`, `#818CF81A` | `#FFFFFFE6`, `#16133A12`, `#4F46E50F` | linia luminoasă sus, umbra moale, strălucirea paginii |
+
+Contrast (calculat): text / muted / up / down / warn ≥ 5,0 pe bg, surface și surface-2 în ambele moduri; text alb pe butonul principal 4,47 (întunecat) și 6,3 (luminos).
+Carduri premium (`ui_theme.premium_css()`): gradient `surface-top → surface`, contur `border`, colțuri 14px, umbră `inset 0 1px 0 highlight, 0 1px 2px shadow, 0 10px 28px shadow`. Se aplică pe `.fin-card`, `.news-card`, `st.metric`, expandere și pe cardurile HTML vechi cu fundal `surface`.
+
+### 1.1 Suprafețe și text (paleta inițială Bleumarin, înlocuită de §1.0 — rolurile rămân)
 
 | Token | Întunecat | Luminos | Rol |
 |---|---|---|---|
@@ -85,7 +101,7 @@ Reguli:
 - Corelații și heatmap-uri: scală divergentă `--down` → `--surface-2` → `--accent`, cu centrul în 0.
 - Gradientul de la bara analiștilor (verde → galben → roșu) rămâne, fiindcă are sens: e o scală. Se refac doar culorile, cu tokenurile de mai sus.
 
-Două șabloane Plotly, `terminal_dark` și `terminal_light`, aplicate centralizat în `plot_ro()`. Toate `template="plotly_dark"` scrise direct dispar.
+Implementat (#166): Streamlit aplică deja tema lui peste șablonul figurii, așa că `plot_ro()` corectează doar culorile scrise pentru fundal închis, prin `ui_theme.theme_figure_dict()` (§7.2).
 
 ---
 
@@ -261,7 +277,9 @@ Verificat la rulare cu `streamlit==1.65.0`: cheile sunt valide. `base` NU se pun
 3. ✅ inclus în #166 — graficele prin `theme_figure_dict()` în `plot_ro()` (în loc de două șabloane Plotly: Streamlit aplică deja tema lui peste șablon).
 4. Cardul de sinteză (Revolut) pe Rezumatul zilei și pe antetul Portofoliului.
 5. Cardurile HTML rămase (verdicte, scor macro, ghid), pe rând, câte un tab pe PR.
-6. Iconuri Material în meniu și pe taburile fără piață (doar etichete, prin `format_func`; §6).
+6. ✅ #168 — iconuri Material în meniu și pe taburile fără piață (doar etichete, prin `format_func`; §6).
+
+În plus: #167 — bannerul macro pe telefon (verdictul nu se mai rupe în cuvânt, `clamp()` + `flex-wrap`).
 
 **NU se atinge:** calculele, textele, ordinea secțiunilor, numele taburilor și emoji-urile (excepție: PR 6, decis pe 10.11), formatul numeric românesc, `hub.service` / copia fixată a botului Telegram.
 
