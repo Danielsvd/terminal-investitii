@@ -211,3 +211,19 @@ def test_metricile_centrate_si_compacte():
     css = theme.premium_css()
     assert 'div[data-testid="stMetric"] { padding: 10px 12px; text-align: center; }' in css
     assert "justify-content: center" in css
+
+
+def test_sign_css_dupa_semn():
+    up, down = "#0A0", "#A00"
+    assert theme.sign_css("+1,23%", up, down) == "color: #0A0"
+    assert theme.sign_css("-0,71%", up, down) == "color: #A00"
+    assert theme.sign_css("\u22120,5 pp", up, down) == "color: #A00"
+    assert theme.sign_css("+73 lei", up, down) == "color: #0A0"
+    assert theme.sign_css("-8 lei", up, down) == "color: #A00"
+    assert theme.sign_css("+0,4σ", up, down) == "color: #0A0"
+
+
+def test_sign_css_fara_culoare():
+    up, down = "#0A0", "#A00"
+    for v in ("+0,00%", "0 lei", "0,00 pp", "+0,0σ", "-0,0%", "N/A", "", "   ", "0,4σ", None, float("nan"), 1.5):
+        assert theme.sign_css(v, up, down) == "", v

@@ -84,6 +84,26 @@ def df_colors(mode):
     return DF_UP, DF_DOWN, DF_MUTED
 
 
+_NONZERO = re.compile(r"[1-9]")
+
+
+def sign_css(text, up, down):
+    """Culoarea CSS a unei celule de variație deja formatate ca text („+1,23%”, „-0,71%”, „-8 lei”).
+    Semnul vine din primul caracter: „+” → `up`, „-” sau „−” → `down`. Fără nicio cifră nenulă
+    („+0,00%”, „0 lei”, „0,0σ”) sau fără semn → fără culoare. „N/A” și valorile lipsă → fără culoare.
+    Se folosește cu `Styler.map(..., subset=coloanele de variație)` peste un `text_frame`."""
+    if not isinstance(text, str):
+        return ""
+    t = text.strip()
+    if not t or not _NONZERO.search(t):
+        return ""
+    if t[0] == "+":
+        return f"color: {up}"
+    if t[0] in "-\u2212":
+        return f"color: {down}"
+    return ""
+
+
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}\b")
 _RGBA = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)")
 
