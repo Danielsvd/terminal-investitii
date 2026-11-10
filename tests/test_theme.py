@@ -186,3 +186,28 @@ def test_theme_figure_dict():
     assert out["data"][0]["marker"]["color"] == ["#3FB950", "#0891B2"]
     assert out["data"][0]["y"] == [1, 2] and out["data"][0]["name"] == "#30363D"   # date și nume neatinse
     assert fig["layout"]["paper_bgcolor"] == "#0E1117"            # originalul nu se modifică
+
+
+def test_df_colors_dupa_mod():
+    assert theme.df_colors("dark") == (theme.TOKENS["up"][1], theme.TOKENS["down"][1], theme.TOKENS["muted"][1])
+    assert theme.df_colors("light") == (theme.TOKENS["up"][0], theme.TOKENS["down"][0], theme.TOKENS["muted"][0])
+    assert theme.df_colors(None) == (theme.DF_UP, theme.DF_DOWN, theme.DF_MUTED)
+
+
+def test_df_colors_contrast_pe_fundalul_tabelului():
+    # cu mod cunoscut, verdele și roșul din tabele au contrast deplin (≥ 4,5:1) pe fundalul paginii
+    for mode, i in (("light", 0), ("dark", 1)):
+        for col in theme.df_colors(mode):
+            assert contrast(col, theme.TOKENS["bg"][i]) >= 4.5, (mode, col)
+
+
+def test_app_tabele_folosesc_df_colors():
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "DF_UP, DF_DOWN, DF_MUTED = ui_theme.df_colors(_THEME_TYPE)" in src
+    assert not re.search(r"#3A8854|#E82C2C|#707A8F", src)
+
+
+def test_metricile_centrate_si_compacte():
+    css = theme.premium_css()
+    assert 'div[data-testid="stMetric"] { padding: 10px 12px; text-align: center; }' in css
+    assert "justify-content: center" in css
