@@ -1,44 +1,45 @@
 # Tema aplicației: două moduri, comutate din meniul ⋮ → Settings → Theme.
-# Valorile și rolul fiecăreia sunt în DESIGN.md (direcția „Bleumarin + Revolut”).
+# Valorile și rolul fiecăreia sunt în DESIGN.md (paleta „Indigo profund”, aleasă pe 10.11.2026).
+# Aceleași culori sunt în ui/theme.py (TOKENS); testul tests/test_theme.py verifică să coincidă.
 # Aici NU se pun chei sau secrete: acestea stau în .streamlit/secrets.toml (ignorat de git).
 
 [theme]
 font = "sans-serif"
 baseFontSize = 15
-baseRadius = "10px"
+baseRadius = "12px"
 buttonRadius = "full"
 metricValueFontSize = "24px"
 metricValueFontWeight = 600
 showWidgetBorder = true
 
 [theme.dark]
-primaryColor = "#3B82F6"
-backgroundColor = "#0B1220"
-secondaryBackgroundColor = "#111A2E"
-textColor = "#E5ECF6"
-borderColor = "#1F2A44"
-linkColor = "#60A5FA"
-greenColor = "#22C55E"
+primaryColor = "#6366F1"
+backgroundColor = "#141230"
+secondaryBackgroundColor = "#1C1940"
+textColor = "#ECEAFB"
+borderColor = "#2E2A5C"
+linkColor = "#A5B4FC"
+greenColor = "#34D399"
 redColor = "#F87171"
 yellowColor = "#FBBF24"
-blueColor = "#3B82F6"
-dataframeBorderColor = "#1F2A44"
-dataframeHeaderBackgroundColor = "#18233B"
-dataframeHeaderTextColor = "#8A97AD"
-chartCategoricalColors = ["#3B82F6", "#F59E0B", "#14B8A6", "#A78BFA", "#F472B6", "#94A3B8"]
+blueColor = "#818CF8"
+dataframeBorderColor = "#2E2A5C"
+dataframeHeaderBackgroundColor = "#242150"
+dataframeHeaderTextColor = "#A09BC8"
+chartCategoricalColors = ["#818CF8", "#F59E0B", "#14B8A6", "#F472B6", "#60A5FA", "#A09BC8"]
 
 [theme.light]
-primaryColor = "#1D4ED8"
-backgroundColor = "#F3F5F9"
+primaryColor = "#4F46E5"
+backgroundColor = "#F4F4FB"
 secondaryBackgroundColor = "#FFFFFF"
-textColor = "#0F172A"
-borderColor = "#DCE2EC"
-linkColor = "#1D4ED8"
-greenColor = "#15803D"
+textColor = "#16133A"
+borderColor = "#E3E1F3"
+linkColor = "#4338CA"
+greenColor = "#047857"
 redColor = "#B91C1C"
 yellowColor = "#B45309"
-blueColor = "#1D4ED8"
-dataframeBorderColor = "#DCE2EC"
-dataframeHeaderBackgroundColor = "#F8FAFC"
-dataframeHeaderTextColor = "#526079"
-chartCategoricalColors = ["#1D4ED8", "#B45309", "#0F766E", "#7C3AED", "#BE185D", "#475569"]
+blueColor = "#4F46E5"
+dataframeBorderColor = "#E3E1F3"
+dataframeHeaderBackgroundColor = "#F8F8FD"
+dataframeHeaderTextColor = "#5F5A8A"
+chartCategoricalColors = ["#4F46E5", "#B45309", "#0F766E", "#BE185D", "#1D4ED8", "#5F5A8A"]

@@ -33,6 +33,7 @@ def test_tokenurile_coincid_cu_config_toml():
         assert theme.TOKENS["text"][idx] == t["textColor"]
         assert theme.TOKENS["border"][idx] == t["borderColor"]
         assert theme.TOKENS["up"][idx] == t["greenColor"]
+        assert theme.TOKENS["muted"][idx] == t["dataframeHeaderTextColor"]
         assert theme.TOKENS["down"][idx] == t["redColor"]
 
 
@@ -56,9 +57,28 @@ def test_root_css_are_light_dark_pentru_fiecare_token():
         assert f"--tk-{k}: light-dark({lt}, {dk});" in css
 
 
-def test_root_css_nu_e_modificat_de_themed_html():
-    css = f"<style>{theme.root_css()}</style>"
-    assert theme.themed_html(css) == css
+def test_root_css_si_premium_css_nu_sunt_modificate_de_themed_html():
+    for css in (f"<style>{theme.root_css()}</style>", f"<style>{theme.premium_css()}</style>"):
+        assert theme.themed_html(css) == css
+
+
+def test_premium_css_foloseste_doar_tokenuri_definite():
+    used = set(re.findall(r"var\(--tk-([a-z0-9-]+)\)", theme.premium_css()))
+    assert used and used <= set(theme.TOKENS), used - set(theme.TOKENS)
+
+
+def test_premium_css_tinteste_cardurile_inline_dar_nu_surface_2():
+    css = theme.premium_css()
+    assert 'div[style*="background:var(--tk-surface)"]' in css
+    assert "surface-2)\"]" not in css
+
+
+def test_accentul_principal_cu_text_alb():
+    import tomllib as _t
+    cfg = _t.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
+    for mode in ("light", "dark"):
+        # butonul principal Streamlit are text alb pe primaryColor
+        assert contrast("#FFFFFF", cfg[mode]["primaryColor"]) >= 4.4, mode
 
 
 def test_var_token_necunoscut():
@@ -137,7 +157,7 @@ def test_install_idempotent():
 @pytest.mark.parametrize("col", [theme.DF_UP, theme.DF_DOWN, theme.DF_MUTED, theme.DF_WARN])
 def test_culorile_de_tabel_lizibile_pe_ambele_fundaluri(col):
     # canvas-ul tabelelor nu acceptă var(); culori de mijloc, ≈ 4:1 pe alb și pe bleumarin
-    for bg in ("#FFFFFF", "#F3F5F9", "#0B1220", "#111A2E"):
+    for bg in ("#FFFFFF", "#F4F4FB", "#141230"):
         assert contrast(col, bg) >= 3.9, (col, bg)
 
 
