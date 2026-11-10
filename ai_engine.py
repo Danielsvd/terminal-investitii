@@ -8,7 +8,6 @@ import plotly.graph_objects as go
 import streamlit as st
 from sklearn.cluster import KMeans
 from plotly.subplots import make_subplots
-from scipy.optimize import minimize
 from sklearn.ensemble import IsolationForest
 import yfinance as yf
 from datetime import date, datetime
@@ -256,71 +255,6 @@ def detect_market_regime_ai(hist_data):
     except Exception as e:
         return "Model Offline", "#8B949E", f"Eroare: {str(e)}"
     
-def optimize_portfolio_ai(hist_data):
-    """
-    Optimizarea portofoliului (Modern Portfolio Theory - Markowitz).
-    Algoritmul găsește ponderile care maximizează Sharpe Ratio.
-    """
-    try:
-        if hist_data is None or len(hist_data.columns) < 2:
-            return None, "Ai nevoie de cel puțin 2 active."
-
-        # Curățăm datele (completăm zilele lipsă, ex: sărbători diferite pe burse)
-        df_clean = hist_data.ffill().dropna()
-        
-        # Randamente zilnice
-        returns = df_clean.pct_change(fill_method=None).dropna()
-        
-        # Parametri anuali (252 zile de tranzacționare/an)
-        mean_returns = returns.mean() * 252
-        cov_matrix = returns.cov() * 252
-        num_assets = len(mean_returns)
-        risk_free_rate = 0.04 # Presupunem 4% rata fără risc (yield-ul titlurilor de stat)
-
-        # Funcția obiectiv: Vrem să MAXIMIZĂM Sharpe. 
-        # Pentru că scriptul caută minimul matematic, îi dăm Sharpe Ratio NEGATIV.
-        def negative_sharpe(weights, mean_ret, cov_mat, rf_rate):
-            p_ret = np.sum(mean_ret * weights)
-            p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_mat, weights)))
-            return -(p_ret - rf_rate) / p_vol
-
-        # Constrângeri: Toți banii trebuie investiți (Suma procentelor = 100%)
-        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
-        
-        # Limite: Nu putem avea alocare negativă (Fără Short-Selling: limite 0 - 1)
-        bounds = tuple((0, 1) for _ in range(num_assets))
-        
-        # Punct de plecare (Presupunem că ești egal ponderat)
-        init_guess = np.array(num_assets * [1. / num_assets])
-
-        # Rulăm motorul de optimizare ML (SLSQP = Sequential Least Squares Programming)
-        opt_results = minimize(negative_sharpe, init_guess, args=(mean_returns, cov_matrix, risk_free_rate), 
-                               method='SLSQP', bounds=bounds, constraints=constraints)
-
-        if not opt_results.success:
-            return None, "AI-ul nu a găsit o soluție convergentă."
-
-        # Extragem ponderile "magice" găsite de AI
-        optimal_weights = opt_results.x
-        opt_ret = np.sum(mean_returns * optimal_weights)
-        opt_vol = np.sqrt(np.dot(optimal_weights.T, np.dot(cov_matrix, optimal_weights)))
-        opt_sharpe = (opt_ret - risk_free_rate) / opt_vol
-
-        # Formatăm rezultatele pentru interfață
-        tickers = df_clean.columns.tolist()
-        allocation = {tickers[i]: round(optimal_weights[i] * 100, 2) for i in range(num_assets)}
-
-        return {
-            "allocation": allocation,
-            "expected_return": opt_ret * 100,
-            "expected_volatility": opt_vol * 100,
-            "sharpe_ratio": opt_sharpe
-        }, "Optimizare finalizată."
-
-    except Exception as e:
-        logger.warning(f"Eroare AI Portofoliu: {e}")
-        return None, str(e)
-
 def detect_volume_anomaly_ai(df_t):
     """
     Isolation Forest pe (randament, volum, volatilitate pe 5 zile): ultima zi din `df_t` față de zilele dinaintea ei.
