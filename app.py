@@ -6230,16 +6230,16 @@ def main():
 
         # --- 3. AFIȘARE BANNER ---
         st.markdown(f"""
-            <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:30px; border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Mediul de piață SUA (verdict macro, netestat)</h4>
-                        <h1 style="color:{m_col}; margin:10px 0; font-size:38px;">{m_label}</h1>
+            <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:clamp(18px, 5vw, 30px); border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+                <div style="display: flex; flex-wrap: wrap; gap: 12px 24px; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1 1 260px; min-width: 0;">
+                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px; font-size:clamp(13px, 3.6vw, 18px);">Mediul de piață SUA (verdict macro, netestat)</h4>
+                        <h1 style="color:{m_col}; margin:10px 0; font-size:clamp(26px, 8vw, 38px); overflow-wrap:normal; word-break:keep-all; hyphens:none;">{m_label}</h1>
                         <p style="color:#C9D1D9; font-size:16px;">{m_desc}</p>
                     </div>
                     <div style="text-align:center; min-width: 120px;">
                         <div style="font-size:12px; color:#8B949E;">SCOR MACRO</div>
-                        <div style="font-size:56px; font-weight:bold; color:{m_col};">{m_score_txt}</div>
+                        <div style="font-size:clamp(40px, 11vw, 56px); font-weight:bold; color:{m_col}; font-variant-numeric:tabular-nums;">{m_score_txt}</div>
                         <div style="font-size:14px; color:#8B949E;">/ 100</div>
                     </div>
                 </div>
