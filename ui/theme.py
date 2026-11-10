@@ -73,6 +73,17 @@ DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
 DF_HIGHLIGHT_BG = "rgba(59, 130, 246, 0.14)"   # rândul evidențiat (compania analizată, mediana)
 
+def df_colors(mode):
+    """(câștig, pierdere, neutru) pentru tabele, după modul temei (`st.context.theme.type`).
+    Cu mod cunoscut se folosesc tokenurile pline (contrast ≥ 5:1); necunoscut (None) → culorile
+    de mijloc, lizibile pe ambele fundaluri. Documentația Streamlit avertizează că modul poate fi
+    greșit chiar în momentul schimbării temei; la următoarea rerulare se corectează."""
+    if mode in ("light", "dark"):
+        i = 0 if mode == "light" else 1
+        return TOKENS["up"][i], TOKENS["down"][i], TOKENS["muted"][i]
+    return DF_UP, DF_DOWN, DF_MUTED
+
+
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}\b")
 _RGBA = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)")
 
@@ -108,6 +119,13 @@ def premium_css():
         '[data-testid="stAppViewContainer"] { background:'
         " radial-gradient(1100px 420px at 50% -160px, var(--tk-glow), transparent 70%), var(--tk-bg); }"
         f" .fin-card, .news-card, div[data-testid=\"stMetric\"] {{ {card} }}"
+        # metricile (un singur număr): mai compacte și centrate (cerut de Daniel pe 10.11, 19:36)
+        ' div[data-testid="stMetric"] { padding: 10px 12px; text-align: center; }'
+        ' div[data-testid="stMetric"] [data-testid="stMetricLabel"],'
+        ' div[data-testid="stMetric"] [data-testid="stMetricValue"],'
+        ' div[data-testid="stMetric"] [data-testid="stMetricDelta"] { justify-content: center; text-align: center; }'
+        ' div[data-testid="stMetric"] [data-testid="stMetricLabel"] { grid-template-columns: auto auto; }'
+        ' div[data-testid="stMetric"] div:has(> [data-testid="stMetricDelta"]) { justify-content: center; }'
         " .fin-card:hover, .news-card:hover { border-color: var(--tk-border-strong); }"
         ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
         " background: var(--tk-surface); }"

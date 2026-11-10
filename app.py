@@ -15,6 +15,12 @@ from ui import theme as ui_theme
 from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
 # Cardurile HTML vechi au culori din paleta GitHub dark: la afișare trec pe tokenurile temei (ui/theme.py).
 ui_theme.install(st, _DeltaGenerator)
+# Culorile din tabele (canvas, fără var()): după modul temei, cu rezervă lizibilă în ambele moduri.
+try:
+    _THEME_TYPE = st.context.theme.type
+except (AttributeError, RuntimeError):
+    _THEME_TYPE = None
+DF_UP, DF_DOWN, DF_MUTED = ui_theme.df_colors(_THEME_TYPE)
 import os
 import time
 from datetime import datetime, timedelta
@@ -4342,7 +4348,7 @@ def main():
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
                 if earn_df is not None and not earn_df.empty:
                     def style_surprise(val):
-                        color = '#3A8854' if val > 0 else '#E82C2C' if val < 0 else '#707A8F'
+                        color = DF_UP if val > 0 else DF_DOWN if val < 0 else DF_MUTED
                         return f'color: {color}; font-weight: bold'
                     e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
@@ -4655,8 +4661,8 @@ def main():
 
                 def _sens_color(v):
                     if pd.isna(v) or not price_f:
-                        return "color: #707A8F"
-                    return "color: #3A8854" if v > price_f else "color: #E82C2C"
+                        return f"color: {DF_MUTED}"
+                    return f"color: {DF_UP}" if v > price_f else f"color: {DF_DOWN}"
 
                 st.dataframe(sens.style.format(ro_spec(",.2f")).map(_sens_color), width='stretch')
                 st.caption(
@@ -5905,7 +5911,7 @@ def main():
 
                     def color_profit(val):
                         if pd.isna(val): return ''
-                        color = '#3A8854' if val >= 0 else '#E82C2C'
+                        color = DF_UP if val >= 0 else DF_DOWN
                         return f'color: {color}'
 
                     st.dataframe(
@@ -7134,8 +7140,8 @@ def main():
                     # Stilizare tabel: Evidențiem creșterile/scăderile
                     def color_macro_trend(val):
                         if isinstance(val, str):
-                            if '+' in val: return 'color: #3A8854; font-weight: bold'
-                            elif '-' in val: return 'color: #E82C2C; font-weight: bold'
+                            if '+' in val: return f'color: {DF_UP}; font-weight: bold'
+                            elif '-' in val: return f'color: {DF_DOWN}; font-weight: bold'
                         return ''
                     
                     st.dataframe(
@@ -7178,9 +7184,9 @@ def main():
             # celulele sunt text gata formatat („+1,23%”, „-0,50”, „N/A”): culoarea după semn
             txt = str(val)
             if txt.startswith("+"):
-                return 'color: #3A8854'
+                return f'color: {DF_UP}'
             if txt.startswith("-"):
-                return 'color: #E82C2C'
+                return f'color: {DF_DOWN}'
             return ''
 
         signed = lambda v: f"{ro(v):+.2f}"
@@ -7462,7 +7468,7 @@ def main():
                 **({"Valoare": [briefing_calc.money_short(v if (v is not None and pd.notna(v)) else None, "RON")
                                 for v in values_ron]} if show_value else {}),
             })
-            color = lambda v: "" if v is None or pd.isna(v) else ("color: #3A8854" if v > 0 else "color: #E82C2C" if v < 0 else "")
+            color = lambda v: "" if v is None or pd.isna(v) else (f"color: {DF_UP}" if v > 0 else f"color: {DF_DOWN}" if v < 0 else "")
             st.dataframe(
                 view.style.format({"Preț": ro_spec(",.2f", unit), "Variație": ro_spec("+.2f", "%"), "σ": ro_spec("+.1f", "σ")})
                 .map(color, subset=["Variație"]),
@@ -7580,7 +7586,7 @@ def main():
                                         for v, t in zip(full["value"], tr)],
                             "Ultima cotație": [d.strftime("%d.%m.%Y") for d in full["date"]],
                         })
-                        f_color = lambda v: "" if v is None or pd.isna(v) else ("color: #3A8854" if v > 0 else "color: #E82C2C" if v < 0 else "")
+                        f_color = lambda v: "" if v is None or pd.isna(v) else (f"color: {DF_UP}" if v > 0 else f"color: {DF_DOWN}" if v < 0 else "")
                         st.dataframe(
                             fv.style.format({"Preț": ro_spec(",.2f", " lei"), "Variație": ro_spec("+.2f", "%"),
                                              "σ": ro_spec("+.1f", "σ")}, na_rep="N/A")
@@ -7701,8 +7707,8 @@ def main():
                         }), {"Preț": lambda v: format_ro(v, 2),
                              "Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
                              "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ")})
-                        s_color = lambda v: ("color: #3A8854" if str(v).startswith("+") and str(v) != "+0,00%"
-                                             else "color: #E82C2C" if str(v).startswith("-") else "")
+                        s_color = lambda v: (f"color: {DF_UP}" if str(v).startswith("+") and str(v) != "+0,00%"
+                                             else f"color: {DF_DOWN}" if str(v).startswith("-") else "")
                         st.dataframe(fv.style.map(s_color, subset=["Variație"]), width='stretch', hide_index=True,
                                      height=min(38 + 35 * len(fv), 600),
                                      column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a "
@@ -7790,8 +7796,8 @@ def main():
                     }), {"Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
                          "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ"),
                          "Față de S&P 500": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, " pp")})
-                    s_color = lambda v: ("color: #3A8854" if str(v).startswith("+") and not str(v).startswith("+0,00")
-                                         else "color: #E82C2C" if str(v).startswith("-") else "")
+                    s_color = lambda v: (f"color: {DF_UP}" if str(v).startswith("+") and not str(v).startswith("+0,00")
+                                         else f"color: {DF_DOWN}" if str(v).startswith("-") else "")
                     st.dataframe(sv.style.map(s_color, subset=["Variație", "Față de S&P 500"]), width='stretch', hide_index=True,
                                  column_config={
                                      "Variație": st.column_config.Column(help="Față de închiderea precedentă, preț neajustat: în ziua "
