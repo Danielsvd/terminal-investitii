@@ -825,7 +825,7 @@ def main():
             i_us = next(i for i, x in enumerate(subs) if "Top 10 știri Wall Street" in x)
             assert i_own < i_ro < i_us, "ordinea din tabul Știri"
             assert len([x for x in subs if "Top 5 știri financiare (România)" in x]) == 1, "știrile RO apar de două ori"
-            assert len(at.tabs) >= 4 and [t.label for t in at.tabs][-4:] == ["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street", "📰 Știri"], [t.label for t in at.tabs]
+            assert len(at.tabs) >= 4 and [t.label for t in at.tabs][-4:] == ["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 SUA", ":material/newspaper: Știri"], [t.label for t in at.tabs]
             # etapa E: „3 lucruri de știut azi”, sus, din reguli; în smoke există P/L, deci primul rând e portofoliul
             assert "3 lucruri de știut azi" in md, "lipsește „3 lucruri de știut azi”"
             box = next(str(e.value) for e in at.markdown if "<b>1.</b>" in str(e.value))
