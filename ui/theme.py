@@ -215,20 +215,47 @@ PLOT_COLOR_MAP = {
 _WHITE_KEYS = {"tickcolor"}
 
 
-def _plot_color(key, val):
-    up = val.strip().upper()
-    if up in ("WHITE", "#FFFFFF"):
+# Verdele de creștere din paleta veche, scris direct în grafice (bare, lumânări, linii): devine verdele
+# temei active (`up`, același ca în tabele și carduri). Verdele din paletele de categorii nu e aici.
+PLOT_UP_HEX = {"#3FB950", "#238636"}
+_PLOT_UP_RGB = (63, 185, 80)
+_RGBA_FULL = re.compile(r"^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)$", re.I)
+
+
+def _rgb(hex_color):
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _plot_color(key, val, up=None):
+    norm = val.strip().upper()
+    if norm in ("WHITE", "#FFFFFF"):
         return "rgba(128,128,128,0.6)" if key in _WHITE_KEYS else val
-    return PLOT_COLOR_MAP.get(up, val)
+    if up is not None:
+        if norm in PLOT_UP_HEX:
+            return up
+        m = _RGBA_FULL.match(val.strip())
+        if m and tuple(int(m.group(i)) for i in (1, 2, 3)) == _PLOT_UP_RGB:
+            r, g, b = _rgb(up)
+            return f"rgba({r}, {g}, {b}, {m.group(4)})"
+    return PLOT_COLOR_MAP.get(norm, val)
 
 
-def theme_figure_dict(obj, key=None):
+def theme_figure_dict(obj, key=None, up=None):
     """Copie a dicționarului unei figuri Plotly, cu culorile pentru fundal închis înlocuite (PLOT_COLOR_MAP).
+    Cu `up` (hex, verdele temei active): verdele vechi de creștere și lumânările în creștere primesc `up`.
     Nu modifică datele, doar valorile text ale cheilor care conțin „color”."""
     if isinstance(obj, dict):
-        return {k: theme_figure_dict(v, k) for k, v in obj.items()}
+        out = {k: theme_figure_dict(v, k, up) for k, v in obj.items()}
+        if up is not None and out.get("type") == "candlestick":
+            inc = dict(out.get("increasing") or {})
+            line = dict(inc.get("line") or {})
+            line.setdefault("color", up)
+            inc["line"] = line
+            out["increasing"] = inc
+        return out
     if isinstance(obj, list):
-        return [theme_figure_dict(v, key) for v in obj]
+        return [theme_figure_dict(v, key, up) for v in obj]
     if isinstance(obj, str) and key is not None and "color" in key.lower():
-        return _plot_color(key, obj)
+        return _plot_color(key, obj, up)
     return obj

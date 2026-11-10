@@ -227,3 +227,18 @@ def test_sign_css_fara_culoare():
     up, down = "#0A0", "#A00"
     for v in ("+0,00%", "0 lei", "0,00 pp", "+0,0σ", "-0,0%", "N/A", "", "   ", "0,4σ", None, float("nan"), 1.5):
         assert theme.sign_css(v, up, down) == "", v
+
+
+def test_theme_figure_dict_verde_crestere():
+    fig = {"data": [{"type": "bar", "marker": {"color": ["#3FB950", "#F85149", "#199E70"]}},
+                    {"type": "scatter", "fillcolor": "rgba(63, 185, 80, 0.1)", "line": {"color": "#238636"}},
+                    {"type": "candlestick", "x": [1], "open": [1], "close": [2]},
+                    {"type": "candlestick", "increasing": {"line": {"color": "#123456"}}}]}
+    out = theme.theme_figure_dict(fig, up="#34D399")
+    assert out["data"][0]["marker"]["color"] == ["#34D399", "#F85149", "#199E70"]   # roșul și categoriile rămân
+    assert out["data"][1]["fillcolor"] == "rgba(52, 211, 153, 0.1)"
+    assert out["data"][1]["line"]["color"] == "#34D399"
+    assert out["data"][2]["increasing"] == {"line": {"color": "#34D399"}}
+    assert "decreasing" not in out["data"][2]
+    assert out["data"][3]["increasing"]["line"]["color"] == "#123456"             # culoare explicită păstrată
+    assert theme.theme_figure_dict(fig)["data"][0]["marker"]["color"][0] == "#3FB950"   # fără up: neschimbat

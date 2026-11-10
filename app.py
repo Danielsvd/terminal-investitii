@@ -335,7 +335,7 @@ def plot_ro(fig, **kwargs):
     Culorile scrise pentru fundal închis (fundal #0E1117, grilă #30363D, galben, cyan) trec pe valori
     vizibile în ambele teme (ui/theme.theme_figure_dict); restul stilului vine din tema Streamlit."""
     fig.update_layout(separators=",.")
-    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict()))
+    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict(), up=DF_UP))
     return st.plotly_chart(fig, **kwargs)
 
 def format_large_currency(val):
