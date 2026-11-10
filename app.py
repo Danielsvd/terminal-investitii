@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
-from data.news import filter_company_news, future_note, holdings_news, mark_future, news_card_html
+from data.news import filter_company_news, future_note, holdings_news, mark_future, news_card_html, safe_link
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
@@ -2354,7 +2354,7 @@ def _holdings_news_html(items):
     return compact_html("".join(
         f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
         <span style="background:#21262D; color:#C9D1D9; border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; margin-right:6px;">{html.escape(it['symbol'].replace('.RO', ''))}</span>
-        <a href="{html.escape(str(it['link']), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(it['title'])}</a>
+        <a href="{html.escape(safe_link(it['link']) or '#', quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank" rel="noopener noreferrer">{html.escape(it['title'])}</a>
         <div style="font-size:12px; color:#8B949E;">{html.escape(str(it['source']))} • {it['time']:%d.%m %H:%M}</div></div>"""
         for it in items))
 
@@ -7460,7 +7460,7 @@ def main():
                 return False
             st.markdown(compact_html("".join(
                 f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
-                <a href="{html.escape(str(it.get('link', '')), quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank">{html.escape(str(it.get('title', '')))}</a>
+                <a href="{html.escape(safe_link(it.get('link')) or '#', quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank" rel="noopener noreferrer">{html.escape(str(it.get('title', '')))}</a>
                 <div style="font-size:12px; color:#8B949E;">{html.escape(str(it.get(src_key, '')))} • {html.escape(str(it.get('date_str', '')))}{future_note(it)}</div></div>"""
                 for it in items)), unsafe_allow_html=True)
             return True
