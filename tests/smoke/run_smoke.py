@@ -831,7 +831,8 @@ def main():
             box = next(str(e.value) for e in at.markdown if "<b>1.</b>" in str(e.value))
             assert "<b>3.</b>" in box and "Portofoliul (acțiuni și ETF)" in box and "Piața: cea mai mare mișcare" in box, box
             print("3 lucruri:", box[:600])
-            badges = [str(e.value) for e in at.markdown if "background:#21262D" in str(e.value)]
+            # culorile vechi trec pe tokenurile temei la afișare (ui/theme.py): #21262D → var(--tk-surface-2)
+            badges = [str(e.value) for e in at.markdown if "background:var(--tk-surface-2)" in str(e.value)]
             assert badges and "TLV" in badges[0] and "<b>" not in badges[0], "știrile pe poziții: lipsă sau HTML neescapat"
             print("Calendar:", [str(e.value)[:120] for e in at.markdown if "Calendar macro SUA:" in str(e.value)])
         if section == "5. Import Date":
