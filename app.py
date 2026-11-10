@@ -199,7 +199,7 @@ def connect_to_gsheets(sheet_name=None):
 st.markdown("""
     <style>
     /* Stil general aplicație */
-    .stApp { background-color: #0E1117; }
+    /* Fundalul paginii vine din tema (.streamlit/config.toml), ca să meargă și modul luminos. */
     
     /* Carduri Principale */
     .fin-card, .news-card {
