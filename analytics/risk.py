@@ -1,4 +1,5 @@
 """Indicatori de risc calculați din prețuri. Fără Streamlit, fără rețea."""
+import numpy as np
 import pandas as pd
 
 
@@ -54,6 +55,19 @@ def beta_weekly(asset_close, bench_close, min_obs=52):
         return None
     return {"beta": float(asset.cov(bench) / variance), "n": int(len(joined)),
             "start": joined.index[0], "end": joined.index[-1]}
+
+
+def beta_corr_weekly(asset_close, bench_close, min_obs=52):
+    """Beta și corelația față de benchmark, pe aceleași randamente săptămânale (vezi `beta_weekly`).
+
+    Întoarce {"beta", "corr", "n", "start", "end"} sau None sub `min_obs` săptămâni comune.
+    """
+    base = beta_weekly(asset_close, bench_close, min_obs=min_obs)
+    if base is None:
+        return None
+    joined = pd.concat([_weekly_returns(asset_close), _weekly_returns(bench_close)], axis=1, join="inner").dropna()
+    corr = joined.iloc[:, 0].corr(joined.iloc[:, 1])
+    return dict(base, corr=None if corr != corr else float(corr))
 
 
 def _daily_close(close):
@@ -159,3 +173,33 @@ def common_day_correlation(closes, min_obs=60):
     if len(returns) < max(min_obs, 2):
         return pd.DataFrame(), int(len(returns))
     return returns.corr(), int(len(returns))
+
+
+# Pragurile de corelație pe perechi, aceleași în heatmap și pe carduri (orientative, netestate).
+# Peste 0,75 două poziții se mișcă aproape împreună (de ex. același sector sau același indice);
+# 0,40–0,75 e intervalul obișnuit între acțiuni din aceeași piață; sub 0,40 diversificarea e reală.
+CORR_HIGH = 0.75
+CORR_MID = 0.40
+CORR_BANDS = {
+    "slaba": "Diversificare slabă",
+    "moderata": "Diversificare moderată",
+    "buna": "Diversificare bună",
+}
+
+
+def correlation_band(value):
+    """Clasa unei corelații pe pereche: 'slaba' (> 0,75), 'moderata' (> 0,40), 'buna' (≤ 0,40),
+    sau None dacă valoarea lipsește. Corelațiile negative intră la 'buna' (pozițiile se compensează)."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(v):
+        return None
+    if v > CORR_HIGH:
+        return "slaba"
+    if v > CORR_MID:
+        return "moderata"
+    return "buna"

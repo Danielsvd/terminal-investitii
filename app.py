@@ -1,13 +1,19 @@
 import streamlit as st
+import logging
+logger = logging.getLogger(__name__)
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
+from data.news import filter_company_news, future_note, holdings_news, mark_future, news_card_html, safe_link
+from data import fred_calendar as fred_cal
+from data import sheet_view
+from data import universes
+from ui.card_help import FUND_HELP, fund_help
 import os
 import time
 from datetime import datetime, timedelta
-from textblob import TextBlob
 import socket
 import numpy as np
 import re
@@ -19,14 +25,23 @@ import pandas_datareader.data as web
 import gspread
 from google.oauth2.service_account import Credentials
 import concurrent.futures
-from scipy.stats import norm
 from collections import deque
 from threading import Lock
 
 # Module proprii: funcții de calcul pure, acoperite de teste (vezi tests/)
-from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines
-from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread
-from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve
+from analytics.technical import atr_trailing_stop, rsi_wilder, macd as macd_lines, price_changes
+from analytics.macro import yoy_pct, real_rate, market_of, monthly_spread, same_day_spread, tbill_discount_to_bey
+from analytics import macro as macro_calc
+from analytics import markets as markets_calc
+from analytics import rates as rates_calc
+from analytics import stress as stress_calc
+from analytics import briefing as briefing_calc
+from analytics import day_notes
+from analytics import portfolio_day as pday_calc
+from analytics import scanner as scanner_calc
+from analytics import watchlist as watchlist_calc
+from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
+from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
 from analytics import ledger as ledger_calc
 from analytics import simulation
@@ -35,7 +50,8 @@ from data import portfolio_sheet
 from data import iv_history
 from data import broker_import
 import zipfile
-from analytics.risk import beta_benchmark, beta_weekly, jensen_alpha, performance_risk, common_day_correlation
+from analytics.risk import beta_benchmark, beta_weekly, beta_corr_weekly, jensen_alpha, performance_risk, common_day_correlation
+from analytics.risk import CORR_HIGH, CORR_MID, CORR_BANDS, correlation_band
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
 from analytics import global_fundamental as gfund
@@ -44,7 +60,8 @@ from data.company_files import load_company, is_bank_template, ticker_from_title
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
-from data.helpers import format_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, entry_target_view, scale_number, watchlist_status, ro, ro_spec, md_bold_html
+from data import bnr as bnr_data
+from data.helpers import format_ro, score_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, price_ro, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -83,9 +100,9 @@ async def fetch_ticker_price_async(client, ticker):
             data = response.json()
             price = data['chart']['result'][0]['meta']['regularMarketPrice']
             return ticker, float(price)
-        print(f"DEBUG: preț live {ticker}: HTTP {response.status_code}")
+        logger.warning(f"preț live {ticker}: HTTP {response.status_code}")
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
-        print(f"DEBUG: preț live {ticker} indisponibil: {e}")
+        logger.warning(f"preț live {ticker} indisponibil: {e}")
     return ticker, None
 
 async def get_all_portfolio_prices(tickers):
@@ -95,15 +112,31 @@ async def get_all_portfolio_prices(tickers):
         results = await asyncio.gather(*tasks)
         return dict(results)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _live_prices_cached(tickers):
+    """Prețurile live pentru un tuplu de simboluri, în cache 5 minute (inclusiv golurile None; get_fast_live_prices
+    le recere separat la fiecare apel). Eroarea generală (event loop, httpx) iese ca excepție și nu intră în cache."""
+    return asyncio.run(get_all_portfolio_prices(list(tickers)))
+
 # Wrapper pentru a putea rula cod asincron în interiorul Streamlit (care e sincron)
 def get_fast_live_prices(tickers):
-    """Prețuri curente: dict simbol -> preț, sau None pentru simbolurile care nu au putut fi citite."""
+    """Prețuri curente: dict simbol -> preț, sau None pentru simbolurile care nu au putut fi citite.
+
+    Prețurile citite stau 5 minute în cache (`_live_prices_cached`): înainte, fiecare clic din Portofoliu cerea din nou
+    prețul fiecărei poziții (o dată pentru registru și încă o dată în fiecare tab de monedă). Simbolurile rămase fără
+    preț se recer la fiecare apel, fără cache, ca un refuz temporar Yahoo (429) să nu țină 5 minute."""
     if not tickers: return {}
+    key = tuple(dict.fromkeys(tickers))   # ordinea păstrată, fără dubluri
     try:
-        return asyncio.run(get_all_portfolio_prices(tickers))
+        prices = dict(_live_prices_cached(key))
+        missing = [t for t in key if prices.get(t) is None]
+        if missing:
+            retry = asyncio.run(get_all_portfolio_prices(missing))
+            prices.update({t: v for t, v in retry.items() if v is not None})
+        return prices
     except (RuntimeError, httpx.HTTPError) as e:
-        print(f"DEBUG: prețuri live indisponibile: {e}")
-        return {t: None for t in tickers}
+        logger.warning(f"prețuri live indisponibile: {e}")
+        return {t: None for t in key}
 
 # --- 0. CONFIGURARE GLOBALĂ ---
 st.set_page_config(page_title="Terminal Investiții PRO", page_icon="📈", layout="wide")
@@ -275,7 +308,7 @@ def parse_date(entry):
         if getattr(entry, 'updated_parsed', None):
             return struct_time_utc_to_ro(entry.updated_parsed)
     except (TypeError, ValueError, OverflowError) as e:
-        print(f"DEBUG: dată de știre neinterpretabilă: {e}")
+        logger.warning(f"dată de știre neinterpretabilă: {e}")
     return now_ro()
 
 # --- FUNCȚIE NOUĂ DE PARSARE INTELIGENTĂ (SENIOR FIX) ---
@@ -297,11 +330,13 @@ def format_large_currency(val):
         if val >= 1e9: return f"{ro(val/1e9):.2f} B USD"
         if val >= 1e6: return f"{ro(val/1e6):.2f} M USD"
         return f"{ro(val):,.2f} USD"
-    except:
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("format_large_currency: %s", exc)
         return str(val)
     
-def format_num(val, is_pct=False):
-    """Formatare afișare (folosește smart_to_float intern)"""
+def format_num(val, is_pct=False, small_decimals=None):
+    """Formatare afișare (folosește smart_to_float intern). Cu `small_decimals`, valorile sub 1 în modul
+    se afișează cu atâtea zecimale (EPS de 0,0446 lei nu devine 0,04)."""
     if val is None: return "N/A"
     # Asigurăm conversia dacă vine string
     if isinstance(val, str):
@@ -309,6 +344,8 @@ def format_num(val, is_pct=False):
     if pd.isna(val): return "N/A"
         
     if is_pct: return f"{ro(val * 100):.2f}%"
+    if small_decimals is not None and 0 < abs(val) < 1:
+        return f"{ro(val):.{small_decimals}f}"
     return scale_number(val)
 
 def format_amount(val):
@@ -322,97 +359,46 @@ def format_amount(val):
     if a >= 1e6: return f"{sign}{ro(a/1e6):,.2f} mil"
     return f"{sign}{ro(a):,.2f}"
 
-def calculate_portfolio_beta(portfolio_curve, benchmark_ticker="SPY"):
-    """Calculează Beta și Corelația globală a întregului portofoliu."""
-    if portfolio_curve is None or portfolio_curve.empty:
-        return 0.0, 0.0
-    try:
-        start_date = portfolio_curve.index[0]
-        bench_data = yf.download(benchmark_ticker, start=start_date, progress=False)['Close']
-        if isinstance(bench_data, pd.DataFrame): bench_data = bench_data.iloc[:, 0]
-        
-        combined = pd.DataFrame({'Port': portfolio_curve, 'Bench': bench_data}).ffill().dropna()
-        returns = combined.pct_change().dropna()
-        
-        # Corelația globală (0 la 1)
-        correlation = returns['Port'].corr(returns['Bench'])
-        
-        # Beta (Sensibilitatea la piață)
-        variance = returns['Bench'].var()
-        beta = returns['Port'].cov(returns['Bench']) / variance if variance != 0 else 1.0
-        
-        return correlation, beta
-    except:
-        return 0.0, 1.0
+def get_macro_interpretation(ticker_data, vix_close=None):
+    """Ghidul macro al zilei: semnalele din analytics/macro.py (daily_cross_asset_signals) pe variațiile ultimei ședințe
+    a fiecărei serii. Un simbol fără date nu mai contează ca variație 0: regula lui se sare. Randamentul pe 10 ani
+    se compară în puncte procentuale, nu în procente din randament."""
+    def close_of(t):
+        try:
+            if isinstance(ticker_data.columns, pd.MultiIndex) and t in ticker_data.columns.levels[0]:
+                return ticker_data[t]['Close']
+        except (KeyError, AttributeError) as exc:
+            logger.warning("get_macro_interpretation %s: %s", t, exc)
+        return None
 
-def get_macro_interpretation(ticker_data):
-    """
-    Motor IA Macro Profesional: Analiză corelații, inflație și impact sectorial.
-    """
-    try:
-        def get_chg(t): return ticker_data[t]['Close'].pct_change().iloc[-1] if t in ticker_data else 0
+    def pct_of(t):
+        c = macro_calc.last_change(close_of(t))
+        return None if c is None else c["pct"]
 
-        usd = get_chg('DX-Y.NYB')
-        gold = get_chg('GC=F')
-        oil = get_chg('CL=F')
-        copper = get_chg('HG=F')
-        tnx_chg = get_chg('^TNX') # Yield 10Y
-        
-        v = []
-
-        # --- 1. CORELAȚII ACTIVE (DINAMICE) ---
-        if usd < -0.003 and gold > 0.003:
-            v.append("🟡 **AUR:** Refugiu activ. Dolarul slăbește, confirmând rolul aurului de protecție a puterii de cumpărare.")
-        
-        if usd > 0.003 and oil < -0.005:
-            v.append("🛢️ **PETROL:** Presiune valutară. Dolarul puternic scumpește barilul pentru importatori, reducând cererea.")
-
-        if copper > 0.01:
-            v.append("🏗️ **CUPRU:** Semnal expansiune. Creșterea metalelor industriale indică activitate industrială robustă.")
-
-        # --- 2. IMPACT SECTORIAL & INFLAȚIE (PROFESIONAL) ---
-        if tnx_chg > 0.01: # Dacă dobânzile cresc
-            v.append("🚀 **SECTOR BANCAR:** Impact Pozitiv. Creșterea yield-urilor îmbunătățește marjele nete de dobândă (spread).")
-            v.append("📉 **TECH & GROWTH:** Risc ridicat. Dobânzile mari scad valoarea prezentă a profiturilor viitoare (model DCF).")
-            v.append("🚩 **SMALL CAPS:** Vulnerabilitate crescută la refinanțarea datoriilor cu dobândă variabilă.")
-        elif tnx_chg < -0.01: # Dacă dobânzile scad
-            v.append("🟢 **TECH & REAL ESTATE:** Mediu favorabil. Costul capitalului scade, stimulând evaluările activelor imobiliare și tehnologice.")
-        
-        # --- 3. ALERTA "BLACK SWAN" (CRERATĂ DE TINE) ---
-        if gold > 0.01 and usd > 0.005 and get_chg('^VIX') > 0.10:
-            v.append("🚨 **ALERTA BLACK SWAN:** Fuga masivă către siguranță detectată (Aur+Dolar+VIX în creștere). Risc sistemic ridicat!")
-
-        return v if v else ["⚖️ **ECHILIBRU:** Corelațiile macro sunt stabile azi. Mișcările reflectă fundamentele individuale ale activelor."]
-    except:
+    pct = {"usd": pct_of('DX-Y.NYB'), "gold": pct_of('GC=F'), "oil": pct_of('CL=F'), "copper": pct_of('HG=F')}
+    tnx = macro_calc.last_change(close_of('^TNX'))
+    vix = macro_calc.last_change(vix_close)
+    if all(v is None for v in pct.values()) and tnx is None:
         return ["⚠️ Date insuficiente pentru procesarea corelațiilor macro."]
-
-def calculate_sortino_ratio(portfolio_curve, risk_free_rate=0.04):
-    """
-    Calculează Sortino Ratio izoland exclusiv deviația standard negativă.
-    Standardul de aur pentru hedge-fund-uri.
-    """
-    if portfolio_curve is None or len(portfolio_curve) < 5:
-        return 0.0
-        
-    try:
-        returns = portfolio_curve.pct_change().dropna()
-        # Randament mediu anualizat
-        mean_return = returns.mean() * 252
-        
-        # Păstrăm doar randamentele sub zero (Downside Risk)
-        negative_returns = returns[returns < 0]
-        
-        if len(negative_returns) < 2:
-            return 0.0 # Prea puține date negative pentru calcul
-            
-        # Volatilitate negativă anualizată
-        downside_std = np.sqrt((negative_returns**2).sum() / len(returns)) * np.sqrt(252)
-        
-        if downside_std == 0: return 0.0
-        
-        return (mean_return - risk_free_rate) / downside_std
-    except:
-        return 0.0
+    texts = {
+        "aur_refugiu": "🟡 **AUR:** Refugiu activ. Dolarul slăbește (sub −0,3% azi), iar aurul crește (peste +0,3%).",
+        "petrol_dolar": "🛢️ **PETROL:** Presiune valutară. Dolarul puternic (peste +0,3%) scumpește barilul pentru importatori; petrolul scade.",
+        "cupru_expansiune": "🏗️ **CUPRU:** Creștere de peste 1% azi: metalele industriale semnalează cerere industrială.",
+        "dobanzi_cresc": "📈 **DOBÂNZI:** Randamentul SUA pe 10 ani a crescut cu peste 10 puncte de bază azi: presiune pe acțiunile de creștere "
+                         "(valoarea prezentă a profiturilor viitoare scade) și pe companiile mici îndatorate; marje mai bune la bănci.",
+        "dobanzi_scad": "🟢 **DOBÂNZI:** Randamentul SUA pe 10 ani a scăzut cu peste 10 puncte de bază azi: costul capitalului scade "
+                        "(favorabil tehnologiei și imobiliarelor).",
+        "fuga_siguranta": "🚨 **FUGĂ SPRE SIGURANȚĂ:** Aurul (peste +1%), dolarul (peste +0,5%) și VIX (peste +10%) cresc simultan azi.",
+    }
+    sig = macro_calc.daily_cross_asset_signals(pct, None if tnx is None else tnx["abs"], None if vix is None else vix["pct"])
+    out = [texts[k] for k in sig]
+    missing = [n for n, v in (("dolar", pct["usd"]), ("aur", pct["gold"]), ("petrol", pct["oil"]), ("cupru", pct["copper"]),
+                              ("randament 10 ani", tnx), ("VIX", vix)) if v is None]
+    if not out:
+        out = ["⚖️ **ECHILIBRU:** Nicio regulă a ghidului nu s-a declanșat azi."]
+    out.append("ℹ️ Semnale pe variația unei singure ședințe, praguri orientative, netestate."
+               + (f" Fără date azi pentru: {', '.join(missing)} (regulile lor nu s-au evaluat)." if missing else ""))
+    return out
 
 def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, spread_label=None):
     score = 50
@@ -465,23 +451,6 @@ def calculate_investment_rating_pro(info, inst_pct, rvol, spread_val, mos_val, s
     
     return max(0, min(100, score)), details
 
-def get_score_highlights(data):
-    highlights = []
-    
-    # Verificare Profitabilitate
-    if data['roe'] > 0.15:
-        highlights.append("✅ Profitabilitate: ROE excelent susține creșterea organică.")
-    
-    # Verificare Marjă de Siguranță
-    if data['margin_of_safety'] < 0.10:
-        highlights.append("⚠️ Evaluare: Marjă de siguranță redusă sub nivelul ideal de 20%.")
-        
-    # Verificare Balene (Instituționali)
-    if data['inst_ownership'] > 0.50:
-        highlights.append("✅ Smart Money: Suport instituțional solid detectat.")
-        
-    return highlights
-
 def get_watchlist_target(symbol):
     """Extrage prețul țintă din foaia 'watchlist' pentru simbolul analizat."""
     try:
@@ -491,7 +460,7 @@ def get_watchlist_target(symbol):
             if not match.empty:
                 return positive_or_none(match.iloc[0]['TargetPrice'])
     except (KeyError, IndexError, TypeError, ValueError) as exc:
-        print(f"DEBUG: preț țintă din watchlist pentru {symbol}: {exc}")
+        logger.warning(f"preț țintă din watchlist pentru {symbol}: {exc}")
     return None
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -528,7 +497,7 @@ def list_company_files():
         files = client.list_spreadsheet_files(folder_id=folders[0]["id"])
         return [{"id": f["id"], "name": f["name"], "modified": f.get("modifiedTime")} for f in files], None
     except (gspread.exceptions.APIError, requests.exceptions.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: lista fișierelor de analiză: {e}")
+        logger.warning(f"lista fișierelor de analiză: {e}")
         return [], f"Lista fișierelor din „{COMPANY_FOLDER_NAME}” nu a putut fi citită: {e}"
 
 
@@ -647,6 +616,30 @@ def compact_html(fragment):
     return "".join(line.strip() for line in fragment.splitlines() if line.strip())
 
 
+XTB_BULLET_CSS = """<style>
+.xtb-bullet-container {background-color:#161B22; padding:25px; border-radius:12px; border:1px solid #30363D; box-shadow:0 4px 6px rgba(0,0,0,0.1);}
+.xtb-row {display:flex; align-items:flex-start; margin-bottom:20px;}
+.xtb-icon {margin-right:15px; font-size:20px; margin-top:-2px;}
+.xtb-text {font-size:15px; color:#C9D1D9; line-height:1.5; font-weight:400;}
+.xtb-footer {margin-top:10px; font-size:12px; color:#8B949E; border-top:1px solid #30363D; padding-top:15px; display:flex; justify-content:space-between; align-items:center;}
+</style>"""
+
+
+def render_bullet_box(bullets, footer_text):
+    """Caseta cu bulleturi (stil XTB) într-un singur st.markdown.
+
+    Înainte, deschiderea <div>, fiecare rând și închiderea erau trimise în apeluri st.markdown separate:
+    Streamlit închide singur fiecare fragment, deci caseta apărea goală, cu rândurile dedesubt.
+    Textul bulleturilor e generat de aplicație; titlurile de știri din el sunt deja escapate."""
+    rows = "".join(
+        f'<div class="xtb-row"><div class="xtb-icon" style="color:{b["color"]};">{b["icon"]}</div>'
+        f'<div class="xtb-text">{b["text"]}</div></div>' for b in bullets)
+    footer = (f'<div class="xtb-footer"><span>{footer_text}</span>'
+              '<span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span></div>')
+    st.markdown(compact_html(XTB_BULLET_CSS + f'<div class="xtb-bullet-container">{rows}{footer}</div>'),
+                unsafe_allow_html=True)
+
+
 def render_bvb_decision(real_sym, hist):
     """Secțiunea „Decizie BVB în doi pași” pentru simbolurile .RO care au fișier în „Analiză companii”."""
     sym = str(real_sym).upper()
@@ -746,7 +739,7 @@ def render_bvb_decision(real_sym, hist):
 
     st.markdown("**Pasul 2 · Momentul** (tehnic, doar pentru intrare)")
     t1, t2, t3, t4, t5 = st.columns(5)
-    t1.metric("Moment", "N/A" if moment is None else f"{ro(moment):.0f}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
+    t1.metric("Moment", "N/A" if moment is None else f"{score_ro(moment)}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
     trend = comp["trend"]
     t2.metric("Trend SMA 50/200", "N/A" if trend is None else f"{ro(trend * 3):.0f} din 3" if len(close.dropna()) >= 200 else f"{ro(trend):.0f} din 1",
               help="Câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200 (sub 200 de ședințe: doar preț > SMA 50).")
@@ -818,7 +811,10 @@ def render_bvb_decision(real_sym, hist):
             "fund_score": None if pd.isna(row["scor"]) else float(row["scor"]), "fund_detail": vb["fund_detail"],
             "fund_basis": "testat pe BVB", "moment": moment, "moment_label": vb["moment_label"],
             "moment_color": vb["moment_color"], "moment_detail": vb["moment_detail"],
-            "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False}
+            "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False,
+            # Randamentul dividendului din fișier (dividend total pe ultimul an / capitalizarea la prețul curent),
+            # pentru cardul „Dividend (Randament)”: Yahoo nu îl trimite la BVB.
+            "dy": None if pd.isna(me["DY"]) else float(me["DY"]), "dy_year": me.get("raport_anual"), "price": price}
     st.markdown("---")
 
 
@@ -888,8 +884,8 @@ def render_global_decision(real_sym, info, hist, risk_stats):
     m_label, m_color, m_note = moment_label(moment, False)
     n_ok = sum(1 for p in res["pillars"] if p["score"] is not None)
     fund_detail = ("N/A" if res["score"] is None
-                   else f"{ro(res['score']):.1f}/100 · {n_ok} din {len(res['pillars'])} piloni cu date · descriptiv")
-    moment_detail = "N/A" if moment is None else f"tehnic {ro(moment):.0f}/100, descriptiv"
+                   else f"{score_ro(res['score'])}/100 · {n_ok} din {len(res['pillars'])} piloni cu date · descriptiv")
+    moment_detail = "N/A" if moment is None else f"tehnic {score_ro(moment)}/100, descriptiv"
 
     st.markdown(f"""
         <div style="background:#161B22; border:1px solid {res['color']}88; border-radius:12px; padding:14px; margin:8px 0 14px 0;">
@@ -987,7 +983,7 @@ def _read_peer_rows(symbols):
         try:
             inf = yf.Ticker(p_sym).info or {}
         except Exception as e:
-            print(f"DEBUG: comparabil {p_sym} indisponibil: {e}")
+            logger.warning(f"comparabil {p_sym} indisponibil: {e}")
             failed.append(p_sym)
             continue
         row = {"Simbol": p_sym, "Capitalizare": num(inf, 'marketCap'), "Monedă": inf.get('currency') or "",
@@ -1016,34 +1012,6 @@ def get_bvb_yahoo_peer_rows(yahoo_symbols):
     """Comparabilii BVB care nu au indicatori în foaia BVB (tuplu de simboluri Yahoo, ex. „BRD.RO"),
     citiți din Yahoo. Datele Yahoo pentru BVB sunt mai rare decât cele din foaie; sursa se afișează."""
     return _read_peer_rows(list(yahoo_symbols))
-
-def run_monte_carlo_sim(portfolio_curve, days_ahead=252, simulations=1000):
-    """
-    Rulează o simulare stocastică pentru a prezice evoluția portofoliului.
-    """
-    if portfolio_curve is None or len(portfolio_curve) < 10:
-        return None, 0
-    
-    # Calculăm randamentele logaritmice pentru stabilitate matematică
-    returns = np.log(portfolio_curve / portfolio_curve.shift(1)).dropna()
-    mu = returns.mean()
-    var = returns.var()
-    # Drift-ul reprezintă direcția medie ajustată cu volatilitatea
-    drift = mu - (0.5 * var)
-    stdev = returns.std()
-    
-    # Generăm șocuri aleatorii (Z ~ N(0,1))
-    # Matrice de (zile x simulări)
-    daily_returns = np.exp(drift + stdev * norm.ppf(np.random.rand(days_ahead, simulations)))
-    
-    # Proiecția prețului
-    price_paths = np.zeros_like(daily_returns)
-    price_paths[0] = portfolio_curve.iloc[-1]
-    
-    for t in range(1, days_ahead):
-        price_paths[t] = price_paths[t-1] * daily_returns[t]
-        
-    return price_paths, portfolio_curve.iloc[-1]
 
 def calculate_atr_trailing_stop(df, window=14, multiplier=2.5):
     """
@@ -1074,9 +1042,11 @@ def fetch_news_data():
                     "date_obj": dt,
                     "date_str": dt.strftime("%Y-%m-%d %H:%M")
                 })
-        except: continue
-    all_news.sort(key=lambda x: x['date_obj'], reverse=True)
-    return all_news
+        except Exception as exc:  # înainte: except: gol
+            logger.debug("fetch_news_data: %s", exc)
+            continue
+    # Cea mai nouă prima; știrile cu data din sursă în viitor (Ziarul Bursa: data ediției) marcate și puse la coadă.
+    return mark_future(all_news, now_ro().replace(tzinfo=None))
 
 def filter_news(all_news, category):
     keywords = RSS_CONFIG["Categorii"].get(category, [])
@@ -1112,22 +1082,46 @@ def filter_news(all_news, category):
             
     return filtered
 
-def get_company_news_rss(symbol):
+class _NoRssNews(Exception):
+    """Fluxul RSS nu a dat nicio știre. Excepțiile nu intră în cache: o listă goală (Yahoo limitează uneori) se reîncearcă."""
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _yahoo_rss_news(symbol):
+    """Primele 30 de știri din fluxul Yahoo RSS al simbolului, nefiltrate (cache 15 min). Înainte fluxul se descărca
+    la fiecare rerulare a paginii (orice clic pe un widget). Flux gol → _NoRssNews; eroare → excepția (fără cache)."""
     rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
+    feed = feedparser.parse(rss_url)
+    if not feed.entries:
+        raise _NoRssNews(symbol)
     news_list = []
-    try:
-        feed = feedparser.parse(rss_url)
-        if not feed.entries: return []
-        for entry in feed.entries[:7]:
-            dt = parse_date(entry)
-            news_list.append({
-                "title": entry.title,
-                "link": entry.link,
-                "publisher": "Yahoo Finance",
-                "date_str": dt.strftime("%Y-%m-%d %H:%M")
-            })
-    except: return []
+    for entry in feed.entries[:30]:
+        dt = parse_date(entry)
+        news_list.append({
+            "title": entry.title,
+            "link": entry.link,
+            "summary": getattr(entry, "summary", ""),
+            "publisher": "Yahoo Finance",
+            "date_str": dt.strftime("%Y-%m-%d %H:%M")
+        })
     return news_list
+
+
+def get_company_news_rss(symbol, names=None, limit=7):
+    """Știrile Yahoo (RSS) pe simbol. Cu `names` (numele companiei din `info`), se păstrează doar
+    știrile care menționează emitentul (data/news.py): fluxul pe simbol aduce des știri despre alte
+    companii. Fără `names` (indici: ^GSPC, ^IXIC) lista rămâne nefiltrată."""
+    try:
+        news_list = [dict(n) for n in _yahoo_rss_news(symbol)]   # copie: lista din cache nu se modifică
+    except _NoRssNews:
+        logger.info("get_company_news_rss %s: flux fără știri", symbol)
+        return []
+    except Exception as exc:  # rețea / format RSS
+        logger.warning("get_company_news_rss: %s", exc)
+        return []
+    if names is not None:
+        news_list = filter_company_news(news_list, symbol, names)
+    return news_list[:limit]
 
 # --- FUNCȚII ANALIZĂ (Professional Update) ---
 @st.cache_data(ttl=3600)
@@ -1152,50 +1146,8 @@ def get_macro_data_visuals():
         'DAX 40 (Germania) 🇩🇪': '^GDAXI'
     }
     # Descărcăm 5 ani (5y)
-    data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False)
+    data = yf.download(list(tickers.values()), period="5y", group_by='ticker', progress=False, auto_adjust=True)
     return tickers, data
-
-@st.cache_data(ttl=3600)
-def get_market_data():
-    try:
-        spy = yf.Ticker("SPY").history(period="1y")['Close']
-        return spy
-    except: return None
-
-@st.cache_data(ttl=3600)
-def get_risk_free_rate():
-    """Descarcă randamentul titlurilor de stat SUA pe 10 ani (^TNX) ca proxy pentru Risk Free Rate."""
-    try:
-        tnx = yf.Ticker("^TNX").history(period="1d")
-        if not tnx.empty:
-            return tnx['Close'].iloc[-1] / 100
-    except:
-        pass
-    return 0.04 # Fallback la 4%
-
-def calculate_alpha(stock_hist, beta):
-    try:
-        spy = get_market_data()
-        if spy is None or stock_hist is None: return None
-        
-        # Sincronizare lungime date
-        min_len = min(len(spy), len(stock_hist))
-        stock_close = stock_hist['Close'].iloc[-min_len:]
-        spy_close = spy.iloc[-min_len:]
-        
-        # Calcul randament total
-        ret_stock = (stock_close.iloc[-1] / stock_close.iloc[0]) - 1
-        ret_market = (spy_close.iloc[-1] / spy_close.iloc[0]) - 1
-        
-        # Rata dinamică
-        risk_free = get_risk_free_rate()
-        
-        if beta is None: beta = 1.0
-        
-        # Formula CAPM: Alpha = R_stock - (R_rf + Beta * (R_market - R_rf))
-        alpha = ret_stock - (risk_free + beta * (ret_market - risk_free))
-        return alpha
-    except: return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_financial_statements(symbol):
@@ -1216,7 +1168,7 @@ def get_financial_statements(symbol):
             if isinstance(raw, pd.DataFrame) and not raw.empty:
                 df = raw
         except Exception as e:
-            print(f"DEBUG: {attr} indisponibil pentru {symbol}: {e}")
+            logger.warning(f"{attr} indisponibil pentru {symbol}: {e}")
         out[key] = df
         if df is None:
             out["errors"].append(attr)
@@ -1231,7 +1183,7 @@ def get_benchmark_close(symbol):
         if data is not None and not data.empty and 'Close' in data:
             return data['Close'].dropna()
     except Exception as e:
-        print(f"DEBUG: benchmark {symbol} indisponibil: {e}")
+        logger.warning(f"benchmark {symbol} indisponibil: {e}")
     return pd.Series(dtype=float)
 
 
@@ -1242,6 +1194,31 @@ STATEMENT_RATIO_LABELS = {
     "quickRatio": "quick ratio", "totalRevenue": "venituri", "netIncomeToCommon": "profit net",
     "operatingCashflow": "flux din exploatare", "totalDebt": "datorie totală", "totalCash": "numerar",
 }
+
+
+class SheetUnavailable(Exception):
+    """Foaia cerută nu există sau nu e accesibilă (mesaj fără date din foaie)."""
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_sheet_values(sheet_name):
+    """`get_all_values()` al unei foi din `portofoliu_db`, pentru tabul „Import Date”. Doar citire.
+    Eroarea aruncă excepția, deci nu intră în cache."""
+    ws = connect_to_gsheets(sheet_name)
+    if not ws:
+        raise SheetUnavailable(f"foaia {sheet_name} nu există sau nu e accesibilă")
+    return ws.get_all_values()
+
+
+def read_sheet_values(sheet_name):
+    """(valori, None) sau (None, motivul) — pentru afișare cu st.error, fără excepție brută."""
+    try:
+        return load_sheet_values(sheet_name), None
+    except SheetUnavailable as exc:
+        return None, str(exc)
+    except (gspread.exceptions.GSpreadException, requests.RequestException) as exc:
+        logger.warning("citire foaie %s: %s", sheet_name, exc)
+        return None, f"citirea foii {sheet_name} a eșuat ({type(exc).__name__})"
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -1259,7 +1236,7 @@ def load_bvb_fundamentals():
         parsed["_unmapped"] = unmapped_info_keys(values)
         return parsed
     except Exception as e:
-        print(f"DEBUG: foaia BVB nu a putut fi citită: {e}")
+        logger.warning(f"foaia BVB nu a putut fi citită: {e}")
         return {}
 
 
@@ -1326,7 +1303,8 @@ def resolve_beta_alpha(symbol, info, hist):
     deci se calculează față de BET (prin TVBETETF.RO, proxy), pe randamente săptămânale.
     La celelalte piețe rămâne beta Yahoo; dacă lipsește, se calculează față de indicele pieței.
     Alpha: când beta e calculat aici, alpha folosește același benchmark și rata fără risc a
-    valutei. Cu beta din Yahoo: acțiunile în USD rămân pe calculul existent (față de SPY); cele în EUR
+    valutei. Cu beta din Yahoo: acțiunile în USD se compară cu SPY (fereastră calendaristică de un an,
+    rata fără risc din ^TNX, fără valoare de rezervă); cele în EUR
     se compară cu DAX (.DE) sau Euro Stoxx 50, cu beta calculat față de același indice; alte valute: N/A.
     Întoarce un dict: beta, beta_label, alpha, alpha_label. Valorile lipsă sunt None.
     """
@@ -1393,8 +1371,19 @@ def resolve_beta_alpha(symbol, info, hist):
     if cur != "USD":
         out["alpha_label"] = f"indisponibil: nu există încă un indice de referință în {cur} (doar SUA, zona euro, BVB)"
         return out
-    out["alpha"] = calculate_alpha(hist, out["beta"])
-    out["alpha_label"] = "față de S&P 500 (SPY), ultimul an; rată fără risc: titluri SUA 10 ani"
+    # USD: beta Yahoo (față de S&P 500), benchmark SPY. Fereastra pe date calendaristice (jensen_alpha),
+    # nu pe număr de rânduri; rata fără risc citită din ^TNX, fără valoarea de rezervă de 4% (lipsă → N/A).
+    rf_val, rf_label = get_risk_free_for_currency("USD")
+    if rf_val is None:
+        out["alpha_label"] = f"indisponibil: {rf_label}"
+        return out
+    alpha = jensen_alpha(hist['Close'], get_benchmark_close("SPY"), out["beta"], rf_val)
+    if alpha is None:
+        out["alpha_label"] = "indisponibil: sub un an de ședințe comune cu S&P 500 (SPY)"
+        return out
+    out["alpha"] = alpha["alpha"]
+    out["alpha_label"] = (f"față de S&P 500 (SPY), {alpha['start']:%d.%m.%Y}–{alpha['end']:%d.%m.%Y}; "
+                          f"beta Yahoo {ro(out['beta']):.2f}; rată fără risc {ro(rf_val * 100):.2f}% [{rf_label}]")
     return out
 
 
@@ -1408,7 +1397,7 @@ def get_aaa_yield():
         if len(serie) and 0 < float(serie.iloc[-1]) < 25:
             return float(serie.iloc[-1]), f"obligațiuni corporative AAA SUA (FRED AAA, {serie.index[-1]:%m.%Y})"
     except Exception as e:
-        print(f"DEBUG: randament AAA (FRED) indisponibil: {e}")
+        logger.warning(f"randament AAA (FRED) indisponibil: {e}")
     return None, "Randamentul obligațiunilor AAA (FRED) nu a putut fi citit."
 
 
@@ -1424,9 +1413,9 @@ def get_aaa_spread():
         res = fund.aaa_treasury_spread(aaa, gs10)
         if res is not None and 0 < res["aaa"] < 25 and 0 < res["treasury"] < 25:
             return res, f"marja AAA din SUA {ro(res['spread']):.2f} pp (FRED AAA − GS10, {res['month'].strftime('%m.%Y')})"
-        print("DEBUG: marja AAA (FRED AAA/GS10): nicio lună comună validă")
+        logger.warning("marja AAA (FRED AAA/GS10): nicio lună comună validă")
     except Exception as e:
-        print(f"DEBUG: marja AAA (FRED AAA/GS10) indisponibilă: {e}")
+        logger.warning(f"marja AAA (FRED AAA/GS10) indisponibilă: {e}")
     return None, "Marja AAA față de titlurile SUA (FRED AAA, GS10) nu a putut fi citită."
 
 
@@ -1455,12 +1444,18 @@ ECB_RO_10Y_URL = "https://data-api.ecb.europa.eu/service/data/IRS/M.RO.L.L40.CI.
 EUROSTAT_MONEY_MARKET_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/irt_st_m"
 
 
+class CurveUnavailable(Exception):
+    """Curba nu a putut fi citită. Excepțiile nu intră în cache-ul Streamlit: un eșec temporar se reîncearcă
+    la următoarea afișare, nu rămâne 6 ore (aceeași regulă ca rata fără risc, #75)."""
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_market_curve(market):
+def _market_curve_cached(market):
     """Panta curbei randamentelor (10 ani − 3 luni, în puncte procentuale) pe piața acțiunii:
     (spread, descriere) sau (None, motiv). Fără valoare de rezervă.
 
-    US: ^TNX − ^IRX (Yahoo), aceeași zi. EU: curba titlurilor de stat AAA din zona euro (BCE, zilnic,
+    US: ^TNX − ^IRX (Yahoo), aceeași zi; ^IRX e randament de discount și se convertește întâi în randament echivalent
+    de obligațiune (`tbill_discount_to_bey`), convenția lui ^TNX și a FRED DGS3MO. EU: curba titlurilor de stat AAA din zona euro (BCE, zilnic,
     seria gata calculată 10 ani − 3 luni; proxy pentru Bund). RO: titluri de stat 10 ani (BCE, lunar)
     − ROBOR 3M (Eurostat irt_st_m, lunar), pe aceeași lună.
     """
@@ -1471,13 +1466,14 @@ def get_market_curve(market):
         try:
             t10 = yf.Ticker("^TNX").history(period="10d", auto_adjust=False)['Close']
             t3 = yf.Ticker("^IRX").history(period="10d", auto_adjust=False)['Close']
-            res = same_day_spread(t10, t3)
+            # ^IRX e cotat ca randament de discount (4,00 ≈ 4,10 echivalent): fără conversie panta ieșea ~0,1 pp mai mare.
+            res = same_day_spread(t10, tbill_discount_to_bey(t3))
             if res is not None and _valid(res["spread"]):
                 return res["spread"], (f"SUA, titluri de stat 10 ani {ro(res['long']):.2f}% − 3 luni {ro(res['short']):.2f}% "
-                                       f"(^TNX − ^IRX, {res['date']:%d.%m.%Y})")
+                                       f"(^TNX − ^IRX convertit în randament echivalent, {res['date']:%d.%m.%Y})")
         except Exception as e:
-            print(f"DEBUG: curba SUA (^TNX/^IRX) indisponibilă: {e}")
-        return None, "curba SUA (^TNX − ^IRX) nu a putut fi citită"
+            logger.warning(f"curba SUA (^TNX/^IRX) indisponibilă: {e}")
+        raise CurveUnavailable("curba SUA (^TNX − ^IRX) nu a putut fi citită")
     if market == "EU":
         try:
             resp = requests.get(ECB_EU_CURVE_URL, params={"lastNObservations": 5, "format": "csvdata"}, timeout=10)
@@ -1486,10 +1482,10 @@ def get_market_curve(market):
                 if obs is not None and _valid(obs[1]):
                     return obs[1], f"zona euro, curba titlurilor de stat AAA 10 ani − 3 luni (BCE, {obs[0]}; proxy pentru Bund)"
             else:
-                print(f"DEBUG: BCE (curba zonei euro): HTTP {resp.status_code}")
+                logger.warning(f"BCE (curba zonei euro): HTTP {resp.status_code}")
         except requests.RequestException as e:
-            print(f"DEBUG: BCE (curba zonei euro) indisponibilă: {e}")
-        return None, "curba zonei euro (BCE) nu a putut fi citită"
+            logger.warning(f"BCE (curba zonei euro) indisponibilă: {e}")
+        raise CurveUnavailable("curba zonei euro (BCE) nu a putut fi citită")
     if market == "RO":
         try:
             r10 = requests.get(ECB_RO_10Y_URL, params={"lastNObservations": 6, "format": "csvdata"}, timeout=10)
@@ -1500,17 +1496,30 @@ def get_market_curve(market):
                 if res is not None and _valid(res["spread"]):
                     return res["spread"], (f"România, titluri de stat 10 ani {ro(res['long']):.2f}% (BCE) − ROBOR 3M "
                                            f"{ro(res['short']):.2f}% (Eurostat), {res['month']}")
-                print("DEBUG: curba RO: nicio lună comună între BCE și Eurostat")
+                logger.warning("curba RO: nicio lună comună între BCE și Eurostat")
             else:
-                print(f"DEBUG: curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
+                logger.warning(f"curba RO: BCE HTTP {r10.status_code}, Eurostat HTTP {r3.status_code}")
         except (requests.RequestException, ValueError) as e:
-            print(f"DEBUG: curba RO indisponibilă: {e}")
-        return None, "curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită"
-    return None, "nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)"
+            logger.warning(f"curba RO indisponibilă: {e}")
+        raise CurveUnavailable("curba României (BCE 10 ani, ROBOR 3M Eurostat) nu a putut fi citită")
+    raise CurveUnavailable("nu există încă o curbă a randamentelor pentru piața acestei acțiuni (doar SUA, zona euro, România)")
+
+
+def get_market_curve(market):
+    """(spread, descriere) sau (None, motiv). Doar citirile reușite stau în cache 6 ore (`_market_curve_cached`)."""
+    try:
+        return _market_curve_cached(market)
+    except CurveUnavailable as exc:
+        return None, str(exc)
+
+
+class RiskFreeUnavailable(Exception):
+    """Rata fără risc nu a putut fi citită. Excepțiile nu intră în cache-ul Streamlit, deci un eșec
+    temporar (timeout BCE/FRED/Yahoo) se reîncearcă la următoarea afișare, nu rămâne 6 ore."""
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_risk_free_for_currency(currency):
+def _risk_free_cached(currency):
     """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
 
     USD: randamentul titlurilor SUA pe 10 ani (^TNX, Yahoo). EUR: Bund 10 ani (FRED, lunar).
@@ -1526,12 +1535,12 @@ def get_risk_free_for_currency(currency):
     cur = (currency or "").upper()
     if cur == "USD":
         try:
-            closes = yf.Ticker("^TNX").history(period="5d")['Close'].dropna()
+            closes = yf.Ticker("^TNX").history(period="5d", auto_adjust=True)['Close'].dropna()
             if len(closes) and _valid(float(closes.iloc[-1])):
                 return float(closes.iloc[-1]) / 100, f"titluri SUA 10 ani (^TNX, {closes.index[-1]:%d.%m.%Y})"
         except Exception as e:
-            print(f"DEBUG: ^TNX indisponibil: {e}")
-        return None, "Randamentul titlurilor SUA pe 10 ani (^TNX) nu a putut fi citit."
+            logger.warning(f"^TNX indisponibil: {e}")
+        raise RiskFreeUnavailable("Randamentul titlurilor SUA pe 10 ani (^TNX) nu a putut fi citit.")
     if cur == "EUR":
         try:
             end = datetime.today()
@@ -1539,8 +1548,8 @@ def get_risk_free_for_currency(currency):
             if len(serie) and _valid(float(serie.iloc[-1])):
                 return float(serie.iloc[-1]) / 100, f"Bund 10 ani (FRED IRLTLT01DEM156N, {serie.index[-1]:%m.%Y})"
         except Exception as e:
-            print(f"DEBUG: Bund 10 ani (FRED) indisponibil: {e}")
-        return None, "Randamentul Bund pe 10 ani (FRED) nu a putut fi citit."
+            logger.warning(f"Bund 10 ani (FRED) indisponibil: {e}")
+        raise RiskFreeUnavailable("Randamentul Bund pe 10 ani (FRED) nu a putut fi citit.")
     if cur == "RON":
         try:
             resp = requests.get(
@@ -1552,13 +1561,22 @@ def get_risk_free_for_currency(currency):
                 if obs is not None and _valid(obs[1]):
                     return obs[1] / 100, f"titluri de stat RO 10 ani (BCE, {obs[0]})"
             else:
-                print(f"DEBUG: BCE (randament RO 10 ani): HTTP {resp.status_code}")
+                logger.warning(f"BCE (randament RO 10 ani): HTTP {resp.status_code}")
         except requests.RequestException as e:
-            print(f"DEBUG: BCE (randament RO 10 ani) indisponibil: {e}")
-        return None, "Randamentul titlurilor de stat românești pe 10 ani (BCE) nu a putut fi citit."
-    return None, f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}."
+            logger.warning(f"BCE (randament RO 10 ani) indisponibil: {e}")
+        raise RiskFreeUnavailable("Randamentul titlurilor de stat românești pe 10 ani (BCE) nu a putut fi citit.")
+    raise RiskFreeUnavailable(f"Nu există încă o sursă automată pentru rata fără risc în {cur or 'valuta necunoscută'}.")
 
-# --- Pune acest bloc sus, lângă celelalte funcții (calculate_alpha, etc.) ---
+
+def get_risk_free_for_currency(currency):
+    """Rata fără risc pe 10 ani în valuta dată: (fracție, descrierea sursei) sau (None, motiv).
+    Doar valorile citite cu succes stau în cache (6 ore); vezi `_risk_free_cached`."""
+    try:
+        return _risk_free_cached(currency)
+    except RiskFreeUnavailable as exc:
+        return None, str(exc)
+
+# --- Funcții ajutătoare ---
 
 def calculate_health_score_ext(info):
     score = 5
@@ -1604,7 +1622,7 @@ def calculate_health_score_ext(info):
                 cons.append("Lichiditate precară")
             
     except Exception as e:
-        print(f"DEBUG: scor sănătate incomplet: {e}")
+        logger.warning(f"scor sănătate incomplet: {e}")
 
     # Fără niciun indicator de bilanț, scorul ar rămâne 5/10 („mediu") fără nicio bază.
     if all(num(info, k) is None for k in ('debtToEquity', 'returnOnEquity', 'currentRatio')):
@@ -1652,24 +1670,6 @@ def calculate_altman_z(info, symbol, fin):
     out.update(value=value, zone=zone, label=ALTMAN_ZONE_TEXT[zone][0], color=ALTMAN_ZONE_TEXT[zone][1],
                message=ALTMAN_ZONE_TEXT[zone][2])
     return out
-
-def calculate_margin_of_safety(current_price, fair_value):
-    """Calculează marja de siguranță între prețul actual și valoarea intrinsecă."""
-    if fair_value <= 0: return 0, "N/A"
-    
-    # Diferența procentuală
-    mos = (fair_value - current_price) / fair_value
-    
-    if mos > 0.30:
-        verdict = "🚀 Deep Value: Acțiunea este sever subevaluată. Marjă de siguranță excelentă."
-    elif mos > 0.10:
-        verdict = "✅ Fair Value: Preț rezonabil. Există o marjă de siguranță acceptabilă."
-    elif mos > -0.10:
-        verdict = "⚖️ Evaluare Corectă: Prețul pieței reflectă valoarea reală. Fără marjă de siguranță."
-    else:
-        verdict = "⚠️ Supraevaluare: Prețul este mult peste valoarea intrinsecă. Risc mare de corecție."
-        
-    return mos * 100, verdict
 
 def analyze_dividend_quality(info):
     """Analizează dacă dividendele și profitul sunt sustenabile.
@@ -1737,7 +1737,7 @@ def _safe_info(t):
         if len(info) < 10:
             info_error = f"răspuns aproape gol de la Yahoo ({len(info)} câmpuri)"
     except Exception as e:
-        print(f"DEBUG: info indisponibil pentru {getattr(t, 'ticker', '?')}: {e}")
+        logger.warning(f"info indisponibil pentru {getattr(t, 'ticker', '?')}: {e}")
         info_error = f"{type(e).__name__}: {str(e)[:300]}"
         info = {}
     try:
@@ -1750,9 +1750,9 @@ def _safe_info(t):
                     if value is not None:
                         info[key] = value
                 except Exception as e:
-                    print(f"DEBUG: fast_info.{attr} indisponibil: {e}")
+                    logger.warning(f"fast_info.{attr} indisponibil: {e}")
     except Exception as e:
-        print(f"DEBUG: fast_info indisponibil: {e}")
+        logger.warning(f"fast_info indisponibil: {e}")
     info["_fundamentals_available"] = any(
         num(info, k) is not None for k in ("trailingPE", "returnOnEquity", "debtToEquity", "profitMargins", "bookValue")
     )
@@ -1765,7 +1765,7 @@ def _safe_earnings(t):
     try:
         return getattr(t, 'earnings_history', None)
     except Exception as e:
-        print(f"DEBUG: earnings indisponibil: {e}")
+        logger.warning(f"earnings indisponibil: {e}")
         return None
 
 
@@ -1776,13 +1776,13 @@ def get_stock_data(symbol):
         t = yf.Ticker(symbol)
         
         # Încercăm să descărcăm datele istorice
-        hist = t.history(period="5y")
+        hist = t.history(period="5y", auto_adjust=True)
 
         # Fallback pentru Bursa de Valori București (BVB)
         if hist.empty and not symbol.endswith(".RO"):
             sym_ro = symbol + ".RO"
             t_ro = yf.Ticker(sym_ro)
-            hist_ro = t_ro.history(period="5y")
+            hist_ro = t_ro.history(period="5y", auto_adjust=True)
             if not hist_ro.empty:
                 return hist_ro, _safe_info(t_ro), _safe_earnings(t_ro), sym_ro
 
@@ -1793,7 +1793,7 @@ def get_stock_data(symbol):
 
     except Exception as e:
         # Dacă apare o eroare de conexiune, o afișăm în consolă pentru debug, nu blocăm UI-ul
-        print(f"DEBUG: Eroare yfinance pentru {symbol}: {e}")
+        logger.warning(f"Eroare yfinance pentru {symbol}: {e}")
         return None, None, None, symbol
 
 def calculate_technical_indicators(df):
@@ -1807,8 +1807,9 @@ def calculate_technical_indicators(df):
     df['MACD'], df['Signal'] = macd_lines(df['Close'])
     return df
 
-def plot_correlation_matrix(tickers):
-    """Generează matricea de corelație și un raport vizual premium."""
+def plot_correlation_matrix(tickers, show_cards=True):
+    """Matricea de corelație (heatmap). Cu `show_cards=False` cardurile pe perechi nu se afișează aici:
+    se întoarce matricea, iar apelantul le afișează unde vrea cu `render_diversification_cards`."""
     if len(tickers) < 2: return None
     try:
         # 1. Descărcare și calcul
@@ -1819,31 +1820,36 @@ def plot_correlation_matrix(tickers):
             st.info(f"Corelațiile nu pot fi calculate: doar {corr_days} zile comune de tranzacționare (minimum 60) "
                     "sau mai puțin de două simboluri cu istoric.")
             return None
-        st.caption(f"Corelații pe {corr_days} zile comune de tranzacționare din ultimul an.")
+        st.caption(f"Corelații pe {corr_days} zile comune de tranzacționare din ultimul an (randamente zilnice). "
+                   f"Peste {ro(CORR_HIGH):.2f}: diversificare slabă; {ro(CORR_MID):.2f}–{ro(CORR_HIGH):.2f}: moderată; "
+                   f"sub {ro(CORR_MID):.2f}: bună. Praguri orientative, netestate, aceleași pe carduri.")
         
-        # 2. Text Heatmap
+        # 2. Text Heatmap (clasele din analytics/risk.py: aceleași praguri ca pe carduri)
+        band_short = {"slaba": "⚠️ Slabă", "moderata": "Moderată", "buna": "✅ Bună"}
         text_matrix = []
         for i in range(len(corr_matrix)):
             row_text = []
             for j in range(len(corr_matrix)):
                 val = corr_matrix.iloc[i, j]
-                if i == j: label = "1.00"
-                elif val > 0.8: label = f"{ro(val):.2f}<br>⚠️ Risc"
-                elif val > 0.5: label = f"{ro(val):.2f}<br>Moderat"
-                else: label = f"{ro(val):.2f}<br>✅ OK"
+                band = correlation_band(val)
+                if i == j: label = f"{ro(1.0):.2f}"
+                elif band is None: label = "N/A"
+                else: label = f"{ro(val):.2f}<br>{band_short[band]}"
                 row_text.append(label)
             text_matrix.append(row_text)
 
-        # 3. Grafic Plotly optimizat
+        # 3. Grafic Plotly: scală divergentă, albastru (negativ: pozițiile se compensează) – gri (0) – portocaliu (pozitiv)
         fig = go.Figure(data=go.Heatmap(
             z=corr_matrix.values,
             x=corr_matrix.columns,
             y=corr_matrix.columns,
-            colorscale=[[0.0, '#00FF00'], [0.5, '#ffffff'], [1.0, '#01464D']],
-            zmin=-1, zmax=1,
+            colorscale=[[0.0, '#3987e5'], [0.5, '#383835'], [1.0, '#d95926']],
+            zmin=-1, zmax=1, xgap=2, ygap=2,
             text=text_matrix,
             texttemplate="%{text}",
-            hovertemplate="Corelație: %{z:.2f}<extra></extra>"
+            textfont=dict(color='#ffffff'),
+            colorbar=dict(title="Corelație"),
+            hovertemplate="%{y} ↔ %{x}<br>Corelație: %{z:.2f}<extra></extra>"
         ))
         
         fig.update_layout(
@@ -1855,55 +1861,76 @@ def plot_correlation_matrix(tickers):
 
         plot_ro(fig, width='stretch')
         
-        # 4. RAPORT VIZUAL STILIZAT (Cards)
-        st.markdown("### 📋 Analiză Strategica a Diversificării")
-        
-        cols = st.columns(len(corr_matrix.columns) - 1 if len(corr_matrix.columns) <= 3 else 2)
-        col_idx = 0
-
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i + 1, len(corr_matrix.columns)):
-                score = corr_matrix.iloc[i, j]
-                t1, t2 = corr_matrix.columns[i], corr_matrix.columns[j]
-                
-                # Logică Culori și Iconițe
-                if score > 0.75:
-                    color, icon, label = "#F85149", "🚫", "Diversificare Slabă"
-                    bg_light = "rgba(248, 81, 73, 0.1)"
-                elif score > 0.40:
-                    color, icon, label = "#DBAB09", "⚠️", "Diversificare Moderată"
-                    bg_light = "rgba(219, 171, 9, 0.1)"
-                else:
-                    color, icon, label = "#3FB950", "🛡️", "Diversificare Optimă"
-                    bg_light = "rgba(63, 185, 80, 0.1)"
-
-                # Randare Card HTML/CSS
-                with cols[col_idx % len(cols)]:
-                    st.markdown(f"""
-                        <div style="
-                            background-color: #161B22; 
-                            border-left: 5px solid {color}; 
-                            padding: 15px; 
-                            border-radius: 10px; 
-                            margin-bottom: 10px;
-                            box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span style="color: #8B949E; font-size: 12px; font-weight: bold; text-transform: uppercase;">{label}</span>
-                                <span style="font-size: 20px;">{icon}</span>
-                            </div>
-                            <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
-                            <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
-                                <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{ro(score):.2f}</span>
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                col_idx += 1
-
-        return True
+        if show_cards:
+            render_diversification_cards(corr_matrix)
+        return corr_matrix
     except Exception as e:
         st.error(f"Eroare Matrice: {e}")
         return None
     
+def render_diversification_cards(corr_matrix):
+    """Cardurile „Analiză Strategică a Diversificării”: o pereche de simboluri pe card, cu corelația ei."""
+    # 4. RAPORT VIZUAL STILIZAT (Cards)
+    st.markdown("### 📋 Analiză Strategică a Diversificării")
+    
+    cols = st.columns(len(corr_matrix.columns) - 1 if len(corr_matrix.columns) <= 3 else 2)
+    col_idx = 0
+
+    for i in range(len(corr_matrix.columns)):
+        for j in range(i + 1, len(corr_matrix.columns)):
+            score = corr_matrix.iloc[i, j]
+            t1, t2 = corr_matrix.columns[i], corr_matrix.columns[j]
+            
+            # Clasa perechii: aceleași praguri ca în heatmap (analytics/risk.py, orientative, netestate)
+            band = correlation_band(score)
+            if band is None:
+                continue
+            label = CORR_BANDS[band]
+            if band == "slaba":
+                color, icon, bg_light = "#F85149", "🚫", "rgba(248, 81, 73, 0.1)"
+            elif band == "moderata":
+                color, icon, bg_light = "#DBAB09", "⚠️", "rgba(219, 171, 9, 0.1)"
+            else:
+                color, icon, bg_light = "#3FB950", "🛡️", "rgba(63, 185, 80, 0.1)"
+
+            # Randare Card HTML/CSS
+            with cols[col_idx % len(cols)]:
+                st.markdown(f"""
+                    <div style="
+                        background-color: #161B22; 
+                        border-left: 5px solid {color}; 
+                        padding: 15px; 
+                        border-radius: 10px; 
+                        margin-bottom: 10px;
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: #8B949E; font-size: 12px; font-weight: bold; text-transform: uppercase;">{label}</span>
+                            <span style="font-size: 20px;">{icon}</span>
+                        </div>
+                        <h4 style="margin: 10px 0; color: white;">{t1} <span style="color: {color};">↔</span> {t2}</h4>
+                        <div style="background: {bg_light}; padding: 5px 10px; border-radius: 5px; display: inline-block;">
+                            <span style="color: {color}; font-family: monospace; font-size: 18px; font-weight: bold;">{ro(score):.2f}</span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            col_idx += 1
+    st.caption(f"Corelația randamentelor zilnice pe perechi. Peste {ro(CORR_HIGH):.2f}: slabă; {ro(CORR_MID):.2f}–{ro(CORR_HIGH):.2f}: moderată; "
+               f"sub {ro(CORR_MID):.2f} (inclusiv negativă): bună. Praguri orientative, netestate.")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _benchmark_since(bench_ticker, start_iso):
+    """Închiderile ajustate ale benchmark-ului de la `start_iso` (YYYY-MM-DD), în cache 1 oră. Înainte se descărcau la
+    fiecare clic, o dată pe fiecare tab. Fără date → excepție (nu intră în cache)."""
+    _yf_limiter.wait_if_needed()
+    spy_data = yf.download(bench_ticker, start=start_iso, progress=False, auto_adjust=True)['Close']
+    if isinstance(spy_data, pd.DataFrame):
+        spy_data = spy_data.iloc[:, 0]
+    spy_data = spy_data.dropna()
+    if spy_data.empty:
+        raise ValueError(f"Yahoo: {bench_ticker} fără închideri de la {start_iso}")
+    return spy_data
+
 def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name="S&P 500"):
     """Compară performanța portofoliului cu benchmark-ul folosind procente în tooltip."""
     if portfolio_curve is None or portfolio_curve.empty:
@@ -1911,10 +1938,11 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
     
     try:
         start_date = portfolio_curve.index[0]
-        spy_data = yf.download(bench_ticker, start=start_date, progress=False)['Close']
-        
-        if isinstance(spy_data, pd.DataFrame):
-            spy_data = spy_data.iloc[:, 0]
+        try:
+            spy_data = _benchmark_since(bench_ticker, f"{pd.Timestamp(start_date):%Y-%m-%d}")
+        except ValueError as exc:   # Yahoo fără date: mesajul de sincronizare de mai jos, ca înainte
+            logger.warning("benchmark %s: %s", bench_ticker, exc)
+            spy_data = pd.Series(dtype=float)
         
         combined = pd.DataFrame({'Portfolio': portfolio_curve, 'Benchmark': spy_data}).ffill().dropna()
         
@@ -1976,194 +2004,401 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
 
 # --- FUNCȚII NOI PENTRU REZUMAT ZILNIC (DAILY BRIEFING) ---
 
-def generate_market_narrative(ticker_data, symbol, name):
-    try:
-        if isinstance(ticker_data.columns, pd.MultiIndex):
-            if symbol in ticker_data.columns.levels[0]:
-                close = ticker_data[symbol]['Close']
-            else:
-                return f"Date indisponibile pentru {name}.", 0, 0
-        else:
-            close = ticker_data['Close']
+BRIEFING_US_INDICES = ["^GSPC", "^IXIC", "^DJI"]
+# Universul SUA urmărit (lista unică: tools/univers_urmarit_sua.txt, prin data/universes.py; nu S&P 500).
+BRIEFING_US_UNIVERSE = universes.symbols("us")
+BRIEFING_BET_PROXY = "TVBETETF.RO"
+# Etapa C: indicii Europei (cardurile tabului Europa) și ETF-urile sectoriale SPDR (Wall Street). Nu intră în lățime și topuri.
+BRIEFING_EU_INDICES = ["^STOXX", "^GDAXI", "^FCHI", "^FTSE"]
+BRIEFING_US_SECTORS = ["XLK", "XLC", "XLY", "XLP", "XLF", "XLV", "XLI", "XLE", "XLB", "XLU", "XLRE"]
 
-        close = close.dropna()
-        if len(close) < 2: return "Date insuficiente.", 0, 0
 
-        curr = close.iloc[-1]
-        prev = close.iloc[-2]
-        change_pct = ((curr - prev) / prev) * 100
-        
-        if change_pct > 1.0:
-            trend = "o creștere puternică"
-            sentiment = "pozitiv"
-        elif change_pct > 0.2:
-            trend = "o creștere moderată"
-            sentiment = "ușor optimist"
-        elif change_pct > -0.2:
-            trend = "o evoluție stabilă"
-            sentiment = "neutru"
-        elif change_pct > -1.0:
-            trend = "o scădere moderată"
-            sentiment = "precaut"
-        else:
-            trend = "o scădere semnificativă"
-            sentiment = "negativ"
-            
-        text = f"**{name}** a înregistrat {trend} de **{ro(change_pct):.2f}%**, închizând la {ro(curr):,.2f}. Sentimentul pieței este {sentiment}."
-        return text, change_pct, curr
-    except Exception as e:
-        return f"Nu s-au putut genera date pentru {name}.", 0, 0
+def briefing_bvb_universe():
+    """Universul BVB (lista unică tools/univers_bvb.txt: BET Plus + BET-FI + BETAeRO; și testul istoric)."""
+    return universes.symbols("bvb")
 
-@st.cache_data(ttl=1800)
-def get_daily_briefing_data():
-    bvb_tickers = [
-        'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
-        'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 'MILK.RO', 
-        'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ASC.RO', 'ARS.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
-        'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
-    ]
-    bvb_data = yf.download(bvb_tickers, period="1mo", group_by='ticker', progress=False)
-    
-    us_tickers = [
-        '^GSPC', '^DJI', '^IXIC', '^VIX', 
-        'NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-        'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'T', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'BIIB', 
-        'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'COP', 'OXY', 'DVN', 'LNG', 'GPOR', 'UUUU', 'FSLR', 'VG', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
-        'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SPCX', 'SMR', 'CMG', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C'
-    ]
-    us_data = yf.download(us_tickers, period="1mo", group_by='ticker', progress=False)
-    
-    return bvb_data, us_data
 
-def get_bvb_stats(data, tickers):
-    stats = []
-    
-    for t in tickers:
-        if t in ['TVBETETF.RO', '^GSPC', '^DJI', '^IXIC', '^VIX']: continue 
-        
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if t not in data.columns.levels[0]: continue
-                df_t = data[t]
-            else:
+def briefing_bvb_sections():
+    """{simbol: piața} din secțiunile „# == Nume ==” ale tools/univers_bvb.txt."""
+    return universes.sections("bvb")
+
+
+BRIEF_RETRY_CHUNK = 20       # simbolurile refuzate se recer în grupuri mici
+BRIEF_RETRY_PASSES = 2
+BRIEF_MIN_COVERAGE = 0.8     # sub 80% din simboluri cu preț, citirea e considerată parțială și NU intră în cache
+
+
+class _PartialBriefing(Exception):
+    """Citire Yahoo incompletă: datele se folosesc o dată, fără cache, ca la următoarea deschidere să se reîncerce."""
+    def __init__(self, data):
+        super().__init__("citire parțială")
+        self.data = data
+
+
+def _download_briefing(syms):
+    """Închiderile neajustate și volumele pe 6 luni, într-o cerere; simbolurile rămase fără preț (Yahoo refuză uneori
+    o parte dintr-o cerere mare) se recer în grupuri de BRIEF_RETRY_CHUNK, de cel mult BRIEF_RETRY_PASSES ori."""
+    _yf_limiter.wait_if_needed()
+    raw = yf.download(syms, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
+    close, volume = close_frame(raw, syms), field_frame(raw, "Volume", syms)
+    for attempt in range(BRIEF_RETRY_PASSES):
+        missing = briefing_calc.symbols_without_prices(close, syms)
+        if not missing:
+            break
+        logger.warning("rezumat: %d simboluri fără preț, reîncercarea %d", len(missing), attempt + 1)
+        time.sleep(2 * (attempt + 1))
+        for i in range(0, len(missing), BRIEF_RETRY_CHUNK):
+            chunk = missing[i:i + BRIEF_RETRY_CHUNK]
+            _yf_limiter.wait_if_needed()
+            try:
+                raw2 = yf.download(chunk, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("rezumat, reîncercare %s...: %s", chunk[0], exc)
                 continue
+            close = briefing_calc.merge_price_frames(close, close_frame(raw2, chunk))
+            volume = briefing_calc.merge_price_frames(volume, field_frame(raw2, "Volume", chunk))
+    return close, volume
 
-            series_close = df_t['Close'].dropna()
-            series_vol = df_t['Volume'].dropna()
-            
-            if len(series_close) >= 2:
-                curr = series_close.iloc[-1]
-                prev = series_close.iloc[-2]
-                pct = ((curr - prev) / prev) * 100
-                
-                vol = series_vol.iloc[-1] if not series_vol.empty else 0
-                
-                stats.append({
-                    'Simbol': t.replace('.RO', ''), 
-                    'Preț': curr,
-                    'Variație': pct,
-                    'Volum': vol
-                })
-        except Exception as e:
-            continue
-    
-    df = pd.DataFrame(stats)
-    if df.empty: 
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    
-    gainers = df.sort_values('Variație', ascending=False).head(10)
-    losers = df.sort_values('Variație', ascending=True).head(10)
-    volume_leaders = df.sort_values('Volum', ascending=False).head(10)
-    
-    return gainers, losers, volume_leaders
 
-def calculate_fear_greed_proxy(data):
+@st.cache_data(ttl=900, show_spinner=False)
+def _briefing_market(syms):
+    """O piață a Rezumatului (cache 15 min). Sub BRIEF_MIN_COVERAGE → _PartialBriefing (excepția nu intră în cache)."""
+    syms = list(syms)
+    close, volume = _download_briefing(syms)
+    data = {"close": close, "volume": volume}
+    if briefing_calc.coverage(close, syms) < BRIEF_MIN_COVERAGE:
+        raise _PartialBriefing(data)
+    return data
+
+
+def briefing_market_symbols(key):
+    """Simbolurile cererii Yahoo a unei piețe din Rezumatul Zilei (`bvb`, `us`, `eu`). Aceeași listă oriunde e
+    folosită (Rezumatul, topurile din Piață Globală), ca piața să fie descărcată o singură dată și citită din cache."""
+    if key == "bvb":
+        return briefing_bvb_universe() + [BRIEFING_BET_PROXY]
+    if key == "us":
+        return BRIEFING_US_UNIVERSE + BRIEFING_US_INDICES + BRIEFING_US_SECTORS
+    if key == "eu":
+        return universes.symbols("eu") + BRIEFING_EU_INDICES
+    raise KeyError(key)
+
+
+def get_briefing_market(key):
+    """(data, partial) pentru o piață a Rezumatului: data = {"close", "volume"}; partial = True dacă Yahoo a dat sub
+    BRIEF_MIN_COVERAGE din simboluri (datele se folosesc, dar nu intră în cache)."""
+    syms = briefing_market_symbols(key)
     try:
-        if isinstance(data.columns, pd.MultiIndex):
-             vix_series = data['^VIX']['Close'].dropna()
-             sp500_close = data['^GSPC']['Close'].dropna()
-        else:
-             return 50, "Neutral 😐", 0
+        return _briefing_market(tuple(syms)), False
+    except _PartialBriefing as exc:
+        logger.warning("rezumat %s: citire parțială (%d din %d simboluri fără preț)", key,
+                       len(briefing_calc.symbols_without_prices(exc.data["close"], syms)), len(syms))
+        return exc.data, True
 
-        if vix_series.empty or sp500_close.empty:
-             return 50, "Neutral 😐", 0
 
-        current_vix = vix_series.iloc[-1]
-        
-        vix_score = 100 - ((current_vix - 10) / (40 - 10) * 100)
-        vix_score = max(0, min(100, vix_score))
-        
-        curr_sp = sp500_close.iloc[-1]
-        mean_5d = sp500_close.mean()
-        
-        diff_pct = (curr_sp / mean_5d) - 1
-        mom_score = 50 + (diff_pct * 100 * 25) 
-        mom_score = max(0, min(100, mom_score))
-        
-        final_score = (vix_score * 0.6) + (mom_score * 0.4)
-        
-        if final_score >= 75: label = "Extreme Greed 🤑"
-        elif final_score >= 55: label = "Greed 😋"
-        elif final_score >= 45: label = "Neutral 😐"
-        elif final_score >= 25: label = "Fear 😨"
-        else: label = "Extreme Fear 😱"
-        
-        return final_score, label, current_vix
-    except Exception as e:
-        return 50, "Neutral 😐", 0
-    
-def calculate_bvb_sentiment(bvb_data):
-    """
-    Algoritm avansat de sentiment BVB (v2.0).
-    Integrează: Preț vs Medie (5z/20z), Volume Relativ și Volatilitatea.
-    """
-    try:
-        # 1. Extragere date proxy BET
-        if isinstance(bvb_data.columns, pd.MultiIndex):
-             bet_df = bvb_data['TVBETETF.RO'].dropna()
-        else:
-             return 50, "Neutral ⚖️"
+def get_daily_briefing_data():
+    """Închiderile NEAJUSTATE și volumele pe ~6 luni (Yahoo), pentru Rezumatul Zilei: dict bvb_close, bvb_volume
+    (universul BVB + ETF-ul BET), us_close, us_volume (universul SUA + indicii + ETF-urile sectoriale), eu_close,
+    eu_volume (universul Europa + indicii) și partial = {piață: True dacă Yahoo a dat sub 80% din simboluri}.
+    Fiecare piață are cererea și cache-ul ei: o citire parțială nu se păstrează și nu le strică pe celelalte.
+    Prețul neajustat dă variația zilei cum o raportează bursa; 6 luni ajung pentru σ pe 60 de ședințe.
+    Fără niciun preț pe nicio piață → excepție."""
+    out = {"partial": {}}
+    for key in ("bvb", "us", "eu"):
+        data, partial = get_briefing_market(key)
+        out[f"{key}_close"], out[f"{key}_volume"] = data["close"], data["volume"]
+        out["partial"][key] = partial
+    if out["bvb_close"].empty and out["us_close"].empty and out["eu_close"].empty:
+        raise ValueError("Yahoo: nicio închidere pentru Rezumatul Zilei")
+    return out
 
-        if bet_df.empty or len(bet_df) < 5: return 50, "Neutral ⚖️"
 
-        # 2. Parametri Preț
-        curr_bet = bet_df['Close'].iloc[-1]
-        mean_5d = bet_df['Close'].rolling(window=5).mean().iloc[-1]
-        mean_20d = bet_df['Close'].mean() # Media întregului set descărcat (5 zile în codul tău)
-        
-        # Deviația față de termen scurt (5 zile)
-        dev_short = ((curr_bet / mean_5d) - 1) * 100
-        
-        # 3. Parametri Volum (Factorul de confirmare)
-        curr_vol = bet_df['Volume'].iloc[-1]
-        mean_vol = bet_df['Volume'].mean()
-        # Relative Volume (RVOL) - dacă e > 1.5, mișcarea este instituțională, nu retail
-        rvol = curr_vol / mean_vol if mean_vol > 0 else 1.0
+@st.cache_data(ttl=900, show_spinner=False)
+def get_portfolio_day_closes(symbols):
+    """Închiderile pe ~6 luni pentru pozițiile deschise din registru („Portofoliul meu azi”): Close din Yahoo cu
+    auto_adjust=False, adică ajustat doar la splituri (cantitatea din registru e cea de după split), nu și la dividende.
+    6 luni ajung pentru σ pe 60 de ședințe. Fără niciun preț → excepție (nu intră în cache)."""
+    symbols = list(symbols)
+    _yf_limiter.wait_if_needed()
+    raw = yf.download(symbols, period="6mo", progress=False, auto_adjust=False, group_by="ticker")
+    closes = close_frame(raw, symbols)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru pozițiile din registru")
+    return closes
 
-        # 4. Calcul Scor de Bază (0-100)
-        # Am calibrat formula: +/- 1.5% mișcare pe BVB este considerată acum prag critic
-        score = 50 + (dev_short * 33.3) 
-        
-        # 5. Ajustare dinamică cu Volum
-        # Dacă prețul scade pe volum mare, scorul scade și mai mult (Panic confirmation)
-        # Dacă prețul crește pe volum mare, scorul crește și mai mult (Buying frenzy)
-        if rvol > 1.3:
-            if dev_short > 0: score += (rvol * 5) # Boost optimism
-            else: score -= (rvol * 10) # Penalizare panică (vânzare pe volum mare e mai gravă)
 
-        score = max(0, min(100, score))
+PDAY_MARKET_HOURS = {"bvb": "BVB", "us": "NYSE", "eu": "XETRA"}
+PDAY_HELP = {
+    "grand": ("Tot ce ai la brokeri, în lei la ultimul curs BNR: acțiunile și ETF-urile deschise (cantitatea × ultima "
+              "închidere) + titlurile de stat și obligațiunile (prețul din foaia `Preturi_manuale`, altfel nominal 100, "
+              "proxy) + numerarul, toate din registrul `Tranzactii`. Dedesubt: P/L-ul ultimei ședințe (doar acțiunile și "
+              "ETF-urile au preț zilnic) și procentul lui față de valoarea totală de la închiderea precedentă. "
+              "„3. Portofoliu” arată aceleași poziții pe fiecare monedă și folosește cursul de piață Yahoo, deci totalul "
+              "în lei de acolo poate diferi puțin."),
+    "equity": ("Acțiunile și ETF-urile deschise: cantitatea × ultima închidere × ultimul curs BNR. Dedesubt: P/L-ul "
+               "ultimei ședințe a pieței fiecăreia, cantitatea de acum × (închiderea − închiderea precedentă), în lei; "
+               "procentul e față de valoarea acelorași poziții la închiderea precedentă. Doar efectul prețului: efectul "
+               "cursului din ziua respectivă nu e inclus. Pozițiile fără cotație în ședință intră în valoare (la ultima "
+               "lor cotație), dar nu și în P/L."),
+    "bonds": ("Titlurile de stat și obligațiunile din registru: cantitatea × prețul din foaia `Preturi_manuale` (pe unitate, "
+              "fără dobânda acumulată), altfel nominalul 100 (proxy), × cursul BNR. Fără variație zilnică."),
+    "cash": "Numerarul la brokeri din registrul `Tranzactii` (suma mișcărilor pe broker și monedă), × cursul BNR.",
+    "market": ("Valoarea de azi a acțiunilor și ETF-urilor din această piață (cantitatea × ultima închidere × cursul BNR) "
+               "și, dedesubt, P/L-ul lor în ultima ședință (data din etichetă), în lei și în procente față de "
+               "închiderea precedentă."),
+    "Contribuție": ("P/L-ul poziției în lei ÷ valoarea tuturor acțiunilor și ETF-urilor incluse la închiderea precedentă, "
+                    "în puncte procentuale. Suma contribuțiilor = variația acțiunilor și ETF-urilor."),
+    "σ": ("Variația zilei ÷ abaterea standard a variațiilor zilnice din ultimele 60 de ședințe (fără ziua curentă; "
+          "minimum 20). Peste 2σ = mișcare neobișnuită pentru acest titlu (prag netestat)."),
+}
 
-        # 6. Verdict bazat pe praguri profesionale
-        if score >= 80: label = "Optimism Excesiv (Frenzy) 🚀"
-        elif score >= 60: label = "Sentiment Pozitiv 📈"
-        elif score >= 40: label = "Echilibru / Stabilitate ⚖️"
-        elif score >= 20: label = "Precauție (Vânzări sub presiune) ⚠️"
-        else: label = "Panică / Capitulare 🚨"
-        
-        return score, label
-    except:
-        return 50, "Neutral ⚖️"
-    
+
+def rezumat_fx():
+    """Ultimul curs BNR pe valută pentru Rezumatul Zilei (toate sumele în lei): (dict cod → lei, dict cod → data)."""
+    fx_hist, _failed = get_bnr_fx_history()
+    return pday_calc.fx_from_bnr(fx_hist)
+
+
+def render_portfolio_today(sessions, fx, fx_dates):
+    """„💼 Portofoliul meu azi” (Rezumatul Zilei, etapa B), toate sumele în lei la cursul BNR. Calculele sunt în
+    analytics/portfolio_day.py. `sessions` = {piață: data ultimei ședințe din universul întreg al Rezumatului}."""
+    st.markdown("### 💼 Portofoliul meu azi")
+    values = load_ledger_values()
+    if values is None:
+        st.info("Foaia `Tranzactii` nu a putut fi citită din `portofoliu_db`.")
+        return
+    ledger_df, _ = ledger_calc.parse_ledger(values)
+    if ledger_df.empty:
+        st.info("Foaia `Tranzactii` nu conține tranzacții.")
+        return
+    positions, _ = ledger_calc.build_positions(ledger_df)
+    holdings = pday_calc.held_positions(positions, ledger_calc.NOMINAL_CLASSES, ledger_calc.QTY_EPS)
+    closes = pd.DataFrame()
+    if not holdings.empty:
+        with st.spinner("Citim ultima ședință pentru pozițiile tale..."):
+            try:
+                closes = get_portfolio_day_closes(tuple(sorted(holdings["Symbol"])))
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("portofoliul azi: %s", exc)
+    rows, tot = pday_calc.portfolio_day(holdings, closes, fx, sessions, pday_calc.last_trade_dates(ledger_df))
+    manual_prices, _ = ledger_calc.parse_manual_prices(load_manual_price_values())
+    bonds = pday_calc.bond_values(positions, fx, manual_prices, ledger_calc.NOMINAL_CLASSES)
+    cash = pday_calc.cash_values(ledger_calc.cash_balances(ledger_df), fx)
+    grand = pday_calc.grand_total(tot, bonds, cash)
+
+    def _lei(v):
+        return "N/A" if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v, 0, " lei")
+
+    def _val(v):
+        return "N/A" if v is None or pd.isna(v) else format_ro(v, 0, " lei")
+
+    def _pp(v, d=2):
+        return None if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v * 100, d, "%")
+
+    def _cpp(v):
+        return "N/A" if v is None or pd.isna(v) else ("+" if v > 0 else "") + format_ro(v * 100, 2, " pp")
+
+    def _day(pnl, pct):
+        """Delta-ul cardului: P/L-ul zilei în lei și în procente („-276 lei · -0,83%”); fără P/L → fără delta."""
+        if pnl is None or pd.isna(pnl):
+            return None
+        return _lei(pnl) + (f" · {_pp(pct)}" if _pp(pct) else "")
+
+    # Rândul 1: totalul și din ce e făcut
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Valoare totală azi (lei)", _val(grand["value_ron"]), _day(grand["pnl_ron"], grand["pct"]), help=PDAY_HELP["grand"])
+    g2.metric("Acțiuni și ETF", _val(tot["value_ron"]), _day(tot["pnl_ron"], tot["pct"]),
+              help=PDAY_HELP["equity"] + f" Evaluate: {tot['n_valued']} din {tot['held']}; în P/L: {tot['n']} din {tot['held']}.")
+    g3.metric("Titluri de stat", _val(grand["bonds_ron"]), help=PDAY_HELP["bonds"] + f" Poziții: {len(bonds)}.")
+    g4.metric("Numerar", _val(grand["cash_ron"]), help=PDAY_HELP["cash"])
+    # Rândul 2: acțiunile și ETF-urile pe piață, fiecare cu data ultimei ei ședințe
+    mkts = list(tot["by_market"].items())
+    if mkts:
+        cols = st.columns(len(mkts))
+        for col, (mkt, b) in zip(cols, mkts):
+            sd = b["session"]
+            lbl = f"{pday_calc.MARKET_LABEL[mkt]} · {sd:%d.%m}" if sd is not None else pday_calc.MARKET_LABEL[mkt]
+            col.metric(lbl, _val(b["value_ron"]), _day(b["pnl_ron"], b["pct"]),
+                       help=PDAY_HELP["market"] + f" Evaluate: {b['n_valued']} din {b['held']}; în P/L: {b['n']} din {b['held']}.")
+    partial = [pday_calc.MARKET_LABEL[m] for m, b in mkts
+               if briefing_calc.session_is_partial(b["session"], briefing_calc.market_state(PDAY_MARKET_HOURS[m], now_ro()))]
+    if partial:
+        st.caption(f"⏳ Ședință în desfășurare la {', '.join(partial)}: P/L-ul de acolo e parțial, pe ultimele prețuri.")
+
+    r = rows.set_index("Symbol")
+    name = lambda s: s.replace(".RO", "")
+    if tot["top"] or tot["bottom"]:
+        def _who(syms):
+            return ", ".join(f"{name(s)} {_lei(r.loc[s, 'PnL_RON'])} ({_cpp(r.loc[s, 'Contribution'])})" for s in syms) or "—"
+        st.markdown(f"**Au tras în sus:** {_who(tot['top'])}  \n**Au tras în jos:** {_who(tot['bottom'])}")
+    if tot["alerts"]:
+        st.markdown("**⚠️ Mișcări peste 2σ:** " + ", ".join(
+            f"{name(s)} {_pp(r.loc[s, 'Pct'])} ({format_ro(r.loc[s, 'Sigma'], 1, 'σ')})" for s in tot["alerts"]))
+    if tot["excluded"]:
+        st.caption("Neincluse în P/L: " + "; ".join(f"{name(s)} ({why})" for s, why in tot["excluded"]) + ".")
+    if tot["approx"]:
+        st.caption("Cantitate schimbată în ziua ședinței (tranzacție în registru), P/L aproximativ: "
+                   + ", ".join(name(s) for s in tot["approx"]) + ".")
+    if grand["missing"]:
+        st.caption("Neincluse în valoarea totală: " + ", ".join(grand["missing"]) + ".")
+    proxy = bonds.loc[bonds["PriceSource"] == ledger_calc.PRICE_NOMINAL, "Symbol"].tolist() if len(bonds) else []
+    if proxy:
+        st.caption("Titluri la nominal 100 (proxy, fără preț în `Preturi_manuale`): " + ", ".join(proxy) + ".")
+    used = sorted(set(rows["Currency"].dropna()) | set(bonds["Currency"].dropna()) | set(cash["Currency"].dropna()))
+    fx_used = [c for c in used if c != "RON" and c in fx_dates]
+    if fx_used:
+        st.caption("Toate sumele în lei, la cursul BNR: " + "; ".join(f"{c} {format_ro(fx[c], 4)} ({fx_dates[c]:%d.%m.%Y})"
+                                                                       for c in fx_used)
+                   + ". Fără efectul cursului din ziua ședinței.")
+    elif any(c != "RON" for c in used):
+        st.caption("Cursurile BNR nu au putut fi citite: sumele în valută nu intră în totaluri.")
+
+    n_lines = len(rows) + len(bonds)
+    with st.expander(f"📋 Toate pozițiile ({n_lines}) și numerarul"):
+        eq_view = pd.DataFrame({
+            "Simbol": [name(s) for s in rows["Symbol"]],
+            "Piață": [pday_calc.MARKET_LABEL[m] for m in rows["Market"]],
+            "Ședința": rows["Date"].values,
+            "Variație": rows["Pct"].values,
+            "σ": rows["Sigma"].values,
+            "P/L (lei)": rows["PnL_RON"].values,
+            "Contribuție": rows["Contribution"].values,
+            "Valoare (lei)": rows["Value_RON"].values,
+            "Stare": ["" if s == pday_calc.STATUS_OK else s for s in rows["Status"]],
+        })
+        bond_view = pd.DataFrame({
+            "Simbol": bonds["Symbol"].values, "Piață": "Titluri de stat",
+            "Ședința": bonds["PriceDate"].values, "Variație": None, "σ": None, "P/L (lei)": None, "Contribuție": None,
+            "Valoare (lei)": bonds["Value_RON"].values,
+            "Stare": ["nominal 100 (proxy)" if s == ledger_calc.PRICE_NOMINAL else "preț manual" for s in bonds["PriceSource"]],
+        })
+        # object pe ambele: coloanele goale ale titlurilor de stat (Variație, σ, P/L) nu mai schimbă tipul
+        # la concatenare (FutureWarning pandas 2.1); text_frame face oricum totul text
+        view = (pd.concat([eq_view.astype(object), bond_view.astype(object)], ignore_index=True)
+                if len(bond_view) else eq_view)
+        st.dataframe(
+            text_frame(view, {
+                "Ședința": lambda d: f"{pd.Timestamp(d):%d.%m.%Y}",
+                "Variație": lambda v: _pp(v), "σ": lambda v: format_ro(v, 1, "σ"),
+                "P/L (lei)": _lei, "Contribuție": _cpp, "Valoare (lei)": _val,
+            }),
+            width='stretch', hide_index=True,
+            column_config={"σ": st.column_config.Column(help=PDAY_HELP["σ"]),
+                           "Contribuție": st.column_config.Column(help=PDAY_HELP["Contribuție"]),
+                           "Ședința": st.column_config.Column(help="Acțiuni și ETF: ziua ultimei cotații folosite. "
+                                                                    "Titluri de stat: data prețului din `Preturi_manuale`."),
+                           "P/L (lei)": st.column_config.Column(help="Cantitatea × (închiderea − închiderea precedentă) × cursul BNR."),
+                           "Valoare (lei)": st.column_config.Column(help="Cantitatea × prețul × cursul BNR.")})
+        if len(cash):
+            st.dataframe(
+                text_frame(pd.DataFrame({"Numerar": [f"{b} · {c}" for b, c in zip(cash["Broker"], cash["Currency"])],
+                                         "Valoare (lei)": cash["Value_RON"].values}), {"Valoare (lei)": _val}),
+                width='stretch', hide_index=True,
+                column_config={"Valoare (lei)": st.column_config.Column(help="Soldul din registru × cursul BNR.")})
+    st.markdown("---")
+    return {"holdings": holdings, "totals": tot, "rows": rows}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _yahoo_names(sym):
+    """(longName, shortName) din Yahoo pentru un simbol, în cache 24 de ore (pentru filtrul de știri).
+    O eroare de rețea nu se salvează în cache (excepția iese din funcție), deci se reîncearcă la următoarea deschidere."""
+    _yf_limiter.wait_if_needed()
+    info = yf.Ticker(sym).info or {}
+    return info.get("longName") or None, info.get("shortName") or None
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_holdings_news(symbols):
+    """Știrile din ultimele 48 de ore despre pozițiile tale (Rezumatul Zilei, etapa D): fluxul Yahoo pe fiecare simbol
+    plus fluxurile generale (RO și internaționale), păstrate doar dacă titlul menționează compania
+    (data/news.py). Întoarce (știri, simboluri fără nume din Yahoo — filtrate doar după simbol)."""
+    names, no_name, own = {}, [], {}
+    for sym in symbols:
+        try:
+            names[sym] = tuple(n for n in _yahoo_names(sym) if n)
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("știri pe poziții, nume %s: %s", sym, exc)
+            names[sym] = ()
+        if not names[sym]:
+            no_name.append(sym)
+        own[sym] = get_company_news_rss(sym, names=names[sym], limit=10)
+    items = holdings_news(names, fetch_news_data(), own, now=now_ro().replace(tzinfo=None))
+    return items, no_name
+
+
+def render_calendar_line():
+    """Calendarul macro SUA de azi și mâine pe un rând, sus în Rezumatul Zilei (același calendar ca în „4. Piață
+    Globală”: FRED + calendarul oficial Fed pentru FOMC). Întoarce publicările de azi/mâine (pentru „3 lucruri”)."""
+    today = now_ro().date()
+    cal_data, cal_msg = get_fred_calendar(today)
+    src = ("Sursa: FRED, calendarul publicărilor (doar ziua, fără oră; majoritatea dimineața la New York, după-amiaza în "
+           "România) și calendarul oficial Fed pentru FOMC (14:00 New York). Calendarul pe 14 zile: „4. Piață Globală”.")
+    if cal_data is None:
+        st.markdown(f"📅 **Calendar macro SUA:** indisponibil acum ({cal_msg})", help=src)
+        return []
+    cal_rows, _missing = fred_cal.upcoming(cal_data, today)
+    soon, nxt = fred_cal.near(cal_rows)
+    if soon:
+        text = "; ".join(f"{'azi' if r['in_days'] == 0 else 'mâine'} ({r['weekday']} {r['date']:%d.%m}) {r['label']}"
+                         for r in soon)
+    elif nxt is not None:
+        text = (f"azi și mâine nimic urmărit; următoarea: {nxt['label']}, {nxt['weekday']} {nxt['date']:%d.%m} "
+                f"(peste {nxt['in_days']} zile)")
+    else:
+        text = f"nicio publicare urmărită în următoarele {fred_cal.CALENDAR_DAYS} zile"
+    st.markdown(f"📅 **Calendar macro SUA:** {text[0].upper() + text[1:]}", help=src)
+    return soon
+
+
+def _holdings_news_html(items):
+    return compact_html("".join(
+        f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
+        <span style="background:#21262D; color:#C9D1D9; border-radius:4px; padding:1px 6px; font-size:12px; font-weight:600; margin-right:6px;">{html.escape(it['symbol'].replace('.RO', ''))}</span>
+        <a href="{html.escape(safe_link(it['link']) or '#', quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank" rel="noopener noreferrer">{html.escape(it['title'])}</a>
+        <div style="font-size:12px; color:#8B949E;">{html.escape(str(it['source']))} • {it['time']:%d.%m %H:%M}</div></div>"""
+        for it in items))
+
+
+def render_holdings_news(holdings):
+    """„Despre acțiunile tale” (tabul „📰 Știri” din Rezumatul Zilei): știrile din ultimele 48 de ore despre acțiunile
+    din registru (fără ETF-uri și titluri de stat). Întoarce lista de știri (pentru „3 lucruri”)."""
+    st.subheader("💼 Despre acțiunile tale (ultimele 48 de ore)")
+    syms = [] if holdings is None or holdings.empty else sorted(
+        holdings.loc[holdings["Class"].astype(str).str.upper() != "ETF", "Symbol"].astype(str).unique())
+    if not syms:
+        st.info("Nicio acțiune deschisă în registrul `Tranzactii`.")
+        return []
+    with st.spinner("Căutăm știrile despre pozițiile tale..."):
+        try:
+            items, no_name = get_holdings_news(tuple(syms))
+        except Exception as exc:  # rețea / RSS
+            logger.warning("știri pe poziții: %s", exc)
+            items, no_name = None, []
+    if items is None:
+        st.info("Știrile nu au putut fi citite acum. Se reîncearcă la următoarea deschidere a paginii.")
+        items = []
+    elif not items:
+        st.info("Nicio știre din ultimele 48 de ore care să menționeze acțiunile tale.")
+    else:
+        st.markdown(_holdings_news_html(items), unsafe_allow_html=True)
+    st.caption(f"{len(syms)} acțiuni din registru (fără ETF-uri și titluri de stat). Se păstrează doar știrile al căror "
+               "titlu conține numele întreg al companiei sau simbolul (rezumatul nu contează); cel mult 3 pe companie, 15 în total, "
+               "ora României. Fluxurile RO acoperă puține companii mici, deci lipsa unei știri nu înseamnă că nu s-a "
+               "întâmplat nimic." + (f" Fără nume în Yahoo (filtrate doar după simbol): {', '.join(no_name)}." if no_name else ""))
+    return items
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_us_index_news(limit=10):
+    """Știrile Yahoo (RSS) pentru ^GSPC și ^IXIC, fără dubluri, cele mai noi primele (cache 15 min)."""
+    seen, out = set(), []
+    for item in sorted(get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC"),
+                       key=lambda x: x.get("date_str", ""), reverse=True):
+        if item.get("title") and item["title"] not in seen:
+            seen.add(item["title"])
+            out.append(item)
+    return out[:limit]
+
 # --- FUNCȚII PORTOFOLIU (RESCRISE PENTRU GOOGLE SHEETS) ---
 def load_portfolio():
     """Foaia `Portofoliu` (prima foaie) → DataFrame Symbol, Date, Quantity, AvgPrice, Currency, cu numere.
@@ -2179,64 +2414,99 @@ def load_portfolio():
         values = sheet.get_all_values(value_render_option="UNFORMATTED_VALUE",
                                       date_time_render_option="FORMATTED_STRING")
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia Portofoliu nu a putut fi citită: {e}")
+        logger.warning(f"foaia Portofoliu nu a putut fi citită: {e}")
         return pd.DataFrame()
     df, problems = portfolio_sheet.parse_portfolio_values(values)
     df.attrs["problems"] = problems
     return df
 
-# --- FUNCȚII WATCHLIST (CORECȚIE BUG) ---
+# --- FUNCȚII WATCHLIST ---
+@st.cache_data(ttl=300, show_spinner=False)
+def load_watchlist_values():
+    """Conținutul brut al foii `watchlist` (antet + rânduri, numere neformatate); None dacă foaia lipsește
+    sau nu poate fi citită. Cache 5 minute: cardul „Țintă intrare” din Analiză o citește la fiecare rerun."""
+    ws = connect_to_gsheets("watchlist")
+    if ws is None:
+        return None
+    try:
+        # UNFORMATTED_VALUE: ținta vine ca număr; textul formatat românesc „1.250” ar fi citit ca 1,25
+        return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+    except gspread.exceptions.GSpreadException as e:
+        logger.warning(f"foaia watchlist nu a putut fi citită: {e}")
+        return None
+
 def load_watchlist():
-    """Citește datele din foaia 'watchlist'."""
-    ws = connect_to_gsheets("watchlist")  # Direct, fără sheet.spreadsheet.worksheet()
-    if ws:
-        try:
-            data = ws.get_all_records()
-            return pd.DataFrame(data)
-        except Exception as e:
-            return pd.DataFrame()
-    return pd.DataFrame()
+    """Foaia `watchlist` ca DataFrame (Symbol, TargetPrice număr sau None, Notes); `attrs["problems"]` = ce nu s-a putut citi."""
+    df, problems = watchlist_calc.parse_watchlist(load_watchlist_values())
+    df.attrs["problems"] = problems
+    return df
 
 def add_to_watchlist(symbol, target, note):
-    """Adaugă o intrare nouă în watchlist."""
+    """Adaugă o intrare nouă în watchlist. Întoarce (reușit, mesaj).
+
+    Simbolul deja prezent nu se adaugă a doua oară: cardul din Analiză ar lua doar prima țintă.
+    Duplicatul se verifică pe foaia recitită acum (nu pe cache), ca o editare manuală recentă să conteze.
+    Simbolul se rezolvă ca în Analiză: întâi cel scris, apoi cu `.RO`; se salvează primul care are preț Yahoo,
+    ca tabelul și cardul „Țintă intrare” să găsească același simbol. Fără preț → nu se salvează."""
+    written = watchlist_calc.normalize_symbol(symbol)
+    symbol = next((c for c in watchlist_calc.symbol_candidates(written) if c in get_watchlist_quotes([c])), None)
+    if symbol is None:
+        return False, (f"{written}: Yahoo nu are preț pentru {', nici pentru '.join(watchlist_calc.symbol_candidates(written))}. "
+                       "Verifică simbolul (Europa: cu sufixul bursei, ex. SAP.DE; BVB: TLV sau TLV.RO).")
     ws = connect_to_gsheets("watchlist")
-    if ws:
-        try:
-            ws.append_row([symbol, float(target), note])
-            st.cache_data.clear()
-            return True
-        except Exception as e:
-            st.error(f"Eroare salvare: {e}")
-            return False
-    return False
+    if ws is None:
+        return False, "Foaia watchlist nu poate fi accesată."
+    try:
+        values = ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+        if watchlist_calc.symbol_rows(values, symbol):
+            current = watchlist_calc.parse_watchlist(values)[0]
+            t = current.loc[current["Symbol"] == symbol, "TargetPrice"].iloc[0]
+            t_txt = format_ro(t, 4, trim=True) if pd.notna(t) else "fără țintă"
+            return False, f"{symbol} e deja în watchlist (ținta {t_txt}). Șterge-l întâi dacă vrei altă țintă."
+        row = watchlist_calc.sheet_row(values[0] if values else [], symbol, target, note, f"{now_ro():%Y-%m-%d}")
+        if row is None:
+            return False, "Foaia watchlist nu are coloanele Symbol și TargetPrice în antet (rândul 1)."
+        ws.append_row(row)  # în ordinea antetului; data intră doar dacă foaia are coloana Date
+    except (gspread.exceptions.GSpreadException, requests.RequestException) as e:
+        logger.warning(f"watchlist, adăugare {symbol}: {e}")
+        return False, f"Eroare la salvarea în foaia watchlist: {e}"
+    load_watchlist_values.clear()  # golește doar cache-ul foii watchlist
+    currency = watchlist_currency(symbol)
+    resolved = f" (scris {written}; găsit ca {symbol})" if symbol != written else ""
+    return True, f"Adăugat {symbol} la ținta {format_ro(target, 4, trim=True)} {currency}{resolved}."
 
 def remove_from_watchlist(symbol):
-    """Șterge un simbol din watchlist (căutând după nume)."""
+    """Șterge simbolul din watchlist: toate rândurile cu el în coloana Symbol, nu prima celulă egală din foaie
+    (înainte `ws.find` căuta în toată foaia, inclusiv în note). Întoarce (reușit, mesaj)."""
     ws = connect_to_gsheets("watchlist")
-    if ws:
-        try:
-            cell = ws.find(symbol)
-            if cell:
-                ws.delete_rows(cell.row)
-                st.cache_data.clear()
-                return True
-        except:
-            pass
-    return False
+    if ws is None:
+        return False, "Foaia watchlist nu poate fi accesată."
+    try:
+        rows = watchlist_calc.symbol_rows(ws.get_all_values(), symbol)
+        if not rows:
+            return False, f"{symbol} nu mai e în coloana Symbol a foii watchlist (poate a fost șters între timp)."
+        for r in rows:  # de jos în sus: numerele rândurilor rămase nu se schimbă
+            ws.delete_rows(r)
+    except (gspread.exceptions.GSpreadException, requests.RequestException) as e:
+        logger.warning(f"watchlist, ștergere {symbol}: {e}")
+        return False, f"Eroare la ștergerea din foaia watchlist: {e}"
+    finally:
+        load_watchlist_values.clear()  # golește doar cache-ul foii watchlist (și după o ștergere parțială)
+    return True, f"Șters {symbol}" + (f" ({len(rows)} rânduri)." if len(rows) > 1 else ".")
 
-def add_trade(s, q, p, d, c):
-    """Adaugă tranzacția direct în Google Sheets."""
-    sheet = connect_to_gsheets()
-    if sheet:
-        row = [s, str(d), float(q), float(p), c]
-        sheet.append_row(row)
-        st.cache_data.clear()
+        # load_portfolio nu are cache: nu e nimic de golit
 
-@st.cache_data(ttl=300)
-def get_portfolio_history_data(tickers):
-    if not tickers: return pd.DataFrame()
-    data = yf.download(tickers, period="5y", group_by='ticker')
-    return data
+@st.cache_data(ttl=900, show_spinner=False)
+def _portfolio_history_closes(tickers):
+    """Închiderile ajustate pe 5 ani pentru simbolurile unui tab de monedă (tuplu), în cache 15 minute. Înainte se
+    descărcau la fiecare clic din pagină, o dată pe fiecare tab. Fără nicio închidere → excepție (nu intră în cache)."""
+    tickers = list(tickers)
+    _yf_limiter.wait_if_needed()
+    hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False, auto_adjust=True)
+    closes = close_frame(hist_data, tickers)   # tratează toate formele întoarse de yf.download (un simbol sau mai multe)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru pozițiile din tab")
+    return closes
 
 def calculate_portfolio_performance(df, history_range="1A"):
     """Evaluează pozițiile și construiește curba de valoare a portofoliului.
@@ -2257,12 +2527,12 @@ def calculate_portfolio_performance(df, history_range="1A"):
     # --- Descărcăm totul dintr-o singură lovitură ---
     with st.spinner("Actualizăm portofoliul prin Motor Asincron..."):
         current_prices = get_fast_live_prices(tickers)
-        # Descărcăm istoricul bulk pentru grafic (cu rate limiter)
-        _yf_limiter.wait_if_needed()
-        hist_data = yf.download(tickers, period="5y", group_by='ticker', progress=False)
-
-    # close_frame tratează toate formele întoarse de yf.download (un simbol sau mai multe)
-    closes = close_frame(hist_data, tickers)
+        # Istoricul pentru grafic, o cerere pe tab (cache 15 min în _portfolio_history_closes)
+        try:
+            closes = _portfolio_history_closes(tuple(tickers))
+        except Exception as exc:  # rețea / Yahoo: fără istoric, valorile rămân N/A (value_positions)
+            logger.warning("istoric portofoliu %s: %s", tickers, exc)
+            closes = pd.DataFrame()
 
     df_result, total_daily_pl_abs, total_daily_pl_pct, notes = value_positions(positions, current_prices, closes)
     portfolio_curve, curve_notes = build_portfolio_curve(positions, closes)
@@ -2275,6 +2545,8 @@ def calculate_portfolio_performance(df, history_range="1A"):
 
 # --- REGISTRUL DE TRANZACȚII (foaia `Tranzactii`) ---
 LEDGER_FX_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X"}
+TAB_BENCHMARKS = {"USD": ("SPY", "S&P 500 (SPY)"), "EUR": ("EXSA.DE", "STOXX Europe 600 (EXSA.DE)"),
+                  "RON": ("TVBETETF.RO", "BET (ETF TVBETETF)")}
 LEDGER_CLASS_ORDER = ["Actiuni RO", "Actiuni SUA", "Actiuni UE", "ETF", "Obligatiuni", "Altele"]
 
 # Explicațiile din semnul întrebării de lângă fiecare indicator: cum se calculează și ce înseamnă.
@@ -2343,7 +2615,7 @@ def load_ledger_values():
     try:
         return ws.get_all_values()
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia Tranzactii nu a putut fi citită: {e}")
+        logger.warning(f"foaia Tranzactii nu a putut fi citită: {e}")
         return None
 
 MANUAL_PRICE_STALE_DAYS = 30  # peste atât, prețul manual e semnalat ca vechi
@@ -2357,7 +2629,7 @@ def load_iv_history_values():
     try:
         return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia IV_istoric nu a putut fi citită: {e}")
+        logger.warning(f"foaia IV_istoric nu a putut fi citită: {e}")
         return None
 
 def update_iv_history(symbol, iv_pct):
@@ -2378,7 +2650,7 @@ def update_iv_history(symbol, iv_pct):
             df, problems = iv_history.parse_iv_history(load_iv_history_values())
             note = f"IV-ul de azi ({ro(iv_pct):.1f}%) a fost salvat în IV_istoric pentru {session:%d.%m.%Y}."
         except (gspread.exceptions.GSpreadException, AttributeError) as e:
-            print(f"DEBUG: IV_istoric, scriere eșuată pentru {symbol}: {e}")
+            logger.warning(f"IV_istoric, scriere eșuată pentru {symbol}: {e}")
             note = "IV-ul de azi nu a putut fi salvat în IV_istoric."
     series = iv_history.history_for(df, symbol)
     rank = opt_calc.iv_rank_percentile(series, None if iv_pct is None else iv_pct / 100, as_of=pd.Timestamp(session))
@@ -2396,7 +2668,7 @@ def load_manual_price_values():
     try:
         return ws.get_all_values()
     except gspread.exceptions.GSpreadException as e:
-        print(f"DEBUG: foaia Preturi_manuale nu a putut fi citită: {e}")
+        logger.warning(f"foaia Preturi_manuale nu a putut fi citită: {e}")
         return None
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -2409,7 +2681,7 @@ def get_last_closes(symbols):
     try:
         data = yf.download(symbols, period="5d", group_by='ticker', progress=False, auto_adjust=False)
     except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: ultimele închideri indisponibile: {e}")
+        logger.warning(f"ultimele închideri indisponibile: {e}")
         return {}
     closes = close_frame(data, symbols)
     out = {}
@@ -2418,6 +2690,117 @@ def get_last_closes(symbols):
         if not series.empty:
             out[sym] = float(series.iloc[-1])
     return out
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _download_watchlist_quotes(symbols):
+    """Ultimul preț și data lui pentru simbolurile din watchlist (tuplu), din `yf.download` pe o lună.
+
+    O lună, nu 5 zile: după o săptămână de sărbători la BVB tot există un ultim preț (data lui se afișează).
+    auto_adjust=False: prețul real tranzacționat, cel cu care se compară ținta. Excepțiile urcă la apelant,
+    ca o cerere eșuată să nu rămână în cache 15 minute."""
+    symbols = list(symbols)
+    _yf_limiter.wait_if_needed()
+    data = yf.download(symbols, period="1mo", group_by='ticker', progress=False, auto_adjust=False)
+    return watchlist_calc.last_quotes(close_frame(data, symbols))
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False, max_entries=500)
+def _yahoo_currency(symbol):
+    """Moneda cotației raportată de Yahoo (`fast_info.currency`, de ex. „GBp”, „USD”) sau None.
+    Cache 7 zile: moneda unei linii de cotare nu se schimbă. Excepțiile urcă (nu se pun în cache)."""
+    _yf_limiter.wait_if_needed()
+    cur = yf.Ticker(symbol).fast_info.currency
+    return str(cur).strip() if cur else None
+
+def watchlist_currency(symbol):
+    """Eticheta de monedă pentru un simbol din watchlist: din Yahoo în afara SUA și BVB, altfel după sufix."""
+    yahoo = None
+    if watchlist_calc.needs_yahoo_currency(symbol):
+        try:
+            yahoo = _yahoo_currency(symbol)
+        except (requests.RequestException, KeyError, ValueError, AttributeError, TypeError) as e:
+            logger.warning(f"monedă Yahoo indisponibilă pentru {symbol}: {e}")
+    return watchlist_calc.currency_label(yahoo, symbol)
+
+def get_watchlist_quotes(symbols):
+    """{simbol: {"price", "date"}} pentru watchlist; simbolurile fără date lipsesc (apar „N/A”), eroarea Yahoo → {}."""
+    symbols = tuple(sorted(set(symbols)))
+    if not symbols:
+        return {}
+    try:
+        return _download_watchlist_quotes(symbols)
+    except (requests.RequestException, ValueError, KeyError) as e:
+        logger.warning(f"Watchlist, prețuri: {e}")
+        return {}
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _watchlist_moment_closes(symbols):
+    """Închiderile AJUSTATE pe 2 ani pentru coloana Moment din Watchlist (tuplu de simboluri), într-o singură cerere.
+    2 ani ajung: trendul folosește ultimele 200 de ședințe, momentumul 12-1 ultimele 12 luni (aceleași valori ca pe
+    istoricul de 5 ani din Analiză). Excepțiile urcă la apelant, ca o cerere eșuată să nu rămână în cache."""
+    symbols = list(symbols)
+    _yf_limiter.wait_if_needed()
+    data = yf.download(symbols, period="2y", group_by='ticker', progress=False, auto_adjust=True)
+    return _naive_index(close_frame(data, symbols))
+
+def get_watchlist_moments(symbols):
+    """{simbol: textul coloanei Moment}; Yahoo indisponibil → „N/A” peste tot (mesajul e în log)."""
+    symbols = tuple(sorted(set(symbols)))
+    try:
+        closes = _watchlist_moment_closes(symbols) if symbols else pd.DataFrame()
+    except (requests.RequestException, ValueError, KeyError, yf.exceptions.YFException) as e:
+        logger.warning(f"Watchlist, moment: {e}")
+        closes = pd.DataFrame()
+    return watchlist_calc.moment_cells(closes, symbols)
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False, max_entries=300)
+def _watchlist_global_fundamental(symbol):
+    """Scorul fundamental SUA/UE al unui rând din Watchlist, cu aceleași funcții ca secțiunea din Analiză Companie
+    (`get_stock_data`, `resolve_beta_alpha`, `global_fundamental_inputs`, `gfund.fundamental_score`). Cache 24 h:
+    prețul din evaluare (DCF invers, E/P) e cel de la momentul calculului, afișat în „at”.
+    Întoarce {"score", "label", "na", "at"}: valorile, nu textul (formatul se aplică la afișare, deci o schimbare de
+    format nu rămâne 24 h în cache). ETF / fond / indice → na „N/A (ETF)” etc. Yahoo fără răspuns complet (info refuzat,
+    situațiile anuale lipsă) → excepție: rezultatul degradat nu intră în cache și se reîncearcă la următorul calcul."""
+    hist, info, _, real_sym = get_stock_data(symbol)
+    if hist is None or hist.empty or not info:
+        raise ValueError(f"Yahoo: fără istoric sau fără info pentru {symbol}")
+    if info.get("_info_error"):
+        raise ValueError(f"Yahoo: info incomplet pentru {symbol} ({info['_info_error']})")
+    qtype = (info.get('quoteType') or "").upper()
+    if qtype in NON_COMPANY_QUOTE_TYPES:
+        return {"score": None, "label": None, "na": f"N/A ({qtype})", "at": now_ro()}
+    risk_stats = resolve_beta_alpha(real_sym, info, hist)
+    inp = global_fundamental_inputs(real_sym, info, hist, risk_stats)
+    if not inp["financial"] and {"financials", "balance_sheet", "cashflow"} <= set(inp["statement_errors"]):
+        raise ValueError(f"Yahoo: situațiile financiare anuale indisponibile pentru {symbol}")
+    res = gfund.fundamental_score(inp)
+    return {"score": res["score"], "label": res["label"], "na": None, "at": now_ro()}
+
+def watchlist_bvb_fundamentals(ro_symbols, fallback_prices):
+    """{simbol .RO: textul coloanei Scor fundamental} din fișierele „Analiză companii”, exact ca secțiunea din Analiză:
+    prețurile curente din `get_bvb_file_prices`, iar pentru emitentul evaluat, dacă lipsește, ultimul preț din
+    Watchlist (`fallback_prices`; în Analiză e ultimul preț din istoric). Secțiunea transversală se reface pe fiecare
+    emitent, ca prețul de rezervă să schimbe doar rândul lui. Întoarce (dict, eroare sau None).
+    Bancă (alt șablon, sărită) → „N/A (bancă)”; fără fișier cu date → „N/A (fără fișier)”."""
+    files, err = list_company_files()
+    if err:
+        return {s: "N/A" for s in ro_symbols}, err
+    data = build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+    prices = get_bvb_file_prices(tuple(sorted(data["companii"])))
+    base = {t: current_indicators(df, prices.get(t)) for t, df in data["companii"].items()}
+    banks = {ticker_from_title(s.split(" (")[0]) for s in data["sarite"] if "bancă" in s}
+    out = {}
+    for sym in ro_symbols:
+        tk = sym[:-3]
+        if tk not in data["companii"]:   # aceleași cazuri ca mesajul din Analiză
+            out[sym] = "N/A (bancă)" if tk in banks else "N/A (fără fișier)"
+            continue
+        indicators = dict(base)
+        if prices.get(tk) is None:
+            indicators[tk] = current_indicators(data["companii"][tk], positive_or_none(fallback_prices.get(sym)))
+        cs = cross_section(indicators)
+        out[sym] = (watchlist_calc.bvb_fundamental_cell(cs.loc[tk, "scor"], cs.loc[tk, "treapta"])
+                    if tk in cs.index and "scor" in cs.columns else "N/A")
+    return out, None
 
 def _naive_index(frame):
     """Index de date fără fus orar (Yahoo întoarce uneori index cu fus)."""
@@ -2434,7 +2817,7 @@ def get_ledger_fx_history(start):
     try:
         data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False)
     except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: istoric curs valutar indisponibil: {e}")
+        logger.warning(f"istoric curs valutar indisponibil: {e}")
         return pd.DataFrame()
     closes = _naive_index(close_frame(data, symbols))
     closes = closes.rename(columns={sym: cur for cur, sym in LEDGER_FX_SYMBOLS.items()})
@@ -2442,7 +2825,7 @@ def get_ledger_fx_history(start):
     for cur in closes.columns:
         cleaned, fixed = ledger_calc.despike(closes[cur].dropna(), jump=1.10, tolerance=0.03, max_days=3)
         if fixed:
-            print(f"DEBUG: curs {cur}/RON corectat în {len(fixed)} zile cu cotație aberantă: {[f'{d:%Y-%m-%d}' for d in fixed]}")
+            logger.warning(f"curs {cur}/RON corectat în {len(fixed)} zile cu cotație aberantă: {[f'{d:%Y-%m-%d}' for d in fixed]}")
         closes[cur] = cleaned.reindex(closes.index)
     return closes
 
@@ -2456,7 +2839,7 @@ def get_ledger_market_history(symbols, start):
     try:
         data = yf.download(symbols, start=start, group_by='ticker', progress=False, auto_adjust=False, actions=True)
     except (requests.RequestException, ValueError, KeyError) as e:
-        print(f"DEBUG: istoric de preț indisponibil pentru registru: {e}")
+        logger.warning(f"istoric de preț indisponibil pentru registru: {e}")
         return pd.DataFrame()
     closes = _naive_index(close_frame(data, symbols))
     splits = field_frame(data, "Stock Splits", symbols)
@@ -2780,132 +3163,369 @@ def render_ledger_results():
                 st.write(f"- {problem}")
     return positions
 
-from scipy.stats import norm # Adaugă acest import la începutul fișierului main.py
 
-def calculate_risk_metrics(portfolio_curve, confidence_level=0.95):
-    """Calculează Max Drawdown, Sharpe Ratio, VaR și Volatilitate Anualizată."""
-    if portfolio_curve is None or portfolio_curve.empty or len(portfolio_curve) < 5:
-        return 0.0, 0.0, 0.0, 0.0
-    
-    try:
-        # 1. Max Drawdown
-        rolling_max = portfolio_curve.cummax()
-        drawdown = (portfolio_curve - rolling_max) / rolling_max
-        max_dd = drawdown.min()
-        
-        # 2. Sharpe Ratio & Volatilitate
-        returns = portfolio_curve.pct_change().dropna()
-        if returns.std() == 0: return max_dd, 0.0, 0.0, 0.0
-        
-        # Volatilitate Anualizată (Standard Deviation * sqrt(252 zile de tranzacționare))
-        volatility_ann = returns.std() * np.sqrt(252)
-        
-        rf_daily = 0.04 / 252 
-        sharpe = np.sqrt(252) * ((returns.mean() - rf_daily) / returns.std())
-        
-        # 3. Value at Risk (VaR)
-        mu, sigma = returns.mean(), returns.std()
-        var_pct = norm.ppf(1 - confidence_level, mu, sigma)
-        var_abs = var_pct * portfolio_curve.iloc[-1]
-        
-        return max_dd, sharpe, var_abs, volatility_ann
-    except:
-        return 0.0, 0.0, 0.0, 0.0
-
-@st.cache_data(ttl=3600)
-def get_portfolio_sectors(df_current):
-    """
-    ARHITECTURĂ #5: Versiune batch optimizată.
-    ÎNAINTE: N apeluri seriale yf.Ticker(sym).info = 30-60 secunde
-    ACUM: 1 apel yf.Tickers() pentru toate = 3-5 secunde
-    """
-    if df_current.empty: return pd.DataFrame()
-
-    tickers_list = df_current['Symbol'].unique().tolist()
-    total_mkt_val = df_current['MarketValue'].sum()
-
-    # UN SINGUR apel pentru TOATE simbolurile
+@st.cache_data(ttl=86400, show_spinner=False)
+def _yahoo_sector(sym):
+    """(sector, quoteType) din Yahoo pentru un simbol, în cache 24 de ore.
+    O eroare de rețea nu se salvează în cache (excepția iese din funcție), deci se reîncearcă la următoarea deschidere."""
     _yf_limiter.wait_if_needed()
-    try:
-        bulk_data = yf.Tickers(" ".join(tickers_list))
-    except Exception:
-        bulk_data = None
+    info = yf.Ticker(sym).info or {}
+    return info.get('sector') or None, info.get('quoteType') or None
 
-    sector_map = {}
-    for sym in tickers_list:
+def get_portfolio_sectors(df_current):
+    """Expunerea pe sectoare a pozițiilor din tab: (tabel Sector/Valoare/Pondere %/Simboluri, fără preț, surse).
+
+    Sectorul: la BVB din harta proprie (analytics/peers.py; Yahoo nu îl trimite), altfel din Yahoo `info`.
+    ETF-urile și fondurile sunt „ETF / fond”, nu „Nedefinit”. Calculul e în analytics/portfolio.py (testat).
+    """
+    if df_current.empty:
+        return pd.DataFrame(), [], {}
+    values = df_current.groupby('Symbol', sort=False)['MarketValue'].sum(min_count=1).to_dict()
+    labels, sources = {}, {}
+    for sym in values:
+        bvb_sec = bvb_sector(sym) if str(sym).upper().endswith('.RO') else None
+        if bvb_sec:
+            labels[sym], sources[sym] = pf_calc.sector_label(bvb_sec), "harta BVB"
+            continue
         try:
-            sec = "Nedefinit"
-            if bulk_data and sym in bulk_data.tickers:
-                sec = bulk_data.tickers[sym].info.get('sector', 'Nedefinit') or 'Nedefinit'
-            val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
-            sector_map[sec] = sector_map.get(sec, 0) + val
-        except:
-            val = df_current[df_current['Symbol'] == sym]['MarketValue'].sum()
-            sector_map['Nedefinit'] = sector_map.get('Nedefinit', 0) + val
+            sec, qtype = _yahoo_sector(sym)
+            labels[sym], sources[sym] = pf_calc.sector_label(sec, qtype), "Yahoo"
+        except Exception as exc:  # yfinance aruncă tipuri diferite (rețea, JSON, HTTP)
+            logger.warning("get_portfolio_sectors %s: %s", sym, exc)
+            labels[sym], sources[sym] = pf_calc.SECTOR_UNKNOWN, "eroare Yahoo"
+    df_sec, unpriced = pf_calc.sector_weights(values, labels)
+    return df_sec, unpriced, sources
 
-    df_sec = pd.DataFrame(list(sector_map.items()), columns=['Sector', 'MarketValue'])
-    df_sec['Pondere %'] = (df_sec['MarketValue'] / total_mkt_val) * 100
-    return df_sec.sort_values(by='Pondere %', ascending=False)
+# --- CURS VALUTAR FAȚĂ DE LEU (BNR + Yahoo live) ---
+FX_LIVE_SYMBOLS = {"EUR": "EURRON=X", "USD": "USDRON=X", "GBP": "GBPRON=X", "CHF": "CHFRON=X"}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _bnr_xml_frame(url):
+    """Un fișier XML BNR → DataFrame (data_bnr.parse_bnr_xml). Eroare HTTP sau fișier fără cursuri → excepție,
+    deci un eșec nu se salvează în cache și se reîncearcă la următoarea deschidere."""
+    resp = requests.get(url, timeout=15, headers={"User-Agent": "terminal-investitii/1.0 (uz personal)"})
+    resp.raise_for_status()
+    frame = bnr_data.parse_bnr_xml(resp.content)
+    if frame.empty:
+        raise ValueError(f"BNR: fișier fără cursuri ({url})")
+    return frame
+
+def get_bnr_fx_history():
+    """Istoricul cursurilor BNR: anul trecut + anul curent + ultimele 10 zile (pentru variația pe un an și de la 1 ianuarie).
+    Fiecare fișier se caută întâi pe curs.bnr.ro (serverul din 2026), apoi pe www.bnr.ro.
+    Întoarce (istoric, fișiere care n-au putut fi citite, cu motivul pe server). Istoricul e gol doar dacă n-a mers niciun fișier."""
+    year = now_ro().year
+    paths = [bnr_data.BNR_YEAR_PATH.format(year=year - 1), bnr_data.BNR_YEAR_PATH.format(year=year), bnr_data.BNR_10DAYS_PATH]
+    frames, failed = [], []
+    for path in paths:
+        reasons = []
+        for url in bnr_data.bnr_urls(path):
+            try:
+                frames.append(_bnr_xml_frame(url))
+                break
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning("BNR %s: %s", url, exc)
+                reasons.append(f"{url.split('/')[2]}: {bnr_data.short_error(exc)}")
+        else:
+            failed.append(f"{path.rsplit('/', 1)[-1]} ({'; '.join(reasons)})")
+    return bnr_data.merge_histories(*frames), failed
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_fx_live():
+    """Cursul de piață (Yahoo, întârziat câteva minute) pentru valutele principale: dict cod -> lei/unitate.
+    Fără niciun curs → excepție (nu se salvează în cache)."""
+    prices = get_fast_live_prices(list(FX_LIVE_SYMBOLS.values()))
+    out = {code: prices.get(sym) for code, sym in FX_LIVE_SYMBOLS.items()}
+    if not any(v for v in out.values()):
+        raise ValueError("Yahoo: niciun curs valutar live")
+    return out
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_market_closes():
+    """Închiderile zilnice pe 2 ani pentru piețele din analytics/markets.py (MARKETS). Fără niciun simbol → excepție
+    (nu se salvează în cache)."""
+    syms = [m[2] for m in markets_calc.MARKETS]
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(syms, period="2y", progress=False, auto_adjust=True), syms)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru indici")
+    return closes
+
+# --- DOBÂNZI COMPARATE (FRED, BCE, Eurostat) ---
+ECB_DATA_URL = "https://data-api.ecb.europa.eu/service/data/{key}"
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _ecb_rate_series(key, n_obs):
+    """O serie BCE (procente) ca serie indexată pe perioadă. Eroare sau serie goală → excepție (nu se salvează în cache)."""
+    resp = requests.get(ECB_DATA_URL.format(key=key), params={"lastNObservations": n_obs, "format": "csvdata"}, timeout=15)
+    resp.raise_for_status()
+    ser = parse_ecb_series(resp.text)
+    if ser.empty:
+        raise ValueError(f"BCE {key}: fără observații")
+    return ser
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fred_rate_series(code, days=800):
+    """O serie FRED pe ultimele `days` zile. Eroare sau serie goală → excepție (nu se salvează în cache)."""
+    end = datetime.today()
+    ser = web.DataReader(code, 'fred', end - timedelta(days=days), end).iloc[:, 0].dropna()
+    if ser.empty:
+        raise ValueError(f"FRED {code}: fără observații")
+    return ser
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _robor3m_series(n_months=30):
+    """ROBOR 3M lunar (Eurostat irt_st_m, RO, IRT_M3). Eroare sau serie goală → excepție."""
+    resp = requests.get(EUROSTAT_MONEY_MARKET_URL, params={"geo": "RO", "int_rt": "IRT_M3", "freq": "M",
+                                                         "lastTimePeriod": n_months}, timeout=15)
+    resp.raise_for_status()
+    ser = parse_eurostat_monthly(resp.json())
+    if ser.empty:
+        raise ValueError("Eurostat ROBOR 3M: fără observații")
+    return ser
+
+def get_rates_dashboard():
+    """Rândurile tabelului „Dobânzi și risc de țară”: (Piață, Indicator, statistici rates_calc.rate_stats, sursă).
+    O serie care nu poate fi citită dă un rând N/A cu sursa marcată „indisponibil”, nu o valoare presupusă."""
+    def load(fn, *args):
+        try:
+            return fn(*args)
+        except Exception as exc:  # rețea / format: rândul rămâne N/A
+            logger.warning("dobânzi %s %s: %s", getattr(fn, "__name__", fn), args, exc)
+            return None
+    d = rates_calc.to_daily
+    m = rates_calc.to_monthly
+    us = {c: load(_fred_rate_series, c) for c in ("DFEDTARL", "DFEDTARU", "DFF", "DGS3MO", "DGS2", "DGS10")}
+    cpi = load(_fred_rate_series, "CPIAUCSL", 900)
+    us_cpi = rates_calc.yoy_monthly(cpi) if cpi is not None else None
+    dfr = load(_ecb_rate_series, "FM/B.U2.EUR.4F.KR.DFR.LEV", 600)
+    bund = load(_ecb_rate_series, "IRS/M.DE.L.L40.CI.0000.EUR.N.Z", 30)
+    # BCE a închis setul ICP pe 04.02.2026 (ultima lună: 12.2025) și l-a înlocuit cu setul HICP (ECOICOP v2,
+    # furnizor Eurostat = „4D0”). Se citesc ambele chei și se păstrează seria cu luna cea mai recentă.
+    de_hicp = rates_calc.freshest(load(_ecb_rate_series, "HICP/M.DE.N.000000.4D0.ANR", 30),
+                                  load(_ecb_rate_series, "ICP/M.DE.N.000000.4.ANR", 30))
+    ro10 = load(_ecb_rate_series, "IRS/M.RO.L.L40.CI.0000.RON.N.Z", 30)
+    ro_hicp = rates_calc.freshest(load(_ecb_rate_series, "HICP/M.RO.N.000000.4D0.ANR", 30),
+                                  load(_ecb_rate_series, "ICP/M.RO.N.000000.4.ANR", 30))
+    robor = load(_robor3m_series)
+
+    def row(market, label, ser, source, inputs):
+        ok = ser is not None and len(ser) > 0 and all(x is not None for x in inputs)
+        st_ = rates_calc.rate_stats(ser) if ok else rates_calc.rate_stats(None)
+        stale = rates_calc.stale_note(st_["period"], now_ro().date()) if ok else None
+        src = (f"{source} — ⚠️ {stale}" if stale else source) if ok else f"{source} — indisponibil"
+        return {"Piață": market, "Indicator": label, **st_, "Sursă": src}
+
+    rows = [
+        row("SUA", "Dobânda Fed, interval țintă: limita de jos", d(us["DFEDTARL"]) if us["DFEDTARL"] is not None else None,
+            "FRED DFEDTARL, zilnic (decizia FOMC)", [us["DFEDTARL"]]),
+        row("SUA", "Dobânda Fed, interval țintă: limita de sus", d(us["DFEDTARU"]) if us["DFEDTARU"] is not None else None,
+            "FRED DFEDTARU, zilnic (decizia FOMC)", [us["DFEDTARU"]]),
+        row("SUA", "Dobânda Fed (efectivă)", d(us["DFF"]), "FRED DFF, zilnic", [us["DFF"]]),
+        row("SUA", "Titluri de stat 3 luni", d(us["DGS3MO"]), "FRED DGS3MO, zilnic", [us["DGS3MO"]]),
+        row("SUA", "Titluri de stat 2 ani", d(us["DGS2"]), "FRED DGS2, zilnic", [us["DGS2"]]),
+        row("SUA", "Titluri de stat 10 ani", d(us["DGS10"]), "FRED DGS10, zilnic", [us["DGS10"]]),
+        row("SUA", "Inflația CPI, an/an", us_cpi, "FRED CPIAUCSL, lunar", [cpi]),
+        row("SUA", "Panta 10 ani − 2 ani", rates_calc.daily_diff(us["DGS10"], us["DGS2"]) if us["DGS10"] is not None and us["DGS2"] is not None else None,
+            "FRED, aceeași zi", [us["DGS10"], us["DGS2"]]),
+        row("SUA", "Dobânda reală 10 ani (10 ani − CPI)", rates_calc.monthly_diff(us["DGS10"], us_cpi) if us["DGS10"] is not None and us_cpi is not None else None,
+            "FRED, aceeași lună", [us["DGS10"], us_cpi]),
+        row("Zona euro", "Dobânda de depozit BCE", d(dfr) if dfr is not None else None, "BCE FM DFR", [dfr]),
+        row("Germania", "Bund 10 ani", m(bund) if bund is not None else None, "BCE IRS, lunar", [bund]),
+        row("Germania", "Inflația HICP, an/an", m(de_hicp) if de_hicp is not None else None, "BCE HICP, lunar", [de_hicp]),
+        row("Germania", "Dobânda reală Bund (10 ani − HICP)", rates_calc.monthly_diff(bund, de_hicp) if bund is not None and de_hicp is not None else None,
+            "BCE, aceeași lună", [bund, de_hicp]),
+        row("România", "ROBOR 3 luni", m(robor) if robor is not None else None, "Eurostat irt_st_m, lunar", [robor]),
+        row("România", "Titluri de stat 10 ani", m(ro10) if ro10 is not None else None, "BCE IRS, lunar", [ro10]),
+        row("România", "Inflația HICP, an/an", m(ro_hicp) if ro_hicp is not None else None, "BCE HICP, lunar", [ro_hicp]),
+        row("România", "Dobânda reală 10 ani (10 ani − HICP)", rates_calc.monthly_diff(ro10, ro_hicp) if ro10 is not None and ro_hicp is not None else None,
+            "BCE, aceeași lună", [ro10, ro_hicp]),
+        row("România", "Prima de risc de țară (RO 10 ani − Bund 10 ani)", rates_calc.monthly_diff(ro10, bund) if ro10 is not None and bund is not None else None,
+            "BCE, aceeași lună", [ro10, bund]),
+        row("România", "Panta 10 ani − ROBOR 3M", rates_calc.monthly_diff(ro10, robor) if ro10 is not None and robor is not None else None,
+            "BCE + Eurostat, aceeași lună", [ro10, robor]),
+    ]
+    return rows
+
+class FredCalendarUnavailable(Exception):
+    """Calendarul FRED nu a putut fi citit. Excepțiile nu intră în cache: eșecul se reîncearcă la următoarea afișare."""
+
+
+def fred_api_key():
+    """Cheia FRED din secrets (`FRED_API_KEY`) sau None. Nu se loghează și nu se afișează niciodată."""
+    try:
+        key = st.secrets.get("FRED_API_KEY")
+    except (FileNotFoundError, KeyError) as exc:   # fără secrets.toml (rulare locală)
+        logger.info("FRED_API_KEY indisponibil: %s", type(exc).__name__)
+        return None
+    key = str(key).strip() if key else ""
+    return key or None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _fred_calendar_cached(start_iso, end_iso, _api_key):
+    """Lista `release_dates` din FRED pentru [start, end], inclusiv datele viitoare. Cheia (`_api_key`) nu intră în
+    cheia de cache. Erorile aruncă FredCalendarUnavailable cu un mesaj fără cheie (URL-ul cu cheia nu se loghează)."""
+    params = {"api_key": _api_key, "file_type": "json", "realtime_start": start_iso, "realtime_end": end_iso,
+              "include_release_dates_with_no_data": "true", "sort_order": "asc", "limit": 1000}
+    try:
+        resp = requests.get(fred_cal.FRED_RELEASE_DATES_URL, params=params, timeout=15)
+    except requests.RequestException as exc:
+        raise FredCalendarUnavailable(f"FRED nu răspunde ({type(exc).__name__})") from None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if resp.status_code != 200:
+        raise FredCalendarUnavailable(fred_cal.error_text(resp.status_code, body, _api_key))
+    if not isinstance(body, dict) or not isinstance(body.get("release_dates"), list):
+        raise FredCalendarUnavailable("FRED a trimis un răspuns fără lista release_dates")
+    return body["release_dates"]
+
+
+def get_fred_calendar(today):
+    """(release_dates, mesaj): lista FRED pe CALENDAR_DAYS zile de la `today`, sau (None, motivul)."""
+    key = fred_api_key()
+    if key is None:
+        return None, "Cheia FRED lipsește din secrets (FRED_API_KEY)."
+    start, end = fred_cal.window(today)
+    try:
+        return _fred_calendar_cached(start.isoformat(), end.isoformat(), key), None
+    except FredCalendarUnavailable as exc:
+        logger.warning("calendar FRED: %s", exc)
+        return None, str(exc)
+
+def get_us_curve_history(days=3700):
+    """Panta SUA 10 ani − 3 luni pe ~10 ani (FRED DGS10 − DGS3MO, aceeași zi), pentru graficul din „Dobânzi”.
+    Eroare la oricare serie → serie goală; eșecul nu intră în cache (`_fred_rate_series` aruncă excepția)."""
+    try:
+        return rates_calc.daily_diff(_fred_rate_series("DGS10", days), _fred_rate_series("DGS3MO", days))
+    except Exception as exc:  # rețea / FRED
+        logger.warning("curba SUA istoric: %s", exc)
+        return pd.Series(dtype="float64")
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_vix_curve_closes():
+    """Închiderile ^VIX și ^VIX3M pe un an (Yahoo). Fără niciuna → excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(["^VIX", "^VIX3M"], period="1y", progress=False, auto_adjust=False), ["^VIX", "^VIX3M"])
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: VIX / VIX3M fără date")
+    return closes
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_breadth_closes():
+    """Închiderile ajustate RSP, IWM, SPY pe 2 ani (Yahoo). Fără niciuna → excepție (nu se salvează în cache)."""
+    syms = sorted({x for a, b, _ in markets_calc.BREADTH_PAIRS for x in (a, b)})
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(syms, period="2y", progress=False, auto_adjust=True), syms)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: RSP/IWM/SPY fără date")
+    return closes
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_spy_trailing_pe():
+    """P/E-ul pe ultimele 12 luni al SPY (Yahoo `info`), proxy pentru S&P 500. Lipsă sau ≤ 0 → excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    pe = num(yf.Ticker("SPY").info or {}, "trailingPE")
+    if pe is None or pe <= 0:
+        raise ValueError("Yahoo: SPY fără trailingPE")
+    return float(pe)
+
+def get_equity_risk_rows():
+    """Prima de risc a acțiunilor (proxy) pentru BVB și SUA: list de dict (Piață, rezultatul equity_risk_gap, bază)."""
+    rows = []
+    # BVB: EPS-ul din foaia BVB la prețul curent al fiecărei companii, mediana; minus titlurile RO 10 ani (BCE, lunar)
+    sheet = load_bvb_fundamentals()
+    syms = sorted(k for k in sheet if not str(k).startswith("_"))
+    prices = get_bvb_peer_prices(tuple(syms)) if syms else {}
+    yields = [markets_calc.earnings_yield(sheet[k]["info"].get("trailingEps"), prices.get(k)) for k in syms]
+    try:
+        ro10 = rates_calc.to_monthly(_ecb_rate_series("IRS/M.RO.L.L40.CI.0000.RON.N.Z", 30))
+        ro_bond, ro_when = float(ro10.iloc[-1]), rates_calc.period_label(ro10.index[-1])
+    except Exception as exc:  # rețea / BCE
+        logger.warning("prima de risc BVB: %s", exc)
+        ro_bond, ro_when = None, None
+    g = markets_calc.equity_risk_gap(yields, ro_bond)
+    rows.append({"Piață": "BVB", **g, "Bază": (f"mediana EPS ÷ prețul curent pe {g['n']} companii din foaia BVB (din {len(syms)}); "
+                                               f"titluri de stat RO 10 ani, BCE {ro_when or 'indisponibil'}. Mediană simplă, nu BET ponderat: proxy.")})
+    # SUA: 1 ÷ P/E-ul SPY (Yahoo); minus titlurile SUA pe 10 ani (FRED DGS10, ultima zi)
+    try:
+        spy_ep = [1.0 / get_spy_trailing_pe()]
+    except Exception as exc:  # rețea / Yahoo
+        logger.warning("prima de risc SUA (P/E): %s", exc)
+        spy_ep = []
+    try:
+        us10 = rates_calc.to_daily(_fred_rate_series("DGS10"))
+        us_bond, us_when = float(us10.iloc[-1]), f"{us10.index[-1]:%d.%m.%Y}"
+    except Exception as exc:  # rețea / FRED
+        logger.warning("prima de risc SUA (10 ani): %s", exc)
+        us_bond, us_when = None, None
+    g2 = markets_calc.equity_risk_gap(spy_ep, us_bond)
+    rows.append({"Piață": "S&P 500", **g2, "Bază": ("1 ÷ P/E-ul pe 12 luni al SPY (Yahoo, " + ("disponibil" if spy_ep else "indisponibil") + "); "
+                                                    f"titluri SUA 10 ani, FRED DGS10 {us_when or 'indisponibil'}. Proxy.")})
+    return rows
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_rotation_ratio():
+    """Raportul Nasdaq Composite / Dow Jones pe un an (zilele comune). Fără date → excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(['^IXIC', '^DJI'], period="1y", progress=False, auto_adjust=True), ['^IXIC', '^DJI'])
+    both = closes.dropna(how="any") if closes is not None else pd.DataFrame()
+    if both.empty or not {'^IXIC', '^DJI'} <= set(both.columns):
+        raise ValueError("Yahoo: ^IXIC / ^DJI fără zile comune")
+    return both['^IXIC'] / both['^DJI']
 
 # --- FUNCȚIE GLOBAL MARKET ---
-@st.cache_data(ttl=300)
+GLOBAL_INDICES = {
+    'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC',
+    'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE', 'Bursa RO (BET) 🇷🇴': 'TVBETETF.RO'
+}
+GLOBAL_COMMODITIES = {
+    'Aur (Gold)': 'GC=F', 'Argint (Silver)': 'SI=F',
+    'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Copper': 'HG=F', 'Gaz Natural': 'NG=F'
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _global_quote_closes():
+    """Închiderile zilnice NEAJUSTATE pe o lună pentru indicii și mărfurile din „4. Piață Globală”, într-o singură
+    cerere Yahoo (înainte: câte un `fast_info` pe simbol). Fără nicio închidere → excepție (nu intră în cache)."""
+    syms = list(GLOBAL_INDICES.values()) + list(GLOBAL_COMMODITIES.values())
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(syms, period="1mo", progress=False, auto_adjust=False, group_by="ticker"), syms)
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: nicio închidere pentru indici și mărfuri")
+    return closes
+
+
 def get_global_market_data():
-    indices = {
-        'S&P 500': '^GSPC', 'Dow Jones': '^DJI', 'Nasdaq': '^IXIC', 
-        'DAX (GER)': '^GDAXI', 'FTSE 100 (UK)': '^FTSE','Bursa RO (BET) 🇷🇴': 'TVBETETF.RO'
-    }
-    commodities = {
-        'Aur (Gold)': 'GC=F', 'Argint (Silver)': 'SI=F', 
-        'Petrol (WTI)': 'CL=F', 'Petrol (Brent)': 'BZ=F', 'Copper': 'HG=F', 'Gaz Natural': 'NG=F'
-    }
-    
-    us_stocks = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'CG', 'SNOW', 'CEG', 'ASML', 'ARM', 'CRWV', 'FN', 'SNDK', 'MU', 
-                 'AMD', 'INTC', 'NFLX', 'JPM', 'BAC', 'SOFI', 'MS', 'HON', 'V', 'INOD', 'MA', 'MDB', 'AIG', 'AXP', 'SCHW', 'NET', 'SPCX', 'BIIB', 
-                 'WMT', 'KO', 'PEP', 'PG', 'DXCM', 'GPOR', 'COP', 'OXY', 'VG', 'DVN', 'LNG', 'T', 'UUUU', 'FSLR', 'TTE', 'RIO', 'BHP', 'D', 'VALE', 'METC', 'MP', 'LLY', 'AMGN', 'XOM', 'CVX', 
-                 'PLTR', 'PANW', 'ANET', 'QCOM', 'ORCL', 'TSM', 'CMG', 'GS', 'CRM', 'WFC', 'NVO', 'NVS', 'MCD', 'SMR', 'OKLO', 'SNY', 'JNJ', 'BA', 'GD', 'RTX', 'LMT', 'KTOS', 'PM', 'COO', 'MRK', 'PFE', 'C']
-    eu_stocks = ['SAP.DE', 'MC.PA', 'ASML', 'SIE.DE', 'TTE.PA', 'AIR.PA', 'ALV.DE', 'DTE.DE', 'VOW3.DE', 'BAYN.DE', 'UCG.MI', 'ENR.DE', 'DBK.DE', 'ULVR.L', 'REL.L', 
-                 'BMW.DE', 'BNP.PA', 'SAN.PA', 'OR.PA', 'GLNCY', 'MBG.DE', 'BSP.DE', 'RHM.DE', 'ZAL.DE', 'LDO.MI', 'RNO.PA', 'BA.L', 'DGE.L', 'SHEL.L', 'BATS.L', 'RACE.MI', 'AZN', 'HSBA.L']
+    """Tabelele vechi din „4. Piață Globală”: indicii, mărfurile și topurile SUA / Europa.
 
-    all_symbols = list(indices.values()) + list(commodities.values()) + us_stocks + eu_stocks
-    tickers = yf.Tickers(' '.join(all_symbols))
-    
-    def process_tickers(symbol_dict, is_list=False):
-        data = []
-        source = symbol_dict if is_list else symbol_dict.items()
-        for item in source:
-            name = item if is_list else item[0]
-            sym = item if is_list else item[1]
-            try:
-                t = tickers.tickers[sym]
-                info = t.fast_info
-                price = info.last_price
-                prev = info.previous_close
-                if prev:
-                    change = price - prev
-                    pct = (change / prev) * 100
-                else: change = 0; pct = 0
-                
-                data.append({
-                    'Instrument': name, 'Simbol': sym, 'Preț': price, 'Variație': change, 'Variație %': pct
-                })
-            except: continue
-        return pd.DataFrame(data)
-
-    df_indices = process_tickers(indices)
-    df_commodities = process_tickers(commodities)
-    df_us = process_tickers(us_stocks, is_list=True)
-    if not df_us.empty:
-        us_gainers = df_us.sort_values(by='Variație %', ascending=False).head(10)
-        us_losers = df_us.sort_values(by='Variație %', ascending=True).head(10)
-    else: us_gainers = us_losers = pd.DataFrame()
-        
-    df_eu = process_tickers(eu_stocks, is_list=True)
-    if not df_eu.empty:
-        eu_gainers = df_eu.sort_values(by='Variație %', ascending=False).head(10)
-        eu_losers = df_eu.sort_values(by='Variație %', ascending=True).head(10)
-    else: eu_gainers = eu_losers = pd.DataFrame()
-
-    return df_indices, df_commodities, us_gainers, us_losers, eu_gainers, eu_losers
+    Indici și mărfuri: o cerere Yahoo (`_global_quote_closes`, cache 5 min), variația fiecărei serii față de
+    închiderea ei precedentă (analytics/briefing.quote_table). Topurile: aceleași date și reguli ca în
+    „6. Rezumatul Zilei” (`get_briefing_market`, cache comun de 15 min; ultima ședință a pieței, doar titlurile
+    tranzacționate). Înainte: ~230 de cereri `fast_info`, una după alta, la fiecare 5 minute.
+    Întoarce un dict: indices, commodities, us_gain, us_lose, us_session, us_partial, eu_gain, eu_lose, eu_session,
+    eu_partial. O sursă picată dă tabele goale / N/A, nu valori presupuse."""
+    try:
+        closes = _global_quote_closes()
+    except Exception as exc:  # rețea / Yahoo
+        logger.warning("Piață Globală indici și mărfuri: %s", exc)
+        closes = pd.DataFrame()
+    out = {"indices": briefing_calc.quote_table(closes, GLOBAL_INDICES),
+           "commodities": briefing_calc.quote_table(closes, GLOBAL_COMMODITIES)}
+    for key in ("us", "eu"):
+        try:
+            data, partial = get_briefing_market(key)
+        except Exception as exc:  # rețea / Yahoo: topul rămâne gol
+            logger.warning("Piață Globală topuri %s: %s", key, exc)
+            data, partial = {"close": pd.DataFrame(), "volume": pd.DataFrame()}, True
+        cols = [x for x in universes.symbols(key) if x in data["close"].columns]
+        table, session = briefing_calc.session_table(data["close"][cols], data["volume"].reindex(columns=cols))
+        out[f"{key}_gain"], out[f"{key}_lose"] = briefing_calc.top_frames(table)
+        out[f"{key}_session"], out[f"{key}_partial"] = session, partial
+    return out
 
 @st.cache_data(ttl=300)
 def get_sector_performance():
@@ -2919,7 +3539,7 @@ def get_sector_performance():
     }
     try:
         # Descărcăm datele pe ultimele 5 zile pentru a fi siguri că prindem "ieri" și "azi"
-        data = yf.download(list(sectors_map.keys()), period="5d", group_by='ticker', progress=False)
+        data = yf.download(list(sectors_map.keys()), period="5d", group_by='ticker', progress=False, auto_adjust=True)
         
         results = []
         for ticker, name in sectors_map.items():
@@ -2936,7 +3556,8 @@ def get_sector_performance():
                     prev_price = df_t.iloc[-2]
                     pct_change = ((curr_price - prev_price) / prev_price) * 100
                     results.append({'Simbol': ticker, 'Sector': name, 'Variație %': pct_change})
-            except:
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("get_sector_performance: %s", exc)
                 continue
                 
         df = pd.DataFrame(results)
@@ -2945,7 +3566,7 @@ def get_sector_performance():
             df = df.sort_values(by='Variație %', ascending=True)
         return df
     except Exception as e:
-        print(f"Eroare sectoare: {e}")
+        logger.warning(f"Eroare sectoare: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -2954,14 +3575,45 @@ def get_credit_risk_data(period="1y"):
     Descarcă datele pentru piața de credit pe o perioadă specificată.
     """
     try:
-        data = yf.download(['HYG', 'IEF'], period=period, progress=False)['Close']
+        data = yf.download(['HYG', 'IEF'], period=period, progress=False, auto_adjust=True)['Close']  # randament total (cu cupoane)
         if 'HYG' in data.columns and 'IEF' in data.columns:
             ratio = data['HYG'] / data['IEF']
             return ratio.dropna()
         return pd.Series()
     except Exception as e:
-        print(f"Eroare date bonduri: {e}")
+        logger.warning(f"Eroare date bonduri: {e}")
         return pd.Series()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_sector_month_returns():
+    """Randamentul pe o lună calendaristică al celor 11 ETF-uri sectoriale SUA (XLK…XLC), pentru pilonul
+    „Rotația sectorială” din verdictul macro. dict sector -> randament (fracție); sectoarele fără istoric lipsesc.
+    O eroare de rețea nu se salvează în cache (excepția iese din funcție)."""
+    sectors_map = {
+        'XLK': 'Tehnologie', 'XLF': 'Financiar', 'XLE': 'Energie',
+        'XLV': 'Sănătate', 'XLY': 'Consum Discreționar',
+        'XLP': 'Consum de Bază', 'XLI': 'Industrial',
+        'XLU': 'Utilități', 'XLB': 'Materiale',
+        'XLRE': 'Imobiliare', 'XLC': 'Comunicații'
+    }
+    _yf_limiter.wait_if_needed()
+    closes = close_frame(yf.download(list(sectors_map), period="3mo", progress=False, auto_adjust=True), list(sectors_map))
+    out = {}
+    for tk, name in sectors_map.items():
+        if tk in closes.columns:
+            r = macro_calc.period_return(closes[tk], months=1)
+            if r is not None:
+                out[name] = r
+    return out
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_vix_last():
+    """Ultima închidere ^VIX și data ei; o eroare sau lipsa datelor ridică excepție (nu se salvează în cache)."""
+    _yf_limiter.wait_if_needed()
+    h = yf.Ticker("^VIX").history(period="10d", auto_adjust=False)['Close'].dropna()
+    if h.empty:
+        raise ValueError("^VIX fără date")
+    return float(h.iloc[-1]), h.index[-1]
 
 @st.cache_data(ttl=3600)
 def get_cross_asset_correlation():
@@ -2978,7 +3630,7 @@ def get_cross_asset_correlation():
     }
     try:
         # Descărcăm date pe 3 luni pentru a prinde regimul curent (nu prea vechi, nu prea scurt)
-        data = yf.download(list(tickers.values()), period="3mo", progress=False)['Close']
+        data = yf.download(list(tickers.values()), period="3mo", progress=False, auto_adjust=True)['Close']
         
         # Redenumim coloanele cu numele noastre intuitive
         rename_map = {v: k for k, v in tickers.items()}
@@ -2988,84 +3640,8 @@ def get_cross_asset_correlation():
         corr_matrix, _ = common_day_correlation(data, min_obs=30)
         return corr_matrix
     except Exception as e:
-        print(f"Eroare Cross-Asset: {e}")
+        logger.warning(f"Eroare Cross-Asset: {e}")
         return pd.DataFrame()
-
-@st.cache_data(ttl=3600)
-def get_index_technical_levels(symbol):
-    """Calculează nivelurile critice (SMA 50, SMA 200) pentru un indice."""
-    try:
-        # Descărcăm 1 an de date pentru a avea destule zile pentru SMA 200
-        df = yf.download(symbol, period="1y", progress=False)['Close']
-        if isinstance(df, pd.DataFrame):
-            df = df.iloc[:, 0]
-            
-        df = df.dropna()
-        if len(df) < 200: return None # Nu avem destule date
-        
-        curr_price = df.iloc[-1]
-        sma_50 = df.rolling(window=50).mean().iloc[-1]
-        sma_200 = df.rolling(window=200).mean().iloc[-1]
-        
-        # Calculăm distanța procentuală
-        dist_50 = ((curr_price - sma_50) / sma_50) * 100
-        dist_200 = ((curr_price - sma_200) / sma_200) * 100
-        
-        return {
-            "price": curr_price,
-            "sma50": sma_50,
-            "sma200": sma_200,
-            "dist50": dist_50,
-            "dist200": dist_200
-        }
-    except:
-        return None
-
-def calculate_market_breadth(data, tickers):
-    """Calculează Lățimea Pieței (Avans vs Declin)"""
-    adv, dec, flat = 0, 0, 0
-    for t in tickers:
-        # Ignorăm indicii majori (ca să numărăm doar companiile)
-        if t.startswith('^') or t == 'TVBETETF.RO': continue 
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if t not in data.columns.levels[0]: continue
-                series = data[t]['Close'].dropna()
-            else:
-                series = data['Close'].dropna()
-            
-            if len(series) >= 2:
-                change = series.iloc[-1] - series.iloc[-2]
-                if change > 0.001: adv += 1
-                elif change < -0.001: dec += 1
-                else: flat += 1
-        except: continue
-    
-    total = adv + dec + flat
-    if total == 0: return 0, 0, 0, 0, 0, 0
-    return adv, dec, flat, (adv/total*100), (dec/total*100), (flat/total*100)
-
-@st.cache_data(ttl=3600)
-def get_volume_analysis(symbol):
-    """Calculează intensitatea volumului față de media de 20 de zile."""
-    try:
-        t = yf.Ticker(symbol)
-        # Avem nevoie de 1 lună de date pentru o medie mobilă de 20 de zile
-        df = t.history(period="1mo")
-        if df.empty or len(df) < 20: return None
-        
-        curr_vol = df['Volume'].iloc[-1]
-        avg_vol = df['Volume'].rolling(window=20).mean().iloc[-1]
-        
-        # Intensitatea (Raportul)
-        intensity = curr_vol / avg_vol
-        return {
-            "current": curr_vol,
-            "average": avg_vol,
-            "intensity": intensity
-        }
-    except:
-        return None
 
 import pandas_datareader.data as web
 
@@ -3127,84 +3703,15 @@ def get_fred_macro_data():
                     "_change_raw": change,
                     "_yoy": yoy
                 })
-        except Exception:
-            continue # Dacă un simbol are probleme, trecem la următorul fără să oprim aplicația
+        except Exception as exc:  # un indicator picat nu oprește tabelul; rândul lui lipsește
+            logger.warning("get_fred_macro_data %s: %s", code, exc)
+            continue
             
     return pd.DataFrame(results)
 
 def interpret_macro_data_ai(df_macro):
-    """
-    Analiză Macro de nivel Senior Fund Manager.
-    Sintetizează 12 indicatori FRED pentru a detecta schimbările de paradigmă economică.
-    """
-    if df_macro.empty: return []
-    
-    bullets = []
-    m = {row['_simbol']: row for _, row in df_macro.iterrows()}
-    
-    # --- HELPER: Extragere Valori ---
-    def gv(sym): return m.get(sym, {}).get('Valoare Curentă', 0)
-    def gc(sym): return m.get(sym, {}).get('_change_raw', 0)
-
-    # 1. ANALIZA INFLAȚIEI (Cea mai mare frică a pieței)
-    pce = gc('PCEPILFE') # Core PCE MoM
-    cpi_core = gc('CPILFESL') # Core CPI MoM
-    fed_rate = gv('FEDFUNDS')
-    
-    # Calculăm Rata Reală (Dobânda Fed - Inflația an/an)
-    # Dacă e pozitivă și mare, Fed-ul "strânge de gât" economia.
-    # CPIAUCSL este un INDICE (nivel ~320), nu o rată: inflația e variația lui an/an.
-    cpi_yoy = m.get('CPIAUCSL', {}).get('_yoy')
-    cpi_yoy = float(cpi_yoy) if cpi_yoy is not None and pd.notna(cpi_yoy) else None
-    real_rate_pct = real_rate(fed_rate if 'FEDFUNDS' in m else None, cpi_yoy)
-
-    if pce > 0.2 or cpi_core > 0.3:
-        bullets.append("🔥 **INFLAȚIE REZISTENTĂ:** Datele Core PCE și CPI indică prețuri 'lipicioase'. Fed-ul nu poate tăia dobânzile fără riscul unui al doilea val inflaționar. Rămâneți prudenți pe sectorul imobiliar și Tech cu evaluări mari.")
-    elif pce <= 0.15 and real_rate_pct is not None and real_rate_pct > 2:
-        bullets.append("❄️ **DEZINFLAȚIE CU DOBÂNZI REALE MARI:** Inflația scade, dar dobânzile rămân sus. Aceasta este o rețetă pentru 'Pivot' – momentul în care Fed va trebui să taie rapid pentru a nu strivi economia.")
-
-    # 2. RADIOGRAFIA PIEȚEI MUNCII (Motorul consumului)
-    nfp = gc('PAYEMS')
-    adp = gc('ADPCHGS')
-    unrate = gv('UNRATE')
-    jolts_chg = gc('JTSJOL')
-
-    # Corelația ADP vs NFP
-    if nfp > 200 and adp < 100:
-        bullets.append("🔄 **DIVERGENȚĂ PRIVAT-STAT:** Angajările oficiale (NFP) sunt susținute de sectorul public, în timp ce sectorul privat (ADP) frânează. Este un semnal 'Late Cycle' – economia reală încetinește sub suprafață.")
-    
-    # Regula Sahm & Tightness
-    if gc('UNRATE') > 0.1 and unrate > 4.0:
-        bullets.append("🚨 **RECESIUNEA 'BATE LA UȘĂ':** Șomajul crește constant. Istoric, o creștere de 0.5% a ratei șomajului de la minimul anului declanșează Regula Sahm (recesiune inevitabilă).")
-    
-    if jolts_chg < -400:
-        bullets.append("📉 **CAPITULAREA ANGAJATORILOR:** Scăderea masivă a joburilor vacante (JOLTS) arată că firmele au tăiat bugetele de expansiune. Presiunea pe creșterea salariilor va scădea, ajutând inflația, dar lovind consumul.")
-
-    # 3. CONSUMUL ȘI SENTIMENTUL (Inima PIB-ului)
-    retail = gc('RSAFS')
-    sentiment = gc('UMCSENT')
-
-    if retail < 0 and sentiment < 0:
-        bullets.append("⚠️ **STAGNARE CONSUM:** Americanii nu mai au încredere în viitor și au tăiat cheltuielile de retail. Deoarece consumul este 70% din PIB, acesta este un semnal de alarmă pentru profiturile companiilor din S&P 500.")
-    elif retail > 0.5 and sentiment < -2.0:
-        bullets.append("💸 **SPENDING DE NECESITATE:** Vânzările cresc, dar încrederea scade. Oamenii cheltuie mai mult pe aceleași bunuri (din cauza inflației), nu pentru că au surplus. Este un semnal negativ pentru marjele de profit.")
-
-    # 4. INDICATORI AVANSAȚI (Leading Indicators)
-    housing = gc('HOUST')
-    ind_prod = gc('INDPRO')
-
-    if housing < -3.0 and ind_prod < -0.3:
-        bullets.append("🏗️ **FRÂNĂ INDUSTRIALĂ ȘI IMOBILIARĂ:** Cele mai sensibile sectoare la dobânzi sunt în contracție. Acest duo anticipează de obicei o scădere a PIB-ului în următoarele 2-3 trimestre.")
-    elif housing > 2.0:
-        bullets.append("🏠 **RELIENȚĂ IMOBILIARĂ:** Sectorul construcțiilor sfidează dobânzile mari. Acest lucru oferă un suport solid economiei și sugerează că o recesiune 'hard' este puțin probabilă acum.")
-
-    # 5. VERDICTUL MASTER (SINTEZA)
-    if unrate < 4.0 and pce < 0.2 and retail > 0:
-        bullets.append("🌟 **REGIM GOLDILOCKS:** Nici prea cald, nici prea rece. Joburi sunt, inflația e stabilă, consumul merge. Este mediul ideal pentru investiții în acțiuni (Equity Bull Market).")
-    elif unrate > 4.2 and pce > 0.25:
-        bullets.append("🌪️ **SCENARIU DE COȘMAR (STAGFLAȚIE):** Șomaj în creștere + Inflație persistentă. Este singurul mediu în care portofoliile diversificate eșuează. Cash-ul și Aurul sunt singurele refugii.")
-
-    return bullets
+    """Interpretarea Barometrului FED (analytics/macro.py: interpret_fred, testată)."""
+    return macro_calc.interpret_fred(df_macro)
 
 # --- MAIN APP ---
 def main():
@@ -3227,8 +3734,8 @@ def main():
         from importlib import metadata as _md
         rows = [f"Python {platform.python_version()}"]
         for pkg in ("streamlit", "yfinance", "pandas", "numpy", "scipy", "plotly", "curl_cffi", "httpx",
-                    "gspread", "google-auth", "google-auth-oauthlib", "h2", "feedparser", "pandas-datareader", "scikit-learn",
-                    "prophet", "torch", "transformers", "lxml", "requests", "matplotlib", "textblob", "html5lib"):
+                    "gspread", "google-auth", "google-auth-oauthlib", "feedparser", "pandas-datareader", "scikit-learn",
+                    "prophet", "torch", "transformers", "lxml", "requests", "matplotlib"):
             try:
                 rows.append(f"{pkg} {_md.version(pkg)}")
             except _md.PackageNotFoundError:
@@ -3255,13 +3762,8 @@ def main():
                 items = filter_news(raw_news, cat)
                 if items:
                     for item in items:
-                        st.markdown(f"""
-                        <div class="news-card">
-                            <a href="{item['link']}" class="news-title" target="_blank">{item['title']}</a>
-                            <div class="news-meta"><b>{item['source']}</b> • {item['date_str']}</div>
-                            <div style="color:#B0B8C4; font-size:14px; line-height: 1.5;">{item['summary'][:250]}...</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Text RSS extern: curățat de tag-uri, tăiat la cuvânt și escapat (data.news.news_card_html).
+                        st.markdown(news_card_html(item, future_note(item)), unsafe_allow_html=True)
                 else:
                     st.info(f"Nu există știri recente pentru: {cat}.")
 
@@ -3278,6 +3780,10 @@ def main():
         show_sma200 = st.sidebar.checkbox("SMA 200", value=True)
         show_rsi = st.sidebar.checkbox("RSI 14", value=True)
         show_macd = st.sidebar.checkbox("MACD", value=True)
+
+        # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
+        _an_t0 = time.perf_counter()
+        _an_timer = st.empty()
 
         with st.spinner(f"Se analizează {sym}..."):
             hist, info, earn_df, real_sym = get_stock_data(sym)
@@ -3317,9 +3823,14 @@ def main():
             # 1. Informații Generaley
             st.markdown(f"## {info.get('longName') or real_sym}")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Sector", info.get('sector') or bvb_sector(real_sym) or 'N/A')
-            c2.metric("Industrie", info.get('industry') or 'N/A')
-            c3.metric("Capitalizare", format_num(info.get('marketCap')))             
+            c1.metric("Sector", info.get('sector') or bvb_sector(real_sym) or 'N/A',
+                      help="Sectorul după clasificarea Yahoo. La BVB Yahoo nu îl trimite: vine din harta sectoarelor "
+                           "ținută în aplicație. Sectorul alege comparabilii din Peer Review.")
+            c2.metric("Industrie", info.get('industry') or 'N/A',
+                      help="Industria (subdiviziunea sectorului) după Yahoo. La BVB lipsește de obicei (N/A).")
+            c3.metric("Capitalizare", format_num(info.get('marketCap')),
+                      help="Capitalizarea bursieră = prețul acțiunii × numărul de acțiuni în circulație, în moneda de "
+                           "tranzacționare (Yahoo, `marketCap`). Arată mărimea companiei, nu cât valorează ea fundamental.")
             from_statements = [STATEMENT_RATIO_LABELS[k] for k in info.get('_from_statements', [])]
             if not info.get('_fundamentals_available', True):
                 if from_statements:
@@ -3388,21 +3899,21 @@ def main():
             # Fereastră calendaristică: "1 An" înseamnă un an de date, nu 365 de rânduri (~1,45 ani)
             subset = slice_window(hist, time_opt)
             
-            if not subset.empty and len(hist) >= 2:
-                curr_price = subset['Close'].iloc[-1]
-                start_price = subset['Close'].iloc[0]
-                diff_val = curr_price - start_price
-                diff_pct = (diff_val / start_price) * 100
-                prev_close = hist['Close'].iloc[-2]
-                day_val = curr_price - prev_close
-                day_pct = (day_val / prev_close) * 100
-            else:
-                curr_price = 0; diff_val = 0; diff_pct = 0; day_val = 0; day_pct = 0
+            # Lipsă (interval gol, o singură ședință) → N/A, nu 0 (analytics.technical.price_changes)
+            pc = price_changes(subset['Close'] if not subset.empty else None, hist['Close'])
+            curr_price = pc['last']
+            _chg = lambda v, p: None if v is None or p is None else f"{ro(v):.2f} ({ro(p):.2f}%)"
 
             with col_price_info:
                  m1, m2 = st.columns(2)
-                 m1.metric(f"Interval ({time_opt})", f"{ro(curr_price):.2f} {info.get('currency', '')}", f"{ro(diff_val):.2f} ({ro(diff_pct):.2f}%)")
-                 m2.metric("Evoluție Azi", f"{ro(curr_price):.2f}", f"{ro(day_val):.2f} ({ro(day_pct):.2f}%)")
+                 m1.metric(f"Interval ({time_opt})", "N/A" if curr_price is None else f"{ro(curr_price):.2f} {info.get('currency', '')}",
+                           _chg(pc['diff'], pc['diff_pct']),
+                           help="Ultima închidere și variația față de prima închidere din intervalul ales (fereastră "
+                                "calendaristică). Prețuri ajustate pentru dividende și splituri, ca în grafic.")
+                 m2.metric("Evoluție Azi", "N/A" if curr_price is None else f"{ro(curr_price):.2f}",
+                           _chg(pc['day'], pc['day_pct']),
+                           help="Ultima închidere față de închiderea ședinței precedente. În timpul ședinței, „ultima "
+                                "închidere” e prețul de acum (ședință în curs).")
 
             rows_needed = 1 + (1 if show_rsi else 0) + (1 if show_macd else 0)
             row_heights = [0.6] + ([0.2] if show_rsi else []) + ([0.2] if show_macd else [])
@@ -3495,27 +4006,37 @@ def main():
                 c_eval, c_prof, c_indat, c_risc = st.columns(4)
                 with c_eval:
                     st.markdown("**Evaluare & Dividende**")
-                    st.metric("P/E Ratio", format_num(info.get('trailingPE')))
-                    st.metric("Forward P/E", format_num(info.get('forwardPE')))
+                    st.metric("P/E Ratio", format_num(info.get('trailingPE')), help=fund_help(info, "trailingPE"))
+                    st.metric("Forward P/E", format_num(info.get('forwardPE')), help=fund_help(info, "forwardPE"))
                     div_rate = info.get('dividendRate')
                     div_display = f"{ro(div_rate):.2f} ({ro((div_rate/curr_price*100)):.2f}%)" if (div_rate and curr_price) else "N/A"
-                    st.metric("Dividend (Randament)", div_display)
-                    st.metric("P/BV", format_num(info.get('priceToBook')))
-                    gn_calc = (info.get('trailingPE', 0) or 0) * (info.get('priceToBook', 0) or 0)
-                    st.metric("GN (Graham)", f"{ro(gn_calc):.2f}" if gn_calc > 0 else "N/A")
-                    st.metric("EPS", format_num(info.get('trailingEps')))
-                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue')))
+                    div_help = fund_help(info, "dividendRate")
+                    bvb_dy = (bvb_decision or {}).get("dy")
+                    if bvb_dy is not None and (bvb_decision or {}).get("price"):
+                        # BVB: din fișierul „Analiză companii” (Yahoo nu trimite dividendul); are prioritate.
+                        dps = bvb_dy * bvb_decision["price"]
+                        div_display = f"{ro(dps):.4f} ({ro(bvb_dy * 100):.2f}%)" if dps < 1 else f"{ro(dps):.2f} ({ro(bvb_dy * 100):.2f}%)"
+                        div_help = (f"{FUND_HELP['dividendRate']} Sursă: fișierul „Analiză companii” {bvb_symbol(real_sym)}: "
+                                    f"dividendul total din {bvb_decision.get('dy_year') or 'ultimul an'} / capitalizarea la prețul curent "
+                                    f"({ro(bvb_decision['price']):.4f} lei); pe acțiune = randament × preț.")
+                    st.metric("Dividend (Randament)", div_display, help=div_help)
+                    st.metric("P/BV", format_num(info.get('priceToBook')), help=fund_help(info, "priceToBook"))
+                    gn_pe, gn_pb = num(info, 'trailingPE'), num(info, 'priceToBook')
+                    gn_calc = gn_pe * gn_pb if (gn_pe is not None and gn_pb is not None) else None   # lipsă = N/A, nu 0
+                    st.metric("GN (Graham)", f"{ro(gn_calc):.2f}" if (gn_calc is not None and gn_calc > 0) else "N/A", help=fund_help(info, "gn"))
+                    st.metric("EPS", format_num(info.get('trailingEps'), small_decimals=4), help=fund_help(info, "trailingEps"))
+                    st.metric("Val. Contabilă/Acțiune", format_num(info.get('bookValue'), small_decimals=4), help=fund_help(info, "bookValue"))
                 with c_prof:
                     st.markdown("**Profitabilitate**")
-                    st.metric("ROA", format_num(info.get('returnOnAssets'), True))
-                    st.metric("ROE", format_num(info.get('returnOnEquity'), True))
-                    st.metric("Marjă Netă", format_num(info.get('profitMargins'), True))
-                    st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True))
+                    st.metric("ROA", format_num(info.get('returnOnAssets'), True), help=fund_help(info, "returnOnAssets"))
+                    st.metric("ROE", format_num(info.get('returnOnEquity'), True), help=fund_help(info, "returnOnEquity"))
+                    st.metric("Marjă Netă", format_num(info.get('profitMargins'), True), help=fund_help(info, "profitMargins"))
+                    st.metric("Marjă Operațională", format_num(info.get('operatingMargins'), True), help=fund_help(info, "operatingMargins"))
                 with c_indat:
                     st.markdown("**Îndatorare**")
-                    st.metric("Datorii/Capital", de_display)
-                    st.metric("Current Ratio", format_num(info.get('currentRatio')))
-                    st.metric("Quick Ratio", format_num(info.get('quickRatio')))
+                    st.metric("Datorii/Capital", de_display, help=fund_help(info, "debtToEquity"))
+                    st.metric("Current Ratio", format_num(info.get('currentRatio')), help=fund_help(info, "currentRatio"))
+                    st.metric("Quick Ratio", format_num(info.get('quickRatio')), help=fund_help(info, "quickRatio"))
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
                     st.metric("Beta", format_num(beta_val), help=f"Sursă: {risk_stats['beta_label']}")
@@ -3529,11 +4050,13 @@ def main():
             
             with st.spinner("Extragem datele contabile..."):
                 try:
-                    t_fin = yf.Ticker(real_sym)
+                    # Aceleași situații Yahoo (financials, quarterly_financials) ca scorurile, din cache-ul de 1 oră
+                    # al get_financial_statements; înainte se descărcau din nou la fiecare clic din pagină.
+                    _fs = get_financial_statements(real_sym)
                     
                     # Preluăm datele (yfinance le aduce cu datele pe coloane, deci facem Transpose .T)
-                    df_ann = t_fin.financials.T
-                    df_qtr = t_fin.quarterly_financials.T
+                    df_ann = _fs["income"].T if _fs.get("income") is not None else pd.DataFrame()
+                    df_qtr = _fs["q_income"].T if _fs.get("q_income") is not None else pd.DataFrame()
                     
                     # Curățăm și ordonăm cronologic (cele mai vechi primele)
                     if not df_ann.empty and not df_qtr.empty:
@@ -3687,13 +4210,20 @@ def main():
                 p_med, p_n = medians[p_label]
                 p_diff = versus_median(p_own, p_med)
                 p_title = p_label.replace(" (%)", "")
+                p_help = (f"{p_title} al companiei față de mediana comparabililor din același sector și aceeași regiune. "
+                          "Diferența = (valoarea − mediana) ÷ |mediana|; n = câți comparabili au valoarea. Mediana apare de la "
+                          "3 comparabili; la P/E se iau doar valorile pozitive. Fără verdict: eșantionul e mic. Sursa: foaia BVB "
+                          "la emitenții BVB, altfel Yahoo, completat din situațiile financiare.")
                 if p_own is None:
-                    p_col.metric(p_title, "N/A")
+                    p_col.metric(p_title, "N/A",
+                                  help=p_help)
                 elif p_diff is None:
-                    p_col.metric(p_title, p_fmt.format(ro(p_own)), "fără mediană de comparație", delta_color="off")
+                    p_col.metric(p_title, p_fmt.format(ro(p_own)), "fără mediană de comparație", delta_color="off",
+                                  help=p_help)
                 else:
                     p_col.metric(p_title, p_fmt.format(ro(p_own)),
-                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})", delta_color="off")
+                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})", delta_color="off",
+                                  help=p_help)
 
             st.write("")
 
@@ -3764,10 +4294,18 @@ def main():
             rev = info.get('totalRevenue'); net_inc = info.get('netIncomeToCommon'); cash = info.get('totalCash')
             exp = (rev - net_inc) if (rev and net_inc) else None
             cf1, cf2, cf3, cf4 = st.columns(4)
-            cf1.metric("Venituri Totale", format_num(rev))
-            cf2.metric("Profit Net", format_num(net_inc))
-            cf3.metric("Cheltuieli (Est.)", format_num(exp))
-            cf4.metric("Numerar Disponibil", format_num(cash))
+            cf1.metric("Venituri Totale", format_num(rev),
+                       help="Cifra de afaceri pe ultimele 12 luni (TTM, Yahoo `totalRevenue`); fără ea, din situațiile "
+                            "financiare: TTM din 4 trimestre sau ultimul an fiscal. În moneda de raportare.")
+            cf2.metric("Profit Net", format_num(net_inc),
+                       help="Profitul net atribuibil acționarilor ordinari, ultimele 12 luni (Yahoo `netIncomeToCommon`; "
+                            "fără el, din situațiile financiare). În moneda de raportare.")
+            cf3.metric("Cheltuieli (Est.)", format_num(exp),
+                       help="Proxy: venituri − profit net = toate costurile, inclusiv dobânzi, impozit și elemente "
+                            "excepționale. Nu e un rând din situațiile financiare.")
+            cf4.metric("Numerar Disponibil", format_num(cash),
+                       help="Numerar și echivalente (plus plasamente pe termen scurt, unde Yahoo le include) din cel mai "
+                            "recent bilanț (Yahoo `totalCash`; fără el, din bilanț). Nu scade datoriile.")
             
             st.markdown("<br>", unsafe_allow_html=True)
             col_an_left, col_an_right = st.columns([1, 2])
@@ -3781,7 +4319,9 @@ def main():
                 if rec_mean:
                     pos_p = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
                     st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left:{pos_p}%;"></div></div>""", unsafe_allow_html=True)
-                st.metric("Preț Țintă (Mediu)", f"{ro(target):,.2f} {info.get('currency','USD')}" if target else "N/A")
+                st.metric("Preț Țintă (Mediu)", f"{ro(target):,.2f} {info.get('currency','USD')}" if target else "N/A",
+                          help="Media prețurilor țintă ale analiștilor care acoperă compania (Yahoo `targetMeanPrice`), de "
+                               "obicei la 12 luni. Opinia analiștilor, nu o evaluare a aplicației; la BVB lipsește des.")
 
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
@@ -3791,7 +4331,7 @@ def main():
                         return f'color: {color}; font-weight: bold'
                     e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
                     e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
-                    st.dataframe(e_disp.style.applymap(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
+                    st.dataframe(e_disp.style.map(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
                 else: st.info("Date earnings indisponibile.")
             
             # --- MODUL NOU: ANALIZA VOLUMULUI INSTITUȚIONAL ---
@@ -4469,8 +5009,8 @@ def main():
                 from ai_engine import analyze_sentiment_ai, generate_ai_swot_analysis
                 
                 # Colectare date necesare pentru SWOT
-                c_news_ai = get_company_news_rss(real_sym)
-                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else 0
+                c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
+                s_score_val = analyze_sentiment_ai(c_news_ai) if c_news_ai else None   # lipsă ≠ neutru
                 mos_swot = ((dcf_calc - current_p) / dcf_calc * 100) if (dcf_calc is not None and dcf_calc > 0) else None
                 z_val_swot = altman_res["zone"]   # zona, nu scorul: pragul depinde de variantă
                 
@@ -4515,7 +5055,7 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                        
-            c_news_ai = get_company_news_rss(real_sym)
+            c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
             cai1, cai2 = st.columns([1, 2])
             
             # --- PARTEA ACTUALIZATĂ (Scorul FinBERT cu Legendă) ---
@@ -4526,7 +5066,9 @@ def main():
                         s_score = analyze_sentiment_ai(c_news_ai)
                         
                         # --- LOGICĂ EXTINSĂ PE 5 PRAGURI ---
-                        if s_score >= 0.25:
+                        if s_score is None:      # FinBERT indisponibil: fără scor, nu 0 „neutru”
+                            c_ai, status_text = "#8B949E", "Indisponibil: FinBERT nu a putut analiza știrile"
+                        elif s_score >= 0.25:
                             c_ai, status_text = "#3FB950", "🚀 Euforie media"
                         elif s_score >= 0.05:
                             c_ai, status_text = "#3FB950", "📈 Optimism moderat"
@@ -4542,7 +5084,7 @@ def main():
                         
                         st.markdown(f"""
                         <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {c_ai}; text-align:center;'>
-                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{ro(s_score):.2f}</h1>
+                            <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{"N/A" if s_score is None else f"{ro(s_score):.2f}"}</h1>
                             <div style='color:{c_ai}; font-weight:bold; font-size:18px; margin-top:5px;'>{status_text}</div>
                             <p style='color:#8B949E; font-size:11px; margin-top:10px;'>Încredere Model: {confidence} ({len(c_news_ai)} surse)</p>
                         </div>
@@ -4558,6 +5100,9 @@ def main():
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
+                else:
+                    st.caption("Sentiment N/A: în fluxul Yahoo nu există știri recente care să menționeze compania "
+                               "(știrile despre alte companii sunt excluse).")
             
             # --- PREDICȚIE AI CU CACHING ---
             with cai2:
@@ -4997,31 +5542,38 @@ def main():
                 bullets = []
                 
                 # Extragem datele vitale la cald
-                pe_ratio = info.get('trailingPE', 0) or 0
-                pb_ratio = info.get('priceToBook', 0) or 0
-                margins = (info.get('profitMargins', 0) or 0) * 100
-                beta = beta_val or 1
+                # Lipsă = None: bulletul respectiv nu se afișează (nu se presupune 0 sau beta 1).
+                pe_ratio = num(info, 'trailingPE')
+                pb_ratio = num(info, 'priceToBook')
+                margins = num(info, 'profitMargins')
+                margins = margins * 100 if margins is not None else None
+                beta = beta_val
+                pe_src = ("foaia BVB, la prețul curent" if 'trailingPE' in (info.get('_bvb_repriced') or [])
+                          else "Yahoo")
                 
                 # --- BULLET 1: Profitabilitate & Venituri ---
-                if margins > 0:
+                if margins is not None and margins > 0:
                     if margins > 15:
                         text_fin = f"Compania raportează rezultate fundamentale puternice, cu o marjă netă de profit de {ro(margins):.2f}%. Această eficiență operațională ridicată consolidează încrederea investitorilor pe termen lung."
                         bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_fin})
                     else:
                         text_fin = f"Compania menține o profitabilitate moderată, operând cu o marjă netă de {ro(margins):.2f}%, o valoare standard pentru dinamica actuală a sectorului său."
                         bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_fin})
-                elif margins < 0:
+                elif margins is not None and margins < 0:
                     text_fin = f"Rezultatele recente indică presiuni operaționale, compania raportând pierderi cu o marjă netă negativă de {ro(margins):.2f}%, un factor de risc major pentru acționari."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_fin})
 
                 # --- BULLET 2: Sentimentul Știrilor (Context) ---
-                c_news_ai = get_company_news_rss(real_sym)
+                c_news_ai = get_company_news_rss(real_sym, names=(info.get('longName'), info.get('shortName')))
                 if c_news_ai:
-                    top_news = c_news_ai[0]['title']
+                    top_news = html.escape(str(c_news_ai[0]['title']))   # text extern în HTML
                     from ai_engine import analyze_sentiment_ai
                     s_score = analyze_sentiment_ai(c_news_ai)
                     
-                    if s_score > 0.15:
+                    if s_score is None:
+                        bullets.append({"icon": "➡️", "color": "#8B949E",
+                                        "text": "Sentimentul știrilor nu a putut fi calculat acum (FinBERT indisponibil)."})
+                    elif s_score > 0.15:
                         text_news = f"Sentimentul media general este optimist. Atenția presei este captată de evoluții pozitive, un catalizator recent fiind: «{top_news}»."
                         bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_news})
                     elif s_score < -0.15:
@@ -5032,77 +5584,28 @@ def main():
                         bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_news})
 
                 # --- BULLET 3: Volatilitate / Risc (Analiză Beta) ---
-                if beta > 1.3:
+                if beta is not None and beta > 1.3:
                     text_vol = f"Prețul acțiunilor a fost volatil comparativ cu piața de referință (Beta de {ro(beta):.2f}). Această fluctuație amplă atrage speculatorii, dar poate îngrijora investitorii conservatori."
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_vol})
-                elif beta < 0.8:
+                elif beta is not None and beta < 0.8:
                     text_vol = f"Acțiunea prezintă o volatilitate redusă față de piața generală (Beta de {ro(beta):.2f}), comportându-se ca un activ defensiv în perioadele de incertitudine."
                     bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_vol})
 
                 # --- BULLET 4: Evaluare Multipli ---
-                if pe_ratio > 30:
-                    text_val = f"Multipli de evaluare ridicați, inclusiv un raport P/E de {ro(pe_ratio):.2f} și P/B de {ro(pb_ratio):.2f}, sugerează că acțiunea ar putea fi supraevaluată în raport cu fundamentele contabile curente."
+                pb_txt = f" și P/B de {ro(pb_ratio):.2f}" if pb_ratio is not None else ""
+                if pe_ratio is not None and pe_ratio > 30:
+                    text_val = (f"Multipli de evaluare ridicați, inclusiv un raport P/E de {ro(pe_ratio):.2f}{pb_txt} ({pe_src}), sugerează că acțiunea "
+                                f"ar putea fi supraevaluată în raport cu fundamentele contabile curente (prag fix P/E 30, netestat).")
                     bullets.append({"icon": "↘️", "color": "#F85149", "text": text_val})
-                elif 0 < pe_ratio < 15:
-                    text_val = f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {ro(pe_ratio):.2f}), indicând o potențială subevaluare din partea pieței raportat la capacitatea sa de generare a profitului."
+                elif pe_ratio is not None and 0 < pe_ratio < 15:
+                    text_val = (f"Acțiunea se tranzacționează la multipli de evaluare atractivi (P/E de {ro(pe_ratio):.2f}, {pe_src}), indicând o potențială "
+                                f"subevaluare din partea pieței raportat la capacitatea sa de generare a profitului (prag fix P/E 15, netestat).")
                     bullets.append({"icon": "↗️", "color": "#3FB950", "text": text_val})
 
                 # --- RANDARE UI PREMIUM ---
                 if bullets:
-                    st.markdown("""
-                    <style>
-                    .xtb-bullet-container {
-                        background-color: #161B22; 
-                        padding: 25px; 
-                        border-radius: 12px; 
-                        border: 1px solid #30363D;
-                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                    }
-                    .xtb-row {
-                        display: flex; 
-                        align-items: flex-start; 
-                        margin-bottom: 20px;
-                    }
-                    .xtb-icon {
-                        margin-right: 15px; 
-                        font-size: 20px; 
-                        margin-top: -2px;
-                    }
-                    .xtb-text {
-                        font-size: 15px; 
-                        color: #C9D1D9; 
-                        line-height: 1.5;
-                        font-weight: 400;
-                    }
-                    .xtb-footer {
-                        margin-top: 10px; 
-                        font-size: 12px; 
-                        color: #8B949E; 
-                        border-top: 1px solid #30363D; 
-                        padding-top: 15px; 
-                        display: flex; 
-                        justify-content: space-between;
-                        align-items: center;
-                    }
-                    </style>
-                    <div class="xtb-bullet-container">
-                    """, unsafe_allow_html=True)
-                    
-                    for b in bullets:
-                        st.markdown(f"""
-                        <div class="xtb-row">
-                            <div class="xtb-icon" style="color: {b['color']};">{b['icon']}</div>
-                            <div class="xtb-text">{b['text']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                    st.markdown("""
-                        <div class="xtb-footer">
-                            <span>Informațiile de mai sus au fost generate algoritmic. Nu le trata ca recomandare sau sfat de investiții.</span>
-                            <span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    render_bullet_box(bullets, "Informațiile de mai sus au fost generate algoritmic. "
+                                      "Nu le trata ca recomandare sau sfat de investiții.")
                 else:
                     st.info("Date insuficiente pentru generarea sintezei AI.")
             st.markdown("---")    
@@ -5125,29 +5628,19 @@ def main():
                         # Folosim label_txt, variabila definită mai sus
                         st.markdown(f'<span class="{css_cls}">{icon} {label_txt}</span>', unsafe_allow_html=True)
                     st.divider()
+        _an_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _an_t0, 1)} s, la {now_ro():%H:%M:%S}.")
                                 
     # ==================================================
     # 3. PORTOFOLIU (MODIFICAT PENTRU MOBIL)
     # ==================================================
     elif sectiune == "3. Portofoliu":
         st.title("💼 Portofoliu Personal")
+        # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
+        _pf_t0 = time.perf_counter()
+        _pf_timer = st.empty()
         
-        with st.expander("➕ Adaugă Tranzacție Nouă"):
-            st.caption("Scrie un rând în foaia `Portofoliu`, care nu mai alimentează această pagină: pozițiile vin din "
-                       "registrul `Tranzactii`. Pentru tranzacții noi folosește importul exportului de la broker, de mai jos.")
-            with st.form("add_pf"):
-                c1, c2, c3, c4 = st.columns(4)
-                s = c1.text_input("Simbol (ex: AAPL, EUNL.DE, TLV.RO)").upper()
-                q = c2.number_input("Cantitate", min_value=0.01, value=1.0, format="%.4f")
-                p = c3.number_input("Preț Achiziție", min_value=0.01, value=100.0, format="%.2f")
-                curr = c4.selectbox("Moneda", ["USD", "EUR", "RON"]) 
-                
-                d_acq = st.date_input("Data", now_ro().date())
-                
-                if st.form_submit_button("Salvează") and s:
-                    add_trade(s, q, p, d_acq, curr)
-                    st.success(f"Adăugat {s} în Google Sheets!")
-                    st.rerun()
+        # Formularul „Adaugă Tranzacție Nouă” (scria în foaia Portofoliu) a fost scos la 04.11.2026, cu acordul
+        # lui Daniel: tranzacțiile intră doar prin importul exporturilor de la broker (deduplicare pe ID).
 
         # Toată pagina folosește pozițiile din registrul `Tranzactii` (exporturile brokerilor);
         # foaia Portofoliu nu mai alimentează pagina.
@@ -5159,9 +5652,12 @@ def main():
             st.info("Nu există acțiuni sau ETF-uri deschise în registrul `Tranzactii` (sau registrul nu a putut fi citit).")
         else:
             st.markdown("### Perioadă Analiză")
-            hist_range = st.select_slider("", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
+            hist_range = st.select_slider("Perioadă analiză", label_visibility="collapsed", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
             
             tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
+            # Registrul, pentru performanța reală pe monedă (citirea foii e în cache)
+            _ledger_vals = load_ledger_values()
+            ledger_df_tabs = ledger_calc.parse_ledger(_ledger_vals)[0] if _ledger_vals is not None else None
             
             def render_portfolio_tab(df_subset, currency_symbol):
                 if df_subset.empty:
@@ -5187,13 +5683,19 @@ def main():
                     st.caption(f"ℹ️ Preț live indisponibil pentru {', '.join(pf_notes['price_from_close'])}: s-a folosit ultima închidere.")
 
                 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{format_ro(total_invested)} {currency_symbol}")
-                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{format_ro(total_current)} {currency_symbol}")
-                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{format_ro(total_profit_val)} {currency_symbol}", f"{format_ro(total_profit_pct)}%")
+                c_kpi1.metric(f"Total Investit ({currency_symbol})", f"{format_ro(total_invested)} {currency_symbol}",
+                              help="Σ cantitate × preț mediu de cost, pe toate pozițiile deschise din tab (din registrul "
+                                   "`Tranzactii`), inclusiv cele fără preț curent.")
+                c_kpi2.metric(f"Valoare Curentă ({currency_symbol})", f"{format_ro(total_current)} {currency_symbol}",
+                              help="Σ cantitate × prețul de acum (live, sau ultima închidere dacă live lipsește). "
+                                   "Pozițiile fără niciun preț nu intră (sunt listate în avertismentul de deasupra).")
+                c_kpi3.metric(f"Profit/Pierdere ({currency_symbol})", f"{format_ro(total_profit_val)} {currency_symbol}", f"{format_ro(total_profit_pct)}%",
+                              help="Nerealizat: valoarea curentă − costul pozițiilor cu preț; procentul = profit ÷ acel cost. "
+                                   "Fără dividende încasate și fără vânzările închise (acelea sunt în performanța din registru, mai sus).")
 
                 if pf_notes.get('curve_start') is not None:
                     st.caption(
-                        f"ℹ️ Graficele și indicatorii de risc de mai jos aplică deținerile de azi pe trecut, începând cu "
+                        f"ℹ️ Graficul valorii, Monte Carlo și optimizatorul aplică deținerile de azi pe trecut, începând cu "
                         f"{pf_notes['curve_start'].strftime('%d.%m.%Y')} (prima zi în care toate pozițiile au preț; "
                         f"istoricul cel mai scurt: {pf_notes.get('limiting_symbol')}). Nu reprezintă performanța realizată efectiv."
                     )
@@ -5264,87 +5766,102 @@ def main():
                     # --- NOU: COMPARAȚIE BENCHMARK ---
                 st.markdown("---")
                 st.subheader("🏁 Performanță Relativă (Benchmark)")
-                
-                # Definirea benchmark-ului înainte de apel (Fix Alpha EUR)
-                if currency_symbol == "$":
-                    current_bench_ticker = "SPY"
-                    current_bench_name = "S&P 500 (SPY)"
-                elif currency_symbol == "RON":
-                    # Schimbăm STOXX 600 cu indicele local BET
-                    current_bench_ticker = "TVBETETF.RO"
-                    current_bench_name = "BET (ETF TVBETETF)"
+                cur_code = {"$": "USD", "€": "EUR"}.get(currency_symbol, currency_symbol)
+                bench_ticker, bench_name = TAB_BENCHMARKS[cur_code]
+                # Performanța și riscul se măsoară pe ce s-a întâmplat efectiv: acțiunile și ETF-urile din
+                # această monedă, din registrul `Tranzactii`, cu TWR (fără efectul cumpărărilor și vânzărilor).
+                sleeve = None
+                if ledger_df_tabs is not None and not ledger_df_tabs.empty:
+                    sleeve_syms = sorted(set(ledger_df_tabs.loc[
+                        (ledger_df_tabs["Currency"] == cur_code) & ledger_df_tabs["Symbol"].ne("")
+                        & ~ledger_df_tabs["Class"].isin(ledger_calc.NOMINAL_CLASSES), "Symbol"]))
+                    sleeve_start = (ledger_df_tabs["Date"].min() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+                    sleeve_index = pd.bdate_range(ledger_df_tabs["Date"].min().normalize(), pd.Timestamp(now_ro().replace(tzinfo=None)).normalize())
+                    with st.spinner(f"Reconstruim istoricul real al pozițiilor în {cur_code}..."):
+                        sleeve_market = get_ledger_market_history(tuple(sleeve_syms), sleeve_start)
+                    s_values, s_in, s_out, s_sources, s_blockers = ledger_calc.currency_sleeve(
+                        ledger_df_tabs, cur_code, sleeve_index, sleeve_market)
+                    s_daily, s_cum, s_total = ledger_calc.twr_in_out(s_values, s_in, s_out)
+                    if s_total is not None:
+                        sleeve = {"wealth": slice_window(1.0 + s_cum, hist_range), "sources": s_sources, "blockers": s_blockers}
+                if sleeve is None or len(sleeve["wealth"]) < 2:
+                    st.info(f"Istoricul real al pozițiilor în {cur_code} nu poate fi reconstruit din registru "
+                            "(lipsesc prețurile istorice sau tranzacțiile); indicatorii de mai jos sunt N/A.")
+                    wealth_w = pd.Series(dtype=float)
                 else:
-                    # Rămâne STOXX 600 doar pentru portofoliul în EURO
-                    current_bench_ticker = "EXSA.DE"
-                    current_bench_name = "STOXX Europe 600 (EXSA.DE)"
+                    wealth_w = sleeve["wealth"]
+                    with st.spinner(f"Se compară cu {bench_name}..."):
+                        render_benchmark_comparison(wealth_w, bench_ticker, bench_name)
+                    proxy = sorted(s for s, src in sleeve["sources"].items() if src in ("proxy", "mixed"))
+                    st.caption(
+                        f"ℹ️ Curba de sus e randamentul ponderat cu timpul (TWR) al acțiunilor și ETF-urilor în {cur_code} din registrul "
+                        f"`Tranzactii`, {wealth_w.index[0]:%d.%m.%Y}–{wealth_w.index[-1]:%d.%m.%Y}: cumpărările și vânzările nu "
+                        "contează ca randament, dividendele încasate (nete de impozit) da. Fără numerar și fără titluri de stat."
+                        + (f" Fără istoric complet de piață, evaluate la prețul ultimei tranzacții (proxy): {', '.join(proxy)}." if proxy else "")
+                        + (f" Zile fără preț din cauza: {', '.join(sleeve['blockers'])}; TWR începe după ultima." if sleeve["blockers"] else ""))
 
-                with st.spinner(f"Se compară cu {current_bench_name}..."):
-                    # Trimitem ticker-ul și numele corect către funcție
-                    render_benchmark_comparison(hist_curve, current_bench_ticker, current_bench_name)
-                
-                # --- CALCUL METRICI (Rândul 1 & 2) ---
-                # 1. Calculăm metricile de risc intern
-                max_dd, sharpe, var_abs, vol_ann = calculate_risk_metrics(hist_curve)
-                
-                # 2. Alegem benchmark-ul automat bazat pe monedă
-                if currency_symbol == "$":
-                    bench_ticker = "SPY"
-                    bench_name = "S&P 500 (SPY)"
-                elif currency_symbol == "RON":
-                    # Schimbarea crucială pentru piața din România
-                    bench_ticker = "TVBETETF.RO"
-                    bench_name = "BET (ETF TVBETETF)"
-                else:
-                    # Rămâne STOXX 600 doar pentru portofoliul în EUR
-                    bench_ticker = "EXSA.DE"
-                    bench_name = "STOXX Europe 600 (EXSA.DE)"
-                
-                # 3. Calculăm Corelația Globală și Beta
-                global_corr, portfolio_beta = calculate_portfolio_beta(hist_curve, bench_ticker)
+                rets_w = wealth_w.pct_change(fill_method=None).dropna() if len(wealth_w) > 1 else pd.Series(dtype=float)
+                rf_tab, rf_tab_label = get_risk_free_for_currency(cur_code)
+                risk_tab = performance_risk(rets_w, rf_tab) if len(rets_w) else None
+                bench_close_tab = get_benchmark_close(bench_ticker)
+                bc = beta_corr_weekly(wealth_w, bench_close_tab) if len(wealth_w) > 1 else None
 
                 st.markdown(f"#### 🛡️ Diagnostic Portofoliu ({currency_symbol})")
-                
-                # Rândul 1: Riscul Intern al activelor tale
+                if risk_tab is None:
+                    st.info(f"Prea puține zile cu randament în fereastra aleasă ({len(rets_w)}); indicatorii de risc cer cel puțin 60. "
+                            "Alege o perioadă mai lungă (de ex. 1A).")
+                pct_t = lambda v, d=2: "N/A" if v is None else f"{ro(v * 100):.{d}f}%"
+                rat_t = lambda v: "N/A" if v is None else f"{ro(v):.2f}"
+                amt_t = lambda v: "N/A" if (v is None or not total_current) else f"{currency_symbol} {format_ro(abs(v * total_current))}"
+                rk = risk_tab or {}
+                rf_txt = (f"Rata fără risc: {ro(rf_tab * 100):.2f}% [{rf_tab_label}]." if rf_tab is not None
+                          else f"Rata fără risc indisponibilă ({rf_tab_label}): Sharpe și Sortino sunt N/A.")
+                n_txt = f" Eșantion: {rk['n']} zile ({rk['start']:%d.%m.%Y}–{rk['end']:%d.%m.%Y})." if rk else ""
+
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
-                c_r1.metric("Max Drawdown", f"{ro(max_dd*100):.2f}%", help="Cea mai mare scădere istorică.")
-                c_r2.metric("Sharpe Ratio", f"{ro(sharpe):.2f}", help="Eficiența profitului vs risc (Ideal > 1).")
-                c_r3.metric("VaR (95%)", f"{currency_symbol} {format_ro(abs(var_abs))}", help="Pierderea maximă probabilă într-o singură zi.")
-                c_r4.metric("Volatilitate Anualizată", f"{ro(vol_ann*100):.2f}%", help="Agitația generală a prețurilor portofoliului.")
+                c_r1.metric("Max Drawdown", pct_t(rk.get("max_drawdown")),
+                            help="Cea mai mare scădere de la un vârf la minimul de după el, pe curba TWR din fereastra aleasă." + n_txt)
+                c_r2.metric("Sharpe Ratio", rat_t(rk.get("sharpe")),
+                            help="(media zilnică − rata fără risc zilnică) / deviația standard zilnică × √252. "
+                                 "Sub 0: mai slab decât titlurile de stat; peste 1: bun. " + rf_txt + n_txt)
+                c_r3.metric("VaR istoric (95%, 1 zi)", amt_t(rk.get("var95_hist")),
+                            help="Percentila 5 a randamentelor zilnice, aplicată la valoarea de azi: într-o zi din 20 pierderea a fost "
+                                 f"mai mare. Procent: {pct_t(rk.get('var95_hist'))}." + n_txt)
+                c_r4.metric("Volatilitate Anualizată", pct_t(rk.get("vol_ann")),
+                            help="Deviația standard a randamentelor zilnice × √252." + n_txt)
 
-                # Rândul 2: Relația Strategică cu Piața (Benchmark-ul)
-                st.write("") # Mic spațiu vizual între rânduri
+                st.write("")
                 c_b1, c_b2, c_b3, c_b4 = st.columns(4)
-                
-                c_b1.metric("Benchmark", bench_name)
-                
-                c_b2.metric("Corelație cu Piața", f"{ro(global_corr):.2f}", 
-                           help=f"Scorul de {ro(global_corr):.2f} arată cât de mult imiți indexul {bench_name}. 1,00 = Copie fidelă.")
-                
-                c_b3.metric("Beta Portofoliu", f"{ro(portfolio_beta):.2f}", 
-                           help=f"Sensibilitatea la piață. Un Beta de {ro(portfolio_beta):.2f} înseamnă că ești {'mai agresiv' if portfolio_beta > 1 else 'mai stabil'} decât media.")
+                c_b1.metric("Benchmark", bench_name, help="Indicele pieței în aceeași monedă cu pozițiile.")
+                bc_txt = (f" {bc['n']} randamente săptămânale comune, {bc['start']:%d.%m.%Y}–{bc['end']:%d.%m.%Y}." if bc
+                          else " Sub 52 de săptămâni comune: N/A.")
+                corr_v = bc["corr"] if bc else None
+                c_b2.metric("Corelație cu Piața", rat_t(corr_v),
+                            help=f"Corelația randamentelor săptămânale TWR cu {bench_name}. 1,00 = mișcare identică." + bc_txt)
+                c_b3.metric("Beta Portofoliu", rat_t(bc["beta"] if bc else None),
+                            help=f"cov(portofoliu, {bench_name}) / var({bench_name}), pe randamente săptămânale. "
+                                 "Peste 1 = mai sensibil decât piața." + bc_txt)
+                c_b4.metric("Scor Diversificare", "N/A" if corr_v is None else f"{ro((1 - abs(corr_v)) * 100):.1f}%",
+                            help="(1 − |corelația cu piața|) × 100. Cât de independent se mișcă portofoliul față de indice.")
 
-                # Scorul de Diversificare Strategică
-                div_score = (1 - abs(global_corr)) * 100
-                c_b4.metric("Scor Diversificare", f"{ro(div_score):.1f}%", 
-                           help="Indică cât de independentă este strategia ta față de restul pieței.")
-                
-                sortino_val = calculate_sortino_ratio(hist_curve)
-                # Creăm un rând nou de metrici sau adăugăm la cel existent
-                st.write("") 
-                c_s1, c_s2 = st.columns(2)
-
-                with c_s1:
-                    s_color = "#3FB950" if sortino_val > 2 else ("#D29922" if sortino_val > 1 else "#F85149")
-                    st.metric("Sortino Ratio (Calitate Profit)", f"{ro(sortino_val):.2f}", 
-                            help="Ideal > 2. Arată cât de mult câștigi pentru fiecare unitate de risc la scădere.")
-
-                with c_s2:
+                st.write("")
+                c_s1, c_s2, c_s3 = st.columns(3)
+                sortino_val = rk.get("sortino")
+                c_s1.metric("Sortino Ratio", rat_t(sortino_val),
+                            help="Ca Sharpe, dar la numitor intră doar variația zilelor sub rata fără risc. " + rf_txt + n_txt)
+                c_s2.metric("CVaR (95%, 1 zi)", amt_t(rk.get("cvar95")),
+                            help="Media pierderilor din cele mai rele 5% din zile, aplicată la valoarea de azi. "
+                                 f"Procent: {pct_t(rk.get('cvar95'))}." + n_txt)
+                c_s3.metric("VaR parametric (95%)", amt_t(rk.get("var95_param")),
+                            help="media − 1,645 × deviația standard (presupune distribuție normală; subestimează cozile). "
+                                 f"Procent: {pct_t(rk.get('var95_param'))}." + n_txt)
+                if sortino_val is not None:
                     if sortino_val > 2:
-                        st.success("🌟 **Excelent:** Portofoliul tău produce profituri cu un risc minim de scădere majoră.")
+                        st.success("🌟 **Sortino peste 2:** randament mare față de scăderile din perioadă (prag orientativ, netestat).")
                     elif sortino_val > 1:
-                        st.info("⚖️ **Acceptabil:** Profitul justifică riscul asumat.")
+                        st.info("⚖️ **Sortino între 1 și 2:** randamentul acoperă scăderile (prag orientativ, netestat).")
                     else:
-                        st.warning("⚠️ **Risc Ridicat:** Obții profit, dar ești expus la scăderi violente. Verifică diversificarea.")
+                        st.warning("⚠️ **Sortino sub 1:** scăderile au fost mari față de randament (prag orientativ, netestat).")
 
                 st.markdown("---")
 
@@ -5367,69 +5884,116 @@ def main():
                         plot_ro(fig_sym, width='stretch', key=f"pie_sym_{currency_symbol}")
 
                 # 4. Detaliu Poziții
-                st.subheader("Detaliu Poziții")
+                st.subheader("📋 Detaliu Poziții")
                 if not df_calc.empty:
-                    display_cols = ['Symbol', 'Quantity', 'AvgPrice', 'CurrentPrice', 'MarketValue', 'Profit', 'Profit %']
-                    
+                    df_detail = positions_detail(df_calc)
+
                     def color_profit(val):
                         if pd.isna(val): return ''
                         color = '#3FB950' if val >= 0 else '#F85149'
                         return f'color: {color}'
 
                     st.dataframe(
-                        df_calc[display_cols].style.map(color_profit, subset=['Profit', 'Profit %'])
+                        df_detail.style.map(color_profit, subset=['Profit', 'Profit %'])
                         .format({
                             # format românesc; cantitatea până la 4 zecimale, fără zerouri inutile (1.250, 0,3048)
-                            'Quantity': lambda q: format_ro(q, 4, trim=True),
-                            'AvgPrice': lambda v: format_ro(v, 4), 'CurrentPrice': lambda v: format_ro(v, 4),
-                            'MarketValue': lambda v: format_ro(v), 'Profit': lambda v: format_ro(v), 'Profit %': lambda v: format_ro(v, 2, "%")
+                            'Cantitate': lambda q: format_ro(q, 4, trim=True),
+                            'Cost mediu': lambda v: format_ro(v, 4), 'Preț curent': lambda v: format_ro(v, 4),
+                            'Valoare': lambda v: format_ro(v), 'Pondere %': lambda v: format_ro(v, 2, "%"),
+                            'Profit': lambda v: format_ro(v), 'Profit %': lambda v: format_ro(v, 2, "%")
                         }, na_rep="N/A"),
-                        width='stretch'
-                    )        
+                        width='stretch', hide_index=True,
+                        column_config={
+                            "Simbol": st.column_config.Column(help="Simbolul Yahoo al poziției deschise din registrul `Tranzactii`."),
+                            "Cantitate": st.column_config.Column(help="Cantitatea deținută azi: cumpărări − vânzări din registru, plus acțiunile gratuite."),
+                            "Cost mediu": st.column_config.Column(help=f"Cost mediu ponderat pe unitate, în {currency_symbol}: costul deschis (cu comisioanele de cumpărare) ÷ cantitate. "
+                                                                         "Acțiunile gratuite intră la cost 0, deci îl scad; la o vânzare parțială costul mediu nu se schimbă."),
+                            "Preț curent": st.column_config.Column(help="Prețul live de la Yahoo; dacă lipsește, ultima închidere (vezi nota de deasupra). Fără niciunul: N/A."),
+                            "Valoare": st.column_config.Column(help=f"Cantitate × preț curent, în {currency_symbol}. N/A dacă lipsește prețul."),
+                            "Pondere %": st.column_config.Column(help="Valoarea poziției ÷ valoarea tuturor pozițiilor cu preț din acest tab × 100. "
+                                                                     "Pozițiile fără preț nu intră la numitor."),
+                            "Profit": st.column_config.Column(help=f"Valoare − cantitate × cost mediu, în {currency_symbol}. Profitul pe hârtie, "
+                                                                  "fără dividende, impozite și profitul deja realizat la vânzări (acelea sunt în tabelul pe clase de sus)."),
+                            "Profit %": st.column_config.Column(help="Profit ÷ (cantitate × cost mediu) × 100. N/A la cost 0 (doar acțiuni gratuite)."),
+                        }
+                    )
 
                 with col_pie2:
                     st.caption("**După Sector Economic (%)**")
                     with st.spinner("Analizăm expunerea..."):
-                        df_sectors = get_portfolio_sectors(df_calc)
-                    
+                        df_sectors, sec_unpriced, sec_sources = get_portfolio_sectors(df_calc)
+
                     if not df_sectors.empty:
-                        # Grafic Plăcintă cu Procente
+                        # Culorile urmează sectorul în ordinea ponderii (paleta categorică, temă închisă); ETF/fond și
+                        # „Nedefinit” în gri, ca să nu pară sectoare. Peste 7 sectoare reale, restul intră la „Altele”.
+                        cat_colors = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9']
+                        neutral = {pf_calc.SECTOR_FUND: '#8b949e', pf_calc.SECTOR_UNKNOWN: '#484f58'}
+                        real = df_sectors[~df_sectors['Sector'].isin(list(neutral))]
+                        pie_df = pd.concat([real.head(7), df_sectors[df_sectors['Sector'].isin(list(neutral))]])
+                        rest = real.iloc[7:]
+                        if not rest.empty:
+                            pie_df = pd.concat([pie_df, pd.DataFrame([{"Sector": "Altele", "Valoare": rest['Valoare'].sum(),
+                                                                        "Pondere %": rest['Pondere %'].sum(),
+                                                                        "Simboluri": ", ".join(rest['Simboluri'])}])])
+                        colors, k = [], 0
+                        for sec_name in pie_df['Sector']:
+                            if sec_name in neutral:
+                                colors.append(neutral[sec_name])
+                            elif sec_name == "Altele":
+                                colors.append('#6e7681')
+                            else:
+                                colors.append(cat_colors[k]); k += 1
                         fig_sec = go.Figure(data=[go.Pie(
-                            labels=df_sectors['Sector'], 
-                            values=df_sectors['Pondere %'], 
-                            hole=.4,
+                            labels=pie_df['Sector'],
+                            values=pie_df['Valoare'],
+                            customdata=pie_df['Simboluri'],
+                            hole=.4, sort=False,
                             textinfo='label+percent',
-                            marker=dict(colors=['#1f6feb', '#238636', '#da3633', '#d29922'])
+                            marker=dict(colors=colors, line=dict(color='#0e1117', width=2)),
+                            hovertemplate="<b>%{label}</b><br>Valoare: %{value:,.2f} " + currency_symbol
+                                          + "<br>Pondere: %{percent}<br>%{customdata}<extra></extra>"
                         )])
-                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), 
+                        fig_sec.update_layout(height=350, margin=dict(t=0, b=0, l=0, r=0), showlegend=True,
                                               template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
                         plot_ro(fig_sec, width='stretch', key=f"pie_sec_{currency_symbol}")
 
-                        # VERDICT DIVERSIFICARE
-                        # 'Nedefinit' = Yahoo nu a trimis sectorul (sau ETF): nu e un sector real și nu se evaluează.
-                        known = df_sectors[df_sectors['Sector'] != 'Nedefinit']
-                        undefined_pct = df_sectors.loc[df_sectors['Sector'] == 'Nedefinit', 'Pondere %'].sum()
-                        if known.empty:
-                            st.info("ℹ️ Sectoarele nu sunt disponibile de la Yahoo pentru aceste poziții, deci concentrarea pe sectoare nu se poate evalua.")
+                        # VERDICT DIVERSIFICARE (pe sectoarele reale; ETF/fond și „Nedefinit” nu sunt sectoare)
+                        sv = pf_calc.sector_verdict(df_sectors)
+                        lim = f"{ro(pf_calc.SECTOR_CONCENTRATION_PCT):.0f}%"
+                        if sv['status'] == 'na':
+                            st.info("ℹ️ Nicio poziție din acest tab nu are un sector cunoscut (doar ETF-uri/fonduri sau sector lipsă), "
+                                    "deci concentrarea pe sectoare nu se poate evalua.")
+                        elif sv['status'] == 'concentrat':
+                            st.warning(f"⚠️ **Concentrare mare:** sectorul „{sv['top']['Sector']}” ({sv['top']['Simboluri']}) are "
+                                       f"{ro(sv['top']['Pondere %']):.1f}% din valoarea tabului, peste pragul de {lim} (prag orientativ, netestat).")
                         else:
-                            max_sector = known.iloc[0]
-                            if max_sector['Pondere %'] > 40:
-                                st.warning(f"⚠️ **Concentrare mare:** Sectorul '{max_sector['Sector']}' ocupă {ro(max_sector['Pondere %']):.1f}% din portofoliu. Riști mult dacă acest sector scade.")
-                            else:
-                                st.success(f"✅ **Diversificare bună:** Niciun sector cunoscut nu depășește 40%.")
-                            if undefined_pct > 0:
-                                st.caption(f"ℹ️ {ro(undefined_pct):.1f}% din portofoliu are sector necunoscut și nu intră în această evaluare.")
+                            st.success(f"✅ Niciun sector nu depășește {lim} din valoarea tabului; cel mai mare: „{sv['top']['Sector']}”, "
+                                       f"{ro(sv['top']['Pondere %']):.1f}% (prag orientativ, netestat).")
+                        notes_sec = []
+                        if sv['fund_pct'] > 0:
+                            notes_sec.append(f"{ro(sv['fund_pct']):.1f}% e în ETF-uri/fonduri: sunt diversificate în interior, "
+                                             "dar compoziția lor pe sectoare nu e citită, deci nu intră în evaluare")
+                        if sv['unknown_pct'] > 0:
+                            notes_sec.append(f"{ro(sv['unknown_pct']):.1f}% are sector necunoscut (Yahoo nu l-a trimis sau citirea a eșuat) "
+                                             "și nu intră în evaluare")
+                        if sec_unpriced:
+                            notes_sec.append(f"fără preț, deci în afara graficului: {', '.join(sec_unpriced)}")
+                        bvb_src = sorted(s_ for s_, src in sec_sources.items() if src == "harta BVB")
+                        if bvb_src:
+                            notes_sec.append(f"sector din harta proprie BVB: {', '.join(bvb_src)}")
+                        if notes_sec:
+                            st.caption("ℹ️ " + "; ".join(notes_sec) + ".")
                     else:
-                        st.info("Nu există date sectoriale.")
+                        st.info("Nu există date sectoriale (nicio poziție cu preț).")
 
                 # 3. Matrice Corelare
                 st.markdown("---")
                 st.subheader("🧩 Analiză Diversificare (Corelare)")
                 current_tickers = df_subset['Symbol'].unique().tolist()
+                corr_for_cards = None   # cardurile pe perechi se afișează la finalul tabului (cerința lui Daniel)
                 if len(current_tickers) > 1:
                     with st.spinner("Analizăm suprapunerea riscului..."):
-                        # Acum doar apelăm funcția, ea face totul
-                        plot_correlation_matrix(current_tickers)
+                        corr_for_cards = plot_correlation_matrix(current_tickers, show_cards=False)
                 else:
                     st.info("Adaugă cel puțin 2 active pentru analiză.")
                 
@@ -5536,7 +6100,7 @@ def main():
                                         help="**Cum se calculează:** deviația standard a randamentelor zilnice ale alocării × √252.\n\n"
                                              "**Ce înseamnă:** cât de mult ar fi fluctuat alocarea într-un an obișnuit.")
                             
-                            c_opt3.metric("Sharpe Ratio", "N/A" if opt_res['sharpe_ratio'] is None else f"{ro(opt_res['sharpe_ratio']):.2f}",
+                            c_opt3.metric("Sharpe Ratio", "N/A" if (opt_res['sharpe_ratio'] is None or rf_opt is None) else f"{ro(opt_res['sharpe_ratio']):.2f}",
                                         help="**Cum se calculează:** (randament anual − rata fără risc) ÷ volatilitate.\n\n"
                                              "**Ce înseamnă:** randamentul peste titlurile de stat pentru fiecare unitate de risc. E valoarea maximă posibilă pe aceste date, "
                                              "cu plafonul pe poziție; în practică iese mai mic.")
@@ -5548,13 +6112,13 @@ def main():
                                     "Alocare": [r["label"] for r in oos],
                                     "Randament anualizat": [f"{ro(r['return']):.1f}%" for r in oos],
                                     "Volatilitate": [f"{ro(r['volatility']):.1f}%" for r in oos],
-                                    "Sharpe": ["N/A" if r["sharpe"] is None else f"{ro(r['sharpe']):.2f}" for r in oos],
+                                    "Sharpe": ["N/A" if (r["sharpe"] is None or rf_opt is None) else f"{ro(r['sharpe']):.2f}" for r in oos],
                                 }), hide_index=True, width='stretch')
                             st.caption(
                                 f"Din {opt_res['n_days']} zile comune de tranzacționare, {opt_res['start']:%d.%m.%Y} – {opt_res['end']:%d.%m.%Y}. "
                                 f"Plafon pe poziție: {ro(opt_res['cap']):.0f}%. Covarianță Ledoit-Wolf (shrinkage {ro(opt_res['shrinkage']):.2f}). "
                                 + (f"Excluse pentru istoric prea scurt: {', '.join(opt_res['excluded'])}. " if opt_res.get('excluded') else "")
-                                + (f"Rata fără risc: {ro(rf_opt * 100):.2f}% ({rf_opt_label}). " if rf_opt is not None else "Rata fără risc indisponibilă: Sharpe calculat cu 0%. ")
+                                + (f"Rata fără risc: {ro(rf_opt * 100):.2f}% ({rf_opt_label}). " if rf_opt is not None else f"Rata fără risc indisponibilă ({rf_opt_label}): alocarea „Sharpe maxim” maximizează randament ÷ volatilitate (rată 0%), iar Sharpe se afișează N/A. ")
                                 + ("Tabelul de verificare: ponderile au fost calculate pe primele 70% din zile și evaluate pe ultimele 30%. "
                                    "Dacă acolo nu bat ponderile egale, „optimul” e în mare parte potrivire pe trecut. " if oos else "")
                                 + "Varianța minimă nu depinde de estimarea randamentelor, deci e mai stabilă decât Sharpe maxim."
@@ -5563,6 +6127,11 @@ def main():
                             st.warning(opt_msg)
                 else:
                     st.info("Adaugă cel puțin 2 acțiuni în portofoliu pentru ca AI-ul să poată calcula diversificarea optimă.") 
+
+                # Ultima secțiune a tabului: cardurile pe perechi, după optimizator
+                if corr_for_cards is not None:
+                    st.markdown("---")
+                    render_diversification_cards(corr_for_cards)
 
             with tab_usd:
                 df_usd = df_pf[df_pf['Currency'] == 'USD']
@@ -5576,6 +6145,7 @@ def main():
                 df_ron = df_pf[df_pf['Currency'] == 'RON']
                 # Folosim simbolul monedei locale
                 render_portfolio_tab(df_ron, "RON")      
+        _pf_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _pf_t0, 1)} s, la {now_ro():%H:%M:%S}.")
 
             # Butonul de reset nu poate șterge datele din Google Drive, doar le ignoră temporar
             # Așa că l-am comentat sau ar trebui scos, deoarece gestionarea datelor se face acum în Sheets.
@@ -5590,6 +6160,11 @@ def main():
     elif sectiune == "4. Piață Globală":
         st.title("🌐 Pulsul Pieței Globale")
         st.caption("Date în timp real și macroeconomie instituțională.")
+        # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
+        # Fără st.fragment aici (09.11, decizia lui Daniel): după o sesiune nouă pe server (telefonul deconectat > 2 min,
+        # containerul repornit) clicurile din fragmente se pierd fără mesaj, iar pagina completă rulează în ~3 s cu cache.
+        _pg_t0 = time.perf_counter()
+        _pg_timer = st.empty()
 
         with st.spinner("Motorul Macro AI descarcă și corelează indicatorii globali..."):
             # --- 1. DESCĂRCĂM ABSOLUT TOATE DATELE LA ÎNCEPUT ---
@@ -5601,163 +6176,390 @@ def main():
             # --- NOU: Descărcăm datele FRED aici sus pentru a le da motorului AI ---
             df_fred = get_fred_macro_data()
             
-            try: vix_val = yf.Ticker("^VIX").fast_info.last_price
-            except: vix_val = 20.0
-            
+            # Lipsă = None (N/A), niciodată o valoare de rezervă (înainte: VIX 20, spread 0,5).
             try:
-                t_10y = yf.Ticker("^TNX").fast_info.last_price
-                t_3m = yf.Ticker("^IRX").fast_info.last_price
-                curr_yield_spread = t_10y - t_3m
-            except: curr_yield_spread = 0.5
+                vix_val, vix_date = get_vix_last()
+            except Exception as exc:  # yfinance: rețea, JSON, date lipsă
+                logger.warning("Piață Globală VIX: %s", exc)
+                vix_val, vix_date = None, None
+            curr_yield_spread, curve_desc = get_market_curve("US")
+            try:
+                sector_month = get_sector_month_returns()
+            except Exception as exc:
+                logger.warning("Piață Globală sectoare 1 lună: %s", exc)
+                sector_month = {}
 
             news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
             from ai_engine import analyze_sentiment_ai
-            macro_sentiment = analyze_sentiment_ai(news_samples) if news_samples else 0
+            macro_sentiment = analyze_sentiment_ai(news_samples) if news_samples else None
 
-            # --- 2. CALCULĂM SCORUL GLOBAL ---
-            from ai_engine import calculate_master_macro_verdict
-            m_score, m_label, m_col, m_desc, m_reasons = calculate_master_macro_verdict(
-                macro_sectors, macro_risk_ratio, macro_corr, macro_sentiment, curr_yield_spread, vix_val
-            )
+            # --- 2. CALCULĂM SCORUL GLOBAL (analytics/macro.py: piloni 0–100, media ponderată pe pilonii cu date) ---
+            try:
+                spy_uup = float(macro_corr.loc['Acțiuni (SPY)', 'Dolar (UUP)'])
+            except (KeyError, TypeError, ValueError, AttributeError):
+                spy_uup = None
+            macro_pillars = {
+                "credit": macro_calc.pillar_credit(macro_risk_ratio),
+                "vix": macro_calc.pillar_vix(vix_val),
+                "dolar": macro_calc.pillar_dollar(spy_uup),
+                "sectoare": macro_calc.pillar_sectors(sector_month),
+                "curba": macro_calc.pillar_curve(curr_yield_spread),
+                "sentiment": macro_calc.pillar_sentiment(macro_sentiment),
+            }
+            mv = macro_calc.macro_verdict(macro_pillars)
 
-        # --- 3. AFIȘARE BANNER SUPREM ---
+        m_score = mv["score"]
+        m_label = mv["label"] or "N/A"
+        m_col = {"FAVORABIL": "#3FB950", "MIXT": "#D29922", "DEFAVORABIL": "#F85149"}.get(mv["label"], "#8B949E")
+        m_desc = {
+            "FAVORABIL": "Majoritatea pilonilor ponderați (credit, volatilitate, dolar, sectoare, curbă, sentiment) indică un mediu de piață favorabil.",
+            "MIXT": "Pilonii dau semnale contradictorii; mediul de piață nu înclină clar într-o parte.",
+            "DEFAVORABIL": "Majoritatea pilonilor ponderați indică stres: credit în retragere, volatilitate mare sau rotație defensivă.",
+        }.get(mv["label"], f"Prea puține date: doar {mv['weight_used']}% din ponderi au valori (minimum {macro_calc.MACRO_MIN_WEIGHT}%).")
+        m_score_txt = score_ro(m_score)  # o zecimală, tăiat: eticheta vine din pragurile 60/40 (#153)
+
+        # --- 3. AFIȘARE BANNER ---
         st.markdown(f"""
             <div style="background:linear-gradient(90deg, #161B22 0%, #21262D 100%); padding:30px; border-radius:15px; border-left: 10px solid {m_col}; margin-bottom:20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
-                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Verdict Sănătate Piață Globală</h4>
+                        <h4 style="color:#8B949E; margin:0; text-transform:uppercase; letter-spacing:1px;">Mediul de piață SUA (verdict macro, netestat)</h4>
                         <h1 style="color:{m_col}; margin:10px 0; font-size:38px;">{m_label}</h1>
                         <p style="color:#C9D1D9; font-size:16px;">{m_desc}</p>
                     </div>
                     <div style="text-align:center; min-width: 120px;">
-                        <div style="font-size:12px; color:#8B949E;">SCOR MACRO AI</div>
-                        <div style="font-size:56px; font-weight:bold; color:{m_col};">{int(m_score)}</div>
+                        <div style="font-size:12px; color:#8B949E;">SCOR MACRO</div>
+                        <div style="font-size:56px; font-weight:bold; color:{m_col};">{m_score_txt}</div>
                         <div style="font-size:14px; color:#8B949E;">/ 100</div>
                     </div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
 
-        # --- 4. RESTAURAREA ARGUMENTELOR VECHI ---
-        st.markdown("#### 🔍 Argumentele Modelului:")
-        c_re1, c_re2 = st.columns(2)
-        for i, reason in enumerate(m_reasons):
-            if i % 2 == 0: c_re1.markdown(f"{reason}")
-            else: c_re2.markdown(f"{reason}")
-
-        # --- 5. NOUL CARD DEEP-DIVE AI (CLONA XTB) ---
-        st.markdown("---")
+        # --- 3b. SINTEZA AI (mutată aici de jos, 06.11) ---
         st.subheader("✨ Sinteza Inteligenței Artificiale")
-        
         with st.spinner("Sintetizăm intersecțiile de metale, valute, dobânzi și opțiuni..."):
             from ai_engine import generate_macro_ai_summary
             macro_bullets = generate_macro_ai_summary(
                 vix_val, curr_yield_spread, macro_risk_ratio, macro_sectors, macro_corr, macro_data, df_fred
             )
-            
             if macro_bullets:
-                st.markdown("""
-                <style>
-                .xtb-bullet-container {
-                    background-color: #161B22; 
-                    padding: 25px; 
-                    border-radius: 12px; 
-                    border: 1px solid #30363D;
-                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                }
-                .xtb-row {
-                    display: flex; 
-                    align-items: flex-start; 
-                    margin-bottom: 20px;
-                }
-                .xtb-icon {
-                    margin-right: 15px; 
-                    font-size: 20px; 
-                    margin-top: -2px;
-                }
-                .xtb-text {
-                    font-size: 15px; 
-                    color: #C9D1D9; 
-                    line-height: 1.5;
-                    font-weight: 400;
-                }
-                .xtb-footer {
-                    margin-top: 10px; 
-                    font-size: 12px; 
-                    color: #8B949E; 
-                    border-top: 1px solid #30363D; 
-                    padding-top: 15px; 
-                    display: flex; 
-                    justify-content: space-between;
-                    align-items: center;
-                }
-                </style>
-                <div class="xtb-bullet-container">
-                """, unsafe_allow_html=True)
-                
-                for b in macro_bullets:
-                    st.markdown(f"""
-                    <div class="xtb-row">
-                        <div class="xtb-icon" style="color: {b['color']};">{b['icon']}</div>
-                        <div class="xtb-text">{b['text']}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                st.markdown("""
-                    <div class="xtb-footer">
-                        <span>Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri (Aur, Petrol, Cupru), sentimentului și pieței de credit.</span>
-                        <span style="color:#A371F7; font-weight:bold;">⚡ Quant-AI Engine</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                render_bullet_box(macro_bullets, "Informații derivate algoritmic din confluența dobânzilor, prețurilor de mărfuri "
+                                  "(Aur, Petrol, Cupru), sentimentului și pieței de credit.")
             else:
                 st.info("Așteptăm date suficiente pentru generarea sintezei.")
 
+        # --- 3c. EXPLICAȚIA SCORULUI MACRO, ÎN PAGINĂ (analytics/macro.macro_explanation) ---
+        st.markdown("#### 🧮 Cum s-a ajuns la scorul macro")
+        st.markdown("\n\n".join(macro_calc.macro_explanation(macro_pillars, mv)["lines"]))
+
+        # --- 4. PILONII, FIECARE CU SCORUL LUI ---
+        st.markdown("#### 🔍 Pilonii verdictului")
+        pillar_rows = []
+        for key, weight in macro_calc.MACRO_WEIGHTS.items():
+            pp = macro_pillars[key]
+            pillar_rows.append({"Pilon": macro_calc.MACRO_NAMES[key], "Pondere %": weight,
+                                "Scor": pp["score"], "Bază": pp["detail"]})
+        st.dataframe(
+            pd.DataFrame(pillar_rows).style.format({"Pondere %": lambda v: f"{v:.0f}%",
+                                                    "Scor": lambda v: f"{ro(v):.0f}"}, na_rep="N/A"),
+            hide_index=True, width='stretch',
+            column_config={
+                "Pondere %": st.column_config.Column(help="Ponderea pilonului în scor. Pilonii fără date ies din calcul, "
+                                                          "iar ponderile celorlalți se reîmpart (nu contează ca neutri)."),
+                "Scor": st.column_config.Column(help="0 = nefavorabil, 50 = neutru, 100 = favorabil. Regulile pe pilon:\n\n"
+                    f"**Credit:** HYG/IEF față de media pe {macro_calc.CREDIT_SMA_DAYS} de ședințe: peste +1% = 100, sub −1% = 0, între = 50.\n\n"
+                    f"**VIX:** ≤ {macro_calc.VIX_CALM:.0f} = 100, ≥ {macro_calc.VIX_PANIC:.0f} = 0, liniar între.\n\n"
+                    "**Dolar:** corelația SPY/UUP pe 3 luni: ≤ −0,70 = 0, ≥ 0 = 100, liniar între.\n\n"
+                    "**Sectoare:** primele 3 ETF-uri sectoriale SUA pe o lună: ≥ 2 ciclice (tehnologie, consum discreționar, financiar, comunicații) = 100; "
+                    "altfel, utilități sau consum de bază printre ele = 0; altfel 50.\n\n"
+                    "**Curba:** 10 ani − 3 luni: inversată = 0, 0–0,5 pp = 50, ≥ 0,5 pp = 100.\n\n"
+                    "**Sentiment:** media FinBERT pe titlurile S&P 500 și Nasdaq: > 0,15 = 100, < −0,15 = 0, între = 50."),
+                "Bază": st.column_config.Column(help="Valoarea din care s-a calculat scorul pilonului, sau motivul pentru care lipsește."),
+            })
+        st.caption(
+            f"Scor = media ponderată a pilonilor cu date ({mv['weight_used']}% din ponderi). "
+            f"FAVORABIL ≥ {macro_calc.MACRO_FAVORABLE:.0f}, DEFAVORABIL < {macro_calc.MACRO_ADVERSE:.0f}, altfel MIXT; "
+            f"fără verdict sub {macro_calc.MACRO_MIN_WEIGHT}% din ponderi. Pragurile și ponderile sunt orientative, netestate istoric. "
+            + (f"VIX: {vix_date:%d.%m.%Y}. " if vix_date is not None else "")
+            + f"Curba: {curve_desc}.")
+
+        # --- PIEȚELE ÎN CARE INVESTEȘTI: regim tehnic + randament în lei ---
+        st.markdown("---")
+        st.subheader("🌍 Piețele în care investești")
+        with st.spinner("Citim indicii..."):
+            try:
+                mk_closes = get_market_closes()
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("piețe: %s", exc)
+                mk_closes = pd.DataFrame()
+            mk_fx, _mk_fx_failed = get_bnr_fx_history()
+        if mk_closes.empty:
+            st.info("Indicii nu au putut fi citiți acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
+        else:
+            pct1 = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v * 100):+.1f}%"
+            reg_rows = []
+            for key, name, sym, cur, note in markets_calc.MARKETS:
+                r = markets_calc.market_regime(mk_closes[sym] if sym in mk_closes.columns else None)
+                reg_rows.append({"Piață": name, "Ultima închidere": r["last"],
+                                 "Data": r["date"], "Trend": None if r["trend_n"] is None else f"{r['trend_n']}/3",
+                                 "Momentum 12-1": r["momentum"], "Scor moment": r["score"], "De la maximul pe 52 săpt.": r["from_high"]})
+            st.markdown("**Regimul tehnic** (aceeași regulă ca eticheta „Moment” din Analiză Companie)")
+            st.dataframe(
+                pd.DataFrame(reg_rows).style.format({
+                    "Ultima închidere": lambda v: format_ro(v, 2), "Data": lambda d: "N/A" if d is None or pd.isna(d) else f"{d:%d.%m.%Y}",
+                    "Momentum 12-1": pct1, "Scor moment": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.0f}",
+                    "De la maximul pe 52 săpt.": pct1}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={
+                    "Trend": st.column_config.Column(help="Câte din 3 condiții sunt îndeplinite: închiderea peste media pe 50 de ședințe, "
+                                                          "peste media pe 200, media pe 50 peste cea pe 200. 3/3 = trend ascendent complet."),
+                    "Momentum 12-1": st.column_config.Column(help="Randamentul de acum 12 luni până acum o lună (fără ultima lună), pe date calendaristice."),
+                    "Scor moment": st.column_config.Column(help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
+                                                                "Pragurile 80/40 sunt testate pe acțiuni BVB, nu pe indici: aici valoarea e descriptivă, fără verdict."),
+                    "De la maximul pe 52 săpt.": st.column_config.Column(help="Ultima închidere ÷ cea mai mare închidere din ultimele 52 de săptămâni − 1. "
+                                                                                "0% = pe maxim; −10% = corecție; −20% = piață în scădere (bear market, convenția uzuală)."),
+                })
+
+            hz = st.radio("Orizont", list(markets_calc.HORIZONS), index=2, horizontal=True, key="mk_horizon")
+            ret_rows = []
+            for key, name, sym, cur, note in markets_calc.MARKETS:
+                fx = None if cur == "RON" else (mk_fx[cur] if (not mk_fx.empty and cur in mk_fx.columns) else pd.Series(dtype=float))
+                rr = markets_calc.ron_return(mk_closes[sym] if sym in mk_closes.columns else None, fx, hz)
+                ret_rows.append({"Piață": name, "Valută": cur, "Randament local": rr["local"],
+                                 "Efect curs față de leu": rr["fx"], "Randament în lei": rr["ron"], "Notă": note})
+            st.markdown(f"**Randamentul în lei** ({hz})")
+            st.dataframe(
+                pd.DataFrame(ret_rows).style.format({"Randament local": pct1, "Efect curs față de leu": pct1, "Randament în lei": pct1}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={
+                    "Randament local": st.column_config.Column(help="Variația indicelui în valuta lui, de la ultima închidere de la sau înainte de începutul orizontului."),
+                    "Efect curs față de leu": st.column_config.Column(help="Variația cursului BNR al valutei față de leu pe aceeași perioadă "
+                                                                            "(cursul din ultima zi de tranzacționare a indicelui, nu cel de azi). 0% la BET."),
+                    "Randament în lei": st.column_config.Column(help="(1 + randament local) × (1 + efect curs) − 1: cât a câștigat un investitor în lei, "
+                                                                     "fără dividende la indicii de preț și fără comisioane."),
+                })
+            st.caption("ℹ️ Indici de la Yahoo (ajustați), cursuri BNR. Indicii de preț nu includ dividendele (S&P 500, Nasdaq, STOXX 600); "
+                       "DAX le include. BET e aproximat prin ETF-ul TVBETETF.")
+
+        # --- LĂȚIMEA PIEȚEI SUA ---
+        st.markdown("**Lățimea pieței SUA** (cât de larg participă companiile la creștere)")
+        try:
+            br_closes = get_breadth_closes()
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("lățime: %s", exc)
+            br_closes = pd.DataFrame()
+        if br_closes.empty:
+            st.info("RSP / IWM / SPY nu au putut fi citite acum de la Yahoo.")
+        else:
+            br_rows = []
+            for a_sym, b_sym, label in markets_calc.BREADTH_PAIRS:
+                row_b = {"Comparație": label, "Pereche": f"{a_sym} / {b_sym}"}
+                for mths in markets_calc.BREADTH_MONTHS:
+                    rr_b = markets_calc.relative_return(br_closes.get(a_sym), br_closes.get(b_sym), mths)
+                    row_b[f"Diferență {mths} luni"] = rr_b["diff"]
+                    row_b[f"Detaliu {mths} luni"] = (None if rr_b["diff"] is None else
+                                                    f"{a_sym} {ro(rr_b['a'] * 100):+.1f}% vs {b_sym} {ro(rr_b['b'] * 100):+.1f}%")
+                br_rows.append(row_b)
+            pct_b = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v * 100):+.1f} pp"
+            st.dataframe(
+                pd.DataFrame(br_rows).style.format({f"Diferență {m_} luni": pct_b for m_ in markets_calc.BREADTH_MONTHS}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={f"Diferență {m_} luni": st.column_config.Column(
+                    help=f"Randamentul primului ETF − al doilea pe {m_} luni (total return, până la ultima zi comună). "
+                         "Negativ la RSP/SPY: creșterea S&P 500 vine din câteva companii mari (piață îngustă, mai fragilă). "
+                         "Pozitiv: participare largă.") for m_ in markets_calc.BREADTH_MONTHS})
+
+        # --- DOBÂNZI ȘI RISC DE ȚARĂ ---
+        st.markdown("---")
+        st.subheader("🏦 Dobânzi și risc de țară")
+        with st.spinner("Citim dobânzile (FRED, BCE, Eurostat)..."):
+            rate_rows = get_rates_dashboard()
+        pp = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}"
+        df_rates = pd.DataFrame([{"Piață": r["Piață"], "Indicator": r["Indicator"], "Valoare (%)": r["value"],
+                                  "Perioadă": rates_calc.period_label(r["period"]), "Δ 3 luni (pp)": r["d3m"],
+                                  "Δ 1 an (pp)": r["d1y"], "Sursă": r["Sursă"]} for r in rate_rows])
+        st.dataframe(
+            df_rates.style.format({"Valoare (%)": lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.2f}",
+                                   "Δ 3 luni (pp)": pp, "Δ 1 an (pp)": pp}, na_rep="N/A"),
+            hide_index=True, width='stretch',
+            column_config={
+                "Valoare (%)": st.column_config.Column(help="Ultima valoare publicată, în procente pe an (inflația: variația prețurilor față de aceeași lună de anul trecut)."),
+                "Perioadă": st.column_config.Column(help="Ziua (serii zilnice) sau luna (serii lunare) a ultimei valori. Seriile lunare BCE/Eurostat apar cu 1–2 luni întârziere."),
+                "Δ 3 luni (pp)": st.column_config.Column(help="Variația în puncte procentuale față de acum 3 luni (aceeași lună, la seriile lunare)."),
+                "Δ 1 an (pp)": st.column_config.Column(help="Variația în puncte procentuale față de acum un an."),
+                "Indicator": st.column_config.Column(help=(
+                    "**Dobânda reală** = randamentul pe 10 ani − inflația an/an din aceeași lună (ex-post, proxy: inflația așteptată nu e publicată). "
+                    "Pozitivă = titlurile de stat bat inflația.\n\n"
+                    "**Prima de risc de țară** = randamentul titlurilor românești pe 10 ani − Bund 10 ani, aceeași lună: cât cer investitorii în plus "
+                    "pentru riscul României (fiscal, rating, curs). Când crește, titlurile de stat existente pierd din preț și evaluările BET scad; "
+                    "când scade, invers.\n\n"
+                    "**Panta** 10 ani − scurt: negativă = curbă inversată.")),
+            })
+        st.caption("ℹ️ Dobânda de politică monetară a BNR nu are o sursă automată: nu e în tabel. Randamentele RO și DE pe 10 ani sunt seriile lunare "
+                   "de convergență (criteriile Maastricht) publicate de BCE.")
+
+        # --- PANTA CURBEI SUA, ISTORIC (graficul pilonului „Curba”; înlocuiește „Early Warning System”) ---
+        st.markdown("**Panta curbei SUA, 10 ani − 3 luni** (istoric; aceeași măsură ca pilonul „Curba” din verdict)")
+        us_curve = get_us_curve_history()
+        cv_sum = rates_calc.curve_inversion_summary(us_curve)
+        if cv_sum is None:
+            st.info("Seriile FRED DGS10 / DGS3MO nu au putut fi citite acum: graficul pantei e N/A.")
+        else:
+            fig_cv = go.Figure(go.Scatter(x=us_curve.index, y=us_curve.values, mode="lines",
+                                          line=dict(color="#3987e5", width=2), name="10 ani − 3 luni",
+                                          hovertemplate="%{x|%d.%m.%Y}: %{y:.2f} pp<extra></extra>"))
+            fig_cv.add_hline(y=0, line=dict(color="#8B949E", dash="dot", width=1))
+            fig_cv.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0), template="plotly_dark",
+                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False,
+                                 yaxis=dict(title="puncte procentuale", gridcolor='#30363D', zeroline=False))
+            plot_ro(fig_cv, width='stretch', key="us_curve_chart")
+            last_inv = ("niciuna în istoricul afișat" if cv_sum["last_inverted"] is None
+                        else f"{cv_sum['last_inverted']:%d.%m.%Y}")
+            st.caption(f"Ultima valoare {ro(cv_sum['value']):+.2f} pp ({cv_sum['date']:%d.%m.%Y}). În ultimele 12 luni curba a fost "
+                       f"inversată în {cv_sum['inverted_window']} din {cv_sum['n_window']} ședințe; ultima zi inversată: {last_inv}. "
+                       "Sub linia punctată (0) curba e inversată: în SUA, inversarea 10 ani − 3 luni a precedat recesiunile din 1969 "
+                       "încoace, cu un decalaj de 6–24 de luni și cel puțin un semnal fals; nu dă momentul. "
+                       f"Sursa: FRED DGS10 − DGS3MO, aceeași zi, din {cv_sum['start']:%m.%Y}. Pilonul din verdict folosește "
+                       "^TNX − ^IRX (Yahoo, ^IRX convertit din randament de discount în randament echivalent de obligațiune), "
+                       "din ultima ședință; FRED vine de obicei cu o zi în urmă, deci în zilele cu mișcări mari (ex. raportul "
+                       "privind locurile de muncă) cele două pot diferi cu până la ~0,2 pp.")
+
+        # --- PRIMA DE RISC A ACȚIUNILOR (proxy) ---
+        st.markdown("**Acțiunile față de titlurile de stat** (prima de risc a acțiunilor, proxy)")
+        with st.spinner("Calculăm randamentul profiturilor..."):
+            erp_rows = get_equity_risk_rows()
+        pc2 = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):.2f}%"
+        # Text gata formatat: st.dataframe arată celulele nule ca „None” chiar cu Styler.format(na_rep=...).
+        st.dataframe(
+            text_frame(pd.DataFrame([{"Piață": r["Piață"], "Randamentul profiturilor (E/P)": r["ep"], "Titluri de stat 10 ani": r["bond"],
+                                      "Prima de risc (pp)": r["gap"], "Bază": r["Bază"]} for r in erp_rows]), {
+                "Randamentul profiturilor (E/P)": pc2, "Titluri de stat 10 ani": pc2,
+                "Prima de risc (pp)": lambda v: f"{ro(v):+.2f}"}),
+            hide_index=True, width='stretch',
+            column_config={
+                "Randamentul profiturilor (E/P)": st.column_config.Column(help="Profitul pe acțiune ÷ prețul = inversul P/E. "
+                    "Cât profit „cumperi” la 100 de lei investiți, înainte de creștere."),
+                "Prima de risc (pp)": st.column_config.Column(help="E/P − randamentul titlurilor de stat pe 10 ani, în puncte procentuale. "
+                    "Mare și pozitivă: acțiunile sunt ieftine față de obligațiuni (plătesc bine riscul). Mică sau negativă: "
+                    "titlurile de stat dau aproape cât profiturile, deci acțiunile sunt scumpe relativ, dacă profiturile nu cresc. "
+                    "Nu ține cont de creșterea profiturilor și de inflație: proxy, fără verdict."),
+            })
+
+        # --- STRESUL PIEȚEI: structura VIX + spread-urile de credit ---
+        st.markdown("---")
+        st.subheader("🌡️ Stresul pieței")
+        with st.spinner("Citim VIX, VIX3M și spread-urile de credit..."):
+            try:
+                vix_cl = get_vix_curve_closes()
+                vterm = stress_calc.vix_term(vix_cl.get("^VIX"), vix_cl.get("^VIX3M"))
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("VIX/VIX3M: %s", exc)
+                vterm = None
+            credit, credit_ser = {}, {}
+            for code in ("BAMLH0A0HYM2", "BAMLC0A0CM"):
+                try:
+                    credit_ser[code] = _fred_rate_series(code, 3700)
+                    credit[code] = stress_calc.spread_stats(credit_ser[code])
+                except Exception as exc:  # rețea / FRED
+                    logger.warning("FRED %s: %s", code, exc)
+                    credit_ser[code] = None
+                    credit[code] = stress_calc.spread_stats(None)
+        c_st1, c_st2, c_st3 = st.columns(3)
+        state_txt = {"stres": "🔴 stres acut", "tensiune": "🟠 tensiune", "normal": "🟢 normal"}
+        c_st1.metric("VIX / VIX3M", "N/A" if vterm is None else f"{ro(vterm['ratio']):.2f}",
+                     None if vterm is None else state_txt[vterm["state"]], delta_color="off",
+                     help="Volatilitatea implicită pe 30 de zile ÷ cea pe 3 luni (S&P 500), aceeași zi. "
+                          f"Sub {ro(stress_calc.VIX_TERM_TENSE):.2f}: normal (piața se teme mai puțin de imediat decât de viitor); "
+                          f"{ro(stress_calc.VIX_TERM_TENSE):.2f}–{ro(stress_calc.VIX_TERM_STRESS):.2f}: tensiune; peste 1: stres acut "
+                          "(apare în corecții și vânzări forțate). Praguri uzuale de piață, netestate."
+                          + ("" if vterm is None else f" VIX {ro(vterm['vix']):.2f}, VIX3M {ro(vterm['vix3m']):.2f}, {vterm['date']:%d.%m.%Y}."))
+        for col, code, name in ((c_st2, "BAMLH0A0HYM2", "Spread high yield SUA"), (c_st3, "BAMLC0A0CM", "Spread investment grade SUA")):
+            cs = credit[code]
+            col.metric(name, "N/A" if cs["value"] is None else f"{ro(cs['value']):.2f} pp",
+                       None if cs["d1m"] is None else f"{ro(cs['d1m']):+.2f} pp într-o lună", delta_color="inverse",
+                       help=f"ICE BofA option-adjusted spread (FRED {code}): randamentul obligațiunilor corporative peste titlurile de stat. "
+                            "Crește când investitorii cer mai mult pentru riscul de neplată (stres); scade când creditul e ieftin. "
+                            + ("" if cs["value"] is None else
+                               f"Ultima valoare {cs['date']:%d.%m.%Y}. Percentila în istoricul disponibil "
+                               f"({cs['start']:%m.%Y}–{cs['date']:%m.%Y}, {cs['n']} zile): {ro(cs['pctile']):.0f}% "
+                               "(100% = cel mai larg spread din perioadă). FRED publică doar ultimii ~3 ani din seriile ICE.")
+                            + ("" if cs["d1y"] is None else f" Față de acum un an: {ro(cs['d1y']):+.2f} pp."))
+        if vterm is not None and len(vterm["series"]) > 1:
+            fig_vt = go.Figure(go.Scatter(x=vterm["series"].index, y=vterm["series"].values, mode="lines",
+                                          line=dict(color="#3987e5", width=2), name="VIX / VIX3M",
+                                          hovertemplate="%{x|%d.%m.%Y}: %{y:.2f}<extra></extra>"))
+            fig_vt.add_hline(y=stress_calc.VIX_TERM_STRESS, line=dict(color="#8B949E", dash="dot", width=1))
+            fig_vt.update_layout(height=220, margin=dict(l=0, r=0, t=10, b=0), template="plotly_dark",
+                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False,
+                                 yaxis=dict(title="VIX / VIX3M", gridcolor='#30363D'))
+            plot_ro(fig_vt, width='stretch', key="vix_term_chart")
+            st.caption("Linia punctată = 1: peste ea, volatilitatea pe termen scurt depășește pe cea pe 3 luni.")
+
+        # --- GRAFICELE CREDITULUI (înlocuiesc „Radar de Risc Sistemic”, scos 05.11) ---
+        cr_c1, cr_c2 = st.columns(2)
+        with cr_c1:
+            st.markdown("**Spread-urile de credit SUA** (măsura directă)")
+            sp_lines = [(code, name, colr) for code, name, colr in (("BAMLH0A0HYM2", "High yield", "#3987e5"),
+                                                                    ("BAMLC0A0CM", "Investment grade", "#d95926"))
+                        if credit_ser.get(code) is not None]
+            if not sp_lines:
+                st.info("Spread-urile ICE BofA nu au putut fi citite acum de la FRED: N/A.")
+            else:
+                fig_sp = go.Figure()
+                for code, name, colr in sp_lines:
+                    ser_sp = rates_calc.to_daily(credit_ser[code])
+                    fig_sp.add_trace(go.Scatter(x=ser_sp.index, y=ser_sp.values, mode="lines", name=name,
+                                                line=dict(color=colr, width=2),
+                                                hovertemplate=name + " %{x|%d.%m.%Y}: %{y:.2f} pp<extra></extra>"))
+                fig_sp.update_layout(height=260, margin=dict(l=0, r=0, t=30, b=0), template="plotly_dark",
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                                     yaxis=dict(title="puncte procentuale", gridcolor='#30363D'))
+                plot_ro(fig_sp, width='stretch', key="credit_spreads_chart")
+                st.caption("Randamentul obligațiunilor corporative SUA peste titlurile de stat (FRED, ICE BofA option-adjusted spread). "
+                           "Urcă = investitorii cer mai mult pentru riscul de neplată. FRED publică doar ultimii ~3 ani din seriile ICE.")
+        with cr_c2:
+            st.markdown("**Pilonul „Piața de credit”: HYG / IEF** (un an)")
+            cb = macro_calc.credit_band_frame(macro_risk_ratio)
+            if cb.empty:
+                st.info("HYG / IEF nu au putut fi citite acum de la Yahoo: N/A.")
+            else:
+                fig_cb = go.Figure()
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["upper"], mode="lines", line=dict(width=0),
+                                            showlegend=False, hoverinfo="skip"))
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["lower"], mode="lines", line=dict(width=0),
+                                            fill="tonexty", fillcolor="rgba(139,148,158,0.18)",
+                                            name=f"Banda ±{ro(macro_calc.CREDIT_BAND * 100):.0f}% (neutru)", hoverinfo="skip"))
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["sma"], mode="lines", name=f"Media pe {macro_calc.CREDIT_SMA_DAYS} de ședințe",
+                                            line=dict(color="#8B949E", dash="dot", width=1.5),
+                                            hovertemplate="Media %{x|%d.%m.%Y}: %{y:.3f}<extra></extra>"))
+                fig_cb.add_trace(go.Scatter(x=cb.index, y=cb["ratio"], mode="lines", name="HYG / IEF",
+                                            line=dict(color="#3987e5", width=2),
+                                            hovertemplate="HYG/IEF %{x|%d.%m.%Y}: %{y:.3f}<extra></extra>"))
+                fig_cb.update_layout(height=260, margin=dict(l=0, r=0, t=30, b=0), template="plotly_dark",
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                                     yaxis=dict(title="raport", gridcolor='#30363D'))
+                plot_ro(fig_cb, width='stretch', key="credit_band_chart")
+                cp = macro_pillars["credit"]
+                cp_txt = "N/A" if cp["score"] is None else f"{cp['score']:.0f}"
+                st.caption(f"Azi: {cp['detail']}; scor pilon {cp_txt}. "
+                           "Peste bandă = apetit pentru risc (100), sub bandă = retragere din risc (0), în bandă = neutru (50); "
+                           "prag orientativ, netestat. HYG/IEF (randament total, Yahoo) e un proxy: banii care trec din "
+                           "obligațiunile firmelor în titlurile de stat trag raportul în jos.")
+
+        # „✨ Sinteza Inteligenței Artificiale” a fost mutată sus, sub bannerul „Mediul de piață SUA” (06.11, cererea lui Daniel).
         st.markdown("---")
         
         if st.button("🔄 Reîmprospătează Piața"):
-            get_global_market_data.clear()
+            _global_quote_closes.clear()
+            _briefing_market.clear()
             get_macro_data_visuals.clear()
             st.rerun()
 
-        # Urmează restul codului tău cu "🚨 Early Warning System..."
-
-        st.subheader("🚨 Early Warning System: Risc Recesiune (10Y-3M)")
-        
-        try:
-            # Preluăm datele pentru 10 ani și 3 luni (standardul FED)
-            t_10y = yf.Ticker("^TNX").fast_info.last_price
-            t_3m = yf.Ticker("^IRX").fast_info.last_price 
-            
-            if t_10y > 0 and t_3m > 0:
-                spread = t_10y - t_3m
-                label_spread = "SPREAD 10Y - 3M (SĂNĂTATE MACRO)"
-            else:
-                spread = 0.5
-                label_spread = "Spread indisponibil (Data Delay)"
-
-            y_col1, y_col2 = st.columns([1, 2])
-            with y_col1:
-                spread_color = "#F85149" if spread < 0 else "#3FB950"
-                st.markdown(f"""
-                    <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {spread_color}; text-align:center;">
-                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">{label_spread}</p>
-                        <h1 style="color:{spread_color}; margin:10px 0;">{ro(spread):.3f}</h1>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with y_col2:
-                if spread < 0:
-                    st.error(f"⚠️ **INVERSIUNE CONFIRMATĂ:** Spread-ul de {ro(spread):.3f} indică o curbă a randamentelor inversată. Istoric, acest semnal a precedat fiecare recesiune majoră..")
-                    st.write("👉 **Strategie:** Protejează capitalul. Redu expunerea pe acțiuni ciclice și crește ponderea în Cash/Aur.")
-                else:
-                    st.success(f"✅ **SĂNĂTATE MACRO:** Spread-ul de {ro(spread):.3f} indică o curbă a randamentelor normală. Indică expansiune economică")
-                    st.write("👉 **Strategie:** Poți menține o strategie de creștere (Growth). Mediul economic susține expansiunea bursieră.")
-
-        except Exception as e:
-            st.info("Sistemul de monitorizare a curbei randamentelor se recalibrează...")
-
-        # --- AICI CONTINUĂ RESTUL CODULUI TĂU (HARTA, RADAR, MATRICE, TABELE) ---
+        # „Early Warning System” (10 ani − 3 luni) a fost scos (05.11, decizia lui Daniel): valoarea e în pilonul „Curba”,
+        # iar istoricul în graficul pantei din „Dobânzi și risc de țară”.
         st.markdown("---")    
 
         # --- PASUL 1: DESCĂRCARE DATE (Trebuie să fie PRIMUL rând!) ---
@@ -5767,23 +6569,24 @@ def main():
         # --- PASUL 2: MODUL INTERPRETARE DINAMICĂ DOBÂNZI ---
         st.markdown("### 🧭 Indicatori Macroeconomici")
         
-        # Verificăm dacă avem date pentru randamentele pe 10 ani
-        has_tnx = '^TNX' in macro_data.columns.levels[0] if isinstance(macro_data.columns, pd.MultiIndex) else '^TNX' in macro_data
-        
-        if has_tnx:
-            try:
-                tnx_series = macro_data['^TNX']['Close'].dropna() if isinstance(macro_data.columns, pd.MultiIndex) else macro_data['^TNX'].dropna()
-                tnx_chg = tnx_series.pct_change().iloc[-1]
-                
-                if tnx_chg > 0.015:
-                    macro_msg = "🚨 **RANDAMENTE ÎN CREȘTERE:** Yield-ul 10Y crește brusc. Acest lucru pune presiune pe acțiunile de Tehnologie (Growth) și crește costul creditării."
-                elif tnx_chg < -0.015:
-                    macro_msg = "🟢 **REDUCERE COST CAPITAL:** Yield-ul 10Y scade. Un mediu favorabil pentru acțiuni și pentru refinanțarea datoriilor companiilor."
-                else:
-                    macro_msg = "⚖️ **STABILITATE DOBÂNZI:** Yield-ul 10Y este stabil. Piața nu anticipează schimbări majore de politică monetară în acest moment."
-                st.info(macro_msg)
-            except:
-                st.info("💡 Interpretare: Dacă US 10Y Yield crește brusc, acțiunile de tehnologie tind să scadă. Dacă Aurul crește, indică frică în piață.")
+        # Randamentul SUA pe 10 ani: variația în puncte procentuale pe o zi și pe o lună (analytics/macro.py).
+        tnx_close = None
+        if isinstance(macro_data.columns, pd.MultiIndex) and '^TNX' in macro_data.columns.levels[0]:
+            tnx_close = macro_data['^TNX']['Close']
+        tnx_d1 = macro_calc.last_change(tnx_close)
+        tnx_m1 = macro_calc.change_over(tnx_close, 1)
+        tnx_trend = macro_calc.yield_trend(tnx_m1)
+        if tnx_trend is None:
+            st.info("ℹ️ Randamentul SUA pe 10 ani (^TNX) nu are istoric suficient acum: interpretarea dobânzilor nu se poate face.")
+        else:
+            tnx_txt = (f"Randamentul pe 10 ani: {ro(tnx_d1['last']):.2f}% ({tnx_d1['date']:%d.%m.%Y}); "
+                       f"{ro(tnx_d1['abs'] * 100):+.0f} pb față de ședința precedentă, {ro(tnx_m1 * 100):+.0f} pb într-o lună.")
+            macro_msg = {
+                "creste": "🚨 **RANDAMENTE ÎN CREȘTERE:** peste +25 pb într-o lună. Presiune pe acțiunile de creștere (Tehnologie) și cost mai mare al creditării.",
+                "scade": "🟢 **REDUCERE COST CAPITAL:** peste −25 pb într-o lună. Mediu favorabil acțiunilor și refinanțării datoriilor companiilor.",
+                "stabil": "⚖️ **STABILITATE DOBÂNZI:** sub ±25 pb într-o lună. Piața nu anticipează schimbări majore de politică monetară.",
+            }[tnx_trend]
+            st.info(f"{macro_msg}\n\n{tnx_txt} Prag orientativ (±25 pb pe o lună), netestat.")
                 
         # --- 1. CONFIGURARE UI (Selectori) ---
         c_sel1, c_sel2 = st.columns([1, 3])
@@ -5795,7 +6598,7 @@ def main():
             
             st.markdown("##### 2. Perioadă:")
             # Slider pentru timp
-            time_frame = st.select_slider("", options=["1L", "3L", "6L", "1A", "3A", "5A"], value="1A")
+            time_frame = st.select_slider("Perioadă", label_visibility="collapsed", options=["1L", "3L", "6L", "1A", "3A", "5A"], value="1A")
 
         # --- 2. PROCESARE DATE ---
         with c_sel2:
@@ -5805,7 +6608,9 @@ def main():
                 try:
                     if selected_macro_sym in macro_data.columns.levels[0]:
                         series = macro_data[selected_macro_sym]['Close'].dropna()
-                except: pass
+                except Exception as exc:  # înainte: except: gol
+                    logger.warning("render_portfolio_tab: %s", exc)
+                    pass
             else:
                 series = macro_data['Close'] # Fallback
 
@@ -5817,15 +6622,15 @@ def main():
                 
                 curr_val = series.iloc[-1] # Valoarea curentă (Azi)
 
-                # A. Calcul Interval (Start Slider vs Azi)
+                # A. Calcul Interval (Start Slider vs Azi); lipsă = N/A, nu 0
                 start_val = subset.iloc[0]
                 diff_interval = curr_val - start_val
-                pct_interval = (diff_interval / start_val) * 100 if start_val != 0 else 0
+                pct_interval = (diff_interval / start_val) * 100 if start_val != 0 else None
 
-                # B. Calcul Zi (Ieri vs Azi) - Folosim seria completă, nu subsetul
-                prev_day_val = series.iloc[-2] if len(series) >= 2 else curr_val
-                diff_day = curr_val - prev_day_val
-                pct_day = (diff_day / prev_day_val) * 100 if prev_day_val != 0 else 0
+                # B. Calcul Zi (ultima ședință vs precedenta cu valoare)
+                day_chg = macro_calc.last_change(series)
+                diff_day = None if day_chg is None else day_chg["abs"]
+                pct_day = None if day_chg is None else day_chg["pct"]
                 
                 # --- FORMATARE TEXT ---
                 suffix = "%" if "Yield" in selected_macro_name else ""
@@ -5834,16 +6639,20 @@ def main():
                 # --- AFIȘARE DUALĂ (2 Metric Carduri) ---
                 m1, m2 = st.columns(2)
                 
+                fmt_delta = lambda d, pc: (None if d is None else
+                                           f"{ro(d):.4f}" + ("" if pc is None else f" ({ro(pc):.2f}%)"))
                 m1.metric(
                     f"Interval ({time_frame})", 
                     val_fmt, 
-                    f"{ro(diff_interval):.4f} ({ro(pct_interval):.2f}%)"
+                    fmt_delta(diff_interval, pct_interval),
+                    help=f"Față de prima valoare din fereastra aleasă ({subset.index[0]:%d.%m.%Y})."
                 )
                 
                 m2.metric(
                     "Evoluție Azi", 
                     val_fmt, 
-                    f"{ro(diff_day):.4f} ({ro(pct_day):.2f}%)"
+                    fmt_delta(diff_day, pct_day),
+                    help="Ultima ședință față de precedenta cu valoare. La randamente (Yield) variația e în puncte procentuale."
                 )
                 
                 # --- 3. GRAFIC PLOTLY ---
@@ -5861,7 +6670,7 @@ def main():
                 # TRUC: Zoom-in pe axa Y pentru active stabile (Valute)
                 y_min = subset.min()
                 y_max = subset.max()
-                is_stable = (y_max - y_min) / y_min < 0.1 
+                is_stable = y_min > 0 and (y_max - y_min) / y_min < 0.1 
                 
                 range_y = [y_min * 0.999, y_max * 1.001] if is_stable else None
                 
@@ -5885,7 +6694,12 @@ def main():
                 st.markdown("#### 🧠 Analiza Corelațiilor (Ghid Macro)")
                 
                 # Trimitem tot bulk-ul de date macro descărcat anterior
-                macro_verdicts = get_macro_interpretation(macro_data)
+                try:
+                    _vix_for_guide = get_vix_curve_closes().get("^VIX")
+                except Exception as exc:  # rețea / Yahoo
+                    logger.warning("ghid macro VIX: %s", exc)
+                    _vix_for_guide = None
+                macro_verdicts = get_macro_interpretation(macro_data, _vix_for_guide)
                 
                 for v in macro_verdicts:
                     st.info(v)
@@ -5894,41 +6708,42 @@ def main():
                 st.markdown("---")
                 st.subheader("📊 Matricea de Sensibilitate Economică (Scenarii)")
                 
-                impact_data = {
-                    "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
-                    "Dacă Dobânzile CRESC (↑)": [
-                        "🔴 NEGATIV (Evaluări scăzute)", 
-                        "🟢 POZITIV (Marje mai mari)", 
-                        "🔴 NEGATIV (Costuri datorie)", 
-                        "🟡 NEUTRU/POZITIV (Hedge)", 
-                        "🟡 NEUTRU (Cerere stabilă)"
-                    ],
-                    "Dacă Dobânzile SCAD (↓)": [
-                        "🟢 POZITIV (Expansiune multipli)", 
-                        "🔴 NEGATIV (Venituri scăzute)", 
-                        "🟢 POZITIV (Refinanțare ieftină)", 
-                        "🔴 NEGATIV (Semnal încetinire)", 
-                        "🟢 POZITIV (Randament dividend)"
-                    ]
-                }
+                with st.expander("📖 Cum reacționează sectoarele la dobânzi (ghid static, nu date de azi)", expanded=False):
+                    impact_data = {
+                        "Sector": ["Tehnologie (Growth)", "Bancar & Finanțe", "Imobiliare (REITs)", "Energie & Mărfuri", "Consum de Bază"],
+                        "Dacă Dobânzile CRESC (↑)": [
+                            "🔴 NEGATIV (Evaluări scăzute)", 
+                            "🟢 POZITIV (Marje mai mari)", 
+                            "🔴 NEGATIV (Costuri datorie)", 
+                            "🟡 NEUTRU/POZITIV (Hedge)", 
+                            "🟡 NEUTRU (Cerere stabilă)"
+                        ],
+                        "Dacă Dobânzile SCAD (↓)": [
+                            "🟢 POZITIV (Expansiune multipli)", 
+                            "🔴 NEGATIV (Venituri scăzute)", 
+                            "🟢 POZITIV (Refinanțare ieftină)", 
+                            "🔴 NEGATIV (Semnal încetinire)", 
+                            "🟢 POZITIV (Randament dividend)"
+                        ]
+                    }
                 
-                # Afișare tabel profesional
-                st.table(pd.DataFrame(impact_data))
+                    # Afișare tabel profesional
+                    st.table(pd.DataFrame(impact_data))
 
-                # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
-                col_c1, col_c2 = st.columns(2)
-                with col_c1:
-                    st.success("**🏢 Companii Large-Cap (Gigant)**")
-                    st.markdown("""
-                    * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
-                    * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
-                    """)
-                with col_c2:
-                    st.warning("**🚜 Companii Small-Cap (Mici)**")
-                    st.markdown("""
-                    * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
-                    * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
-                    """)
+                    # --- ANALIZĂ STRATEGICĂ DUPĂ CAPITALIZARE ---
+                    col_c1, col_c2 = st.columns(2)
+                    with col_c1:
+                        st.success("**🏢 Companii Large-Cap (Gigant)**")
+                        st.markdown("""
+                        * **Performanță optimă:** În medii cu dobânzi **MARI** (Higher for Longer).
+                        * **Avantaj:** Rezerve de cash care produc dobândă și rezistență la inflație.
+                        """)
+                    with col_c2:
+                        st.warning("**🚜 Companii Small-Cap (Mici)**")
+                        st.markdown("""
+                        * **Performanță optimă:** Când dobânzile încep să **SCADĂ** (Pivot).
+                        * **Avantaj:** Accesul la capital ieftin repornește motoarele de creștere și expansiune.
+                        """)
                 with st.expander("📖 Vezi Minighid de Macroeconomie"):
                     st.markdown("""
                     **1. Aurul: Refugiu Financiar**
@@ -5949,15 +6764,17 @@ def main():
                 st.markdown("---")
                 st.subheader("🔄 Indicator Rotație Sectoare (Nasdaq / Dow Jones)")
                 
+                rot_change = None
                 try:
-                    # 1. Date și Calcule (Rămân la fel)
-                    rot_data = yf.download(['^IXIC', '^DJI'], period="1y", progress=False)['Close']
-                    ratio = rot_data['^IXIC'] / rot_data['^DJI']
+                    # Raportul pe zilele comune; variația pe o lună calendaristică (nu 22 de rânduri)
+                    ratio = get_rotation_ratio()
                     ratio_sma = ratio.rolling(window=50).mean()
                     
                     current_ratio = ratio.iloc[-1]
-                    prev_ratio = ratio.iloc[-22]
-                    rot_change = ((current_ratio - prev_ratio) / prev_ratio) * 100
+                    rot_ret = macro_calc.period_return(ratio, months=1)
+                    if rot_ret is None:
+                        raise ValueError("raportul Nasdaq/Dow nu acoperă o lună")
+                    rot_change = rot_ret * 100
 
                     # --- PASUL A: GRAFICUL PE TOATĂ LĂȚIMEA (SUS) ---
                     fig_rot = go.Figure()
@@ -6010,7 +6827,7 @@ def main():
                         st.markdown(f"""
                             <div style="background-color: #161B22; padding: 22px; border-radius: 12px; border: 1px solid #30363D; height: 100%;">
                                 <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
-                                    Trend Rotație (30z)
+                                    Trend Rotație (1 lună)
                                 </div>
                                 <div style="font-size: 22px; font-weight: bold; color: #FFFFFF; margin-bottom: 18px;">
                                     {rot_status}
@@ -6033,55 +6850,15 @@ def main():
                             st.warning("🛡️ **MOD DEFENSIV:** Investitorii fug în Industriale și Value. Se caută siguranța dividendelor și a companiilor stabile.")
                         else:
                             st.info("⚖️ **ECHILIBRU:** Rotația este neutră între 'Creștere' și 'Valoare'. Piața își caută o direcție clară.")
+                        st.caption("Variația raportului Nasdaq Composite / Dow Jones într-o lună calendaristică. Prag ±1,5%, orientativ, netestat. "
+                                   "Dow Jones e ponderat cu prețul, deci e doar un proxy pentru „value”.")
                             
-                except Exception as e:
-                    st.info("Indicatorul de rotație se recalibrează...")
+                except Exception as e:  # rețea / Yahoo / istoric scurt
+                    logger.warning("rotație Nasdaq/Dow: %s", e)
+                    st.info("Indicatorul de rotație nu are date acum (Yahoo): N/A.")
                     
-                    # --- MODUL: BAROMETRU DE SENTIMENT GLOBAL (ȘTIRI) ---
-                st.markdown("---")
-                st.subheader("🎭 Barometru Sentiment Global al Media")
-                
-                try:
-                    # Colectăm știrile de la indicii majori pentru un eșantion relevant
-                    news_samples = get_company_news_rss("^GSPC") + get_company_news_rss("^IXIC")
-                    
-                    if news_samples:
-                        # Calculăm scorul mediu folosind motorul tău de IA
-                        from ai_engine import analyze_sentiment_ai
-                        global_sentiment_score = analyze_sentiment_ai(news_samples)
-                        
-                        # Definire culori și mesaje profesionale
-                        if global_sentiment_score > 0.15:
-                            s_col, s_msg = "#3FB950", "🚀 BULLISH: Narațiunea globală este optimistă."
-                        elif global_sentiment_score < -0.15:
-                            s_col, s_msg = "#F85149", "📉 BEARISH: Predomină frica și incertitudinea."
-                        else:
-                            s_col, s_msg = "#8B949E", "⚖️ NEUTRU: Media reflectă o perioadă de consolidare."
-                            
-                        # Afișare vizuală
-                        sb1, sb2 = st.columns([1, 2])
-                        with sb1:
-                            st.markdown(f"""
-                            <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {s_col}; text-align:center;">
-                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sentiment Media</p>
-                                <h1 style="color:{s_col}; margin:10px 0; font-size:36px;">{ro(global_sentiment_score):.2f}</h1>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        
-                        with sb2:
-                            st.info(s_msg)
-                            st.write("**Corelație cu Rotația:**")
-                            # Logică de corelare automată
-                            if global_sentiment_score < 0 and rot_change < 0:
-                                st.write("⚠️ **CONFIRMARE DEFENSIVĂ:** Atât știrile, cât și mișcările de capital (rotația) indică o fugă către siguranță.")
-                            elif global_sentiment_score > 0 and rot_change > 0:
-                                st.write("🌟 **CONFIRMARE GROWTH:** Sentimentul pozitiv din media susține migrarea banilor către Tehnologie.")
-                            else:
-                                st.write("🔄 **DIVERGENȚĂ:** Piața se mișcă într-o direcție, dar media raportează altceva. Atenție la potențiale capcane!")
-                    else:
-                        st.info("Sincronizare fluxuri știri pentru barometru...")
-                except:
-                    st.info("Barometrul de sentiment se actualizează...")
+                # „Barometru Sentiment Global al Media” a fost scos (05.11, decizia lui Daniel): același scor FinBERT e
+                # pilonul „Sentimentul știrilor” din verdictul de sus.
 
             else:
                 st.warning("Date indisponibile sau eroare conexiune Yahoo.")
@@ -6091,10 +6868,18 @@ def main():
         # =================================================================
         st.markdown("---")
         st.subheader("🗺️ Harta Termică a Sectoarelor (Money Flow)")
-        st.markdown("Radiografia indicelui S&P 500: Urmărește în timp real în ce sectoare își mută instituțiile capitalul astăzi.")
+        st.markdown("Cele 11 ETF-uri sectoriale ale S&P 500 (XLK…XLC): în ce sectoare se mută capitalul.")
+        heat_hz = st.radio("Orizont", ["Azi", "1 lună"], index=1, horizontal=True, key="sec_heat_hz",
+                           help="Azi = ultima ședință față de precedenta (zgomotos: o zi nu e o tendință). "
+                                "1 lună = randamentul pe o lună calendaristică, același folosit de pilonul „Rotația sectorială” din verdict.")
+        heat_word = "zilei" if heat_hz == "Azi" else "lunii"
 
         with st.spinner("Se calculează fluxul de capital pe sectoare..."):
-            df_sectors = get_sector_performance()
+            if heat_hz == "Azi":
+                df_sectors = get_sector_performance()
+            else:
+                df_sectors = (pd.DataFrame([{"Sector": k, "Variație %": v * 100} for k, v in sector_month.items()])
+                              .sort_values("Variație %", ascending=True) if sector_month else pd.DataFrame())
             
             if not df_sectors.empty:
                 # --- GRAFIC PLOTLY ORIZONTAL ---
@@ -6142,7 +6927,7 @@ def main():
                     aggressive = ['Tehnologie', 'Consum Discreționar', 'Comunicații', 'Financiar']
                     
                     # 2. Logică Financiară Avansată
-                    top_sector = top_3.iloc[0] # Liderul absolut al zilei
+                    top_sector = top_3.iloc[0] # Liderul absolut al perioadei alese
                     
                     if len(sectoare_verzi) == 0:
                         # Dacă absolut totul e pe roșu
@@ -6175,14 +6960,14 @@ def main():
                     st.markdown("---")
                     
                     # Afișare Lideri cu procente
-                    st.write("**🏆 Liderii Zilei (Top 3):**")
+                    st.write(f"**🏆 Liderii {heat_word} (Top 3):**")
                     for _, row in top_3.iterrows():
                         st.write(f"<span style='color:#3FB950;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
                         
                     st.markdown("<br>", unsafe_allow_html=True)
                     
                     # Afișare Codași cu procente și culori inteligente
-                    st.write("**🐢 Codașii Zilei (Bottom 3):**")
+                    st.write(f"**🐢 Codașii {heat_word} (Bottom 3):**")
                     for _, row in bottom_3.iterrows():
                         if row['Variație %'] < 0:
                             # E pe minus -> Săgeată roșie
@@ -6190,86 +6975,10 @@ def main():
                         else:
                             # E "codaș", dar e pe plus -> Săgeată galbenă (neutră)
                             st.write(f"<span style='color:#D29922;'>▲</span> {row['Sector']} <span style='color:#8B949E; font-size:12px;'>({ro(row['Variație %']):+.2f}%)</span>", unsafe_allow_html=True)
-        st.markdown("---")
-        # =================================================================
-        # MODUL NOU: RADAR DE RISC SISTEMIC (CU SELECTOR ȘI ZOOM)
-        # =================================================================
-        st.subheader("💣 Radar de Risc Sistemic (Piața de Credit)")
-        
-        # --- NOU: SELECTOR DE PERIOADĂ ---
-        col_title, col_time = st.columns([2, 1])
-        with col_time:
-            time_map_bonds = {
-                "1 Lună": "1mo", "3 Luni": "3mo", "6 Luni": "6mo", 
-                "1 An": "1y", "3 Ani": "3y", "5 Ani": "5y"
-            }
-            selected_period_label = st.selectbox("Interval Radar:", list(time_map_bonds.keys()), index=3)
-            selected_period_code = time_map_bonds[selected_period_label]
-
-        with st.spinner(f"Se analizează stresul financiar pe {selected_period_label}..."):
-            ratio_series = get_credit_risk_data(selected_period_code)
-            
-            if not ratio_series.empty:
-                current_ratio = ratio_series.iloc[-1]
-                # Calculăm media pe 20 de zile pentru context
-                sma_20 = ratio_series.rolling(20).mean().iloc[-1] if len(ratio_series) >= 20 else ratio_series.mean()
-                
-                # Calculăm variația procentuală pe intervalul selectat
-                start_ratio = ratio_series.iloc[0]
-                total_change = ((current_ratio - start_ratio) / start_ratio) * 100
-                
-                c_bond1, c_bond2 = st.columns([2, 1.2])
-                
-                with c_bond1:
-                    # --- GRAFIC CU ZOOM DINAMIC ---
-                    fig_bonds = go.Figure()
-                    
-                    # Linia principală
-                    fig_bonds.add_trace(go.Scatter(
-                        x=ratio_series.index, y=ratio_series.values, 
-                        mode='lines', name='Raport HYG/IEF', 
-                        line=dict(color='#BF91FF', width=2.5),
-                        fill='tozeroy', fillcolor='rgba(191, 145, 255, 0.05)'
-                    ))
-                    
-                    # Adăugăm media mobilă pentru a vedea trendul
-                    fig_bonds.add_trace(go.Scatter(
-                        x=ratio_series.index, y=ratio_series.rolling(20).mean(), 
-                        mode='lines', name='Trend (SMA 20)', 
-                        line=dict(color='rgba(255, 255, 255, 0.3)', dash='dot')
-                    ))
-
-                    # TRUCUL PENTRU VIZIBILITATE: Zoom pe axa Y
-                    y_min = ratio_series.min() * 0.99  # Luăm valoarea minimă și mai scădem 1%
-                    y_max = ratio_series.max() * 1.01  # Luăm valoarea maximă și mai adăugăm 1%
-
-                    fig_bonds.update_layout(
-                        height=350, margin=dict(l=0, r=0, t=10, b=0), 
-                        template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                        yaxis=dict(
-                            showgrid=True, gridcolor='#30363D',
-                            range=[y_min, y_max], # ACEASTA ESTE LINIA CARE FACE ZOOM PE VARIAȚII
-                            fixedrange=False
-                        ),
-                        xaxis=dict(showgrid=False),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
-                    plot_ro(fig_bonds, width='stretch')
-                    
-                with c_bond2:
-                    st.markdown("#### 🌡️ Termometrul Creditării")
-                    st.metric(f"Raport ({selected_period_label})", f"{ro(current_ratio):.3f}", f"{ro(total_change):+.2f}%")
-                    
-                    # Logica de interpretare adaptată
-                    if current_ratio < sma_20:
-                        st.error("🚨 **SCĂDERE DETECTATĂ:** Pofta de risc scade. Banii ies din obligațiunile firmelor și intră în titluri de stat.")
-                    else:
-                        st.success("✅ **STABILITATE:** Piața de credit susține încă evaluările acțiunilor.")
-                        
-                    st.info(f"💡 **Interpretare:** În intervalul de **{selected_period_label}**, linia s-a mișcat cu **{ro(total_change):+.2f}%**. Orice pantă bruscă în jos pe grafic indică faptul că băncile devin nervoase.")
-            else:
-                st.info("Sincronizare date obligațiuni...")
-        
+        st.caption("Clasificarea (risk-on / risk-off / rotație / trade de inflație) numără sectoarele agresive și defensive din primele 3 "
+                   "ale perioadei alese. Reguli orientative, netestate; pe „Azi” reflectă o singură ședință.")
+        # „Radar de Risc Sistemic” (HYG/IEF) a fost scos (05.11, decizia lui Daniel): graficul HYG/IEF cu regula
+        # pilonului și spread-urile de credit sunt acum în „Stresul pieței”.
         # =================================================================
         # MODUL NOU: MATRICEA CROSS-ASSET (CORELAȚII MACRO)
         # =================================================================
@@ -6298,11 +7007,12 @@ def main():
                         z=corr_matrix.values,
                         x=corr_matrix.columns,
                         y=corr_matrix.columns,
-                        colorscale=[[0.0, '#F85149'], [0.5, '#161B22'], [1.0, '#3FB950']], 
-                        zmin=-1, zmax=1,
+                        colorscale=[[0.0, '#3987e5'], [0.5, '#383835'], [1.0, '#d95926']], 
+                        zmin=-1, zmax=1, xgap=2, ygap=2,
                         text=text_matrix,
                         texttemplate="%{text}",
-                        hoverinfo="text"
+                        textfont=dict(color='#ffffff'),
+                        hovertemplate="%{y} ↔ %{x}<br>Corelație: %{z:.2f}<extra></extra>"
                     ))
                     
                     fig_corr.update_layout(
@@ -6337,17 +7047,57 @@ def main():
                         # Regula 3: Aurul ca panică pură
                         if gld_uup > 0.3:
                             st.warning(f"🥇 **Frică Extremă:** Aurul crește ÎMPREUNĂ cu Dolarul (Corelație {ro(gld_uup):.2f}). Marile fonduri cumpără masiv orice activ de refugiu, ignorând matematica standard.")
-                    except:
+                    except Exception as exc:  # înainte: except: gol
+                        logger.warning("render_portfolio_tab: %s", exc)
                         st.write("Date insuficiente pentru diagnoza automată.")
                         
                     with st.expander("📖 Cum citești matricea?"):
                         st.write("""
-                        * **Pătrate Verzi (+0,5 la +1,0):** Activele sunt "prietene". Dacă unul crește, crește și celălalt.
-                        * **Pătrate Roșii (-0,5 la -1,0):** Activele sunt "inamice". Când unul urcă, celălalt scade (Corelație Inversă). Aceasta este cheia hedging-ului perfect.
-                        * **Pătrate Negre (în jur de 0,0):** Activele se ignoră complet reciproc.
+                        * **Pătrate portocalii (+0,5 la +1,0):** activele se mișcă împreună. Dacă unul crește, crește și celălalt.
+                        * **Pătrate albastre (−0,5 la −1,0):** corelație inversă: când unul urcă, celălalt scade. Aceasta e baza acoperirii riscului (hedging).
+                        * **Pătrate gri (în jur de 0):** activele se mișcă independent.
+                        * Randamente zilnice pe ultimele 3 luni, doar zilele comune (minimum 30). Pragurile regulilor (±0,4, −0,5, +0,3) sunt orientative, netestate.
                         """)
             else:
                 st.info("Sincronizare date Cross-Asset...")
+        # --- CALENDAR MACRO SUA (FRED releases/dates, cu cheie) ---
+        st.markdown("---")
+        st.subheader(f"📅 Calendar macro SUA (următoarele {fred_cal.CALENDAR_DAYS} zile)")
+        cal_today = now_ro().date()
+        cal_data, cal_msg = get_fred_calendar(cal_today)
+        if cal_data is None:
+            st.info(f"ℹ️ Calendarul nu poate fi afișat acum: {cal_msg}")
+        else:
+            cal_rows, cal_missing = fred_cal.upcoming(cal_data, cal_today)
+            if not cal_rows:
+                st.info("Nicio publicare urmărită în următoarele zile.")
+            else:
+                st.dataframe(
+                    pd.DataFrame([{"Data": f"{r['date']:%d.%m.%Y}", "Ziua": r["weekday"],
+                                   "Peste": "azi" if r["in_days"] == 0 else ("mâine" if r["in_days"] == 1 else f"{r['in_days']} zile"),
+                                   "Publicare": r["label"], "Actualizează în tabelul de mai jos": r["updates"]} for r in cal_rows]),
+                    hide_index=True, width='stretch',
+                    column_config={
+                        "Data": st.column_config.Column(help="Ziua publicării în SUA, după calendarul FRED. FRED nu dă ora; "
+                                                             "majoritatea se publică dimineața la New York (după-amiaza în România). "
+                                                             "Deciziile FOMC: calendarul oficial al Fed, comunicat la 14:00 ora New York "
+                                                             "(21:00 ora României, cu excepția săptămânilor în care doar una dintre țări "
+                                                             "a schimbat ora)."),
+                        "Actualizează în tabelul de mai jos": st.column_config.Column(
+                            help="Rândurile din „Barometrul Economiei Reale” care primesc valoarea nouă. FRED preia valoarea "
+                                 "de obicei în aceeași zi sau a doua zi; tabelul de mai jos are cache."),
+                    })
+            st.caption("Sursa: FRED, calendarul publicărilor (releases/dates). Doar ziua, fără oră și fără estimări de consens. "
+                       "Deciziile FOMC: calendarul oficial federalreserve.gov (ședințele programate; FRED le listează zilnic). "
+                       + (f"Fără dată în interval: {', '.join(cal_missing)}. " if cal_missing else ""))
+            if fred_cal.fomc_outdated(cal_today):
+                st.warning("⚠️ Lista ședințelor FOMC din aplicație nu acoperă tot intervalul: trebuie adăugat programul "
+                           "nou de pe federalreserve.gov (data/fred_calendar.py, FOMC_DECISIONS).")
+            with st.expander("🔎 Toate publicările FRED din interval (verificarea potrivirii numelor)", expanded=False):
+                st.caption("Dacă o publicare urmărită lipsește deși știi că apare în aceste zile, FRED a schimbat probabil numele: "
+                           "caut-o aici și spune-mi numele exact.")
+                st.write(", ".join(fred_cal.all_release_names(cal_data)) or "N/A")
+
         # =================================================================
         # MODUL NOU: TABEL MACROECONOMIE & SĂNĂTATEA ECONOMIEI REALE
         # =================================================================
@@ -6400,731 +7150,728 @@ def main():
             else:
                 st.warning("Datele FRED sunt momentan indisponibile. Verifică conexiunea.")
         
-        # --- TABELELE VECHI ---
+        # --- TABELELE VECHI (în bloc, 09.11: o cerere pentru indici + mărfuri, topurile din datele Rezumatului) ---
         st.markdown("---")
         with st.spinner("Descărcăm datele acțiunilor..."):
-            df_ind, df_comm, us_gain, us_lose, eu_gain, eu_lose = get_global_market_data()
+            gm = get_global_market_data()
 
-        def color_change_val(val):
-            color = '#3FB950' if val >= 0 else '#F85149'
-            return f'color: {color}'
+        def color_signed_txt(val):
+            # celulele sunt text gata formatat („+1,23%”, „-0,50”, „N/A”): culoarea după semn
+            txt = str(val)
+            if txt.startswith("+"):
+                return 'color: #3FB950'
+            if txt.startswith("-"):
+                return 'color: #F85149'
+            return ''
+
+        signed = lambda v: f"{ro(v):+.2f}"
+        signed_pct = lambda v: f"{ro(v):+.2f}%"
+        quote_help = {
+            "Preț": st.column_config.Column(help="Ultima închidere zilnică din Yahoo (neajustată). În timpul ședinței e "
+                                                 "prețul curent, întârziat câteva minute."),
+            "Variație": st.column_config.Column(help="Preț − închiderea precedentă a aceleiași serii, în unitățile instrumentului."),
+            "Variație %": st.column_config.Column(help="(Preț ÷ închiderea precedentă − 1) × 100."),
+            "Data": st.column_config.Column(help="Ziua ultimei închideri. Fiecare rând are ziua lui: bursele din SUA, Europa "
+                                                 "și România și contractele futures pe mărfuri nu se închid la aceeași oră."),
+        }
 
         col_m1, col_m2 = st.columns(2)
-        
-        with col_m1:
-            st.subheader("📊 Indici Principali")
+        for col_, title_, key_ in ((col_m1, "📊 Indici Principali", "indices"), (col_m2, "🛢️ Mărfuri (Commodities)", "commodities")):
+            with col_:
+                st.subheader(title_)
+                st.dataframe(
+                    text_frame(gm[key_], {"Preț": lambda v: format_ro(v, 2), "Variație": signed,
+                                          "Variație %": signed_pct, "Data": lambda d: f"{d:%d.%m.%Y}"})
+                    .style.map(color_signed_txt, subset=['Variație', 'Variație %']),
+                    width='stretch', hide_index=True, column_config=quote_help
+                )
+        st.caption("Indici și mărfuri: o singură cerere Yahoo, închideri zilnice (cache 5 min). Mărfurile sunt contractele "
+                   "futures cu scadența cea mai apropiată, în USD; BET prin ETF-ul TVBETETF, în lei.")
+
+        # --- CURS VALUTAR FAȚĂ DE LEU ---
+        st.markdown("---")
+        st.subheader("💱 Curs valutar față de leu")
+        with st.spinner("Citim cursurile BNR..."):
+            fx_hist, fx_failed = get_bnr_fx_history()
+            try:
+                fx_live = get_fx_live()
+            except Exception as exc:  # rețea / Yahoo
+                logger.warning("curs live: %s", exc)
+                fx_live = {}
+        if fx_hist.empty:
+            st.info("Cursurile BNR nu au putut fi citite acum. Se reîncearcă la următoarea deschidere a paginii. "
+                    f"Detalii: {', '.join(fx_failed) or 'N/A'}.")
+        else:
+            df_fx = bnr_data.fx_table(fx_hist)
+            df_fx.insert(4, "Live (Yahoo)", [
+                (fx_live.get(c) * u) if (fx_live.get(c) and u == 1) else None
+                for c, u in zip(df_fx["Cod"], df_fx["Unitate"])])
+            df_fx["Unitate"] = [f"{u} {c}" if c != "XAU" else "1 g" for u, c in zip(df_fx["Unitate"], df_fx["Cod"])]
+            pct_fmt = lambda v: "N/A" if v is None or pd.isna(v) else f"{ro(v):+.2f}%"
+            # Text gata formatat: st.dataframe arată celulele nule ca „None” chiar cu Styler.format(na_rep=...).
             st.dataframe(
-                df_ind.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                width='stretch', hide_index=True
-            )
-            
-        with col_m2:
-            st.subheader("🛢️ Mărfuri (Commodities)")
-            st.dataframe(
-                df_comm.style.map(color_change_val, subset=['Variație', 'Variație %'])
-                .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                width='stretch', hide_index=True
-            )
+                text_frame(df_fx.drop(columns=["Cod"]), {
+                    "Curs BNR": lambda v: format_ro(v, 4), "Live (Yahoo)": lambda v: format_ro(v, 4),
+                    "Data": lambda d: f"{d:%d.%m.%Y}",
+                    "Zi %": pct_fmt, "1 lună %": pct_fmt, "De la 1 ian. %": pct_fmt, "1 an %": pct_fmt,
+                }),
+                width='stretch', hide_index=True,
+                column_config={
+                    "Unitate": st.column_config.Column(help="Câți lei costă această cantitate de valută (cum publică BNR: 100 de unități la yen și forint)."),
+                    "Curs BNR": st.column_config.Column(help="Cursul oficial de referință BNR, publicat în zilele bancare puțin după ora 13:00. "
+                                                             "E cursul folosit în contabilitate, la declarații fiscale și de bănci ca reper."),
+                    "Live (Yahoo)": st.column_config.Column(help="Cursul de piață interbancar de la Yahoo, întârziat câteva minute; doar pentru valutele principale. "
+                                                                 "Diferă de BNR prin moment (BNR e fixat o dată pe zi) și sursă."),
+                    "Data": st.column_config.Column(help="Ziua bancară a ultimului curs BNR."),
+                    "Zi %": st.column_config.Column(help="Față de cursul BNR din ziua bancară precedentă."),
+                    "1 lună %": st.column_config.Column(help="Față de ultimul curs BNR de la sau înainte de aceeași zi de acum o lună."),
+                    "De la 1 ian. %": st.column_config.Column(help="Față de ultimul curs BNR din anul precedent."),
+                    "1 an %": st.column_config.Column(help="Față de ultimul curs BNR de la sau înainte de aceeași zi de acum un an."),
+                })
+            st.caption("ℹ️ Variație pozitivă = valuta s-a apreciat față de leu (costă mai mulți lei): pozițiile tale în acea valută valorează mai mult în RON. "
+                       "Sursa: BNR (bnr.ro, fișierele XML oficiale)."
+                       + (f" Nu s-au putut citi: {', '.join(fx_failed)}; orizonturile neacoperite apar N/A." if fx_failed else ""))
 
         st.markdown("---")
-        
-        st.subheader("🇺🇸 Top Mișcări SUA (Blue Chips)")
-        c_us1, c_us2 = st.columns(2)
-        
-        with c_us1:
-            st.markdown("**🚀 Top Creșteri (Gainers)**")
-            if not us_gain.empty:
-                st.dataframe(
-                    us_gain[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
-        
-        with c_us2:
-            st.markdown("**🔻 Top Scăderi (Losers)**")
-            if not us_lose.empty:
-                st.dataframe(
-                    us_lose[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
-
-        st.markdown("---")
-
-        st.subheader("🇪🇺 Top Mișcări EUROPA")
-        c_eu1, c_eu2 = st.columns(2)
-        
-        with c_eu1:
-            st.markdown("**🚀 Top Creșteri (Gainers)**")
-            if not eu_gain.empty:
-                st.dataframe(
-                    eu_gain[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
-        
-        with c_eu2:
-            st.markdown("**🔻 Top Scăderi (Losers)**")
-            if not eu_lose.empty:
-                st.dataframe(
-                    eu_lose[['Instrument', 'Preț', 'Variație %']].style
-                    .map(color_change_val, subset=['Variație %'])
-                    .format({'Preț': ro_spec('.2f'), 'Variație %': ro_spec('.2f', '%')}),
-                    width='stretch', hide_index=True
-                )
+        top_help = {
+            "Instrument": st.column_config.Column(help="Simbolul Yahoo."),
+            "Preț": st.column_config.Column(help="Închiderea din ultima ședință a pieței (neajustată), în moneda cotației."),
+            "Monedă": st.column_config.Column(help="Moneda cotației, după sufixul bursei. `.L` = pence (GBp), nu lire."),
+            "Variație %": st.column_config.Column(help="Închiderea ultimei ședințe față de închiderea precedentă, în procente."),
+        }
+        for key_, title_ in (("us", "🇺🇸 Top Mișcări SUA (Blue Chips)"), ("eu", "🇪🇺 Top Mișcări EUROPA")):
+            st.subheader(title_)
+            c_g, c_l = st.columns(2)
+            for col_, label_, frame_ in ((c_g, "**🚀 Top Creșteri (Gainers)**", gm[f"{key_}_gain"]),
+                                         (c_l, "**🔻 Top Scăderi (Losers)**", gm[f"{key_}_lose"])):
+                with col_:
+                    st.markdown(label_)
+                    if frame_.empty:
+                        st.info("Niciun titlu în această listă pentru ultima ședință (sau datele Yahoo lipsesc acum).")
+                    else:
+                        st.dataframe(
+                            text_frame(frame_, {"Preț": price_ro, "Variație %": signed_pct})
+                            .style.map(color_signed_txt, subset=['Variație %']),
+                            width='stretch', hide_index=True, column_config=top_help
+                        )
+            sess_ = gm[f"{key_}_session"]
+            st.caption(f"Ședința: {sess_:%d.%m.%Y}. " if sess_ is not None else "Ședința: N/A. ")
+            st.caption("Doar titlurile tranzacționate în ședință (volum > 0), maximum 10 pe fiecare parte, fără prag de valoare; "
+                       "aceleași date ca în „6. Rezumatul Zilei” (cache comun de 15 min)."
+                       + (" ⚠️ Yahoo a dat prețuri pentru mai puțin de 80% din listă: topul poate fi incomplet." if gm[f"{key_}_partial"] else ""))
+            st.markdown("---")
+        _pg_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _pg_t0, 1)} s, la {now_ro():%H:%M:%S}.")
 
     # ==================================================
     # 5. IMPORT DATE (GOOGLE SHEETS) - BVB EXTINS & GLOBAL FIX
     # ==================================================
     elif sectiune == "5. Import Date":
         st.title("📂 Analiză Date (Cloud Sheets)")
-        st.caption("Datele sunt curățate și standardizate automat (Format RO & US).")
-        
+        st.caption("Foile BVB și GLOBAL din portofoliu_db, așa cum sunt calculate în foaie (prețul vine din GOOGLEFINANCE "
+                   "în foaie; aplicația nu recalculează nimic aici). Celulele goale, „-” și erorile de foaie (#DIV/0!, #N/A) "
+                   "apar ca N/A, nu ca 0. Coloanele se sortează numeric.")
+
         if st.button("🔄 Reîncarcă Datele"):
-            st.cache_data.clear()
+            # golește doar funcțiile care citesc din Google Sheets, nu și datele de piață
+            for _fn in (load_sheet_values, load_bvb_fundamentals, load_ledger_values, load_manual_price_values,
+                        load_iv_history_values, list_company_files, build_bvb_dataset):
+                _fn.clear()
             st.rerun()
 
         tab_bvb, tab_global = st.tabs(["🇷🇴 BVB (Local)", "🌍 Internațional (Global)"])
 
-        # Funcție locală de încărcare
-        def load_gsheet_data(sheet_name):
-            ws = connect_to_gsheets(sheet_name)  # Folosim singleton-ul
-            if not ws: return pd.DataFrame()
-            try:
-                data = ws.get_all_values()
-                if len(data) < 2: return pd.DataFrame()
-                df = pd.DataFrame(data[1:], columns=data[0])
-                return df
-            except Exception as e:
-                st.error(f"Eroare citire {sheet_name}: {e}")
-                return pd.DataFrame()
-
-        # --- TAB BVB (DATE EXTINSE) ---
+        # --- TAB BVB: indicatorii pe rânduri în foaie → companiile pe rânduri aici ---
         with tab_bvb:
             st.subheader("Date BVB")
-            df_bvb = load_gsheet_data("BVB")
-
-            if not df_bvb.empty:
-                try:
-                    col_indicators = df_bvb.columns[1] 
-                    df_bvb = df_bvb[df_bvb[col_indicators] != ""]
-                    
-                    # Eliminăm duplicatele de pe coloana indicatorilor
-                    df_bvb = df_bvb.drop_duplicates(subset=[col_indicators], keep='first')
-                    
-                    # Transpunere
-                    final_df = df_bvb.set_index(col_indicators).T
-                    final_df = final_df.loc[:, ~final_df.columns.str.contains('^Unnamed')] 
-
-                    # === LISTA EXTINSĂ DE COLOANE NUMERICE ===
-                    cols_numeric = [
-                        "P/E 2024", "P/E TTM", "EV/EBITDA", "P/BV TTM", "GN", "P/S TTM",
-                        "Rentabilitate active (ROA)", "Rentabilitate capital (ROE)",
-                        "Marjă netă TTM", "Marjă operațională", "Câștig pe acțiune (EPS)", "EPS TTM",
-                        "Lichiditate curentă", "Lichiditatea imediată", "Levier financiar",
-                        "Div Yield", "Dividend Yield", "Net Debt/EBITDA", "Debt/EBITDA",
-                        "Rata de îndatorare globală", "Rata de cash din capitalizare", "Rata de cash din activ net"
-                    ]
-
-                    for col in final_df.columns:
-                        col_clean = col.strip()
-                        # Verificăm dacă e în listă sau conține indicii de număr
-                        if col_clean in cols_numeric or "%" in col_clean or "Ron" in col_clean or "lei" in col_clean:
-                            final_df[col] = final_df[col].apply(smart_to_float)
-
-                    # format românesc (punct la mii, virgulă la zecimale); Styler păstrează valorile numerice pentru sortare.
-                    # Coloanele nelistate: numerele cu 2 zecimale, textul rămâne neschimbat (ro_spec nu atinge șirurile)
-                    bvb_formats = {
-                        "Rentabilitate active (ROA)": ro_spec(".2f", "%"),
-                        "Rentabilitate capital (ROE)": ro_spec(".2f", "%"),
-                        "Marjă netă TTM": ro_spec(".2f", "%"),
-                        "Marjă operațională": ro_spec(".2f", "%"),
-                        "Div Yield": ro_spec(".2f", "%"),
-                        "Dividend Yield": ro_spec(".2f", "%"),
-                        "Câștig pe acțiune (EPS)": ro_spec(".4f"),
-                        "EPS TTM": ro_spec(".4f"),
-                        "Lichiditate curentă": ro_spec(".2f"),
-                        "Lichiditatea imediată": ro_spec(".2f"),
-                        "Levier financiar": ro_spec(".2f"),
-                        "Net Debt/EBITDA": ro_spec(".2f"),
-                        "Debt/EBITDA": ro_spec(".2f"),
-                        "Rata de îndatorare globală": ro_spec(".2f", "%"),
-                        "Rata de cash din capitalizare": ro_spec(".2f", "%"),
-                        "Rata de cash din activ net": ro_spec(".2f", "%"),
-                    }
-                    st.dataframe(
-                        final_df.style.format({c: bvb_formats.get(c.strip(), ro_spec(",.2f")) for c in final_df.columns}),
-                        height=600, width='stretch'
-                    )
-                except Exception as e:
-                    st.error(f"Eroare structură BVB: {e}")
-                    st.dataframe(df_bvb.head())
-            else:
+            bvb_values, bvb_err = read_sheet_values("BVB")
+            bvb_df, bvb_units, bvb_dropped = sheet_view.bvb_view(bvb_values) if bvb_values else (pd.DataFrame(), {}, [])
+            if bvb_err:
+                st.error(f"Foaia BVB nu poate fi citită: {bvb_err}")
+            elif bvb_df.empty:
                 st.info("Foaia BVB este goală.")
+            else:
+                def _bvb_fmt(col):
+                    if col not in bvb_units:
+                        return lambda v: "N/A" if v is None else v       # coloană text
+                    unit = bvb_units[col]
+                    if unit == "%":
+                        return ro_spec(".2f", "%")
+                    if unit == " lei" or "eps" in col.lower() or "câștig pe acțiune" in col.lower():
+                        return ro_spec(".4f", unit)
+                    return ro_spec(",.2f", unit)
+                st.dataframe(
+                    bvb_df.style.format({c: _bvb_fmt(c) for c in bvb_df.columns}),
+                    height=600, width='stretch',
+                )
+                st.caption(f"{len(bvb_df) - 2} companii, {len(bvb_df.columns)} indicatori. Ultimele două rânduri: "
+                           f"„{sheet_view.AVERAGE_ROW}” și „{sheet_view.MEDIAN_ROW}” (din companiile cu valoare; mai puțin "
+                           "sensibilă la extreme: un P/E de 200 trage media, nu și mediana).")
+                if bvb_dropped:
+                    st.warning("Indicatori care apar de două ori în foaie (s-a afișat prima apariție): "
+                               + ", ".join(bvb_dropped))
 
-        # --- TAB GLOBAL (FORMATĂRI CORRECTE) ---
+        # --- TAB GLOBAL: o companie pe rând, moneda citită din fiecare celulă ---
         with tab_global:
             st.subheader("Date Internaționale")
-            df_g = load_gsheet_data("GLOBAL")
-
-            if not df_g.empty:
-                try:
-                    df_g = df_g.loc[:, ~df_g.columns.str.contains('^Unnamed')]
-                    if "Companii" in df_g.columns:
-                        df_g = df_g.set_index("Companii")
-
-                    clean_df_g = df_g.copy()
-
-                    for col in clean_df_g.columns:
-                        if col in ["Industrie", "Recomandare", "Sector"]: continue
-                        clean_df_g[col] = clean_df_g[col].apply(smart_to_float)
-
-                    # Formatare string pentru afișare (Trilioane/Miliarde)
-                    display_df = clean_df_g.copy()
-                    if "Capitalizare" in display_df.columns:
-                        display_df["Capitalizare"] = display_df["Capitalizare"].apply(format_large_currency)
-                    if "Val. intrinsecă" in display_df.columns:
-                        display_df["Val. intrinsecă"] = display_df["Val. intrinsecă"].apply(format_large_currency)
-
-                    # format românesc; moneda după număr, ca în restul aplicației
-                    global_formats = {
-                        "Preț acțiune": ro_spec(".2f", " USD"),
-                        "Preț țintă": ro_spec(".2f", " USD"),
-                        "Dividend": ro_spec(".2f", " USD"),
-                        "Datorii/Ac. Net": ro_spec(".2f", "%"),
-                        "Abatere": ro_spec(".2f", "%"),
-                        "Marjă P. Net": ro_spec(".2f", "%"),
-                        "ROA": ro_spec(".2f", "%"),
-                        "ROE": ro_spec(".2f", "%"),
-                    }
-                    st.dataframe(
-                        display_df.style.format({c: global_formats.get(c, ro_spec(",.2f")) for c in display_df.columns}),
-                        height=600, width='stretch',
-                        column_config={
-                            "Capitalizare": st.column_config.TextColumn("Capitalizare", help="Valoare formatată"),
-                            "Val. intrinsecă": st.column_config.TextColumn("Val. intrinsecă"),
-                            "Recomandare": st.column_config.TextColumn("Recomandare"),
-                        }
-                    )
-                except Exception as e:
-                    st.error(f"Eroare procesare Global: {e}")
-                    st.dataframe(df_g)
-            else:
+            g_values, g_err = read_sheet_values("GLOBAL")
+            g_df, g_units, g_cur = sheet_view.global_view(g_values) if g_values else (pd.DataFrame(), {}, pd.DataFrame())
+            if g_err:
+                st.error(f"Foaia GLOBAL nu poate fi citită: {g_err}")
+            elif g_df.empty:
                 st.info("Foaia GLOBAL este goală.")
+            else:
+                g_style = g_df.style
+                for col in g_df.columns:
+                    if col not in g_units:
+                        g_style = g_style.format(lambda v: "N/A" if v is None else v, subset=[col])
+                        continue
+                    if g_units[col] == "%":
+                        spec = ".2f"
+                    elif col.strip().lower() in ("nr actiuni", "nr acțiuni"):
+                        spec = ",.0f"
+                    elif col == "Capitalizare (mld.)":
+                        spec = ",.1f"
+                    else:
+                        spec = ",.2f"
+                    g_style = g_style.format(ro_spec(spec, g_units[col]), subset=[col])
+                    for code, rows in sheet_view.currency_groups(g_cur, col).items():
+                        g_style = g_style.format(ro_spec(spec, f" {code}"), subset=pd.IndexSlice[rows, [col]])
+                st.dataframe(
+                    g_style, height=600, width='stretch', hide_index=True,
+                    column_config={
+                        "Capitalizare (mld.)": st.column_config.Column(
+                            help="Capitalizarea din foaie, în miliarde, în moneda scrisă în celulă."),
+                        "Industrie": st.column_config.Column(
+                            help="În foaie e scrisă doar la prima companie din grup; aici e completată pe fiecare rând."),
+                    },
+                )
+                counts = g_cur.stack().value_counts() if not g_cur.empty else pd.Series(dtype=int)
+                st.caption(f"{len(g_df)} companii. Moneda e cea scrisă în fiecare celulă din foaie "
+                           f"({', '.join(f'{k}: {v} celule' for k, v in counts.items()) or 'nicio monedă scrisă'}); "
+                           "valorile nu sunt convertite între monede.")
+                mixed = sheet_view.mixed_currency_rows(g_df, g_cur)
+                if mixed:
+                    st.warning("Companii cu monede diferite pe același rând (de verificat în foaie): " + "; ".join(
+                        f"{name}: {', '.join(f'{c} în {m}' for c, m in odd.items())}, restul în {main}" for name, main, odd in mixed))
 
     # ==================================================
     # 6. REZUMATUL ZILEI (NOU & OPTIMIZAT)
     # ==================================================
     elif sectiune == "6. Rezumatul Zilei":
         st.title("🗞️ Rezumatul Zilei")
-        st.markdown("Raport automat generat la închiderea piețelor.")
-        
-        now = now_ro()  # ora României, nu ora serverului (UTC)
-        # Bursa din SUA deschide la 16:30, ora României
-        us_market_not_open_yet = (now.hour, now.minute) < (16, 30)
-        
-        # Obținem datele
-        with st.spinner("Generăm rezumatul pieței..."):
-            bvb_data, us_data = get_daily_briefing_data()
-        
-        # --- TABURI PENTRU PIEȚE ---
-        tab_bvb, tab_us = st.tabs(["🇷🇴 BVB (Ora 19:00)", "🇺🇸 Wall Street (Ora 23:00)"])
-        
-        # === REZUMAT BVB ===
+        st.caption("Ultima ședință a fiecărei piețe, din prețurile de închidere neajustate (Yahoo). Pragurile textelor "
+                   "(1σ, 2σ) sunt descriptive, netestate. Fără recomandări: datele și baza lor.")
+        # Timpul rulării complete (Etapa 5), scris la final; fără st.fragment (vezi Piață Globală).
+        _rz_t0 = time.perf_counter()
+        _rz_timer = st.empty()
+        rz_top = st.container()        # „3 lucruri de știut azi” (etapa E): se completează după ce sunt calculate toate
+
+        try:
+            with st.spinner("Citim ultima ședință..."):
+                brief = get_daily_briefing_data()
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("rezumatul zilei: %s", exc)
+            brief = None
+        try:
+            mk_closes_rz = get_market_closes()
+        except Exception as exc:  # rețea / Yahoo
+            logger.warning("rezumat, regim: %s", exc)
+            mk_closes_rz = pd.DataFrame()
+
+        def _pct(v, d=2):
+            return "N/A" if v is None or pd.isna(v) else format_ro(v * 100, d, "%") if v < 0 else "+" + format_ro(v * 100, d, "%")
+
+        def _sig(v):
+            return "N/A" if v is None or pd.isna(v) else (("+" if v >= 0 else "") + format_ro(v, 1, "σ"))
+
+        STATE_TEXT_RZ = {"deschisă": "bursa e deschisă", "închisă": "bursa e închisă", "weekend": "weekend, bursa e închisă"}
+
+        def _session_header(market, label, session):
+            stt = briefing_calc.market_state(market, now_ro())
+            if session is None:
+                st.info(f"{label}: nicio cotație de la Yahoo acum.")
+                return stt
+            sd = pd.Timestamp(session)
+            st.markdown(f"**Ultima ședință: {fred_cal.WEEKDAYS_RO[sd.weekday()]} {sd:%d.%m.%Y}** · {label}: {STATE_TEXT_RZ[stt['state']]} "
+                        f"(ședința {stt['opens']}–{stt['closes']}, ora României; fără sărbătorile legale)")
+            if briefing_calc.session_is_partial(session, stt):
+                st.warning("⏳ Ședința e în desfășurare: prețurile, variațiile și volumele de azi sunt parțiale.")
+            return stt
+
+        def _regime_metrics(sym, name):
+            reg = markets_calc.market_regime(mk_closes_rz[sym] if sym in mk_closes_rz.columns else None)
+            r1, r2, r3 = st.columns(3)
+            r1.metric(f"Trend {name}", "N/A" if reg["trend_n"] is None else f"{reg['trend_n']}/3",
+                      help="Câte condiții sunt îndeplinite: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200. "
+                           "Aceeași regulă ca „Moment” din Analiză Companie (sub 200 de ședințe: N/A).")
+            r2.metric("Momentum 12-1", _pct(reg["momentum"], 1),
+                      help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă).")
+            r3.metric("Scor moment", "N/A" if reg["score"] is None else format_ro(reg["score"], 0),
+                      help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
+                           "Pragurile au fost testate pe acțiuni BVB, nu pe indici: aici e descriptiv.")
+
+        def _breadth_bar(b, scope):
+            if not b["n"]:
+                st.info("Niciun simbol din univers nu a tranzacționat în ultima ședință.")
+                return
+            st.markdown(compact_html(f"""
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:14px;">
+                <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {b['up']} ({format_ro(b['up_pct'], 1, '%')})</span>
+                <span style="color:#8B949E; font-weight:bold;">⚪ Nemodificate: {b['flat']}</span>
+                <span style="color:#F85149; font-weight:bold;">🔴 Scad: {b['down']} ({format_ro(b['down_pct'], 1, '%')})</span>
+            </div>
+            <div style="display:flex; height:14px; border-radius:7px; overflow:hidden; background-color:#30363D; margin-bottom:5px;">
+                <div style="width:{b['up_pct']}%; background-color:#3FB950;"></div>
+                <div style="width:{b['flat_pct']}%; background-color:#8B949E;"></div>
+                <div style="width:{b['down_pct']}%; background-color:#F85149;"></div>
+            </div>"""), unsafe_allow_html=True)
+            st.caption(f"{scope}: {b['n']} simboluri tranzacționate în ședință"
+                       + (f"; {b['not_traded']} fără tranzacții (excluse: variația lor ar fi din altă zi)" if b["not_traded"] else "")
+                       + ". Nemodificat = variație exact 0.")
+
+        def _moves_table(df, currency, show_value=True):
+            # currency=None (Europa): moneda pe rând (df["currency"]) și valoarea deja în lei (df["value_ron"])
+            mixed = currency is None
+            unit = "" if mixed else (" lei" if currency == "RON" else f" {currency}")
+            rate = None if mixed else pday_calc.rate_for(currency, rz_fx)   # valoarea în lei (prețul rămâne în moneda bursei)
+            values_ron = (list(df["value_ron"]) if mixed else
+                          [v * rate if (rate is not None and v is not None and pd.notna(v)) else None for v in df["value"]])
+            view = pd.DataFrame({
+                "Simbol": [s.replace(".RO", "") for s in df.index], "Preț": df["close"].values,
+                **({"Monedă": [c or "N/A" for c in df["currency"]]} if mixed else {}),
+                "Variație": (df["pct"] * 100).values, "σ": df["sigma"].values,
+                **({"Valoare": [briefing_calc.money_short(v if (v is not None and pd.notna(v)) else None, "RON")
+                                for v in values_ron]} if show_value else {}),
+            })
+            color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
+            st.dataframe(
+                view.style.format({"Preț": ro_spec(",.2f", unit), "Variație": ro_spec("+.2f", "%"), "σ": ro_spec("+.1f", "σ")})
+                .map(color, subset=["Variație"]),
+                width='stretch', hide_index=True,
+                column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice din "
+                                                                  "ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
+                                                                  "Peste 2σ = mișcare neobișnuită pentru acest titlu."),
+                               "Valoare": st.column_config.Column(help="Preț × volum în ședință (valoarea tranzacționată), "
+                                                                        "în lei la cursul BNR."),
+                               "Variație": st.column_config.Column(help="Față de închiderea ședinței precedente, preț neajustat.")})
+
+        def _news_list(items, src_key):
+            if not items:
+                return False
+            st.markdown(compact_html("".join(
+                f"""<div style="margin-bottom:10px; border-bottom:1px solid #30363D; padding-bottom:5px;">
+                <a href="{html.escape(safe_link(it.get('link')) or '#', quote=True)}" style="color:#58A6FF; text-decoration:none; font-weight:600;" target="_blank" rel="noopener noreferrer">{html.escape(str(it.get('title', '')))}</a>
+                <div style="font-size:12px; color:#8B949E;">{html.escape(str(it.get(src_key, '')))} • {html.escape(str(it.get('date_str', '')))}{future_note(it)}</div></div>"""
+                for it in items)), unsafe_allow_html=True)
+            return True
+
+        # === Portofoliul meu azi (etapa B): ședința fiecărei piețe din universul întreg, nu doar din deținerile tale ===
+        _rz_sessions = {}
+        if brief is not None:
+            _rz_sessions["bvb"] = briefing_calc.session_date(brief["bvb_close"].drop(columns=[BRIEFING_BET_PROXY], errors="ignore"))
+            _rz_sessions["us"] = briefing_calc.session_date(brief["us_close"].drop(columns=BRIEFING_US_INDICES + BRIEFING_US_SECTORS,
+                                                                                   errors="ignore"))
+            if not brief["eu_close"].empty:      # Europa: din universul urmărit (79), nu doar din deținerile tale
+                _rz_sessions["eu"] = briefing_calc.session_date(brief["eu_close"].drop(columns=BRIEFING_EU_INDICES, errors="ignore"))
+        rz_fx, rz_fx_dates = rezumat_fx()          # toate sumele din Rezumatul Zilei în lei, la cursul BNR
+        rz_pday = render_portfolio_today(_rz_sessions, rz_fx, rz_fx_dates) or {}
+        rz_soon = render_calendar_line()
+
+        tab_bvb, tab_eu, tab_us, tab_news = st.tabs(["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street", "📰 Știri"])
+
+        # === BVB ===
         with tab_bvb:
-            st.markdown(f"### 📅 Raport Bursa de Valori București - {now.strftime('%d-%m-%Y')}")
-            
-            # 1. Narrativa Principală (Indicele BET) - ACUM MODIFICAT SĂ ARATE CA WALL STREET
-            bet_text, bet_change, bet_price = generate_market_narrative(bvb_data, 'TVBETETF.RO', 'Indicele BET')
-            
-            # Determinăm culoarea în funcție de schimbare
-            c_bet = "#3FB950" if bet_change >= 0 else "#F85149"
-            
-            # Afișare stil "Card" (similar cu Wall Street)
-            st.markdown(f"""
-            <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {c_bet}; margin-bottom: 20px;">
-                <h4 style="margin-top:0;">🇷🇴 Evoluția Pieței Locale</h4>
-                <p style="margin:5px 0; font-size:18px;">
-                    📉 <b>BET (TVBETETF):</b> {ro(bet_price):,.2f} RON <span style="color:{c_bet}; font-weight:bold;">({ro(bet_change):+.2f}%)</span>
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # --- NOU: SENTIMENTUL PIEȚEI BVB (RADAR) ---
-            # Calculăm scorul folosind funcția de proxy pentru BVB
-            bvb_score, bvb_sentiment_label = calculate_bvb_sentiment(bvb_data)
-            
-            # Stabilim culoarea vizuală în funcție de scor
-            b_color = "#3FB950" if bvb_score > 55 else ("#F85149" if bvb_score < 45 else "#8B949E")
-            
-            st.markdown(f"""
-            <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border: 1px solid {b_color}44; margin-bottom: 20px;">
-                <div style="font-size: 12px; color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Pulsul Pieței Locale (BVB)</div>
-                <div style="font-size: 20px; font-weight: bold; color: {b_color};">{bvb_sentiment_label}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Analiza Contextuală BVB (Explicație pentru investitor)
-            if bvb_score < 35:
-                bvb_conclusion = "🚨 **Vânzări emoționale pe BVB:** Piața locală este sub presiune. Investitorii tind să iasă din poziții, ceea ce poate crea oportunități pe companiile cu dividende mari."
-            elif bvb_score > 65:
-                bvb_conclusion = "🚀 **Apetit crescut pentru risc:** Există un val de optimism pe companiile din indexul BET. Atenție la raliurile care nu sunt susținute de volume mari."
+            if brief is None or brief["bvb_close"].empty:
+                st.info("Cotațiile BVB nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
             else:
-                bvb_conclusion = "⚖️ **Stabilitate locală:** Bursa de la București tranzacționează calm, fără mișcări speculative majore."
-            
-            st.info(f"🇷🇴 {bvb_conclusion}")
-
-            # Calculăm statisticile extinse
-            if isinstance(bvb_data.columns, pd.MultiIndex):
-                bvb_analysis_tickers = bvb_data.columns.levels[0].tolist()
-            else:
-                bvb_analysis_tickers = []
-
-            gainers, losers, vol_leaders = get_bvb_stats(bvb_data, bvb_analysis_tickers)
-            st.markdown("---")
-            # =========================================================
-            # NOU: MARKET BREADTH BVB
-            # =========================================================
-            st.markdown("#### ⚖️ Sănătatea Pieței (Market Breadth)")
-            adv_b, dec_b, flat_b, adv_pb, dec_pb, flat_pb = calculate_market_breadth(bvb_data, bvb_analysis_tickers)
-            
-            if (adv_b + dec_b + flat_b) > 0:
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
-                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_b} ({ro(adv_pb):.1f}%)</span>
-                    <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_b}</span>
-                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_b} ({ro(dec_pb):.1f}%)</span>
-                </div>
-                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
-                    <div style="width: {adv_pb}%; background-color: #3FB950;"></div>
-                    <div style="width: {flat_pb}%; background-color: #8B949E;"></div>
-                    <div style="width: {dec_pb}%; background-color: #F85149;"></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Verdict Pro Automat
-                if adv_b > dec_b * 1.5:
-                    st.caption("✅ **Raliu Sănătos:** Creșterea pieței este susținută de majoritatea companiilor (Participare largă).")
-                elif dec_b > adv_b * 1.5:
-                    st.caption("🚨 **Vânzare Generalizată:** Scăderile nu sunt izolate, presiunea acoperă tot spectrul.")
+                bvb_cols = [c for c in brief["bvb_close"].columns if c != BRIEFING_BET_PROXY]
+                bvb_t, bvb_session = briefing_calc.session_table(brief["bvb_close"][bvb_cols],
+                                                                 brief["bvb_volume"].reindex(columns=bvb_cols))
+                _session_header("BVB", "BVB", bvb_session)
+                if brief["partial"].get("bvb"):
+                    st.warning("⚠️ Yahoo a trimis acum doar o parte din cotații (sub 80% din simboluri, și după reîncercare). Ce lipsește nu e inclus în calcule; datele nu se păstrează în cache, deci se recitesc la următoarea deschidere a paginii.")
+                bet = briefing_calc.daily_move(brief["bvb_close"].get(BRIEFING_BET_PROXY))
+                bvb_b = briefing_calc.breadth_counts(bvb_t)
+                bvb_turn = briefing_calc.turnover_vs_median(brief["bvb_close"][bvb_cols], brief["bvb_volume"].reindex(columns=bvb_cols))
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("BET (proxy: ETF TVBETETF)", "N/A" if bet["last"] is None else format_ro(bet["last"], 2, " lei"),
+                          None if bet["pct"] is None else _pct(bet["pct"]),
+                          help="Prețul ETF-ului care urmărește BET, nu nivelul indicelui (Yahoo nu are BET). "
+                               + (f"Ultima cotație: {bet['date']:%d.%m.%Y}." if bet["date"] is not None else ""))
+                m2.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=briefing_calc.sigma_label(bet["sigma"]).capitalize()
+                          + f". Variația zilei ÷ abaterea standard a variațiilor din ultimele {bet['n']} ședințe (fără ziua curentă).")
+                m3.metric("Lățime (cresc / scad)", f"{bvb_b['up']} / {bvb_b['down']}" if bvb_b["n"] else "N/A",
+                          help="Companiile din universul urmărit (tools/univers_bvb.txt: BET Plus, BET-FI, BETAeRO) "
+                               "care au tranzacționat în ultima ședință.")
+                m4.metric("Valoare tranzacționată", briefing_calc.money_short(bvb_turn["today"], "RON"),
+                          None if bvb_turn["ratio"] is None else f"×{format_ro(bvb_turn['ratio'], 2)} față de mediană",
+                          delta_color="off",
+                          help=f"Suma preț × volum pe universul urmărit în ultima ședință, față de mediana celor {bvb_turn['n']} "
+                               "ședințe dinainte (minimum 10). Doar universul, nu toată bursa.")
+                st.markdown("#### 🎯 Regimul BET (regula „Moment”)")
+                _regime_metrics(BRIEFING_BET_PROXY, "BET")
+                st.markdown("---")
+                st.markdown("#### ⚖️ Lățimea pieței")
+                bvb_universe = briefing_bvb_universe()
+                bvb_missing = briefing_calc.missing_symbols(bvb_universe, bvb_t)
+                _breadth_bar(bvb_b, f"Universul urmărit BVB ({len(bvb_universe)} simboluri, {len(bvb_t)} cu date Yahoo)")
+                if bvb_missing:
+                    st.caption((f"Necitite acum de la Yahoo ({len(bvb_missing)}), excluse din calcule: " if brief["partial"].get("bvb") else
+                                f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(bvb_missing)}), excluse din toate calculele: ")
+                               + ", ".join(s.replace(".RO", "") for s in bvb_missing) + ".")
+                st.markdown("---")
+                bvb_up, bvb_down = briefing_calc.top_moves(bvb_t, n=briefing_calc.TOP_N, min_value=briefing_calc.MIN_VALUE_RON)
+                st.caption(f"Topurile: doar companiile cu valoare tranzacționată ≥ {briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} "
+                           "în ședință (sub prag, o singură tranzacție mică mișcă prețul).")
+                c_up, c_dn = st.columns(2)
+                with c_up:
+                    st.markdown(f"**🚀 Top {briefing_calc.TOP_N} creșteri**")
+                    if bvb_up is not None and not bvb_up.empty:
+                        _moves_table(bvb_up, "RON")
+                    else:
+                        st.info("Nicio creștere peste prag.")
+                with c_dn:
+                    st.markdown(f"**🔻 Top {briefing_calc.TOP_N} scăderi**")
+                    if bvb_down is not None and not bvb_down.empty:
+                        _moves_table(bvb_down, "RON")
+                    else:
+                        st.info("Nicio scădere peste prag.")
+                st.markdown("---")
+                st.subheader("📊 Top lichiditate (valoare tranzacționată)")
+                liq = briefing_calc.liquidity_top(bvb_t, n=10)
+                if liq is not None and not liq.empty:
+                    _moves_table(liq, "RON")
                 else:
-                    st.caption("🔄 **Piață Mixtă:** Echilibru. Banii se mută selectiv dintr-o acțiune în alta.")
-            st.write("") # Spațiu
-            st.markdown("---")
-            # =========================================================
-            # NOU: NIVELE TEHNICE CRITICE (BVB)
-            # =========================================================
-            st.markdown("#### 🎯 Nivele Tehnice Critice (Trend Macro)")
-            with st.spinner("Calculăm mediile mobile..."):
-                tech_bvb = get_index_technical_levels('TVBETETF.RO')
-                
-            if tech_bvb:
-                c50 = "#3FB950" if tech_bvb['dist50'] > 0 else "#F85149"
-                c200 = "#3FB950" if tech_bvb['dist200'] > 0 else "#F85149"
-                
-                # Diagnoza Trendului
-                if tech_bvb['dist50'] > 0 and tech_bvb['dist200'] > 0:
-                    regime_msg = "🟢 **BULL MARKET:** Prețul este deasupra mediilor majore. Trend ascendent confirmat."
-                elif tech_bvb['dist50'] < 0 and tech_bvb['dist200'] < 0:
-                    regime_msg = "🔴 **BEAR MARKET:** Prețul a spart suporturile majore. Presiune de vânzare activă."
+                    st.info("Nicio companie din univers nu a tranzacționat în ultima ședință.")
+                full = briefing_calc.full_table(bvb_t, briefing_bvb_sections())
+                if full is not None and not full.empty:
+                    n_traded = int(full["traded"].sum())
+                    with st.expander(f"📋 Toate companiile urmărite ({len(full)}; {n_traded} tranzacționate în ședință)"):
+                        st.caption("Fără prag de valoare: la valori mici, o singură tranzacție mișcă prețul. "
+                                   "La titlurile fără tranzacții în ultima ședință variația, σ și valoarea sunt N/A, "
+                                   "iar „Ultima cotație” arată data ultimului preț din Yahoo.")
+                        tr = full["traded"].astype(bool)
+                        fv = pd.DataFrame({
+                            "Piață": full["section"].fillna("N/A").values,
+                            "Simbol": [s.replace(".RO", "") for s in full.index],
+                            "Preț": full["close"].values,
+                            "Variație": (full["pct"] * 100).where(tr).values,
+                            "σ": full["sigma"].where(tr).values,
+                            "Valoare": [briefing_calc.money_short(v, "RON") if t else "N/A"
+                                        for v, t in zip(full["value"], tr)],
+                            "Ultima cotație": [d.strftime("%d.%m.%Y") for d in full["date"]],
+                        })
+                        f_color = lambda v: "" if v is None or pd.isna(v) else ("color: #3FB950" if v > 0 else "color: #F85149" if v < 0 else "")
+                        st.dataframe(
+                            fv.style.format({"Preț": ro_spec(",.2f", " lei"), "Variație": ro_spec("+.2f", "%"),
+                                             "σ": ro_spec("+.1f", "σ")}, na_rep="N/A")
+                            .map(f_color, subset=["Variație"]),
+                            width='stretch', hide_index=True, height=min(38 + 35 * len(fv), 600),
+                            column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor "
+                                                                             "din ultimele 60 de ședințe (fără ziua curentă; minimum 20)."),
+                                           "Valoare": st.column_config.Column(help="Preț × volum în ședință."),
+                                           "Piață": st.column_config.Column(help="Secțiunea din tools/univers_bvb.txt "
+                                                                                "(componența BET Plus, BET-FI, BETAeRO la 04.11.2026).")})
+
+        # === EUROPA (etapa C): toate sumele în lei la cursul BNR; prețurile în moneda bursei ===
+        with tab_eu:
+            if brief is None or brief["eu_close"].empty:
+                st.info("Cotațiile Europa nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
+            else:
+                eu_cols = [c for c in brief["eu_close"].columns if c not in BRIEFING_EU_INDICES]
+                eu_close, eu_vol = brief["eu_close"][eu_cols], brief["eu_volume"].reindex(columns=eu_cols)
+                eu_t, eu_session = briefing_calc.session_table(eu_close, eu_vol)
+                _session_header("XETRA", "Europa (reper: XETRA)", eu_session)
+                if brief["partial"].get("eu"):
+                    st.warning("⚠️ Yahoo a trimis acum doar o parte din cotații (sub 80% din simboluri, și după reîncercare). Ce lipsește nu e inclus în calcule; datele nu se păstrează în cache, deci se recitesc la următoarea deschidere a paginii.")
+                i_cols = st.columns(4)
+                for col, (sym, name, kind) in zip(i_cols, (("^STOXX", "STOXX Europe 600", "indice de preț"),
+                                                           ("^GDAXI", "DAX", "indice de performanță (cu dividendele reinvestite)"),
+                                                           ("^FCHI", "CAC 40", "indice de preț"),
+                                                           ("^FTSE", "FTSE 100", "indice de preț"))):
+                    mv = briefing_calc.daily_move(brief["eu_close"].get(sym))
+                    col.metric(name, "N/A" if mv["last"] is None else format_ro(mv["last"], 2),
+                               None if mv["pct"] is None else f"{_pct(mv['pct'])} · {_sig(mv['sigma'])}",
+                               help=briefing_calc.sigma_label(mv["sigma"]).capitalize()
+                                    + f". σ față de ultimele {mv['n']} ședințe. {kind.capitalize()}."
+                                    + (f" Ultima cotație: {mv['date']:%d.%m.%Y}." if mv["date"] is not None else ""))
+
+                eu_rates = {s: pday_calc.rate_for(briefing_calc.quote_currency(s), rz_fx) for s in eu_cols}
+                eu_t = briefing_calc.with_ron_value(eu_t, eu_rates)
+                eu_close_ron, eu_no_fx = briefing_calc.close_in_ron(eu_close, eu_rates)
+                eu_turn = briefing_calc.turnover_vs_median(eu_close_ron, eu_vol.reindex(columns=eu_close_ron.columns))
+                eu_b = briefing_calc.breadth_counts(eu_t)
+                eu_cur = sorted({c for c in (briefing_calc.quote_currency(s) for s in eu_cols) if c})
+
+                def _eu_fx(c):
+                    base = "GBP" if c in pday_calc.PENCE_CODES else c
+                    r = pday_calc.rate_for(c, rz_fx)
+                    if not r:
+                        return f"{c}: curs indisponibil"
+                    d = rz_fx_dates.get(base)
+                    return (f"1 {c} = {format_ro(r, 4)} lei" + (" (GBP ÷ 100)" if base != c else "")
+                            + (f", {d:%d.%m.%Y}" if d is not None else ""))
+
+                eu_fx_txt = "; ".join(_eu_fx(c) for c in eu_cur)
+                m1, m2 = st.columns(2)
+                m1.metric("Lățime (cresc / scad)", f"{eu_b['up']} / {eu_b['down']}" if eu_b["n"] else "N/A",
+                          help="Companiile din universul urmărit (tools/univers_urmarit_ue.txt: DAX 40, CAC 40, Londra, "
+                               "Milano) care au tranzacționat în ultima ședință.")
+                m2.metric("Valoare tranzacționată (universul urmărit)", briefing_calc.money_short(eu_turn["today"], "RON"),
+                          None if eu_turn["ratio"] is None else f"×{format_ro(eu_turn['ratio'], 2)} față de mediană",
+                          delta_color="off",
+                          help="Preț × volum pe universul urmărit în ultima ședință, fiecare titlu în lei la cursul BNR al "
+                               f"monedei lui ({eu_fx_txt}), față de mediana celor {eu_turn['n']} ședințe dinainte (minimum 10; "
+                               "același curs pe toate ședințele, deci raportul nu depinde de curs). Doar universul, nu toată bursa.")
+                if eu_no_fx:
+                    st.caption("Fără curs BNR, excluse din sumele în lei: " + ", ".join(eu_no_fx) + ".")
+
+                st.markdown("#### 🎯 Regimul STOXX 600 (regula „Moment”)")
+                _regime_metrics("^STOXX", "STOXX 600")
+                st.markdown("---")
+                st.markdown("#### ⚖️ Lățimea pieței")
+                eu_universe = universes.symbols("eu")
+                eu_missing = briefing_calc.missing_symbols(eu_universe, eu_t)
+                _breadth_bar(eu_b, f"Universul urmărit Europa ({len(eu_universe)} simboluri, {len(eu_t)} cu date Yahoo)")
+                st.caption("Ședința e ultima zi cu preț la cel puțin 20% din titluri. Bursele au sărbători diferite (Londra, "
+                           "de exemplu): într-o zi închisă doar acolo, titlurile ei apar fără tranzacții și ies din calcule.")
+                if eu_missing:
+                    st.caption((f"Necitite acum de la Yahoo ({len(eu_missing)}), excluse din calcule: " if brief["partial"].get("eu") else
+                                f"Fără niciun preț în Yahoo în ultimele 6 luni ({len(eu_missing)}), excluse din toate calculele: ")
+                               + ", ".join(eu_missing) + ".")
+                st.markdown("---")
+                eu_up, eu_down = briefing_calc.top_moves(eu_t, n=briefing_calc.TOP_N)
+                st.caption("Topurile: fără prag de valoare (toate titlurile sunt componente ale indicilor mari; decizia din "
+                           "05.11.2026). Prețul în moneda bursei (Londra în pence, GBp); valoarea în lei.")
+                c_eu1, c_eu2 = st.columns(2)
+                with c_eu1:
+                    st.markdown(f"**🚀 Top {briefing_calc.TOP_N} creșteri (universul urmărit)**")
+                    if eu_up is not None and not eu_up.empty:
+                        _moves_table(eu_up, None)
+                    else:
+                        st.info("Nicio creștere în ultima ședință.")
+                with c_eu2:
+                    st.markdown(f"**🔻 Top {briefing_calc.TOP_N} scăderi (universul urmărit)**")
+                    if eu_down is not None and not eu_down.empty:
+                        _moves_table(eu_down, None)
+                    else:
+                        st.info("Nicio scădere în ultima ședință.")
+                st.markdown("---")
+                st.subheader("📊 Top lichiditate (valoare tranzacționată, în lei)")
+                eu_liq = briefing_calc.liquidity_top_ron(eu_t, n=10)
+                if eu_liq is not None and not eu_liq.empty:
+                    _moves_table(eu_liq, None)
                 else:
-                    regime_msg = "🟡 **ZONĂ DE TRANZIȚIE:** Prețul este prins între SMA 50 și SMA 200. Indecizie majoră."
-                
-                # Golden / Death Cross
-                cross_msg = "✨ *Golden Cross activ* (SMA 50 este deasupra SMA 200)" if tech_bvb['sma50'] > tech_bvb['sma200'] else "☠️ *Death Cross activ* (SMA 50 a picat sub SMA 200)"
+                    st.info("Nicio companie din univers nu a tranzacționat în ultima ședință.")
+                eu_full = briefing_calc.full_table(eu_t, universes.sections("eu"))
+                if eu_full is not None and not eu_full.empty:
+                    tr = eu_full["traded"].astype(bool)
+                    with st.expander(f"📋 Toate companiile urmărite ({len(eu_full)}; {int(tr.sum())} tranzacționate în ședință)"):
+                        st.caption("La titlurile fără tranzacții în ultima ședință variația, σ și valoarea sunt N/A, iar "
+                                   "„Ultima cotație” arată data ultimului preț din Yahoo.")
+                        fv = text_frame(pd.DataFrame({
+                            "Piață": eu_full["section"].fillna("N/A").values,
+                            "Simbol": list(eu_full.index),
+                            "Preț": eu_full["close"].values,
+                            "Monedă": [c or "N/A" for c in eu_full["currency"]],
+                            "Variație": (eu_full["pct"] * 100).where(tr).values,
+                            "σ": eu_full["sigma"].where(tr).values,
+                            "Valoare": [briefing_calc.money_short(v, "RON") if (t and pd.notna(v)) else "N/A"
+                                        for v, t in zip(eu_full["value_ron"], tr)],
+                            "Ultima cotație": [d.strftime("%d.%m.%Y") for d in eu_full["date"]],
+                        }), {"Preț": lambda v: format_ro(v, 2),
+                             "Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
+                             "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ")})
+                        s_color = lambda v: ("color: #3FB950" if str(v).startswith("+") and str(v) != "+0,00%"
+                                             else "color: #F85149" if str(v).startswith("-") else "")
+                        st.dataframe(fv.style.map(s_color, subset=["Variație"]), width='stretch', hide_index=True,
+                                     height=min(38 + 35 * len(fv), 600),
+                                     column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a "
+                                                                                      "variațiilor din ultimele 60 de ședințe "
+                                                                                      "(fără ziua curentă; minimum 20)."),
+                                                    "Valoare": st.column_config.Column(help="Preț × volum în ședință, în lei la cursul BNR."),
+                                                    "Piață": st.column_config.Column(help="Secțiunea din tools/univers_urmarit_ue.txt.")})
 
-                st.markdown(f"""
-                <div style="display:flex; gap:15px; margin-bottom: 10px;">
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c50};">{ro(tech_bvb['dist50']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_bvb['sma50']):.2f}</b></div>
-                    </div>
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c200};">{ro(tech_bvb['dist200']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_bvb['sma200']):.2f}</b></div>
-                    </div>
-                </div>
-                <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_bvb['dist200'] > 0 else '#F85149'};">
-                    {regime_msg} <br> <span style="color:#8B949E; font-size:12px;">{cross_msg}</span>
-                </div>
-                """, unsafe_allow_html=True)
+        # === SUA ===
+        with tab_us:
+            if brief is None or brief["us_close"].empty:
+                st.info("Cotațiile SUA nu au putut fi citite acum de la Yahoo. Se reîncearcă la următoarea deschidere a paginii.")
             else:
-                st.info("Date tehnice indisponibile pentru acest indice.")
-            st.markdown("---")
-            
-            # =========================================================
-            # NOU: INTENSITATE VOLUM (BVB)
-            # =========================================================
-            st.markdown("#### 🔊 Intensitatea Tranzacționării (Volume)")
-            vol_bvb = get_volume_analysis('TVBETETF.RO')
-            
-            if vol_bvb:
-                v_int = vol_bvb['intensity']
-                # Culori în funcție de intensitate
-                v_color = "#3FB950" if v_int > 1.2 else ("#D29922" if v_int > 0.8 else "#8B949E")
-                v_label = "ACTIVITATE RIDICATĂ" if v_int > 1.2 else ("NORMAL" if v_int > 0.8 else "LICHIDITATE SCĂZUTĂ")
-                
-                # Formula intensității: $I = \frac{V_{current}}{V_{average}}$
-                st.markdown(f"""
-                <div style="background:#161B22; padding:20px; border-radius:12px; border-top: 4px solid {v_color};">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volum vs Media 20z</div>
-                            <div style="font-size:28px; font-weight:bold; color:white;">{ro(v_int):.2f}x</div>
-                        </div>
-                        <div style="text-align:right;">
-                            <span style="background:{v_color}22; color:{v_color}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
-                                {v_label}
-                            </span>
-                        </div>
-                    </div>
-                    <div style="margin-top:15px; background:#30363D; height:8px; border-radius:4px; overflow:hidden;">
-                        <div style="width:{min(v_int*50, 100)}%; background:{v_color}; height:100%;"></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if v_int > 1.5:
-                    st.caption("🔥 **Alertă:** Volum neobișnuit de mare. Instituțiile fac mutări importante în piața locală.")
-                elif v_int < 0.6:
-                    st.caption("💤 **Atenție:** Piață „adormită”. Mișcările de preț pot fi cauzate de ordine mici de retail.")
-            # =========================================================
-            st.markdown("---")
-            
-            # 2. Top Movers (5 companii)
-            col_mov1, col_mov2 = st.columns(2)
-            
-            with col_mov1:
-                st.markdown("**🚀 Top 5 Creșteri**")
-                if not gainers.empty:
-                    st.dataframe(
-                        gainers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #3FB950', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-                else: st.info("Date indisponibile.")
-                
-            with col_mov2:
-                st.markdown("**🔻 Top 5 Scăderi**")
-                if not losers.empty:
-                    st.dataframe(
-                        losers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #F85149', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-                else: st.info("Date indisponibile.")
-            
-            st.markdown("---")
-            
-            # 3. Clasament Volum (Top 10)
-            st.subheader("📊 Top Lichiditate (Volume Tranzacționate)")
-            if not vol_leaders.empty:
-                def format_vol(x):
-                    if x > 1e6: return f"{ro(x/1e6):.2f} M"
-                    if x > 1e3: return f"{ro(x/1e3):.2f} K"
-                    return f"{ro(x):.0f}"
-                
-                vol_display = vol_leaders.copy()
-                vol_display['Volum'] = vol_display['Volum'].apply(format_vol)
-                
-                st.dataframe(
-                    vol_display[['Simbol', 'Preț', 'Volum', 'Variație']].style
-                    .format({'Preț': ro_spec('.2f'), 'Variație': ro_spec('+.2f', '%')})
-                    .applymap(lambda x: 'color: #3FB950' if x > 0 else 'color: #F85149', subset=['Variație']),
-                    width='stretch', hide_index=True
-                )
-            else:
-                st.info("Nu există date despre volume.")
+                us_cols = [c for c in brief["us_close"].columns if c not in BRIEFING_US_INDICES + BRIEFING_US_SECTORS]
+                us_t, us_session = briefing_calc.session_table(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
+                _session_header("NYSE", "Wall Street", us_session)
+                if brief["partial"].get("us"):
+                    st.warning("⚠️ Yahoo a trimis acum doar o parte din cotații (sub 80% din simboluri, și după reîncercare). Ce lipsește nu e inclus în calcule; datele nu se păstrează în cache, deci se recitesc la următoarea deschidere a paginii.")
+                i_cols = st.columns(3)
+                for col, (sym, name) in zip(i_cols, (("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq Composite"), ("^DJI", "Dow Jones"))):
+                    mv = briefing_calc.daily_move(brief["us_close"].get(sym))
+                    col.metric(name, "N/A" if mv["last"] is None else format_ro(mv["last"], 2),
+                               None if mv["pct"] is None else f"{_pct(mv['pct'])} · {_sig(mv['sigma'])}",
+                               help=briefing_calc.sigma_label(mv["sigma"]).capitalize()
+                                    + f". σ față de ultimele {mv['n']} ședințe. Indice de preț (fără dividende).")
 
-            # 4. Top 5 Știri România
+                st.markdown("#### 🌡️ Volatilitatea așteptată (VIX)")
+                try:
+                    vix_c = get_vix_curve_closes()
+                except Exception as exc:  # rețea / Yahoo
+                    logger.warning("rezumat, VIX: %s", exc)
+                    vix_c = pd.DataFrame()
+                vt = stress_calc.vix_term(vix_c.get("^VIX"), vix_c.get("^VIX3M")) if not vix_c.empty else None
+                vix_s = vix_c["^VIX"].dropna() if "^VIX" in vix_c.columns else pd.Series(dtype=float)
+                v1, v2, v3 = st.columns(3)
+                v1.metric("VIX", "N/A" if vix_s.empty else format_ro(vix_s.iloc[-1], 2),
+                          help="Volatilitatea anualizată pe 30 de zile implicită în opțiunile pe S&P 500 (puncte procentuale).")
+                v2.metric("Percentila VIX pe 1 an", "N/A" if vix_s.empty else format_ro(stress_calc.percentile_rank(vix_s), 0, "%"),
+                          help=f"Ce procent din cele {len(vix_s)} închideri din ultimul an au fost ≤ VIX-ul de azi.")
+                v3.metric("VIX / VIX3M", "N/A" if vt is None else f"{format_ro(vt['ratio'], 2)} ({vt['state']})",
+                          help="Frica pe 30 de zile față de cea pe 3 luni. ≥ 1,00 = stres (structură inversată), 0,90–1,00 = "
+                               "tensiune, sub 0,90 = normal. Praguri uzuale de piață, netestate în aplicație.")
+
+                st.markdown("---")
+                st.markdown("#### ⚖️ Lățimea pieței")
+                try:
+                    br_c = get_breadth_closes()
+                except Exception as exc:  # rețea / Yahoo
+                    logger.warning("rezumat, lățime: %s", exc)
+                    br_c = pd.DataFrame()
+                b1, b2 = st.columns(2)
+                for col, (a_sym, b_sym, label) in zip((b1, b2), markets_calc.BREADTH_PAIRS):
+                    rd = briefing_calc.relative_day(br_c.get(a_sym), br_c.get(b_sym)) if not br_c.empty else {"diff_pp": None}
+                    col.metric(f"{a_sym} − {b_sym} (o zi)",
+                               "N/A" if rd["diff_pp"] is None else ("+" if rd["diff_pp"] >= 0 else "") + format_ro(rd["diff_pp"], 2, " pp"),
+                               help=f"{label}: variația zilei a lui {a_sym} minus a lui {b_sym} (prețuri ajustate). Pozitiv = "
+                                    "companiile cu pondere egală (sau cele mici) au făcut mai bine decât indicele ponderat cu "
+                                    "capitalizarea, deci mișcarea zilei a fost largă, nu dusă de câțiva giganți.")
+                _breadth_bar(briefing_calc.breadth_counts(us_t), f"Universul urmărit ({len(us_t)} simboluri, nu S&P 500)")
+                us_turn = briefing_calc.turnover_vs_median(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
+                usd_rz = rz_fx.get("USD")
+                st.metric("Valoare tranzacționată (universul urmărit)",
+                          briefing_calc.money_short(us_turn["today"] * usd_rz if (usd_rz and us_turn["today"] is not None) else None, "RON"),
+                          None if us_turn["ratio"] is None else f"×{format_ro(us_turn['ratio'], 2)} față de mediană",
+                          delta_color="off",
+                          help=f"Preț × volum pe universul urmărit în ultima ședință, în lei la cursul BNR"
+                               + (f" ({format_ro(usd_rz, 4)} lei/USD, {rz_fx_dates['USD']:%d.%m.%Y})" if usd_rz and "USD" in rz_fx_dates else " (indisponibil)")
+                               + f", față de mediana celor {us_turn['n']} ședințe dinainte (raportul nu depinde de curs).")
+
+                st.markdown("---")
+                st.markdown("#### 🎯 Regimul S&P 500 (regula „Moment”)")
+                _regime_metrics("^GSPC", "S&P 500")
+
+                st.markdown("---")
+                st.markdown("#### 🧩 Sectoarele S&P 500 (ETF-urile SPDR, o zi)")
+                sec_cols = [s for s in BRIEFING_US_SECTORS if s in brief["us_close"].columns]
+                if sec_cols:
+                    sec_df, sec_session = briefing_calc.sector_moves(brief["us_close"][sec_cols],
+                                                                     brief["us_volume"].reindex(columns=sec_cols),
+                                                                     brief["us_close"].get("^GSPC"))
+                    sv = text_frame(pd.DataFrame({
+                        "Sector": sec_df["name"].values, "ETF": list(sec_df.index),
+                        "Variație": (sec_df["pct"] * 100).values, "σ": sec_df["sigma"].values,
+                        "Față de S&P 500": sec_df["vs_index_pp"].values,
+                    }), {"Variație": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, "%"),
+                         "σ": lambda v: ("+" if v >= 0 else "") + format_ro(v, 1, "σ"),
+                         "Față de S&P 500": lambda v: ("+" if v > 0 else "") + format_ro(v, 2, " pp")})
+                    s_color = lambda v: ("color: #3FB950" if str(v).startswith("+") and not str(v).startswith("+0,00")
+                                         else "color: #F85149" if str(v).startswith("-") else "")
+                    st.dataframe(sv.style.map(s_color, subset=["Variație", "Față de S&P 500"]), width='stretch', hide_index=True,
+                                 column_config={
+                                     "Variație": st.column_config.Column(help="Față de închiderea precedentă, preț neajustat: în ziua "
+                                                                              "ex-dividend scăderea include dividendul."),
+                                     "σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice ale "
+                                                                       "ETF-ului din ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
+                                                                       "Peste 2σ = mișcare neobișnuită pentru sector (prag netestat)."),
+                                     "Față de S&P 500": st.column_config.Column(help="Variația ETF-ului minus variația S&P 500 în "
+                                                                                     "aceeași ședință, în puncte procentuale. Pozitiv = "
+                                                                                     "sectorul a făcut mai bine decât indicele.")})
+                    if sec_session is not None and us_session is not None and pd.Timestamp(sec_session) != pd.Timestamp(us_session):
+                        st.caption(f"Atenție: ultima ședință a ETF-urilor sectoriale ({pd.Timestamp(sec_session):%d.%m.%Y}) diferă "
+                                   "de cea a universului.")
+                    st.caption("Cele 11 ETF-uri SPDR Select Sector, câte unul pe sector GICS din S&P 500 (ponderate cu "
+                               "capitalizarea). Sortate după variația zilei.")
+                else:
+                    st.info("ETF-urile sectoriale nu au putut fi citite acum de la Yahoo.")
+
+                st.markdown("---")
+                us_up, us_down = briefing_calc.top_moves(us_t, n=briefing_calc.TOP_N)
+                c_us1, c_us2 = st.columns(2)
+                with c_us1:
+                    st.markdown(f"**🚀 Top {briefing_calc.TOP_N} creșteri (universul urmărit)**")
+                    if us_up is not None and not us_up.empty:
+                        _moves_table(us_up, "USD")
+                    else:
+                        st.info("Nicio creștere în ultima ședință.")
+                with c_us2:
+                    st.markdown(f"**🔻 Top {briefing_calc.TOP_N} scăderi (universul urmărit)**")
+                    if us_down is not None and not us_down.empty:
+                        _moves_table(us_down, "USD")
+                    else:
+                        st.info("Nicio scădere în ultima ședință.")
+
+
+        # === ȘTIRI (decizia lui Daniel, 05.11 seara): toate știrile Rezumatului într-un singur tab ===
+        with tab_news:
+            rz_news = render_holdings_news(rz_pday.get("holdings"))
             st.markdown("---")
-            st.subheader("🇷🇴 Top 5 Știri Financiare (România)")
-            
-            if 'raw_news' not in st.session_state:
-                raw_news = fetch_news_data()
-            else:
-                raw_news = st.session_state.get('raw_news', fetch_news_data())
-            
+            st.subheader("🇷🇴 Top 5 știri financiare (România)")
+            raw_news = fetch_news_data()
             ro_sources = ["Ziarul Financiar", "Biziday", "Economica", "Bursa", "Profit.ro", "StartupCafe", "Financial Intelligence", "Wall-Street"]
             ro_news = [n for n in raw_news if any(src.lower() in n['source'].lower() for src in ro_sources)]
             if not ro_news:
-                 ro_news = filter_news(raw_news, "Financiar") + filter_news(raw_news, "Energie")
-            
-            seen = set()
-            unique_ro_news = []
+                ro_news = filter_news(raw_news, "Financiar") + filter_news(raw_news, "Energie")
+            seen_ro, unique_ro_news = set(), []
             for n in ro_news:
-                if n['title'] not in seen:
+                if n['title'] not in seen_ro:
                     unique_ro_news.append(n)
-                    seen.add(n['title'])
-            
-            if unique_ro_news:
-                news_html = ""
-                for item in unique_ro_news[:5]:
-                      news_html += f"""
-                      <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
-                        <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
-                           {item['title']}
-                        </a>
-                        <div style="font-size: 12px; color: #8B949E;">{item['source']} • {item['date_str']}</div>
-                      </div>
-                      """
-                st.markdown(news_html, unsafe_allow_html=True)
-            else:
+                    seen_ro.add(n['title'])
+            if not _news_list(unique_ro_news[:5], "source"):
                 st.info("Nu s-au găsit știri locale recente.")
-
-        # === REZUMAT SUA ===
-        with tab_us:
-            msg_us = ""
-            if us_market_not_open_yet:
-                msg_us = "(Datele afișate sunt de la închiderea precedentă)"
-            
-            st.markdown(f"### 🌎 Raport Wall Street {msg_us}")
-            
-            # --- 1. Indici Principali & Fear Index ---
-            c_idx, c_fg = st.columns([2, 1])
-            
-            with c_idx:
-                # ACUM PRIMIM SI PRETUL (PRICE)
-                sp500_txt, sp500_chg, sp500_price = generate_market_narrative(us_data, '^GSPC', 'S&P 500')
-                nasdaq_txt, nasdaq_chg, nasdaq_price = generate_market_narrative(us_data, '^IXIC', 'Nasdaq')
-                dow_txt, dow_chg, dow_price = generate_market_narrative(us_data, '^DJI', 'Dow Jones')
-                
-                # Culori border
-                us_border = "#3FB950" if sp500_chg >= 0 else "#F85149"
-                
-                # Culori text (verde/rosu) pentru fiecare indice
-                c_sp = "#3FB950" if sp500_chg >= 0 else "#F85149"
-                c_nq = "#3FB950" if nasdaq_chg >= 0 else "#F85149"
-                c_dj = "#3FB950" if dow_chg >= 0 else "#F85149"
-                
-                st.markdown(f"""
-                <div style="background-color: #161B22; padding: 15px; border-radius: 10px; border-left: 5px solid {us_border};">
-                    <p style="margin:5px 0; font-size:16px;">
-                        🇺🇸 <b>S&P 500:</b> {ro(sp500_price):,.2f} <span style="color:{c_sp}; font-weight:bold;">({ro(sp500_chg):+.2f}%)</span>
-                    </p>
-                    <p style="margin:5px 0; font-size:16px;">
-                        💻 <b>Nasdaq:</b> {ro(nasdaq_price):,.2f} <span style="color:{c_nq}; font-weight:bold;">({ro(nasdaq_chg):+.2f}%)</span>
-                    </p>
-                    <p style="margin:5px 0; font-size:16px;">
-                        🏭 <b>Dow Jones:</b> {ro(dow_price):,.2f} <span style="color:{c_dj}; font-weight:bold;">({ro(dow_chg):+.2f}%)</span>
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with c_fg:
-                # Preluăm datele calculate de funcția ta existentă
-                fg_score, fg_label, vix_val = calculate_fear_greed_proxy(us_data)
-                
-                # Stabilim culoarea în funcție de sentiment
-                fg_color = "#F85149" if fg_score < 40 else ("#3FB950" if fg_score > 60 else "#8B949E")
-                
-                st.markdown(f"""
-                <div style="text-align: center; background-color: #21262D; padding: 15px; border-radius: 12px; border: 1px solid {fg_color}44;">
-                    <small style="color: #8B949E; text-transform: uppercase; letter-spacing: 1px;">Sentimentul Wall Street</small>
-                    <h1 style="color: {fg_color}; margin: 10px 0; font-size: 42px;">{int(fg_score)}</h1>
-                    <div style="font-weight:bold; color: #FFFFFF; font-size: 18px; margin-bottom: 5px;">{fg_label}</div>
-                    <div style="font-size: 12px; color: #8B949E;">VIX (Volatilitate): {ro(vix_val):.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            # --- NOU: CONCLUZIA ZILEI (CONTEXTUALĂ) ---
-            st.markdown("#### 🧠 Analiza Contextuală a Zilei")
-            
-            if fg_score < 30:
-                conclusion = "🚨 **PANICĂ ÎN PIAȚĂ:** Sentimentul este de teamă extremă. Din punct de vedere contrarian, acestea sunt momentele în care se caută oportunități de cumpărare 'la reducere'."
-            elif fg_score > 70:
-                conclusion = "⚠️ **EUFORIE EXCESIVĂ:** Piața este lăcomă. Istoric, acest nivel precede adesea o corecție minoră. Atenție la noi intrări acum."
-            else:
-                conclusion = "⚖️ **ECHILIBRU:** Piața tranzacționează fără o direcție emoțională clară. Prețurile sunt dictate de datele economice, nu de impulsuri."
-            
-            st.info(conclusion)
-
-            # --- 2. Top Movers & Volume (Top 10 Companii) ---
-            if isinstance(us_data.columns, pd.MultiIndex):
-                all_us_tickers = us_data.columns.levels[0].tolist()
-            else:
-                all_us_tickers = []
-                
-            us_analysis_tickers = [t for t in all_us_tickers if not t.startswith('^')]
-            
-            us_gainers, us_losers, us_vol = get_bvb_stats(us_data, us_analysis_tickers)
             st.markdown("---")
-            
-            # =========================================================
-            # NOU: MARKET BREADTH SUA
-            # =========================================================
-            st.markdown("#### ⚖️ Sănătatea Pieței (Market Breadth)")
-            adv_u, dec_u, flat_u, adv_pu, dec_pu, flat_pu = calculate_market_breadth(us_data, us_analysis_tickers)
-            
-            if (adv_u + dec_u + flat_u) > 0:
-                st.markdown(f"""
-                <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 14px;">
-                    <span style="color:#3FB950; font-weight:bold;">🟢 Cresc: {adv_u} ({ro(adv_pu):.1f}%)</span>
-                    <span style="color:#8B949E; font-weight:bold;">⚪ Neutru: {flat_u}</span>
-                    <span style="color:#F85149; font-weight:bold;">🔴 Scad: {dec_u} ({ro(dec_pu):.1f}%)</span>
-                </div>
-                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden; background-color: #30363D; margin-bottom: 5px;">
-                    <div style="width: {adv_pu}%; background-color: #3FB950;"></div>
-                    <div style="width: {flat_pu}%; background-color: #8B949E;"></div>
-                    <div style="width: {dec_pu}%; background-color: #F85149;"></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Verdict Pro Automat (Corelare cu indicii)
-                if adv_u > dec_u * 1.5 and sp500_chg > 0:
-                    st.caption("✅ **Breakout Confirmat:** Indicele S&P urcă și o face tragând majoritatea acțiunilor cu el.")
-                elif dec_u > adv_u * 1.5 and sp500_chg > 0:
-                    st.caption("⚠️ **Divergență Periculoasă (Mega-Cap Illusion):** S&P crește doar datorită a 2-3 giganți (ex: Nvidia, Apple). Restul pieței de fapt scade!")
-                elif dec_u > adv_u * 1.5:
-                    st.caption("🚨 **Bearish Breadth:** Scădere severă, instituțiile vând la nivel generalizat.")
-                else:
-                    st.caption("🔄 **Rotație Sectorială:** Volumele sunt împărțite în mod egal între câștigători și perdanți.")
-            st.write("") # Spațiu
-            st.markdown("---")
-            
-            # =========================================================
-            # NOU: NIVELE TEHNICE CRITICE (SUA - S&P 500)
-            # =========================================================
-            st.markdown("#### 🎯 Nivele Tehnice Critice (Trend Macro S&P 500)")
-            with st.spinner("Calculăm mediile mobile S&P 500..."):
-                tech_us = get_index_technical_levels('^GSPC')
-                
-            if tech_us:
-                c50_u = "#3FB950" if tech_us['dist50'] > 0 else "#F85149"
-                c200_u = "#3FB950" if tech_us['dist200'] > 0 else "#F85149"
-                
-                if tech_us['dist50'] > 0 and tech_us['dist200'] > 0:
-                    regime_us = "🟢 **BULL MARKET:** Trend lung intact. Scăderile spre SMA 50 sunt văzute ca oportunități de cumpărare ('Buy the dip')."
-                elif tech_us['dist50'] < 0 and tech_us['dist200'] < 0:
-                    regime_us = "🔴 **BEAR MARKET:** Teritoriul urșilor. Orice creștere este considerată o capcană ('Dead cat bounce')."
-                else:
-                    regime_us = "🟡 **ZONĂ DE CONSOLIDARE:** Luptă critică la nivelul mediilor mobile. Așteaptă confirmarea spargerii."
-                
-                cross_us = "✨ *Golden Cross activ* (Piață în expansiune lungă)" if tech_us['sma50'] > tech_us['sma200'] else "☠️ *Death Cross activ* (Risc de recesiune a pieței)"
-
-                st.markdown(f"""
-                <div style="display:flex; gap:15px; margin-bottom: 10px;">
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 50 (Mediu)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c50_u};">{ro(tech_us['dist50']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_us['sma50']):,.2f}</b></div>
-                    </div>
-                    <div style="flex:1; background:#161B22; padding:15px; border-radius:10px; border:1px solid #30363D;">
-                        <div style="color:#8B949E; font-size:11px; text-transform:uppercase;">Față de SMA 200 (Lung)</div>
-                        <div style="font-size:24px; font-weight:bold; color:{c200_u};">{ro(tech_us['dist200']):+.2f}%</div>
-                        <div style="color:#C9D1D9; font-size:12px; margin-top:5px;">Prag suport/rezistență: <b>{ro(tech_us['sma200']):,.2f}</b></div>
-                    </div>
-                </div>
-                <div style="background:#21262D; padding:12px; border-radius:8px; font-size:14px; border-left: 4px solid {'#3FB950' if tech_us['dist200'] > 0 else '#F85149'};">
-                    {regime_us} <br> <span style="color:#8B949E; font-size:12px;">{cross_us}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("Date tehnice indisponibile pentru S&P 500.")
-            st.markdown("---")
-            
-            # =========================================================
-            # NOU: INTENSITATE VOLUM (SUA)
-            # =========================================================
-            st.markdown("#### 🔊 Intensitatea Tranzacționării (S&P 500)")
-            vol_us = get_volume_analysis('^GSPC')
-            
-            if vol_us:
-                v_int_u = vol_us['intensity']
-                v_color_u = "#3FB950" if v_int_u > 1.2 else ("#D29922" if v_int_u > 0.8 else "#8B949E")
-                v_label_u = "CONVINGERE TARE" if v_int_u > 1.2 else ("STABIL" if v_int_u > 0.8 else "FĂRĂ CONVINGERE")
-                
-                st.markdown(f"""
-                <div style="background:#161B22; padding:20px; border-radius:12px; border-top: 4px solid {v_color_u};">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <div style="color:#8B949E; font-size:12px; text-transform:uppercase;">Volume Intensity Index</div>
-                            <div style="font-size:28px; font-weight:bold; color:white;">{ro(v_int_u):.2f}x</div>
-                        </div>
-                        <div style="text-align:right;">
-                            <span style="background:{v_color_u}22; color:{v_color_u}; padding:5px 12px; border-radius:20px; font-weight:bold; font-size:12px;">
-                                {v_label_u}
-                            </span>
-                        </div>
-                    </div>
-                    <div style="margin-top:15px; background:#30363D; height:8px; border-radius:4px; overflow:hidden;">
-                        <div style="width:{min(v_int_u*50, 100)}%; background:{v_color_u}; height:100%;"></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if v_int_u > 1.2 and sp500_chg > 0:
-                    st.caption("🚀 **Bullish Confirmation:** Creșterea este susținută de volume mari. Trendul are „combustibil” instituțional.")
-                elif v_int_u > 1.2 and sp500_chg < 0:
-                    st.caption("🚨 **Heavy Distribution:** Se vinde masiv pe volume mari. Pericol de continuare a scăderii.")
-                elif v_int_u < 0.7:
-                    st.caption("⚠️ **Low Conviction:** Volum sub medie. Mișcarea zilei nu este confirmată de jucătorii mari.")
-            st.markdown("---")
-            # =========================================================
-
-            c_us1, c_us2 = st.columns(2)
-            with c_us1:
-                st.markdown("**🚀 Top Creșteri (Big Caps)**")
-                if not us_gainers.empty:
-                    st.dataframe(
-                        us_gainers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f', ' USD'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #3FB950', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-            
-            with c_us2:
-                st.markdown("**🔻 Top Scăderi (Big Caps)**")
-                if not us_losers.empty:
-                    st.dataframe(
-                        us_losers[['Simbol', 'Preț', 'Variație']].style
-                        .format({'Preț': ro_spec('.2f', ' USD'), 'Variație': ro_spec('+.2f', '%')})
-                        .map(lambda x: 'color: #F85149', subset=['Variație']),
-                        width='stretch', hide_index=True
-                    )
-
-            # --- 3. Top Știri Wall Street ---
-            st.markdown("---")
-            st.subheader("🇺🇸 Top 10 Știri Wall Street")
-            
-            if 'news_cache_us' not in st.session_state:
-                 news_us_gspc = get_company_news_rss("^GSPC")
-                 news_us_ixic = get_company_news_rss("^IXIC")
-                 combined_us = news_us_gspc + news_us_ixic
-                 combined_us.sort(key=lambda x: x['date_str'], reverse=True)
-                 st.session_state['news_cache_us'] = combined_us
-            
-            final_us_news = st.session_state['news_cache_us']
-            
-            seen_us = set()
-            unique_us_news = []
-            for n in final_us_news:
-                if n['title'] not in seen_us:
-                    unique_us_news.append(n)
-                    seen_us.add(n['title'])
-
-            if unique_us_news:
-                us_news_html = ""
-                for item in unique_us_news[:10]:
-                      us_news_html += f"""
-                      <div style="margin-bottom: 10px; border-bottom: 1px solid #30363D; padding-bottom: 5px;">
-                        <a href="{item['link']}" style="color: #58A6FF; text-decoration: none; font-weight: 600;" target="_blank">
-                           {item['title']}
-                        </a>
-                        <div style="font-size: 12px; color: #8B949E;">{item['publisher']} • {item['date_str']}</div>
-                      </div>
-                      """
-                st.markdown(us_news_html, unsafe_allow_html=True)
-            else:
+            st.subheader("🇺🇸 Top 10 știri Wall Street")
+            if not _news_list(get_us_index_news(), "publisher"):
                 st.info("Nu s-au putut încărca știrile din SUA.")
+
+        # === 3 lucruri de știut azi (etapa E): reguli fixe din analytics/day_notes.py, afișate sus ===
+        rz_rows = rz_pday.get("rows")
+        rz_by_sym = {}
+        for r in ([] if rz_rows is None else rz_rows.itertuples(index=False)):
+            rz_by_sym[r.Symbol] = {k: (None if pd.isna(getattr(r, k)) else float(getattr(r, k)))
+                                   for k in ("Pct", "Sigma", "Contribution")}
+        rz_tot = rz_pday.get("totals")
+        rz_moves, rz_sectors = [], []
+        if brief is not None:
+            for nm, key, sym in (("BET", "bvb_close", BRIEFING_BET_PROXY), ("STOXX 600", "eu_close", "^STOXX"),
+                                 ("S&P 500", "us_close", "^GSPC")):
+                rz_moves.append((nm, briefing_calc.daily_move(brief[key].get(sym))))
+            sec_cols_rz = [s for s in BRIEFING_US_SECTORS if s in brief["us_close"].columns]
+            if sec_cols_rz:
+                sec_rz, _ = briefing_calc.sector_moves(brief["us_close"][sec_cols_rz], brief["us_volume"].reindex(columns=sec_cols_rz),
+                                                       brief["us_close"].get("^GSPC"))
+                rz_sectors = [{"name": r.name, "etf": s, "pct": None if pd.isna(r.pct) else float(r.pct),
+                               "vs_index_pp": None if pd.isna(r.vs_index_pp) else float(r.vs_index_pp)}
+                              for s, r in zip(sec_rz.index, sec_rz.itertuples(index=False))]
+        rz_things = day_notes.three_things(
+            portfolio=day_notes.portfolio_note(rz_tot, rz_by_sym),
+            market=day_notes.market_note(rz_moves),
+            events=day_notes.events_note(rz_soon),
+            alerts=day_notes.alerts_note((rz_tot or {}).get("alerts"), rz_by_sym),
+            sector=day_notes.sector_note(rz_sectors),
+            news=day_notes.news_note(rz_news))
+        with rz_top:
+            st.markdown("### 🧭 3 lucruri de știut azi")
+            if rz_things:
+                st.markdown(compact_html(
+                    '<div style="border:1px solid #30363D; border-radius:8px; padding:10px 14px; margin-bottom:6px;">'
+                    + "".join(f'<div style="margin:4px 0;"><b>{i}.</b> {md_bold_html(t["text"])}</div>'
+                              for i, t in enumerate(rz_things, 1))
+                    + "</div>"), unsafe_allow_html=True)
+            else:
+                st.info("Nu sunt destule date acum pentru rezumat (cotațiile sau registrul nu au putut fi citite).")
+            st.caption("Text din reguli fixe, descriptiv (analytics/day_notes.py): 1) portofoliul în ultima ședință; 2) indicele "
+                       "cu cea mai mare mișcare în σ dintre BET (prin ETF-ul TVBETETF), STOXX 600 și S&P 500; 3) primul disponibil dintre calendarul "
+                       "macro SUA de azi/mâine, pozițiile tale peste 2σ, sectorul S&P 500 cu abaterea cea mai mare (≥ 1 pp) și "
+                       "cea mai nouă știre despre pozițiile tale (lista în tabul „📰 Știri”). Detaliile sunt mai jos.")
+            st.markdown("---")
+        _rz_timer.caption(f"⏱️ Pagina a rulat complet în {format_ro(time.perf_counter() - _rz_t0, 1)} s, la {now_ro():%H:%M:%S}.")
 
     # ==================================================
     # 7. SCANNER VOLUM (RVOL) - NOU
@@ -7138,102 +7885,73 @@ def main():
         
         # Slider pentru sensibilitate (Default 1.5)
         threshold = st.slider("Arată doar acțiunile cu Volum de 'X' ori mai mare decât media:", 
-                            min_value=1.2, max_value=5.0, value=1.5, step=0.1)
+                            min_value=1.2, max_value=5.0, value=scanner_calc.RVOL_DEFAULT, step=0.1)
+        st.caption(f"Lichiditate: la BVB intră doar titlurile cu valoare tranzacționată ≥ "
+                   f"{briefing_calc.money_short(briefing_calc.MIN_VALUE_RON, 'RON')} în ședința evaluată (coloana „Valoare” = preț × volum, în moneda din coloana „Monedă”; ca în "
+                   f"Rezumatul Zilei). La SUA și Europa nu există prag de lichiditate: listele au doar companii mari.")
 
-        # Definim listele de scanare (Extinse)
-        tickers_map = {
-            "🇷🇴 BVB (România - BET)": [
-                'TVBETETF.RO', 'TLV.RO', 'SNP.RO', 'H2O.RO', 'TRP.RO', 'FP.RO', 'ATB.RO', 'BIO.RO', 'ALW.RO', 'AST.RO', 
-                'EBS.RO', 'IMP.RO', 'SNG.RO', 'BRD.RO', 'ONE.RO', 'TGN.RO', 'SNN.RO', 'DIGI.RO', 'M.RO', 'EL.RO', 'MILK.RO', 
-                'SMTL.RO', 'AROBS.RO', 'AQ.RO', 'ARS.RO', 'ASC.RO', 'BRK.RO', 'IARV.RO', 'TTS.RO', 'WINE.RO', 'TEL.RO', 'DN.RO', 'AG.RO', 
-                'BENTO.RO', 'PE.RO', 'COTE.RO', 'PBK.RO', 'SAFE.RO', 'TBK.RO', 'CFH.RO', 'SFG.RO'
-            ],
-            
-            "🇺🇸 SUA - Tech & Growth (Nasdaq 100)": [
-                'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AVGO', 'COST', 'PEP', 'CSCO', 'TMUS',
-                'CMCSA', 'INTC', 'AMD', 'CLS', 'NFLX', 'TXN', 'ANET', 'NET', 'SBUX', 'ISRG', 'MDLZ', 'GILD',
-                'ARM', 'BKNG', 'PANW', 'MU', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'CRWV', 'CSX', 'PYPL', 'ASML',
-                'PLTR', 'CRWD', 'ZS', 'MSTR', 'QCOM', 'SNDK', 'HOOD', 'ROKU', 'INOD', 'U', 'ORCL', 'TSM', 'AFRM'
-            ],
-            
-            "🇺🇸 SUA - Industrial & Finance (Dow/S&P)": [
-                'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK', 'AXP', 'V', 'MA', 'BRK-B',
-                'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'GPOR', 'VG', 'HAL', 'MPC', 'DVN', 'UUUU', 'OKLO', 'VLO', 'T',
-                'CAT', 'DE', 'BA', 'SPCX', 'LMT', 'RTX', 'GD', 'NOC', 'GE', 'MMM', 'HON', 'UNP', 'NVO', 'AMGN', 'BIIB', 'SNY', 'NVS',
-                'JNJ', 'LLY', 'UNH', 'PFE', 'ABBV', 'MRK', 'TMO', 'MP', 'CMG', 'METC', 'RIO', 'BHP', 'AEM', 'DHR', 'BMY', 'CVS'
-            ],
-            
-            "🇪🇺 Europa - Germania (DAX 40)": [
-                'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'AIR.DE', 'BMW.DE', 'VOW3.DE', 'MBG.DE', 'BAS.DE', 'BAYN.DE',
-                'ADS.DE', 'DHL.DE', 'DB1.DE', 'MUV2.DE', 'IFX.DE', 'EOAN.DE', 'RWE.DE', 'ENR.DE', 'DTG.DE', 'BSP.DE', 'RHM.DE', 'HEN3.DE', 'VNA.DE',
-                'DBK.DE', 'CBK.DE', 'CON.DE', 'HEI.DE', 'SY1.DE', 'MTX.DE', 'BEI.DE', 'PUM.DE', 'ZAL.DE'
-            ],
-            
-            "🇪🇺 Europa - Franța (CAC 40)": [
-                'MC.PA', 'OR.PA', 'TTE.PA', 'SAN.PA', 'AIR.PA', 'SU.PA', 'AI.PA', 'BNP.PA', 'EL.PA', 'KER.PA',
-                'RMS.PA', 'SAF.PA', 'CS.PA', 'DG.PA', 'RNO.PA', 'STLAP.PA', 'GLNCY', 'ACA.PA', 'ORA.PA', 'CAP.PA', 'EN.PA',
-                'VIV.PA', 'ENG.PA', 'LR.PA', 'ML.PA', 'DGE.L', 'SU.PA', 'HO.PA', 'RI.PA', 'BN.PA', 'DSY.PA'
-            ],
-            
-            "🇬🇧 UK & Others (FTSE/Global)": [
-                'SHEL.L', 'AZN', 'HSBA.L', 'ULVR.L', 'BP', 'RIO', 'GSK.L', 'DGE.L', 'REL.L', 'BATS.L',
-                'GLNCY', 'LSEG.L', 'AAL.L', 'BARC.L', 'LLOY.L', 'BA.L', 'LDO.MI', 'NWG.L', 'VOD.L', 'RR.L', 'TSCO.L',
-                'ASML', 'NVO', 'SONY', 'TSM', 'BABA', 'JD', 'BIDU', 'TCEHY'
-            ]
-        }
+        # Listele de scanare: din listele unice (data/universes.py), câte un grup pe secțiune + „toate” pe piață.
+        # BVB rămâne separat de Europa; ETF-ul BET (TVBETETF.RO) se scanează împreună cu BVB, ca înainte.
+        tickers_map = {f"🇷🇴 BVB – toate ({len(universes.symbols('bvb')) + 1})": [BRIEFING_BET_PROXY] + universes.symbols("bvb")}
+        for mk, flag in (("us", "🇺🇸 SUA"), ("eu", "🇪🇺 Europa")):
+            tickers_map[f"{flag} – toate ({len(universes.symbols(mk))})"] = universes.symbols(mk)
+            for sec, syms in universes.groups(mk).items():
+                tickers_map[f"{flag} – {sec} ({len(syms)})"] = syms
         
         # Funcție internă de calcul RVOL + AI Isolation Forest
-        def get_rvol_data(ticker_list):
+        def get_rvol_data(ticker_list, include_partial=False):
             from ai_engine import detect_volume_anomaly_ai # Importăm funcția nouă AI
             try:
                 # Descărcăm date pe 3 luni pentru a avea destul istoric de "învățare" pt ML
-                data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False)
+                data = yf.download(ticker_list, period="3mo", group_by='ticker', progress=False, auto_adjust=True)
+                closes, volumes = field_frame(data, "Close", ticker_list), field_frame(data, "Volume", ticker_list)
                 results = []
+                states = {}   # starea bursei, o dată pe bursă: ședința de azi e încă în desfășurare?
                 
                 for t in ticker_list:
                     try:
-                        # Gestionare MultiIndex vs Single Index
-                        if isinstance(data.columns, pd.MultiIndex):
-                            if t not in data.columns.levels[0]: continue
-                            df_t = data[t]
-                        else:
-                            df_t = data
+                        if t not in closes.columns or t not in volumes.columns: continue
+                        hk = scanner_calc.hours_key(t)
+                        if hk not in states:
+                            states[hk] = briefing_calc.market_state(hk, now_ro())
+                        df_t = pd.DataFrame({"Close": closes[t], "Volume": volumes[t]})
+                        # Preț și volum aliniate pe aceeași zi; media pe 20 de ședințe cu volum (fără zilele cu 0)
+                        # În timpul ședinței: implicit ultima ședință încheiată; opțional bara în curs, marcată „parțial”
+                        rs = scanner_calc.rvol_session(df_t, lambda d, s=states[hk]: briefing_calc.session_is_partial(d, s),
+                                                       include_partial)
+                        if rs is None: continue
+                        curr_p, curr_vol, avg_vol_20 = rs["close"], rs["volume"], rs["avg_volume"]
+                        # Lichiditate: doar la BVB, valoare ≥ 50.000 lei în ședința evaluată (ca în Rezumat); SUA/UE fără prag
+                        if not scanner_calc.liquidity_ok(t, curr_p, curr_vol, avg_vol_20): continue
                         
-                        vol = df_t['Volume'].dropna()
-                        close = df_t['Close'].dropna()
+                        rvol = rs["rvol"]
+                        change_pct = rs["change_pct"]
                         
-                        if len(vol) < 25: continue 
-                        
-                        # Calcule clasice matematice
-                        curr_vol = vol.iloc[-1]
-                        avg_vol_20 = vol.iloc[-21:-1].mean()
-                        if avg_vol_20 < 5000: continue # Ignorăm acțiunile nelichide
-                        
-                        rvol = curr_vol / avg_vol_20
-                        
-                        curr_p = close.iloc[-1]
-                        prev_p = close.iloc[-2]
-                        change_pct = ((curr_p - prev_p) / prev_p) * 100
-                        
-                        # --- MAGIA AI: Interogăm modelul Isolation Forest ---
-                        is_anomaly = detect_volume_anomaly_ai(df_t)
+                        # Isolation Forest pe aceeași ședință ca RVOL, antrenat doar pe zilele dinaintea ei (nevalidat)
+                        is_anomaly = detect_volume_anomaly_ai(df_t[df_t.index <= rs["date"]])
                         
                         results.append({
                             "Simbol": t.replace('.RO', ''),
+                            "Ședința": f"{pd.Timestamp(rs['date']):%d.%m}" + (" ⏳ parțial" if rs["partial"] else ""),
                             "Preț": curr_p,
                             "Variație %": change_pct,
-                            "Volum Azi": curr_vol,
+                            "Monedă": briefing_calc.quote_currency(t) or "N/A",
+                            "Volum": curr_vol,
+                            "Valoare": curr_p * curr_vol,
                             "Volum Mediu (20z)": avg_vol_20,
                             "RVOL": rvol,
-                            "Alertă AI": "🚨 ATENTIE" if is_anomaly else "-",  # <--- NOUA COLOANĂ AI
-                            "Status": "🚀 BREAKOUT" if (rvol > 2.0 and change_pct > 1.5) 
-                                     else ("⚠️ PANIC SELL" if (rvol > 2.0 and change_pct < -1.5) 
-                                     else ("✅ ACUMULARE" if (rvol > 1.2 and change_pct > 0) else "Normal"))
+                            "Anomalie model (nevalidat)": "da" if is_anomaly else ("N/A" if is_anomaly is None else "-"),
+                            # Praguri fixe, netestate istoric (analytics/scanner.py: status_label)
+                            "Status": scanner_calc.status_label(rvol, change_pct)
                         })
-                    except: continue
+                    except Exception as exc:  # înainte: except: gol
+                        logger.debug("get_rvol_data: %s", exc)
+                        continue
                     
                 return pd.DataFrame(results)
-            except: return pd.DataFrame()
+            except Exception as exc:  # înainte: except: gol
+                logger.warning("get_rvol_data: %s", exc)
+                return pd.DataFrame()
                         
 
         # --- SELECTOR DE PIAȚĂ (DROPDOWN în loc de TABURI pentru eficiență) ---
@@ -7242,6 +7960,10 @@ def main():
         # Extragem tickerii pentru selecția făcută
         selected_tickers = tickers_map[market_choice]
         
+        include_partial = st.checkbox("Include ședința în curs (volum parțial)", value=False, key="scanner_partial",
+                                      help="Implicit, RVOL se calculează pe ultima ședință ÎNCHEIATĂ: în timpul zilei volumul e "
+                                           "parțial, iar împărțit la media pe 20 de ședințe întregi ar ieși prea mic. Bifat: "
+                                           "se folosește bara de azi, marcată „⏳ parțial” în coloana „Ședința”.")
         col_scan_btn, col_info = st.columns([1, 3])
         
         with col_scan_btn:
@@ -7252,7 +7974,7 @@ def main():
 
         if run_scan:
             with st.spinner(f"Analizăm {market_choice}... (Poate dura 10-20 secunde)"):
-                df_res = get_rvol_data(selected_tickers)
+                df_res = get_rvol_data(selected_tickers, include_partial)
                 
                 if not df_res.empty:
                     # Filtrare după Threshold-ul ales de user
@@ -7273,12 +7995,6 @@ def main():
                                 styles = ['background-color: rgba(248, 81, 73, 0.2)'] * len(row)
                             else:
                                 styles = [''] * len(row)
-                                
-                            # Evidențiem DOAR coloana de AI dacă e anomalie (O colorăm diferit, gen Wall Street Alert)
-                            if "ATENTIE" in str(row['Alertă AI']):
-                                idx = row.index.get_loc('Alertă AI')
-                                styles[idx] += '; color: #FFAB00; font-weight: bold; background-color: rgba(255, 171, 0, 0.2); border: 1px solid #FFAB00;'
-                                
                             return styles
 
                         # --- AFIȘARE TABEL FĂRĂ INDEX ȘI CU STIL ---
@@ -7286,9 +8002,10 @@ def main():
                         
                         st.dataframe(
                             df_filtered.style.apply(style_scanner_rows, axis=1).format({
-                                "Preț": ro_spec('.2f'),
+                                "Preț": price_ro,   # 4 zecimale sub 10 (HAI 0,2350, nu 0,23)
                                 "Variație %": ro_spec('+.2f', '%'),
-                                "Volum Azi": ro_spec(',.0f'),
+                                "Volum": ro_spec(',.0f'),
+                                "Valoare": ro_spec(',.0f'),
                                 "Volum Mediu (20z)": ro_spec(',.0f'),
                                 "RVOL": ro_spec('.2f', 'x')
                             }),
@@ -7297,127 +8014,198 @@ def main():
                             hide_index=True  # <--- ACEASTA ESTE LINIA CARE ELIMINĂ NUMERELE DIN STÂNGA
                         )
                         
-                        st.caption("🟢 **Verde Aprins:** Breakout Confirmat | 🟢 **Verde Pal:** Acumulare Discretă | 🔴 **Roșu:** Panic Sell")
+                        st.caption("🟢 **Verde aprins:** BREAKOUT (RVOL > 2 și variație > +1,5%) | 🟢 **Verde pal:** ACUMULARE "
+                                   "(RVOL > 1,2 și variație pozitivă) | 🔴 **Roșu:** PANIC SELL (RVOL > 2 și variație < −1,5%). "
+                                   "Etichete descriptive cu praguri fixe, **netestate istoric**: nu s-a măsurat ce face prețul după ele.")
+                        st.caption("„Anomalie model (nevalidat)”: Isolation Forest pe randament, volum și volatilitatea pe 5 zile, "
+                                   "antrenat pe ~3 luni dinaintea ședinței evaluate. Pragul e fixat ca ~5% din zilele de antrenare "
+                                   "să fie anomalii, prin construcție; modelul nu a fost validat pe date nevăzute, deci nu e un "
+                                   "semnal mai puternic decât RVOL. N/A = istoric prea scurt.")
                     else:
                         st.info(f"Nicio acțiune din {market_choice} nu depășește pragul de {threshold}x azi.")
                 else:
                     st.warning("Eroare la preluarea datelor. Yahoo Finance ar putea limita cererile.")
     # ==================================================
-    # 8. WATCHLIST (FINAL FIX - TIMEZONE PROOF)
+    # 8. WATCHLIST (logica în analytics/watchlist.py)
     # ==================================================
     elif sectiune == "8. Watchlist":
         st.title("Lista de Urmărire (Watchlist)")
         st.markdown("Monitorizează acțiunile pe care vrei să le cumperi când prețul scade.")
+        if st.session_state.get("wl_msg"):
+            st.success(st.session_state.pop("wl_msg"))
 
         # --- FORMULAR ADĂUGARE ---
         with st.expander("➕ Adaugă Alertă Nouă", expanded=False):
             with st.form("wl_form"):
                 c1, c2, c3 = st.columns([1, 1, 2])
                 s_wl = c1.text_input("Simbol (ex: TSLA)").upper()
-                p_wl = c2.number_input("Preț Țintă (Target)", min_value=0.0, step=0.1)
+                # 4 zecimale: la BVB sunt acțiuni sub 1 leu (0,4950); formatul implicit are 2
+                p_wl = c2.number_input("Preț Țintă (Target)", min_value=0.0, step=0.01, format="%.4f")
                 n_wl = c3.text_input("Notă (ex: Suport major, aștept earnings)")
+                st.caption("Simbolul se caută ca în Analiză: întâi cel scris, apoi cu .RO. La BVB scrie-l cu .RO când "
+                           "există și o acțiune americană cu același simbol (EL = Estée Lauder, EL.RO = Electrica). "
+                           "Ținta e în moneda cotației, cea din coloana Monedă (la Londra poate fi GBp = pence, GBP, USD sau EUR).")
                 
                 if st.form_submit_button("Adaugă în Listă"):
-                    if s_wl and p_wl > 0:
-                        if add_to_watchlist(s_wl, p_wl, n_wl):
-                            st.success(f"Adăugat {s_wl} la ținta {p_wl}!")
+                    if s_wl.strip() and p_wl > 0:
+                        ok, msg = add_to_watchlist(s_wl, p_wl, n_wl)
+                        if ok:
+                            st.session_state["wl_msg"] = msg  # afișat după rerun (altfel mesajul dispare)
                             st.rerun()
+                        st.warning(msg)
                     else:
                         st.warning("Introdu un simbol și un preț valid.")
 
         # --- AFIȘARE TABEL ---
         df_wl = load_watchlist()
+        for problem in df_wl.attrs.get("problems", []):
+            st.warning(problem)
         
         if not df_wl.empty:
-            # 1. Luăm prețurile live pentru toate simbolurile din listă
+            # 1. Ultimul preț pentru fiecare simbol (close_frame, cache 15 minute)
             tickers_list = df_wl['Symbol'].unique().tolist()
-            live_data = pd.Series()
+            with st.spinner("Actualizăm prețurile..."):
+                quotes = get_watchlist_quotes(tickers_list)
+            with st.spinner("Calculăm momentul..."):
+                moments = get_watchlist_moments(tickers_list)
 
-            if tickers_list:
-                with st.spinner("Actualizăm prețurile (Global)..."):
+            # Scorul fundamental: la buton (decizia lui Daniel, 09.11 seara), ~8 cereri Yahoo pe acțiune SUA/UE.
+            # Rezultatele stau 24 h în cache pe simbol; butonul doar pornește afișarea în sesiunea curentă.
+            fund_cells, fund_times, fund_failed, fund_note = {}, [], [], None
+            b1, b2, _ = st.columns([1.4, 1.4, 2])
+            if b1.button("📊 Calculează scorurile fundamentale", key="wl_fund_btn"):
+                st.session_state["wl_fund_on"] = True
+            if st.session_state.get("wl_fund_on") and b2.button("🔄 Recalculează (golește cache-ul de 24 h)", key="wl_fund_clear"):
+                _watchlist_global_fundamental.clear()
+            if st.session_state.get("wl_fund_on"):
+                ro_syms = [s for s in tickers_list if str(s).upper().endswith(".RO")]
+                other_syms = [s for s in tickers_list if s not in ro_syms]
+                if ro_syms:
+                    with st.spinner("Citesc fișierele din „Analiză companii” (prima dată durează până la ~30 de secunde)..."):
+                        bvb_cells, fund_note = watchlist_bvb_fundamentals(
+                            ro_syms, {s: (quotes.get(s) or {}).get("price") for s in ro_syms})
+                    fund_cells.update(bvb_cells)
+                bar = st.progress(0.0, text="Scoruri fundamentale SUA/UE...")
+                for k, sym in enumerate(other_syms, 1):
+                    bar.progress(k / max(len(other_syms), 1), text=f"Scoruri fundamentale SUA/UE: {sym} ({k} din {len(other_syms)})")
                     try:
-                        # DESCĂRCARE DATE PE 5 ZILE (pentru siguranță)
-                        data_bulk = yf.download(tickers_list, period="5d", progress=False)['Close']
-                        
-                        # Tratare caz un singur ticker (Series -> DataFrame)
-                        if isinstance(data_bulk, pd.Series):
-                             data_bulk = data_bulk.to_frame(name=tickers_list[0])
-                        
-                        # --- LOGICĂ DE EXTRAGERE PREȚ VALID INDIFERENT DE ORĂ ---
-                        current_prices = {}
-                        
-                        for col in data_bulk.columns:
-                            # Luăm coloana și ștergem valorile goale (NaN)
-                            valid_values = data_bulk[col].dropna()
-                            
-                            if not valid_values.empty:
-                                # Luăm ultima valoare existentă (chiar dacă e de ieri)
-                                current_prices[col] = valid_values.iloc[-1]
-                            # fără date: simbolul lipsește din serie și apare „N/A”, nu preț 0
-                        
-                        # Convertim înapoi în Series pentru restul codului
-                        live_data = pd.Series(current_prices)
-                        # --------------------------------------------------------
-
-                    except Exception as e:
-                        # st.error(f"Eroare date: {e}") 
-                        live_data = pd.Series()
+                        res = _watchlist_global_fundamental(sym)
+                        fund_cells[sym] = res["na"] or watchlist_calc.global_fundamental_cell(res["score"], res["label"])
+                        fund_times.append(res["at"])
+                    except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError,
+                            yf.exceptions.YFException) as e:
+                        logger.warning(f"Watchlist, scor fundamental {sym}: {e}")
+                        fund_cells[sym] = "N/A (Yahoo)"
+                        fund_failed.append(sym)
+                bar.empty()
 
             # 2. Construim tabelul final
+            today_ro = now_ro()
+            states = {}   # starea fiecărei burse (BVB, NYSE, XETRA), calculată o dată
             display_rows = []
             for index, row in df_wl.iterrows():
                 sym = row['Symbol']
-                target = smart_to_float(row['TargetPrice'])  # acceptă și formatul românesc ("25,5")
                 note = row['Notes']
+                quote = quotes.get(sym) or {}
+                hk = scanner_calc.hours_key(sym)
+                if hk not in states:
+                    states[hk] = briefing_calc.market_state(hk, today_ro)
+                partial = briefing_calc.session_is_partial(quote.get("date"), states[hk])
                 
                 # Preț sau țintă lipsă rămân lipsă („N/A”), nu 0; distanța e față de țintă, ca în cardul din analiză.
-                curr, target, dist_pct, is_buy = watchlist_status(live_data.get(sym), target)
-                if curr is None:
-                    status = "Fără preț"
-                elif target is None:
-                    status = "Fără țintă"
-                else:
-                    status = "✅ CUMPĂRĂ" if is_buy else "⏳ Așteaptă"
-                
+                curr, target, dist_pct, _ = watchlist_status(quote.get("price"), row['TargetPrice'])
                 display_rows.append({
                     "Simbol": sym,
-                    "Preț Curent": curr,
+                    "Monedă": watchlist_currency(sym),
+                    "Ultimul preț": curr,
+                    "Data prețului": watchlist_calc.price_date_text(quote.get("date"), today_ro, partial),
                     "Preț Țintă 🎯": target,
                     "Distanță (%)": dist_pct,
-                    "Recomandare": status,
+                    "Status": watchlist_calc.status_label(curr, target),
+                    "Moment": moments.get(sym, "N/A"),
+                    "Scor fundamental": fund_cells.get(sym, watchlist_calc.NOT_COMPUTED),
+                    "Data țintei": row['Date'].strftime("%d.%m.%Y") if pd.notna(row['Date']) else "N/A",
                     "Notă": note,
-                    "_is_buy": is_buy 
+                    "_zone": target_zone(curr, target),
                 })
             
             df_res = pd.DataFrame(display_rows)
+            no_price = [s for s in tickers_list if s not in quotes]
+            if no_price:
+                st.caption(f"Fără preț Yahoo: {', '.join(no_price)}. La BVB simbolul are sufixul .RO (ex: TLV.RO): "
+                           "șterge rândul și adaugă-l din nou din formular, care găsește singur simbolul corect.")
+            pence = df_res.loc[df_res["Monedă"].str.startswith("GBp"), "Simbol"].tolist()
+            if pence:
+                st.caption(f"În pence (GBp): {', '.join(pence)}. Ținta acestor rânduri se scrie tot în pence (1 GBP = 100 GBp).")
 
-            # 3. Stilizare și Afișare
-            def highlight_buy(row):
-                if row['_is_buy']:
-                    return ['background-color: rgba(63, 185, 80, 0.2); font-weight: bold'] * len(row)
-                else:
-                    return [''] * len(row)
+            # 3. Stilizare și Afișare: verde la/sub țintă, galben aproape (aceleași culori ca în cardul din Analiză)
+            zone_style = {"sub": 'background-color: rgba(63, 185, 80, 0.2); font-weight: bold',
+                          "aproape": 'background-color: rgba(210, 153, 34, 0.18)'}
+            def highlight_zone(row):
+                return [zone_style.get(row['_zone'], '')] * len(row)
 
             st.dataframe(
-                df_res.style.apply(highlight_buy, axis=1)
-                .format({"Preț Curent": ro_spec('.2f'), "Preț Țintă 🎯": ro_spec('.2f'), "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
+                df_res.style.apply(highlight_zone, axis=1)
+                .format({"Ultimul preț": price_ro, "Preț Țintă 🎯": price_ro, "Distanță (%)": ro_spec('+.2f', '%')}, na_rep="N/A"),
                 width='stretch',
                 height=500,
                 column_config={
-                    "_is_buy": None, 
+                    "_zone": None,
+                    "Monedă": st.column_config.Column(help="Moneda cotației. SUA (fără sufix) → USD, BVB (.RO) → RON; la celelalte burse "
+                                                           "moneda vine de la Yahoo, pentru că aceeași bursă are linii în monede diferite "
+                                                           "(la Londra: GBp = pence, GBP, USD, EUR). „(dedusă)” = Yahoo n-a răspuns, moneda "
+                                                           "e ghicită după sufix. Ținta e în aceeași monedă ca prețul."),
+                    "Ultimul preț": st.column_config.Column(help="Ultima închidere Yahoo (preț real, neajustat cu dividende). În timpul "
+                                                                 "ședinței e prețul de azi, cu întârziere de ~15 minute."),
+                    "Data prețului": st.column_config.Column(help="Ziua prețului. ⏳ = ședință în curs (prețul se mai schimbă). "
+                                                                  f"⚠️ = mai vechi de {watchlist_calc.STALE_BDAYS} zile lucrătoare "
+                                                                  "(titlu netranzacționat sau suspendat; sărbătorile nu sunt scăzute)."),
+                    "Preț Țintă 🎯": st.column_config.Column(help="Prețul la care vrei să cumperi, scris de tine în foaia watchlist."),
+                    "Distanță (%)": st.column_config.Column(help="(Ultimul preț − țintă) ÷ țintă × 100. Plus = prețul e peste țintă "
+                                                                 "(cât mai are de scăzut, raportat la țintă); minus = sub țintă."),
+                    "Status": st.column_config.Column(help="✅ prețul e la sau sub țintă; 🟡 peste țintă cu mai puțin de "
+                                                           f"{NEAR_TARGET_PCT:.0f}%; ⏳ peste. Alertă față de ținta ta, nu o recomandare: "
+                                                           "verifică fundamentalele în Analiză înainte de a cumpăra."),
+                    "Moment": st.column_config.Column(help="Sub-scorul tehnic 0–100, același ca în Analiză Companie: media trendului "
+                                                           "(câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200) și a momentumului "
+                                                           "12-1 (−30% → 0, +30% → 100), pe prețuri ajustate; RSI nu intră. BVB: eticheta pe "
+                                                           "pragurile testate 2012–2025 (≥ 80 FAVORABIL, 40–80 NEUTRU, < 40 NEFAVORABIL). "
+                                                           "Celelalte piețe: fără verdict (testul pe SUA nu a găsit putere de predicție). "
+                                                           "N/A = istoric sub 50 de ședințe sau fără date. Nu se adună cu scorul fundamental."),
+                    "Scor fundamental": st.column_config.Column(help="Scorul companiei, același ca în Analiză Companie. BVB: media "
+                                                                     "percentilelor E/P, B/P, randament dividend și Piotroski simplificat față "
+                                                                     "de companiile din fișierele „Analiză companii”, cu treapta testată. SUA/UE: "
+                                                                     "evaluare, calitate, sănătate (rentabilitate la financiare), praguri netestate. "
+                                                                     "— = necalculat (butonul de deasupra tabelului); N/A (ETF) = nu se aplică; "
+                                                                     "N/A (Yahoo) = date incomplete acum, se reîncearcă la următorul calcul."),
+                    "Data țintei": st.column_config.Column(help="Când ai pus ținta (coloana Date din foaie). O țintă veche poate să nu mai "
+                                                                "corespundă fundamentalelor actuale. N/A = rând adăugat înainte de coloana Date."),
                 },
                 hide_index=True 
             )
+            st.caption("Status = prețul față de ținta ta (o alertă de preț, nu o recomandare). Distanța = (preț − țintă) ÷ țintă: "
+                       f"plus = peste țintă. „Aproape” = sub {NEAR_TARGET_PCT:.0f}% peste țintă, același prag ca în cardul „Țintă intrare”. "
+                       "Prețul e ultima închidere Yahoo; în timpul ședinței, prețul de azi cu întârziere (⏳).")
             
+            if fund_times:
+                st.caption(f"Scorurile fundamentale SUA/UE din cache-ul de 24 h, calculate între {min(fund_times):%d.%m %H:%M} și "
+                           f"{max(fund_times):%d.%m %H:%M}: evaluarea folosește prețul de atunci. „🔄 Recalculează” le reface.")
+            if fund_failed:
+                st.caption(f"Fără scor acum (Yahoo a răspuns incomplet): {', '.join(fund_failed)}. Se reîncearcă la următorul calcul.")
+            if fund_note:
+                st.caption(f"Scorul BVB indisponibil: {fund_note}")
+
             # Buton ștergere
             with st.expander("🗑️ Șterge din listă"):
                 del_sym = st.selectbox("Alege simbol de șters:", tickers_list)
                 if st.button("Șterge"):
-                    if remove_from_watchlist(del_sym):
-                        st.warning(f"Șters {del_sym}.")
+                    ok, msg = remove_from_watchlist(del_sym)
+                    if ok:
+                        st.session_state["wl_msg"] = msg  # afișat după rerun
                         st.rerun()
+                    st.error(msg)
 
-        else:
+        elif not df_wl.attrs.get("problems"):
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
 
 if __name__ == "__main__":

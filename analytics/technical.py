@@ -102,3 +102,30 @@ def macd(close, fast=12, slow=26, signal=9):
     line = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
     sig = line.ewm(span=signal, adjust=False).mean()
     return line, sig
+
+
+def price_changes(window_close, full_close):
+    """Cardurile „Interval” și „Evoluție Azi” din Analiză Companie.
+
+    `window_close` = închiderile din intervalul ales; `full_close` = tot istoricul (pentru ședința precedentă).
+    Întoarce dict: last (ultima închidere), diff / diff_pct (față de prima închidere din interval),
+    day / day_pct (față de închiderea precedentă). Orice valoare care nu se poate calcula e None
+    (interval gol, o singură ședință, preț lipsă sau ≤ 0): niciodată 0, care ar arăta „0,00 (0,00%)”.
+    """
+    out = dict.fromkeys(("last", "diff", "diff_pct", "day", "day_pct"))
+    win = pd.to_numeric(pd.Series(window_close, dtype="float64"), errors="coerce").dropna()
+    full = pd.to_numeric(pd.Series(full_close, dtype="float64"), errors="coerce").dropna()
+    if win.empty:
+        return out
+    last = float(win.iloc[-1])
+    out["last"] = last
+    start = float(win.iloc[0])
+    if len(win) >= 2 and start > 0:
+        out["diff"] = last - start
+        out["diff_pct"] = (last - start) / start * 100.0
+    if len(full) >= 2:
+        prev = float(full.iloc[-2])
+        if prev > 0:
+            out["day"] = last - prev
+            out["day_pct"] = (last - prev) / prev * 100.0
+    return out

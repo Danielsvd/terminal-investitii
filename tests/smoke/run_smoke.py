@@ -17,6 +17,7 @@ import re
 import sys
 import time
 import types
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -25,9 +26,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 APP_DIR = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else ROOT
 os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
+from data import fred_calendar as fred_cal   # noqa: E402  (deciziile FOMC din calendarul Fed)
 
 TODAY = pd.Timestamp.today().normalize()
-NO_DATA = {"NODATA.RO"}            # simbol fără nicio cotație
+NO_DATA = {"NODATA.RO", "NODATA", "BVBONLY"}   # simboluri fără nicio cotație (BVBONLY.RO are: rezolvarea .RO din Watchlist)
 NEW_LISTING = {"NEWCO"}            # simbol listat de 60 de ședințe
 
 
@@ -63,7 +65,7 @@ def _ohlcv(sym, n, tz=None):
 def _n_rows(period=None, start=None):
     if start is not None:
         return max(len(pd.bdate_range(pd.Timestamp(start).tz_localize(None), TODAY)), 2)
-    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "3y": 756, "5y": 1260}.get(period, 252)
+    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "2y": 504, "3y": 756, "5y": 1260}.get(period, 252)
 
 
 RICH_INFO = dict(
@@ -113,6 +115,8 @@ class _FastInfo:
         self.last_price = float(df["Close"].iloc[-1]) if df["Close"].notna().any() else None
         self.previous_close = float(df["Close"].iloc[-2]) if df["Close"].notna().any() else None
         self.currency = "RON" if sym.endswith(".RO") else ("EUR" if sym.endswith((".DE", ".PA")) else "USD")
+        if sym.endswith(".L"):   # Londra: acțiunile în pence; ETC-ul pe aur EGLN.L într-o linie în EUR (ca pe test1, 09.11)
+            self.currency = "EUR" if sym == "EGLN.L" else "GBp"
         self.market_cap = 1e9
 
 
@@ -245,6 +249,12 @@ def fake_download(tickers, period=None, start=None, group_by="column", **k):
         tickers = tickers.split()
     n = _n_rows(period, start)
     frames = {t: _ohlcv(t, n) for t in tickers}
+    if "^STOXX" in tickers and len(tickers) > 60:
+        # ca pe test1 la 05.11: în cererea mare a Europei Yahoo refuză cele mai multe simboluri (coloane goale);
+        # recererea în grupuri mici (app._download_briefing) trebuie să le completeze
+        for i, t in enumerate(tickers):
+            if i % 8:
+                frames[t] = frames[t] * np.nan
     if group_by == "ticker":
         out = pd.concat(frames, axis=1)
     else:
@@ -260,7 +270,13 @@ class FakeTickers:
         self.tickers = {s: FakeTicker(s) for s in symbols}
 
 
+FRED_DAILY = {"DFEDTARL": 4.25, "DFEDTARU": 4.50, "DFF": 4.33, "DGS3MO": 4.20, "DGS2": 3.90, "DGS10": 4.40, "BAMLH0A0HYM2": 3.10, "BAMLC0A0CM": 0.85}
+
+
 def fake_fred(code, source, start, end):
+    if code in FRED_DAILY:                      # randamente zilnice (dobânzi comparate), ușor crescătoare
+        didx = pd.bdate_range(end=TODAY, periods=560)
+        return pd.DataFrame({code: [FRED_DAILY[code] + 0.001 * i for i in range(len(didx))]}, index=didx)
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
@@ -270,10 +286,14 @@ def fake_fred(code, source, start, end):
 
 
 def fake_feed(url):
+    # Pe fluxul unui simbol, știrile pare îl menționează (rămân după filtrul pe emitent), cele impare nu.
+    sym = url.split("s=", 1)[1].split("&", 1)[0].split(".")[0] if "s=" in url else ""
+
     def entry(i):
         ts = time.gmtime(time.time() - i * 3600)
+        about = f"{sym} " if sym and i % 2 == 0 else ""
         return types.SimpleNamespace(
-            title=f"Știre <b>test</b> {i}: banca centrală și tehnologia AI", link="https://example.com/a",
+            title=f"Știre <b>test</b> {i}: {about}banca centrală și tehnologia AI", link="https://example.com/a",
             summary="<p>Rezumat cu <a href='x'>HTML</a> netăiat corect " + "text " * 80,
             published_parsed=ts, updated_parsed=ts, published="x")
     feed = types.SimpleNamespace(get=lambda k, d=None: "Ziarul Financiar Test" if k == "title" else d)
@@ -292,8 +312,10 @@ SHEETS = {
         {"Symbol": "NODATA.RO", "Date": "2024-02-10", "Quantity": 100, "AvgPrice": 2.0, "Currency": "RON"},
     ],
     "watchlist": [
-        {"Symbol": "MSFT", "TargetPrice": 300, "Notes": "test"},
-        {"Symbol": "TLV.RO", "TargetPrice": "25,5", "Notes": ""},
+        {"Symbol": "MSFT", "TargetPrice": 300, "Notes": "test", "Date": "2026-10-01"},
+        {"Symbol": "TLV.RO", "TargetPrice": "25,5", "Notes": "", "Date": ""},   # rând de dinainte de coloana Date
+        {"Symbol": "EGLN.L", "TargetPrice": 65, "Notes": "", "Date": ""},       # Londra, dar în EUR (nu pence)
+        {"Symbol": "SNP.RO", "TargetPrice": 0.8, "Notes": "", "Date": ""},      # BVB cu fișier „Analiză companii”: scor
     ],
     "BVB": [["Multipli", "Indicator", "TLV", "SNP"], ["", "Multipli de preț", "", ""],
             ["", "P/E TTM ", "8,5", "6,1"], ["", "Rentabilitate capital (ROE)", "22,10%", "#DIV/0!"],
@@ -323,8 +345,12 @@ SHEETS = {
         [(__import__("datetime").date.today() - __import__("datetime").timedelta(days=40 - i)).isoformat(), "AAPL", (20 + i) / 100]
         for i in range(25)],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
-               ["Tech", "AAPL", "2.500.000.000.000", "180,5", "28,1", "35,2%", "Buy"]],
+               ["Tech", "AAPL", "2.500.000.000.000 $", "180,5 $", "28,1", "35,2%", "Buy"],
+               ["", "SAP", "200.000.000.000€", "150,5€", "#DIV/0!", "-%", "Ține"]],
 }
+
+
+APPENDED = []   # rândurile adăugate de aplicație (foaie, rând), pentru verificări
 
 
 class FakeWorksheet:
@@ -341,7 +367,7 @@ class FakeWorksheet:
         return [list(r) for r in data]
 
     def append_row(self, row, *a, **k):
-        pass
+        APPENDED.append((self.name, list(row)))
 
     def append_rows(self, rows, *a, **k):
         pass
@@ -473,11 +499,44 @@ def install_fakes():
                       "dimension": {"time": {"category": {"index": {"2026-07": 0, "2026-08": 1}}}},
                       "value": {"0": 6.02, "1": 5.87}}
 
+    def _bnr_xml(days):
+        cubes = "".join(f'<Cube date="{d:%Y-%m-%d}"><Rate currency="EUR">{5.0 + i * 0.01:.4f}</Rate>'
+                        f'<Rate currency="USD">{4.4 + i * 0.01:.4f}</Rate><Rate currency="HUF" multiplier="100">1.3{i}</Rate></Cube>'
+                        for i, d in enumerate(days))
+        return ('<?xml version="1.0" encoding="utf-8"?><DataSet xmlns="http://www.bnr.ro/xsd"><Body>'
+                f'<OrigCurrency>RON</OrigCurrency>{cubes}</Body></DataSet>').encode()
+
     def fake_requests_get(url, *a, **k):
+        if "bnr.ro" in url:                     # cursurile BNR: anul trecut indisponibil (ramura de eroare)
+            if f"nbrfxrates{TODAY.year - 1}" in url:
+                raise requests.ConnectionError("BNR anul trecut indisponibil în testul de fum")
+            days = ([pd.Timestamp(TODAY) - pd.Timedelta(days=d) for d in (3, 2, 1)] if "10days" in url
+                    else [pd.Timestamp(TODAY) - pd.DateOffset(months=2), pd.Timestamp(TODAY) - pd.Timedelta(days=4)])
+            return types.SimpleNamespace(status_code=200, content=_bnr_xml(sorted(days)), raise_for_status=lambda: None)
+        if "api.stlouisfed.org" in url:          # calendarul FRED (releases/dates): 2 publicări urmărite + una neurmărită
+            assert k.get("params", {}).get("api_key") == FAKE_FRED_KEY
+            d0 = pd.Timestamp(TODAY)
+            rel = [{"release_id": 50, "release_name": "Employment Situation", "date": f"{d0 + pd.Timedelta(days=1):%Y-%m-%d}"},
+                   {"release_id": 10, "release_name": "Consumer Price Index", "date": f"{d0 + pd.Timedelta(days=7):%Y-%m-%d}"},
+                   {"release_id": 18, "release_name": "H.15 Selected Interest Rates", "date": f"{d0:%Y-%m-%d}"}]
+            return types.SimpleNamespace(status_code=200, json=lambda: {"release_dates": rel}, raise_for_status=lambda: None)
         if "ec.europa.eu/eurostat" in url:      # ROBOR 3M (Eurostat irt_st_m)
-            return types.SimpleNamespace(status_code=200, text="", json=lambda: EUROSTAT_ROBOR)
+            return types.SimpleNamespace(status_code=200, text="", json=lambda: EUROSTAT_ROBOR, raise_for_status=lambda: None)
         if "data-api.ecb.europa.eu" not in url:
             raise requests.ConnectionError("fără rețea în testul de fum")
+        ok = lambda: None
+        months = pd.period_range(end=pd.Period(TODAY, "M") - 1, periods=15, freq="M")
+        if "/FM/" in url:                       # dobânda de depozit BCE, zilnic
+            days = pd.bdate_range(end=TODAY, periods=300)
+            return types.SimpleNamespace(status_code=200, raise_for_status=ok, text="KEY,TIME_PERIOD,OBS_VALUE\n" + "".join(
+                f"X,{d:%Y-%m-%d},{2.0 if i > 150 else 2.25}\n" for i, d in enumerate(days)))
+        if "/IRS/M.DE" in url or "ICP/" in url:   # Bund 10 ani / inflația HICP (cheia nouă HICP și cea veche ICP), lunar
+            base = 2.6 if "/IRS/" in url else (5.0 if "M.RO" in url else 2.1)
+            return types.SimpleNamespace(status_code=200, raise_for_status=ok, text="KEY,TIME_PERIOD,OBS_VALUE\n" + "".join(
+                f"X,{m_},{base + 0.01 * i:.2f}\n" for i, m_ in enumerate(months)))
+        if "/IRS/M.RO" in url and "lastNObservations" in str(k.get("params", {})) and k["params"]["lastNObservations"] >= 30:
+            return types.SimpleNamespace(status_code=200, raise_for_status=ok, text="KEY,TIME_PERIOD,OBS_VALUE\n" + "".join(
+                f"X,{m_},{7.0 + 0.02 * i:.2f}\n" for i, m_ in enumerate(months)))
         if "/YC/" in url:                       # curba AAA a zonei euro, 10 ani − 3 luni, zilnic
             return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-10-20,0.61\nX,2026-10-21,0.64\n")
         return types.SimpleNamespace(status_code=200, text="KEY,TIME_PERIOD,OBS_VALUE\nX,2026-07,7.25\nX,2026-08,7.12\n")
@@ -517,11 +576,14 @@ def install_fakes():
 # --------------------------------------------------------------------------
 # Rularea
 # --------------------------------------------------------------------------
+FAKE_FRED_KEY = "0" * 32
+
 EXPECTED_MESSAGES = (
     "(prag absolut 45%, netestat)", "(prag absolut 20%, netestat)",   # nivelul IV la bani pe lanțul sintetic
     "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
     "Fără opțiuni listate în Yahoo", "Yahoo nu a trimis lista de expirări", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
+    "Ședința e în desfășurare",                   # Rezumatul Zilei rulat în timpul ședinței (depinde de ceas)
     "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
     "Marja de siguranță indisponibilă",            # DCF neaplicabil (sector financiar, FCF negativ, fără situații)
@@ -534,6 +596,9 @@ EXPECTED_MESSAGES = (
     "STRATEGIE SHORT VOL", "ALERTA IV",            # avertismente informative de opțiuni
     "Concentrare mare",                            # avertisment informativ de portofoliu
     "Risc Ridicat",                                # avertisment informativ Sortino
+    "Sortino sub 1", "Sortino între 1 și 2",       # avertisment informativ Sortino (TWR pe monedă)
+    "Istoricul real al pozițiilor în",            # tab fără registru reconstruibil în datele de test
+    "Prea puține zile cu randament în fereastra", # fereastră scurtă în datele de test
     "Tranziție", "Frică Extremă", "MOD DEFENSIV",   # texte informative macro
     "AI-ul nu a găsit o soluție convergentă",      # optimizator pe date sintetice
     # titluri de secțiune afișate cu st.error / st.warning / st.success (nu sunt erori)
@@ -541,13 +606,42 @@ EXPECTED_MESSAGES = (
     "Companii Small-Cap", "AMENINȚĂRI",
     "Yahoo nu a trimis rezumatul companiei",       # banner: indicatori calculați din situațiile financiare
     "Yahoo nu a trimis datele fundamentale",       # banner pentru simbolurile fără fundamentale
+    "e deja în watchlist",                         # smoke-ul încearcă intenționat un duplicat
+    "Yahoo nu are preț pentru NODATA",             # ... și un simbol fără preț
     "zile comune de tranzacționare; sunt necesare",  # tabul EUR din datele de test: o poziție listată de 60 de zile
     "Sunt necesare cel puțin 2 active cu istoric",  # tabul RON din datele de test are un singur simbol cu preț
 )
 
 
+def _ro_num(text):
+    """„+1,39”, „7,28%”, „1.250,5000” → float; „N/A” → None (tabelele afișate ca text în format românesc)."""
+    if text == "N/A":
+        return None
+    return float(str(text).replace("%", "").replace("+", "").replace(".", "").replace(",", "."))
+
+
+def _collect_app_warnings():
+    """Avertismentele Python (pandas FutureWarning, DeprecationWarning etc.) emise din codul aplicației
+    (nu din biblioteci și nu din teste) se adună aici; la final smoke-ul pică dacă există vreunul."""
+    found = []
+    repo = os.path.realpath(APP_DIR) + os.sep
+    tests_dir = os.path.join(repo, "tests") + os.sep
+    original = warnings.showwarning
+
+    def show(message, category, filename, lineno, file=None, line=None):
+        path = os.path.realpath(filename or "")
+        if path.startswith(repo) and not path.startswith(tests_dir):
+            found.append(f"{os.path.relpath(path, repo)}:{lineno}: {category.__name__}: {str(message)[:200]}")
+        original(message, category, filename, lineno, file, line)
+
+    warnings.simplefilter("always")
+    warnings.showwarning = show
+    return found
+
+
 def main():
     install_fakes()
+    app_warnings = _collect_app_warnings()
     from streamlit.testing.v1 import AppTest
 
     problems, notes = [], []
@@ -569,6 +663,7 @@ def main():
 
     at = AppTest.from_file(os.path.join(APP_DIR, "app.py"), default_timeout=300)
     at.secrets["gcp_service_account"] = {"type": "service_account"}
+    at.secrets["FRED_API_KEY"] = FAKE_FRED_KEY   # cheie falsă: calendarul macro rulează pe răspunsul fals de mai sus
     at.run()
     check(at, "1. Știri")
 
@@ -584,8 +679,14 @@ def main():
     assert "E/P față de AAA" in by_comp, f"lipsește componenta E/P față de AAA: {list(by_comp)}"
     assert by_comp.get("GN (Graham)") == "informativ", f"GN trebuie să fie informativ: {by_comp.get('GN (Graham)')}"
     print(f"AAPL componente: {by_comp}")
+    # cardurile Interval / Evoluție Azi: cu istoric, valoare și variație (nu N/A, nu „0,00 (0,00%)”)
+    iv = next(m for m in at.metric if m.label.startswith("Interval ("))
+    day_card = next(m for m in at.metric if m.label == "Evoluție Azi")
+    assert iv.value != "N/A" and iv.delta and day_card.delta, (iv.value, iv.delta, day_card.delta)
+    print("Interval / Azi:", iv.value, iv.delta, "|", day_card.value, day_card.delta)
+    assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Analiză: lipsește timpul paginii"
     page_text = lambda: " ".join(str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.success) + list(at.error) + list(at.warning))
-    curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4,20% − 3 luni 3,90%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
+    curve_expect = {"AAPL": "SUA, titluri de stat 10 ani 4,20% − 3 luni 3,99%", "SAP.DE": "zona euro, curba titlurilor de stat AAA",
                     "SNP.RO": "România, titluri de stat 10 ani 7,12% (BCE) − ROBOR 3M 5,87% (Eurostat), 2026-08"}
     assert curve_expect["AAPL"] in page_text(), "lipsește curba SUA în ratingul AAPL"
     metric_labels = [str(m.label) for m in at.metric]
@@ -612,12 +713,22 @@ def main():
         assert any("Metoda veche" in str(e.label) for e in at.expander), f"lipsește arhiva metodei vechi la {sym}"
         print(f"{sym} Master AI pasul 1: {label} {detail}")
 
+    alpha_aapl = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
+    alpha_help = alpha_aapl.proto.help if alpha_aapl is not None else ""
+    assert "SPY" in alpha_help and "rată fără risc" in alpha_help, f"alpha AAPL: {alpha_help!r}"
+    print(f"AAPL alpha: {alpha_help}")
     master_matches_top("AAPL")
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
         if sym in ("SAP.DE", "EURO.PA", "LOSS", "NEWCO"):      # LOSS = emitent financiar: P/BV față de ROE
             assert has_global(), f"lipsește secțiunea Scor fundamental la {sym}"
+        if sym in ("TLV.RO", "SNP.RO"):   # dividendul BVB din fișierul companiei, nu din Yahoo
+            div_m = next((m for m in at.metric if m.label == "Dividend (Randament)"), None)
+            print(f"{sym} dividend: {div_m and div_m.value} | {div_m and div_m.proto.help[-160:]}")
+            if sym == "SNP.RO":
+                assert div_m is not None and "Analiză companii" in div_m.proto.help and div_m.value != "N/A", \
+                    f"dividend SNP.RO: {div_m and div_m.value}"
         if sym == "EURO.PA":     # alpha UE: față de Euro Stoxx 50, nu față de SPY
             alpha_m = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
             alpha_help = alpha_m.proto.help if alpha_m is not None else ""
@@ -647,6 +758,92 @@ def main():
                     "7. Scanner Volum", "8. Watchlist"):
         radio().set_value(section).run()
         check(at, section)
+        if section == "6. Rezumatul Zilei":
+            # data ședinței, BET proxy, VIX/VIX3M, lățimea pe o zi; scorurile vechi (Fear & Greed, Pulsul BVB) au ieșit
+            mets = {m.label: str(m.value) for m in at.metric}
+            print("Rezumat:", {k: mets[k] for k in mets if k.startswith(("BET", "VIX", "Lățime", "RSP", "S&P"))})
+            for lbl in ("BET (proxy: ETF TVBETETF)", "Mișcarea BET în σ", "VIX / VIX3M", "RSP − SPY (o zi)", "S&P 500"):
+                assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
+            assert any("Ultima ședință:" in str(e.value) for e in at.markdown), "lipsește data ultimei ședințe"
+            assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Rezumat: lipsește timpul paginii"
+            sig_tabs = [getattr(d.value, "data", d.value) for d in at.dataframe if "σ" in getattr(getattr(d.value, "data", d.value), "columns", [])]
+            assert len(sig_tabs) >= 3, "lipsesc topurile cu σ"
+            all_text = " ".join(str(e.value) for e in list(at.markdown) + list(at.info) + list(at.caption))
+            assert "Sentimentul Wall Street" not in all_text and "Pulsul Pieței" not in all_text, "scorurile vechi încă afișate"
+            # etapa B, „Portofoliul meu azi”, totul în lei: acțiuni (TLV.RO, SAP.DE, AAPL) + titlul de stat R9901AE + numerar
+            for lbl in ("Valoare totală azi (lei)", "Acțiuni și ETF", "Titluri de stat", "Numerar"):
+                assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
+            pday = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Contribuție" in
+                         getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            cash_t = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Numerar" in
+                           getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert pday is not None and cash_t is not None, "lipsește tabelul „Portofoliul meu azi” sau numerarul"
+            print("Portofoliul azi:", {k: mets[k] for k in ("Valoare totală azi (lei)", "Acțiuni și ETF", "Titluri de stat", "Numerar")},
+                  pday[["Simbol", "Piață", "P/L (lei)", "Contribuție", "Valoare (lei)", "Stare"]].values.tolist(),
+                  cash_t.values.tolist())
+            assert set(pday["Simbol"]) == {"TLV", "SAP.DE", "AAPL", "R9901AE"}, list(pday["Simbol"])
+            assert "P/L (monedă)" not in pday.columns, "sumele din Rezumat trebuie să fie doar în lei"
+            assert not pday.isna().any().any() and not cash_t.isna().any().any(), "celule nule (se afișează „None”)"
+            lei = lambda t: _ro_num(t.replace(" lei", ""))
+            eq_rows, bond_rows = pday[pday["Piață"] != "Titluri de stat"], pday[pday["Piață"] == "Titluri de stat"]
+            assert abs(sum(lei(v) for v in eq_rows["Valoare (lei)"]) - lei(mets["Acțiuni și ETF"])) <= 0.5 * (len(eq_rows) + 1)
+            assert abs(sum(lei(v) for v in bond_rows["Valoare (lei)"]) - lei(mets["Titluri de stat"])) <= 0.5 * (len(bond_rows) + 1)
+            assert abs(sum(lei(v) for v in cash_t["Valoare (lei)"]) - lei(mets["Numerar"])) <= 0.5 * (len(cash_t) + 1)
+            parts = sum(lei(mets[k]) for k in ("Acțiuni și ETF", "Titluri de stat", "Numerar"))
+            assert abs(parts - lei(mets["Valoare totală azi (lei)"])) <= 1.5, (parts, mets["Valoare totală azi (lei)"])
+            ok_rows = pday[pday["Stare"] == ""]
+            if len(ok_rows):
+                tot_pp = sum(_ro_num(v.replace(" pp", "")) for v in ok_rows["Contribuție"])
+                eq_delta = next(m.delta for m in at.metric if m.label == "Acțiuni și ETF")      # „-276 lei · -0,83%”
+                assert abs(tot_pp - _ro_num(eq_delta.split(" · ")[1])) <= 0.011 * len(ok_rows), (tot_pp, eq_delta)
+            # Wall Street: valoarea tranzacționată în lei (cursul BNR), nu în USD
+            assert mets.get("Valoare tranzacționată (universul urmărit)", "").endswith("lei"), mets.get("Valoare tranzacționată (universul urmărit)")
+            # etapa C: tabul Europa (indici, sume în lei, moneda pe rând) și sectoarele SUA (11 ETF-uri SPDR)
+            caps_rz = " ".join(str(e.value) for e in at.caption)
+            assert "Universul urmărit Europa (79 simboluri, 79 cu date Yahoo)" in caps_rz, "recererea Europei n-a completat simbolurile"
+            for lbl in ("STOXX Europe 600", "DAX", "CAC 40", "FTSE 100"):
+                assert lbl in mets and mets[lbl] != "N/A", (lbl, mets.get(lbl))
+            vals_ron = [str(m.value) for m in at.metric if m.label == "Valoare tranzacționată (universul urmărit)"]
+            assert len(vals_ron) == 2 and all(v.endswith("lei") for v in vals_ron), vals_ron   # Europa + Wall Street
+            frames_rz = [getattr(d.value, "data", d.value) for d in at.dataframe]
+            eu_tops = [f for f in frames_rz if "Monedă" in getattr(f, "columns", []) and "Valoare" in f.columns]
+            assert eu_tops, "lipsesc topurile Europa"
+            assert all(str(v).endswith("lei") or v == "N/A" for f in eu_tops for v in f["Valoare"]), "valoarea Europa nu e în lei"
+            sect = next((f for f in frames_rz if "Față de S&P 500" in getattr(f, "columns", [])), None)
+            assert sect is not None and len(sect) == 11, "lipsește tabelul sectoarelor SUA"
+            print("Europa, primul top:", eu_tops[0].head(3).values.tolist())
+            print("Sectoare SUA:", sect.head(3).values.tolist())
+            # etapa D: evenimentele de azi/mâine și știrile despre pozițiile din registru
+            md = " ".join(str(e.value) for e in at.markdown)
+            # după 05.11 seara: calendarul pe un rând sus, toate știrile în tabul „📰 Știri”
+            assert "Calendar macro SUA:" in md, "lipsește rândul cu calendarul"
+            assert "Evenimente și știri" not in md, "secțiunea veche de știri e încă sus"
+            subs = [str(e.value) for e in at.subheader]
+            assert any("Despre acțiunile tale" in x for x in subs), subs
+            i_own = next(i for i, x in enumerate(subs) if "Despre acțiunile tale" in x)
+            i_ro = next(i for i, x in enumerate(subs) if "Top 5 știri financiare (România)" in x)
+            i_us = next(i for i, x in enumerate(subs) if "Top 10 știri Wall Street" in x)
+            assert i_own < i_ro < i_us, "ordinea din tabul Știri"
+            assert len([x for x in subs if "Top 5 știri financiare (România)" in x]) == 1, "știrile RO apar de două ori"
+            assert len(at.tabs) >= 4 and [t.label for t in at.tabs][-4:] == ["🇷🇴 BVB", "🇪🇺 Europa", "🇺🇸 Wall Street", "📰 Știri"], [t.label for t in at.tabs]
+            # etapa E: „3 lucruri de știut azi”, sus, din reguli; în smoke există P/L, deci primul rând e portofoliul
+            assert "3 lucruri de știut azi" in md, "lipsește „3 lucruri de știut azi”"
+            box = next(str(e.value) for e in at.markdown if "<b>1.</b>" in str(e.value))
+            assert "<b>3.</b>" in box and "Portofoliul (acțiuni și ETF)" in box and "Piața: cea mai mare mișcare" in box, box
+            print("3 lucruri:", box[:600])
+            badges = [str(e.value) for e in at.markdown if "background:#21262D" in str(e.value)]
+            assert badges and "TLV" in badges[0] and "<b>" not in badges[0], "știrile pe poziții: lipsă sau HTML neescapat"
+            print("Calendar:", [str(e.value)[:120] for e in at.markdown if "Calendar macro SUA:" in str(e.value)])
+        if section == "5. Import Date":
+            # foile BVB și GLOBAL ca atare: lipsă = N/A (nu 0), media și mediana BVB, moneda din celulă
+            frames = [getattr(d.value, "data", d.value) for d in at.dataframe]
+            bvb_t = next((f for f in frames if "P/E TTM" in getattr(f, "columns", [])), None)
+            assert bvb_t is not None and list(bvb_t.index)[:2] == ["TLV", "SNP"], "lipsește tabelul BVB transpus"
+            assert pd.isna(bvb_t.loc["SNP", "Rentabilitate capital (ROE)"]), "#DIV/0! din BVB a devenit număr"
+            glob_t = next((f for f in frames if "Capitalizare (mld.)" in getattr(f, "columns", [])), None)
+            assert glob_t is not None and list(glob_t["Companii"]) == ["AAPL", "SAP"], "lipsește tabelul GLOBAL"
+            assert list(glob_t["Industrie"]) == ["Tech", "Tech"] and pd.isna(glob_t.at[1, "P/E"]), glob_t
+            print("Import Date:", bvb_t.shape, glob_t.shape)
         if section == "3. Portofoliu":
             pos_df = next((d.value for d in at.dataframe if {"Simbol", "Cantitate", "Sursă preț"} <= set(getattr(d.value, "columns", []))), None)
             assert pos_df is not None, "lipsește tabelul pozițiilor deschise"
@@ -657,17 +854,226 @@ def main():
             assert qty.get("R9901AE") == "3", f"titlul de stat lipsește din poziții: {qty}"
             # taburile pe monedă folosesc tot registrul: tabul RON are poziții (nu mesajul de portofoliu gol)
             assert not any("Nu există acțiuni sau ETF-uri deschise" in str(e.value) for e in at.info), "taburile nu primesc pozițiile din registru"
+            # Diagnosticul pe monedă vine din TWR-ul registrului: Sharpe are rata fără risc a monedei în „?”
+            sharpe_tabs = [m for m in at.metric if m.label == "Sharpe Ratio"]
+            print("Sharpe pe taburi:", [str(m.value) for m in sharpe_tabs])
+            assert sharpe_tabs and all("Rata fără risc" in m.proto.help for m in sharpe_tabs), "Sharpe fără rata monedei"
+            assert any(str(m.value) != "N/A" for m in sharpe_tabs), "Sharpe N/A pe toate taburile"
+            # „Detaliu Poziții” din taburi: coloanele în română, cu pondere; ponderile unui tab dau 100%
+            detail_dfs = [d.value for d in at.dataframe
+                          if {"Cost mediu", "Pondere %"} <= set(getattr(d.value, "columns", []))]
+            assert detail_dfs, "lipsește tabelul Detaliu Poziții cu coloanele în română"
+            for dd in detail_dfs:
+                w = dd.data["Pondere %"] if hasattr(dd, "data") else dd["Pondere %"]
+                assert abs(float(w.sum()) - 100.0) < 1e-6 or w.isna().all(), f"ponderile nu dau 100%: {list(w)}"
+            # sectoarele: la BVB din harta proprie (Yahoo nu trimite sectorul), cu verdictul marcat „netestat”
+            sec_caps = " ".join(str(c.value) for c in at.caption)
+            assert "sector din harta proprie BVB: TLV.RO" in sec_caps, "TLV.RO nu primește sectorul din harta BVB"
+            assert any("netestat" in str(e.value) for e in list(at.success) + list(at.warning) if "sector" in str(e.value)), \
+                "verdictul pe sectoare nu e marcat netestat"
+            print("Detaliu Poziții:",[list(dd.data["Simbol"]) if hasattr(dd, "data") else list(dd["Simbol"]) for dd in detail_dfs])
             for rng in ("1Z", "1L", "5A"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
+            assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Portofoliu: lipsește timpul paginii"
             at.button(key="manual_prices_reload").click().run()
             check(at, "3. Portofoliu după reîncărcarea prețurilor manuale")
             at.toggle(key="ledger_curve").set_value(True).run()
             check(at, "3. Portofoliu cu curba reală din registru")
+        if section == "4. Piață Globală":
+            # verdictul macro pe piloni: 6 piloni, fiecare cu pondere, scor (sau N/A) și bază; ponderile dau 100
+            pil = next((d.value for d in at.dataframe if {"Pilon", "Pondere %", "Scor", "Bază"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert pil is not None, "lipsește tabelul pilonilor verdictului macro"
+            pil_df = getattr(pil, "data", pil)
+            assert len(pil_df) == 6 and float(pil_df["Pondere %"].sum()) == 100.0, pil_df
+            print("Piloni macro:", list(zip(pil_df["Pilon"], pil_df["Scor"])))
+            # 06.11: Sinteza AI sus, imediat sub banner, apoi explicația scorului, apoi tabelul pilonilor
+            heads = [str(e.value) for e in at.subheader] + [str(e.value) for e in at.markdown]
+            md_vals = [str(e.value) for e in at.markdown]
+            i_expl = next((i for i, v in enumerate(md_vals) if "Cum s-a ajuns la scorul macro" in v), None)
+            i_pil = next((i for i, v in enumerate(md_vals) if "Pilonii verdictului" in v), None)
+            assert i_expl is not None and i_pil is not None and i_expl < i_pil, "explicația scorului nu e deasupra pilonilor"
+            assert any("Sinteza Inteligenței Artificiale" in h for h in heads), "lipsește Sinteza AI"
+            expl = md_vals[i_expl + 1]
+            print("Explicație scor:", expl)
+            assert ("Pornind de la neutru (50)" in expl) or expl.startswith("Fără scor"), expl
+            # #154: scorul macro (bannerul și explicația) cu o zecimală, tăiat, ca la celelalte scoruri cu prag
+            if not expl.startswith("Fără scor"):
+                assert re.search(r"Scorul \d+,\d din 100", expl), expl
+                banner = next(str(e.value) for e in at.markdown if "SCOR MACRO" in str(e.value))
+                assert re.search(r">\s*\d+,\d\s*</div>", banner), banner[-400:]
+            assert not any("VIX 20,0" in str(e.value) for e in at.markdown), "VIX de rezervă 20 încă afișat"
+            # calendarul macro FRED: pe răspunsul fals, doar cele 2 publicări urmărite (H.15 nu e urmărită), ordonate
+            cal = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Publicare", "Peste"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert cal is not None, "lipsește calendarul macro"
+            # deciziile FOMC vin din calendarul Fed (data reală de azi): se scot înainte de comparația cu răspunsul fals
+            cal_fomc = cal[cal["Publicare"] == fred_cal.FOMC_LABEL]
+            assert len(cal_fomc) == len(fred_cal.fomc_in_window(TODAY.date())), cal
+            cal = cal[cal["Publicare"] != fred_cal.FOMC_LABEL]
+            assert list(cal["Publicare"]) == ["Piața muncii (NFP, șomaj)", "Inflația CPI"] and list(cal["Peste"]) == ["mâine", "7 zile"], cal
+            print("Calendar macro:", cal[["Data", "Publicare"]].values.tolist())
+            # piețele în care investește: regim tehnic + randament în lei (curs BNR)
+            reg = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Trend", "Scor moment"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert reg is not None and len(reg) == 6, "lipsește tabelul regimului piețelor"
+            rr = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Randament local", "Randament în lei"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert rr is not None, "lipsește tabelul randamentului în lei"
+            print("Regim:", reg[["Piață", "Trend", "Scor moment"]].values.tolist())
+            print("Randament în lei:", rr[["Piață", "Randament local", "Efect curs față de leu", "Randament în lei"]].values.tolist())
+            bet = rr.set_index("Piață").loc["BET (prin ETF TVBETETF)"]
+            assert bet["Efect curs față de leu"] == 0.0 or pd.isna(bet["Randament local"]), "BET are efect valutar"
+            for hz in ("1 lună", "De la 1 ian."):
+                at.radio(key="mk_horizon").set_value(hz).run()
+                check(at, f"4. Piață Globală orizont {hz}")
+                if hz == "1 lună":
+                    rr1 = next(getattr(d.value, "data", d.value) for d in at.dataframe if "Randament în lei" in
+                               getattr(getattr(d.value, "data", d.value), "columns", [])).set_index("Piață")
+                    print("Randament 1 lună:", rr1[["Randament local", "Efect curs față de leu", "Randament în lei"]].to_dict("index"))
+                    sp = rr1.loc["S&P 500"]
+                    assert abs((1 + sp["Randament local"]) * (1 + sp["Efect curs față de leu"]) - 1 - sp["Randament în lei"]) < 1e-12
+            # dobânzi și risc de țară: 19 rânduri; lipsa unei serii = rând N/A marcat, nu valoare presupusă
+            rt = next((getattr(d.value, "data", d.value) for d in at.dataframe if {"Indicator", "Δ 3 luni (pp)", "Sursă"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert rt is not None and len(rt) == 19, "lipsește tabelul dobânzilor"
+            fed = rt.set_index("Indicator")["Valoare (%)"]
+            assert abs(fed["Dobânda Fed, interval țintă: limita de sus"] - fed["Dobânda Fed, interval țintă: limita de jos"] - 0.25) < 1e-9, fed.head(3).to_dict()
+            print("Dobânzi:", rt[["Indicator", "Valoare (%)", "Perioadă", "Sursă"]].values.tolist())
+            for _, r_ in rt.iterrows():
+                assert pd.isna(r_["Valoare (%)"]) == r_["Sursă"].endswith("indisponibil"), r_.to_dict()
+            # lățimea pieței SUA: 2 perechi, diferența = randament A − randament B
+            br = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Diferență 12 luni" in
+                       getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert br is not None and len(br) == 2, "lipsește tabelul lățimii pieței"
+            print("Lățime:", br[["Pereche", "Diferență 3 luni", "Detaliu 3 luni"]].values.tolist())
+            # prima de risc a acțiunilor: BVB (mediana E/P din foaie − RO 10 ani) și S&P 500 (1/P/E SPY − DGS10)
+            erp = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Prima de risc (pp)" in
+                        getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert erp is not None and list(erp["Piață"]) == ["BVB", "S&P 500"], "lipsește tabelul primei de risc"
+            print("Prima de risc:", erp[["Piață", "Randamentul profiturilor (E/P)", "Titluri de stat 10 ani", "Prima de risc (pp)"]].values.tolist())
+            # tabelul e text gata formatat (2 zecimale, lipsă = „N/A”, niciodată „None”): toleranță de rotunjire
+            assert not erp.isna().any().any(), "celule nule în prima de risc (se afișează „None”)"
+            for _, e_ in erp.iterrows():
+                ep_, bd_, gp_ = (_ro_num(e_[c]) for c in ("Randamentul profiturilor (E/P)", "Titluri de stat 10 ani", "Prima de risc (pp)"))
+                if gp_ is not None:
+                    assert abs(ep_ - bd_ - gp_) <= 0.011, e_.to_dict()
+            # indicatori macro: interpretarea dobânzilor pe o lună în puncte de bază; ghidul spune că e pe o ședință, netestat
+            infos = " ".join(str(e.value) for e in at.info)
+            assert ("pb într-o lună" in infos) or ("nu are istoric suficient" in infos), "lipsește interpretarea dobânzilor"
+            assert "Semnale pe variația unei singure ședințe" in infos, "ghidul macro nu e marcat pe o ședință / netestat"
+            # rotația Nasdaq/Dow pe o lună calendaristică; barometrul refolosește sentimentul de sus (nu rulează FinBERT a doua oară)
+            assert any("Trend Rotație (1 lună)" in str(e.value) for e in at.markdown), "rotația nu e pe o lună"
+            assert not any("Barometrul de sentiment se actualizează" in str(e.value) for e in at.info), "barometrul a căzut pe excepție"
+            # harta sectoarelor: implicit pe o lună; și pe „Azi”
+            assert any("Liderii lunii" in str(e.value) for e in at.markdown), "harta sectoarelor nu e pe o lună implicit"
+            at.radio(key="sec_heat_hz").set_value("Azi").run()
+            check(at, "4. Piață Globală harta sectoarelor azi")
+            assert any("Liderii zilei" in str(e.value) for e in at.markdown), "harta sectoarelor pe azi"
+            at.radio(key="sec_heat_hz").set_value("1 lună").run()
+            # sinteza AI: fără zerouri inventate, nota „netestate” la final
+            md_all = " ".join(str(e.value) for e in at.markdown)
+            assert "Reguli orientative, netestate; mărfurile și dolarul pe o lună" in md_all, "sinteza macro fără nota de bază"
+            # stresul pieței: VIX/VIX3M și spread-urile de credit, cu valori (nu N/A) pe datele false
+            stress_m = {m.label: str(m.value) for m in at.metric if m.label in ("VIX / VIX3M", "Spread high yield SUA", "Spread investment grade SUA")}
+            print("Stres:", stress_m)
+            assert len(stress_m) == 3 and all(v != "N/A" for v in stress_m.values()), stress_m
+            # cursul valutar față de leu: BNR + live; anul trecut lipsește → 1 an / de la 1 ian. N/A, cu nota
+            fx = next((d.value for d in at.dataframe if {"Curs BNR", "Live (Yahoo)", "1 an %"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))), None)
+            assert fx is not None, "lipsește tabelul cursului valutar"
+            fx_df = getattr(fx, "data", fx).set_index("Valută")
+            print("Curs BNR:", fx_df[["Curs BNR", "Zi %", "1 lună %", "1 an %"]].head(3).to_dict("index"))
+            assert not fx_df.isna().any().any(), "celule nule în cursul valutar (se afișează „None”)"
+            assert abs(_ro_num(fx_df.loc["Euro", "Curs BNR"]) - 5.02) < 1e-9, fx_df.loc["Euro"]
+            assert fx_df.loc["Euro", "1 an %"] == "N/A", "1 an fără istoric trebuie N/A"
+            assert fx_df.loc["Liră sterlină", "Curs BNR"] == "N/A", "valută absentă la BNR trebuie N/A"
+            assert any(f"nbrfxrates{TODAY.year - 1}.xml" in str(c.value) for c in at.caption), "lipsește nota fișierului BNR necitit"
+            # tabelele vechi în bloc (09.11): indici și mărfuri dintr-o cerere, cu data pe rând; topurile din datele Rezumatului
+            qts = [getattr(d.value, "data", d.value) for d in at.dataframe if {"Instrument", "Simbol", "Variație %", "Data"} <= set(
+                getattr(getattr(d.value, "data", d.value), "columns", []))]
+            assert len(qts) == 2 and [len(q) for q in qts] == [6, 6], [len(q) for q in qts]
+            assert not any(q.isna().any().any() for q in qts), "celule nule în indici / mărfuri (se afișează „None”)"
+            print("Indici:", qts[0][["Simbol", "Preț", "Variație %", "Data"]].values.tolist())
+            tops = [getattr(d.value, "data", d.value) for d in at.dataframe if list(getattr(getattr(d.value, "data", d.value), "columns", []))
+                    == ["Instrument", "Preț", "Monedă", "Variație %"]]
+            assert len(tops) >= 2, f"topurile SUA / Europa lipsesc ({len(tops)} tabele)"
+            for tp in tops:
+                pcts = [_ro_num(v.rstrip("%")) for v in tp["Variație %"]]
+                assert all(x > 0 for x in pcts) or all(x < 0 for x in pcts), tp["Variație %"].tolist()
+                assert len(tp) <= 10
+            print("Top Piață Globală:", tops[0].head(3).values.tolist())
+            assert sum("Ședința:" in str(c.value) for c in at.caption) == 2, "lipsește ședința topurilor"
+            assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "lipsește timpul paginii"
         if section == "7. Scanner Volum":
             at.button[0].click().run()
             check(at, "7. Scanner Volum (după scanare)")
+            sc = next((getattr(d.value, "data", d.value) for d in at.dataframe if "RVOL" in
+                       getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            msgs = [str(e.value) for e in list(at.success) + list(at.info) + list(at.warning)]
+            print("Scanner:", msgs[-1:] if sc is None else sc.head(3).values.tolist())
+            assert sc is not None or any("Nicio acțiune" in m for m in msgs), f"Scanner fără rezultat: {msgs}"
+            if sc is not None:
+                assert {"Ședința", "Monedă", "Volum", "Valoare"} <= set(sc.columns), list(sc.columns)
+                assert not sc["Monedă"].isna().any(), "Scanner: monedă lipsă"
+                assert set(sc["Anomalie model (nevalidat)"]) <= {"da", "-", "N/A"}, set(sc["Anomalie model (nevalidat)"])
+        if section == "8. Watchlist":
+            wt = next((getattr(d.value, "data", d.value) for d in at.dataframe if "Simbol" in
+                       getattr(getattr(d.value, "data", d.value), "columns", [])), None)
+            assert wt is not None, "Watchlist: lipsește tabelul"
+            print("Watchlist:", wt.drop(columns=[c for c in wt.columns if c.startswith("_")]).values.tolist())
+            assert set(wt["Simbol"]) == {"MSFT", "TLV.RO", "EGLN.L", "SNP.RO"}, list(wt["Simbol"])
+            assert wt["Ultimul preț"].notna().all(), "Watchlist: preț lipsă la simboluri cu date"
+            assert wt.set_index("Simbol")["Monedă"].to_dict() == {"MSFT": "USD", "TLV.RO": "RON", "EGLN.L": "EUR", "SNP.RO": "RON"}, wt["Monedă"].tolist()
+            assert not any("În pence (GBp)" in str(c.value) for c in at.caption), "nota despre pence la un rând în EUR"
+            assert all(len(d) >= 10 and d[2] == "." for d in wt["Data prețului"]), wt["Data prețului"].tolist()
+            assert wt.set_index("Simbol")["Data țintei"].to_dict() == {"MSFT": "01.10.2026", "TLV.RO": "N/A", "EGLN.L": "N/A", "SNP.RO": "N/A"}, wt["Data țintei"].tolist()
+            assert set(wt["Status"]) <= {"✅ La/sub țintă", "🟡 Aproape (<5%)", "⏳ Peste țintă", "Fără preț", "Fără țintă"}
+            assert wt.loc[wt["Simbol"] == "TLV.RO", "Preț Țintă 🎯"].iloc[0] == 25.5, "ținta „25,5” citită greșit"
+            # Moment automat (BVB cu etichetă testată, restul fără verdict); scorul fundamental doar la buton
+            mom = wt.set_index("Simbol")["Moment"].to_dict()
+            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+,\d", mom[s]) for s in ("TLV.RO", "SNP.RO")), mom
+            assert all(re.fullmatch(r"\d+,\d · fără verdict", mom[s]) for s in ("MSFT", "EGLN.L")), mom
+            assert set(wt["Scor fundamental"]) == {"—"}, wt["Scor fundamental"].tolist()
+            next(b for b in at.button if b.label == "📊 Calculează scorurile fundamentale").click().run()
+            check(at, "8. Watchlist (scoruri fundamentale)")
+            wt = next(getattr(d.value, "data", d.value) for d in at.dataframe if "Simbol" in
+                      getattr(getattr(d.value, "data", d.value), "columns", []))
+            fsc = wt.set_index("Simbol")["Scor fundamental"].to_dict()
+            print("Watchlist, scor fundamental:", fsc)
+            assert fsc["TLV.RO"] == "N/A (bancă)", fsc       # TLV are șablon de bancă în fișierele simulate
+            assert re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL|FĂRĂ TREAPTĂ) \d+", fsc["SNP.RO"]), fsc
+            assert all(re.fullmatch(r"(FAVORABIL|NEUTRU|NEFAVORABIL) \d+,\d · netestat|N/A.*", fsc[s]) for s in ("MSFT", "EGLN.L")), fsc
+            assert "—" not in fsc.values(), fsc
+            assert any("calculate între" in str(c.value) for c in at.caption), "lipsește ora calculului scorurilor"
+            # adăugarea unui simbol existent (cu litere mici și spații) e refuzată, cu mesaj
+            next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value(" msft ")
+            next(n for n in at.number_input if n.label.startswith("Preț Țintă")).set_value(280.0)
+            next(b for b in at.button if b.label == "Adaugă în Listă").click().run()
+            check(at, "8. Watchlist (adăugare duplicat)")
+            warns = [str(w.value) for w in at.warning]
+            assert any("MSFT e deja în watchlist" in w for w in warns), warns
+            # simbol fără preț nici cu .RO: refuzat; „bvbonly” → găsit ca BVBONLY.RO
+            next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value("nodata")
+            next(b for b in at.button if b.label == "Adaugă în Listă").click().run()
+            warns = [str(w.value) for w in at.warning]
+            assert any("NODATA: Yahoo nu are preț pentru NODATA, nici pentru NODATA.RO" in w for w in warns), warns
+            next(t for t in at.text_input if t.label.startswith("Simbol (ex: TSLA)")).set_value("bvbonly")
+            next(b for b in at.button if b.label == "Adaugă în Listă").click().run()
+            check(at, "8. Watchlist (adăugare cu .RO)")
+            oks = [str(s.value) for s in at.success]
+            assert any("Adăugat BVBONLY.RO la ținta 280 RON (scris BVBONLY; găsit ca BVBONLY.RO)" in s for s in oks), oks
+            name, row = APPENDED[-1]   # în ordinea antetului; data de azi (ora României) în coloana Date
+            assert name == "watchlist" and row[:3] == ["BVBONLY.RO", 280.0, ""] and len(row) == 4 and row[3][:2] == "20", APPENDED[-1:]
+            # ștergerea: mesajul de confirmare apare după rerun
+            next(b for b in at.button if b.label == "Șterge").click().run()
+            check(at, "8. Watchlist (ștergere)")
+            oks = [str(s.value) for s in at.success]
+            assert any(s.startswith("Șters ") for s in oks), oks
 
+    for w in sorted(set(app_warnings)):
+        problems.append(f"[avertisment în codul aplicației] {w}")
     print(f"Director testat: {APP_DIR}")
     print(f"Mesaje așteptate (informative): {len(notes)}")
     if problems:

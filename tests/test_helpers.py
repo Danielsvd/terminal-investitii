@@ -291,3 +291,38 @@ def test_md_bold_html():
     assert md_bold_html("**A** și **B**") == "<b>A</b> și <b>B</b>"
     assert md_bold_html("P/E < 15 & **ok**") == "P/E &lt; 15 &amp; <b>ok</b>"
     assert md_bold_html("fără bold") == "fără bold"
+
+
+def test_text_frame_lipsa_devine_na_si_restul_formatat():
+    import numpy as np
+    import pandas as pd
+    from data.helpers import text_frame, format_ro
+    df = pd.DataFrame({"Piață": ["BVB", "S&P 500"], "ep": [7.1234, None], "gap": [np.nan, 1.5], "x": [1, 2]})
+    out = text_frame(df, {"ep": lambda v: f"{format_ro(v)}%", "gap": lambda v: format_ro(v), "lipsa": str})
+    assert out["ep"].tolist() == ["7,12%", "N/A"]
+    assert out["gap"].tolist() == ["N/A", "1,50"]
+    assert out["x"].tolist() == [1, 2]            # coloană neformatată: neschimbată
+    assert df["ep"].iloc[1] is None or pd.isna(df["ep"].iloc[1])   # originalul nu e modificat
+    assert "lipsa" not in out.columns
+
+
+def test_price_ro_zecimale_dupa_marime():
+    from data.helpers import price_ro
+    assert price_ro(0.235) == "0,2350"        # HAI: 0,23 pierdea a treia zecimală
+    assert price_ro(9.9999) == "9,9999"
+    assert price_ro(10) == "10,00" and price_ro(53.6) == "53,60"
+    assert price_ro(1234.5) == "1.234,50"
+    for missing in (None, float("nan"), 0, -1, "abc"):
+        assert price_ro(missing) == "N/A"
+
+
+def test_score_ro_taie_nu_rotunjeste():
+    from data.helpers import score_ro
+    # Eticheta se decide pe scorul exact; afișat, scorul nu trece niciodată peste valoarea reală (pragurile 40/70/80)
+    assert score_ro(39.96) == "39,9"
+    assert score_ro(69.96) == "69,9"
+    assert score_ro(79.6) == "79,6"
+    assert score_ro(80.04) == "80,0"
+    assert score_ro(2.3) == "2,3"          # 2,3 × 10 = 22,999… în virgulă mobilă: fără round ar ieși „2,2”
+    assert score_ro(100) == "100,0"
+    assert score_ro(None) == "N/A" and score_ro(float("nan")) == "N/A"

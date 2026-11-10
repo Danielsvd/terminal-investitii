@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.bvb_fundamental import cross_section, current_indicators, final_verdict, piotroski_simplified
+from analytics.bvb_fundamental import cross_section, current_indicators, final_verdict, piotroski_simplified, verdict_banner
 from data.company_files import load_company
 from tests.test_company_files import _company
 
@@ -104,7 +104,7 @@ def test_banda_cu_scoruri_separate():
     assert score_rank(scores, "B") == (2, 4) and score_rank(scores, "A") == (1, 4) and score_rank(scores, "E") == (None, 4)
     b = verdict_banner(1, 54.2, 14, 31, 100)
     assert b["fund_label"] == "NEUTRU" and b["fund_detail"] == "54/100 · locul 14 din 31"
-    assert b["moment_label"] == "FAVORABIL" and b["moment_detail"] == "100/100"
+    assert b["moment_label"] == "FAVORABIL" and b["moment_detail"] == "100,0/100"
     assert "+4,6%" in b["text"] and "N = 340" in b["text"]
     b = verdict_banner(np.nan, np.nan, None, 31, None)
     assert b["fund_label"] == "DATE INSUFICIENTE" and b["fund_detail"] == "N/A" and b["moment_label"] == "N/A"
@@ -149,3 +149,11 @@ def test_piotroski_valori_in_procente_unde_e_cazul():
     assert piotroski_value_text({"criteriu": "Rotația activelor în creștere", "valoare": (0.61, 0.62)}) == "0,61 → 0,62"
     assert piotroski_value_text({"criteriu": "ROA în creștere", "valoare": (None, 0.05)}) == "N/A → 5,0%"
     assert piotroski_value_text({"criteriu": "ROA TTM pozitiv", "valoare": float("nan")}) == "N/A"
+
+
+def test_banda_moment_zecimala_sub_prag():
+    # 79,6 e sub pragul 80 → NEUTRU; fără zecimală ar fi apărut „NEUTRU 80/100” (contradicție cu pragul)
+    b = verdict_banner(1, 55.0, 3, 10, 79.6)
+    assert b["moment_label"] == "NEUTRU" and b["moment_detail"] == "79,6/100"
+    b = verdict_banner(1, 55.0, 3, 10, 39.96)
+    assert b["moment_label"] == "NEFAVORABIL" and b["moment_detail"] == "39,9/100"

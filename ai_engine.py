@@ -1,4 +1,6 @@
 import pandas as pd
+import logging
+logger = logging.getLogger(__name__)
 import numpy as np
 from prophet import Prophet
 from transformers import pipeline  # <--- Librăria pentru noul AI
@@ -6,13 +8,13 @@ import plotly.graph_objects as go
 import streamlit as st
 from sklearn.cluster import KMeans
 from plotly.subplots import make_subplots
-from scipy.optimize import minimize
 from sklearn.ensemble import IsolationForest
 import yfinance as yf
 from datetime import date, datetime
 
 from analytics import options as opt_calc
 from analytics.options import max_pain
+from analytics.macro import period_return, pillar_credit, credit_sentence
 from data.helpers import num, now_ro, ro
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
@@ -23,35 +25,42 @@ def get_finbert_pipeline():
     La prima rulare, va descărca fișierele (~400MB) pe PC-ul tău.
     Apoi va rula instantaneu, fără să depindă de chei API.
     """
-    print("⏳ [AI SYSTEM] Se încarcă motorul financiar FinBERT...")
+    logger.info("[AI SYSTEM] Se încarcă motorul financiar FinBERT...")
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _finbert_mean(titles):
+    """Media FinBERT pe titlurile date (tuple, nevid): +încredere la „positive”, −încredere la „negative”, 0 la „neutral”.
+    Cheia de cache = titlurile: aceleași titluri → același scor, fără a rula modelul din nou la fiecare rerulare a
+    paginii; titluri noi → cheie nouă. O eroare FinBERT iese ca excepție (nu intră în cache)."""
+    analyzer = get_finbert_pipeline()
+    total_score = 0
+    for title in titles:
+        result = analyzer(title)[0]
+        # Adăugăm sau scădem scorul de încredere (între 0 și 1)
+        if result['label'] == 'positive':
+            total_score += result['score']
+        elif result['label'] == 'negative':
+            total_score -= result['score']
+    # Returnăm o medie între -1.0 și 1.0
+    return total_score / len(titles)
 
 def analyze_sentiment_ai(news_list):
     """
-    Calculează scorul general (Barometrul) folosind FinBERT.
+    Calculează scorul general (Barometrul) folosind FinBERT: media pe primele 10 titluri,
+    +încredere la „positive”, −încredere la „negative”, 0 la „neutral” → între −1 și +1.
+    Fără știri, fără titluri analizate sau la eroare FinBERT → None (lipsă, nu sentiment neutru 0).
+    Scorul pe aceleași titluri vine din cache (`_finbert_mean`, 24 h).
     """
-    if not news_list: return 0
+    if not news_list: return None
     try:
-        analyzer = get_finbert_pipeline()
-        total_score = 0
-        count = 0
-        
         # Analizăm top 10 știri
-        for n in news_list[:10]:
-            result = analyzer(n['title'])[0]
-            # Adăugăm sau scădem scorul de încredere (între 0 și 1)
-            if result['label'] == 'positive':
-                total_score += result['score']
-            elif result['label'] == 'negative':
-                total_score -= result['score']
-            count += 1
-            
-        if count == 0: return 0
-        # Returnăm o medie între -1.0 și 1.0
-        return total_score / count
+        titles = tuple(n['title'] for n in news_list[:10])
+        if not titles: return None
+        return _finbert_mean(titles)
     except Exception as e:
-        print(f"❌ [FinBERT ERROR] la scor general: {e}")
-        return 0
+        logger.warning(f"[FinBERT ERROR] la scor general: {e}")
+        return None
 
 # Funcție utilitară pentru a crea un "cheie" de timp (ziua curentă)
 def get_daily_hash():
@@ -88,7 +97,7 @@ def get_cached_prophet_prediction(symbol, _hist_data, daily_hash):
         forecast = m.predict(future)
         return forecast
     except Exception as e:
-        print(f"Eroare Prophet: {e}")
+        logger.warning(f"Eroare Prophet: {e}")
         return None
 
 def render_ai_chart(forecast, hist):
@@ -177,7 +186,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     # --- STRENGTHS ---
     if h_score is not None and h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
     if (num(info, 'profitMargins') or 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
-    if s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
+    if s_score is not None and s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
     if _altman_distress(z_val): swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
@@ -206,7 +215,7 @@ def detect_market_regime_ai(hist_data):
 
         # 1. Feature Engineering
         df_ml = pd.DataFrame()
-        df_ml['Return'] = hist_data['Close'].pct_change() * 100
+        df_ml['Return'] = hist_data['Close'].pct_change(fill_method=None) * 100
         df_ml['Volatility'] = df_ml['Return'].rolling(window=10).std()
         
         # Calculăm "Forward Return" la 20 de zile (ce s-a întâmplat după semnal)
@@ -246,102 +255,19 @@ def detect_market_regime_ai(hist_data):
     except Exception as e:
         return "Model Offline", "#8B949E", f"Eroare: {str(e)}"
     
-def optimize_portfolio_ai(hist_data):
-    """
-    Optimizarea portofoliului (Modern Portfolio Theory - Markowitz).
-    Algoritmul găsește ponderile care maximizează Sharpe Ratio.
-    """
-    try:
-        if hist_data is None or len(hist_data.columns) < 2:
-            return None, "Ai nevoie de cel puțin 2 active."
-
-        # Curățăm datele (completăm zilele lipsă, ex: sărbători diferite pe burse)
-        df_clean = hist_data.ffill().dropna()
-        
-        # Randamente zilnice
-        returns = df_clean.pct_change().dropna()
-        
-        # Parametri anuali (252 zile de tranzacționare/an)
-        mean_returns = returns.mean() * 252
-        cov_matrix = returns.cov() * 252
-        num_assets = len(mean_returns)
-        risk_free_rate = 0.04 # Presupunem 4% rata fără risc (yield-ul titlurilor de stat)
-
-        # Funcția obiectiv: Vrem să MAXIMIZĂM Sharpe. 
-        # Pentru că scriptul caută minimul matematic, îi dăm Sharpe Ratio NEGATIV.
-        def negative_sharpe(weights, mean_ret, cov_mat, rf_rate):
-            p_ret = np.sum(mean_ret * weights)
-            p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_mat, weights)))
-            return -(p_ret - rf_rate) / p_vol
-
-        # Constrângeri: Toți banii trebuie investiți (Suma procentelor = 100%)
-        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
-        
-        # Limite: Nu putem avea alocare negativă (Fără Short-Selling: limite 0 - 1)
-        bounds = tuple((0, 1) for _ in range(num_assets))
-        
-        # Punct de plecare (Presupunem că ești egal ponderat)
-        init_guess = np.array(num_assets * [1. / num_assets])
-
-        # Rulăm motorul de optimizare ML (SLSQP = Sequential Least Squares Programming)
-        opt_results = minimize(negative_sharpe, init_guess, args=(mean_returns, cov_matrix, risk_free_rate), 
-                               method='SLSQP', bounds=bounds, constraints=constraints)
-
-        if not opt_results.success:
-            return None, "AI-ul nu a găsit o soluție convergentă."
-
-        # Extragem ponderile "magice" găsite de AI
-        optimal_weights = opt_results.x
-        opt_ret = np.sum(mean_returns * optimal_weights)
-        opt_vol = np.sqrt(np.dot(optimal_weights.T, np.dot(cov_matrix, optimal_weights)))
-        opt_sharpe = (opt_ret - risk_free_rate) / opt_vol
-
-        # Formatăm rezultatele pentru interfață
-        tickers = df_clean.columns.tolist()
-        allocation = {tickers[i]: round(optimal_weights[i] * 100, 2) for i in range(num_assets)}
-
-        return {
-            "allocation": allocation,
-            "expected_return": opt_ret * 100,
-            "expected_volatility": opt_vol * 100,
-            "sharpe_ratio": opt_sharpe
-        }, "Optimizare finalizată."
-
-    except Exception as e:
-        print(f"Eroare AI Portofoliu: {e}")
-        return None, str(e)
-
 def detect_volume_anomaly_ai(df_t):
     """
-    Machine Learning (Isolation Forest): Învață comportamentul 'normal'
-    al acțiunii (Preț vs Volum vs Volatilitate) și detectează dacă
-    mișcarea de azi este o anomalie generată de fonduri instituționale.
+    Isolation Forest pe (randament, volum, volatilitate pe 5 zile): ultima zi din `df_t` față de zilele dinaintea ei.
+    Model NEVALIDAT; ~5% din zilele de antrenare sunt marcate anomalii prin construcție (contamination = 0,05).
+    Întoarce True / False, sau None când istoricul e prea scurt ori calculul eșuează (fără verdict).
+    Calculul: analytics.scanner.volume_anomaly (pur, testat).
     """
     try:
-        if len(df_t) < 30: return False # Prea puține date pentru antrenament
-            
-        # 1. Extragem datele relevante pentru AI
-        df_ml = pd.DataFrame()
-        df_ml['Return'] = df_t['Close'].pct_change() * 100
-        df_ml['Volume'] = df_t['Volume']
-        df_ml['Volatility'] = df_ml['Return'].rolling(window=5).std()
-        
-        df_ml = df_ml.dropna()
-        if len(df_ml) < 20: return False
-
-        # 2. Antrenăm modelul pe istoric (Zilele anterioare)
-        X = df_ml[['Return', 'Volume', 'Volatility']].values
-        
-        # Setăm 5% rata de anomalii ('contamination' - cât de strict e filtrul)
-        iso_forest = IsolationForest(contamination=0.05, random_state=42)
-        df_ml['Anomaly'] = iso_forest.fit_predict(X)
-        
-        # 3. IsolationForest returnează -1 pentru o anomalie, 1 pentru normal
-        current_status = df_ml['Anomaly'].iloc[-1]
-        
-        return current_status == -1
-    except:
-        return False
+        from analytics.scanner import volume_anomaly
+        return volume_anomaly(df_t)
+    except (ValueError, KeyError, TypeError, ImportError) as exc:
+        logger.warning("detect_volume_anomaly_ai: %s", exc)
+        return None
 
 def calculate_and_plot_seasonality(hist_data):
     """
@@ -423,19 +349,25 @@ def get_options_analysis_ai(ticker_sym, dividend_rate=None):
     """(date, mesaj). Doar rezultatele reușite stau în cache (15 minute); un răspuns gol
     sau o eroare Yahoo se reîncearcă la următoarea afișare, nu rămâne blocat 15 minute."""
     try:
-        return _options_analysis_cached(ticker_sym, dividend_rate), "Succes"
+        data = _options_analysis_cached(ticker_sym, dividend_rate)
+        if data is None:   # simbol cu sufix de bursă fără opțiuni în Yahoo (rezultat păstrat în cache 15 min)
+            return None, NO_LISTED_OPTIONS_MSG
+        return data, "Succes"
     except _OptionsUnavailable as e:
         return None, str(e)
     except Exception as e:
         # Ultima plasă: yfinance ridică tipuri de excepții nedocumentate (HTTP, JSON, 429).
         error_msg = str(e)
-        print(f"DEBUG: opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
+        logger.warning(f"opțiuni {ticker_sym}: {type(e).__name__}: {error_msg}")
         if "429" in error_msg or "Too Many Requests" in error_msg:
             return None, "🚨 LIMITĂ ATINSĂ: Yahoo Finance a restricționat temporar accesul. Reîncearcă în câteva minute."
         return None, f"Eroare Opțiuni: {error_msg}"
 
 
-@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute, doar pentru rezultate reușite
+NO_LISTED_OPTIONS_MSG = "Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE)."
+
+
+@st.cache_data(ttl=900, show_spinner=False) # Cache activ 15 minute: rezultatele reușite și „fără opțiuni” la simbolurile cu sufix
 def _options_analysis_cached(ticker_sym, dividend_rate=None):
     """Lanțul de opțiuni pe expirarea din 20–45 de zile (cea mai apropiată de 30).
 
@@ -449,7 +381,9 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
     expirations = t.options
     if not expirations:
         if "." in ticker_sym:
-            raise _OptionsUnavailable("Fără opțiuni listate în Yahoo pentru acest simbol (de regulă acțiunile BVB și multe din UE).")
+            # BVB / Europa: lipsa expirărilor e starea normală, nu un răspuns gol întâmplător. Se păstrează în cache
+            # (None), altfel fiecare clic din pagină trimitea o cerere Yahoo. La SUA, golul se reîncearcă (mai jos).
+            return None
         raise _OptionsUnavailable(
             f"Yahoo nu a trimis lista de expirări pentru {ticker_sym}. La acțiunile SUA asta înseamnă de obicei "
             "un răspuns gol sau limitat de la Yahoo, nu lipsa opțiunilor. Se reîncearcă la următoarea afișare.")
@@ -468,7 +402,7 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
     try:
         spot = num({"p": t.fast_info.last_price}, "p")
     except (KeyError, AttributeError, TypeError, ValueError) as e:
-        print(f"DEBUG: fast_info.last_price {ticker_sym}: {e}")
+        logger.warning(f"fast_info.last_price {ticker_sym}: {e}")
         spot = None
     if spot is None or spot <= 0:
         raise _OptionsUnavailable("Prețul curent nu a putut fi citit; opțiunile nu se pot evalua fără el.")
@@ -483,7 +417,7 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
             r = float(np.log1p(float(irx.iloc[-1]) / 100.0))
             r_src = f"^IRX {ro(float(irx.iloc[-1])):.2f}% ({irx.index[-1]:%d.%m.%Y})"
     except (KeyError, IndexError, ValueError, TypeError) as e:
-        print(f"DEBUG: ^IRX indisponibil: {e}")
+        logger.warning(f"^IRX indisponibil: {e}")
     if r is None:
         missing.append("rata fără risc (^IRX)")
 
@@ -675,7 +609,9 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
             reasons.append(f"🚨 **Overbought (RSI {ro(rsi):.0f}):** Acțiunea este extrem de supra-cumpărată. Corecție iminentă!")
         else:
             score += 5
-    except: pass
+    except Exception as exc:  # înainte: except: gol
+        logger.warning("calculate_master_ai_score: %s", exc)
+        pass
 
     # 8. MACROECONOMIE & REGIM (Max 5 puncte)
     if spread is None:
@@ -718,105 +654,22 @@ def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_sc
 
     return final_score, action, color, advice, reasons
 
-def calculate_master_macro_verdict(df_sectors, credit_ratio_series, corr_matrix, sentiment_score, yield_spread, vix_val):
-    """
-    Algoritm de Sinteză Macro V2 (Quant Grade).
-    Adaugă VIX și corelația Dolarului ca filtre de siguranță.
-    """
-    score = 50 
-    reasons = []
+class _OwnershipUnavailable(Exception):
+    """Acționariatul nu a putut fi citit (eroare Yahoo). Excepțiile nu intră în cache: se reîncearcă la următoarea afișare."""
 
-    # 1. ANALIZA PIEȚEI DE CREDIT (HYG/IEF) - 30%
-    if not credit_ratio_series.empty:
-        curr_r = credit_ratio_series.iloc[-1]
-        sma_20 = credit_ratio_series.rolling(20).mean().iloc[-1]
-        if curr_r < sma_20:
-            score -= 20
-            reasons.append("🚨 **Risc de Credit:** Piața de obligațiuni (banii deștepți) se retrage spre siguranță.")
-        else:
-            score += 10
-            reasons.append("✅ **Credit Sănătos:** Băncile finanțează activ economia.")
-
-    # 2. PILONUL VIX (Frica / Complăcere) - 20%
-    if vix_val > 25:
-        score -= 20
-        reasons.append(f"🚨 **Panică (VIX {ro(vix_val):.1f}):** Frica este ridicată. Piața este vulnerabilă la căderi bruște.")
-    elif vix_val < 15:
-        score += 10
-        reasons.append(f"✅ **Liniște (VIX {ro(vix_val):.1f}):** Volatilitatea este scăzută, favorizând trendul ascendent.")
-    else:
-        reasons.append(f"⚖️ **VIX Stabil ({ro(vix_val):.1f}):** Frica este în limite normale.")
-
-    # 3. PILONUL DOLAR (Corelația SPY/UUP) - 15%
-    try:
-        spy_uup = corr_matrix.loc['Acțiuni (SPY)', 'Dolar (UUP)']
-        if spy_uup < -0.7:
-            score -= 15
-            reasons.append(f"⚠️ **Dolar Dominant:** Corelație inversă severă ({ro(spy_uup):.2f}). Orice creștere a Dolarului va lovi bursa.")
-        else:
-            score += 5
-    except: pass
-
-    # 4. MONEY FLOW SECTORIAL - 15%
-    if not df_sectors.empty:
-        top_sectors = df_sectors.tail(3)['Sector'].tolist()
-        agg_count = sum(1 for s in top_sectors if s in ['Tehnologie', 'Consum Discreționar', 'Financiar', 'Comunicații'])
-        if agg_count >= 2:
-            score += 15
-            reasons.append("🚀 **Apetit Risc:** Capitalul migrează spre sectoarele de creștere.")
-        elif any(s in top_sectors for s in ['Utilități', 'Consum de Bază']):
-            score -= 10
-            reasons.append("🛡️ **Rotație Defensivă:** Investitorii caută adăpost în sectoarele sigure.")
-
-    # 5. MACRO & SENTIMENT - 20%
-    if yield_spread < 0:
-        score -= 15
-        reasons.append("🚩 **Yield Curve:** Curba inversată semnalează risc de recesiune.")
-    if sentiment_score > 0.15: score += 10
-    elif sentiment_score < -0.15: score -= 10
-
-    # Normalizare și Verdict
-    final_score = max(1, min(100, score))
-    
-    if final_score >= 70:
-        label, color, desc = "INVESTEȘTE", "#3FB950", "Condiții ideale: Lichiditate mare, frica scăzută. Mediul macro este extrem de favorabil. Riscurile sistemice sunt scăzute."
-    elif final_score >= 45:
-        label, color, desc = "AȘTEAPTĂ", "#D29922", "Echilibru fragil. Nu forța intrări noi azi. Piața este în tranziție. Există semnale contradictorii."
-    else:
-        label, color, desc = "CASH / SELL", "#F85149", "🚨 PERICOL: Riscurile sistemice domină piața. Condițiile macro sunt periculoase. Capitalul se retrage rapid"
-
-    return final_score, label, color, desc, reasons
-
-def calculate_iv_rank_percentile(ticker_sym, current_iv):
-    """
-    Calculează IV Rank și IV Percentile folosind datele istorice de volatilitate.
-    """
-    try:
-        t = yf.Ticker(ticker_sym)
-        # Avem nevoie de istoric pentru a calcula volatilitatea istorică (HV) ca proxy dacă IV lipsește
-        hist = t.history(period="1y")
-        if hist.empty: return 0, 0
-        
-        # Calculăm volatilitatea realizată (HV) pe 252 de zile
-        returns = np.log(hist['Close'] / hist['Close'].shift(1))
-        vol_hist = returns.rolling(window=21).std() * np.sqrt(252) * 100
-        vol_hist = vol_hist.dropna()
-
-        if vol_hist.empty: return 0, 0
-
-        # IV Rank: (IV_curent - IV_min) / (IV_max - IV_min)
-        iv_min = vol_hist.min()
-        iv_max = vol_hist.max()
-        iv_rank = ((current_iv - iv_min) / (iv_max - iv_min)) * 100
-        
-        # IV Percentile: Procentul de zile din an cu IV mai mic decât cel de azi
-        iv_percentile = (vol_hist < current_iv).mean() * 100
-        
-        return max(0, min(100, iv_rank)), max(0, min(100, iv_percentile))
-    except:
-        return 0, 0
 
 def get_detailed_ownership_and_execs(ticker_sym):
+    """(sumar, detalii, CEO, % instituții) din Yahoo; valorile lipsă sunt None. Rezultatul vine din `_ownership_cached`
+    (cache 6 h: acționariatul se schimbă trimestrial); înainte se citeau 3 resurse Yahoo la fiecare clic din pagină."""
+    try:
+        return _ownership_cached(ticker_sym)
+    except _OwnershipUnavailable as e:
+        logger.warning(f"acționariat {ticker_sym} indisponibil: {e}")
+        return None, None, "N/A", None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _ownership_cached(ticker_sym):
     try:
         t = yf.Ticker(ticker_sym)
         info = t.info or {}
@@ -873,6 +726,10 @@ def get_detailed_ownership_and_execs(ticker_sym):
         # Fără nicio sursă: datele lipsesc (None), nu „0% instituții". Altfel scorurile penalizau
         # orice acțiune pentru care Yahoo nu trimite acționariatul (BVB, ETF-uri, erori de rețea).
         if not found_inst:
+            # La o acțiune SUA (fără sufix, nu fond) sau cu `info` gol, lipsa e de obicei limitarea Yahoo:
+            # nu se păstrează 6 h în cache, se reîncearcă la următoarea afișare. BVB/UE și fondurile rămân în cache.
+            if not info or ("." not in ticker_sym and str(info.get("quoteType") or "").upper() not in ("ETF", "MUTUALFUND")):
+                raise _OwnershipUnavailable("Yahoo a răspuns fără acționariat")
             return None, None, ceo_name, None
 
         retail_pct = max(0, 100 - (insider_pct + inst_pct))
@@ -891,9 +748,8 @@ def get_detailed_ownership_and_execs(ticker_sym):
             df_details = pd.DataFrame()
 
         return df_summary, df_details, ceo_name, inst_pct
-    except Exception as e:
-        print(f"DEBUG: acționariat {ticker_sym} indisponibil: {e}")
-        return None, None, "N/A", None
+    except Exception as e:  # yfinance: rețea, JSON, 429 — nu se păstrează în cache
+        raise _OwnershipUnavailable(f"{type(e).__name__}: {e}") from e
 
 def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sectors, corr_matrix, macro_data, df_fred):
     """
@@ -906,20 +762,14 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     # 1. EXTRAGERE DATE PIAȚĂ (Trend pe o lună / 20 zile)
     # =========================================================
     def get_trend(ticker):
+        """Randamentul pe o lună calendaristică (fracție) sau None dacă simbolul lipsește / istoricul nu acoperă o lună.
+        Înainte: 0 la lipsă (arăta ca „preț stabil”) și 19 rânduri în loc de o lună."""
         try:
-            if isinstance(macro_data.columns, pd.MultiIndex):
-                if ticker in macro_data.columns.levels[0]:
-                    series = macro_data[ticker]['Close'].dropna()
-                else: return 0
-            else:
-                series = macro_data['Close'].dropna()
-            
-            if len(series) >= 20: 
-                return (series.iloc[-1] / series.iloc[-20]) - 1
-            elif len(series) >= 5:
-                return (series.iloc[-1] / series.iloc[-5]) - 1
-            return 0
-        except: return 0
+            if isinstance(macro_data.columns, pd.MultiIndex) and ticker in macro_data.columns.levels[0]:
+                return period_return(macro_data[ticker]['Close'], months=1)
+        except (KeyError, AttributeError, TypeError) as exc:
+            logger.warning("get_trend %s: %s", ticker, exc)
+        return None
 
     gold_trend = get_trend('GC=F')
     oil_trend = get_trend('CL=F')
@@ -933,32 +783,41 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     if df_fred is not None and not df_fred.empty:
         fred_dict = {row['_simbol']: row for _, row in df_fred.iterrows()}
         
-    cpi_change = fred_dict.get('CPIAUCSL', {}).get('_change_raw', 0)
-    unrate_curr = fred_dict.get('UNRATE', {}).get('Valoare Curentă', 4.0)
-    unrate_change = fred_dict.get('UNRATE', {}).get('_change_raw', 0)
-    nfp_change = fred_dict.get('PAYEMS', {}).get('_change_raw', 0)
-    retail_change = fred_dict.get('RSAFS', {}).get('_change_raw', 0)
-    fed_change = fred_dict.get('FEDFUNDS', {}).get('_change_raw', 0)
-    indpro_change = fred_dict.get('INDPRO', {}).get('_change_raw', 0)
+    def fv(sym, key='_change_raw'):
+        """Valoarea din tabelul FRED sau None (înainte: 0, iar șomajul lipsă era 4,0%)."""
+        try:
+            v = float(fred_dict[sym][key]) if sym in fred_dict else None
+        except (TypeError, ValueError, KeyError):
+            return None
+        return v if v is not None and np.isfinite(v) else None
+
+    cpi_change = fv('CPIAUCSL')
+    unrate_curr = fv('UNRATE', 'Valoare Curentă')
+    unrate_change = fv('UNRATE')
+    nfp_change = fv('PAYEMS')
+    retail_change = fv('RSAFS')
+    fed_change = fv('FEDFUNDS')
+    indpro_change = fv('INDPRO')
+    ok = lambda *v: all(x is not None for x in v)
 
     cross_asset_flags = 0 
 
     # =========================================================
     # STRATUL 1: SUPRA-CORELAȚII (BOMBE MACROECONOMICE)
     # =========================================================
-    if oil_trend > 0.05 and cpi_change > 0.2:
-        bullets.append({"icon": "🌪️", "color": "#F85149", "text": f"BUCLA INFLAȚIEI: Petrolul crește violent (+{ro(oil_trend*100):.1f}%), iar datele CPI confirmă scumpirile. FED este blocată. Mediu toxic pentru acțiunile de creștere (Growth)."})
+    if ok(oil_trend, cpi_change) and oil_trend > 0.05 and cpi_change > 0.2:
+        bullets.append({"icon": "🌪️", "color": "#F85149", "text": f"BUCLA INFLAȚIEI: Petrolul crește violent (+{ro(oil_trend*100):.1f}% într-o lună), iar datele CPI confirmă scumpirile. FED este blocată. Mediu toxic pentru acțiunile de creștere (Growth)."})
         cross_asset_flags += 1
         
-    if cpi_change > 0.2 and unrate_change > 0:
+    if ok(cpi_change, unrate_change) and cpi_change > 0.2 and unrate_change > 0:
         bullets.append({"icon": "☠️", "color": "#F85149", "text": "ALERTĂ STAGFLAȚIE: Șomajul crește, dar prețurile (CPI) refuză să scadă. Este cel mai prost mediu economic: acțiunile și obligațiunile pot pierde valoare simultan."})
         cross_asset_flags += 1
 
-    if gold_trend > 0.03 and dxy_trend > 0.015:
+    if ok(gold_trend, dxy_trend) and gold_trend > 0.03 and dxy_trend > 0.015:
         bullets.append({"icon": "🥇", "color": "#FFAB00", "text": f"PARADOXUL FRICII: Aurul (+{ro(gold_trend*100):.1f}%) și Dolarul (+{ro(dxy_trend*100):.1f}%) cresc simultan. Marile fonduri acumulează orice activ de siguranță, semn de panică sistemică."})
         cross_asset_flags += 1
 
-    if copper_trend < -0.04 and indpro_change < -0.5:
+    if ok(copper_trend, indpro_change) and copper_trend < -0.04 and indpro_change < -0.5:
         bullets.append({"icon": "📉", "color": "#F85149", "text": "CONTRACȚIE EXTREMĂ: Scăderea cuprului se aliniază cu prăbușirea producției industriale (FRED). Motorul global frânează puternic."})
         cross_asset_flags += 1
 
@@ -966,15 +825,19 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     # STRATUL 2: ECONOMIA REALĂ (Datele FRED)
     # =========================================================
     # Inflație
-    if cpi_change > 0.2:
-        bullets.append({"icon": "🔥", "color": "#F85149", "text": f"INFLAȚIE (CPI): Accelerare ({ro(cpi_change):+.2f} pct). Prețurile nu cedează, menținând presiunea pe consumatori și pe dobânzile FED."})
+    if cpi_change is None:
+        pass  # CPI indisponibil: fără bullet
+    elif cpi_change > 0.2:
+        bullets.append({"icon": "🔥", "color": "#F85149", "text": f"INFLAȚIE (CPI): Accelerare ({ro(cpi_change):+.2f}% pe lună). Prețurile nu cedează, menținând presiunea pe consumatori și pe dobânzile FED."})
     elif cpi_change <= 0:
-        bullets.append({"icon": "❄️", "color": "#3FB950", "text": f"INFLAȚIE (CPI): Dezinflație confirmată ({ro(cpi_change):+.2f} pct). Oferă băncii centrale motive să reducă dobânzile (Dovish)."})
+        bullets.append({"icon": "❄️", "color": "#3FB950", "text": f"INFLAȚIE (CPI): Prețuri în scădere sau stagnare ({ro(cpi_change):+.2f}% pe lună). Oferă băncii centrale motive să reducă dobânzile (Dovish)."})
     else:
-        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"INFLAȚIE (CPI): Creștere sub control ({ro(cpi_change):+.2f} pct). Prețurile se stabilizează fără șocuri majore."})
+        bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"INFLAȚIE (CPI): Creștere sub control ({ro(cpi_change):+.2f}% pe lună). Prețurile se stabilizează fără șocuri majore."})
 
     # Piața Muncii
-    if unrate_change > 0 or nfp_change < 50:
+    if not ok(unrate_curr, unrate_change, nfp_change):
+        pass  # șomaj sau NFP indisponibil: fără bullet (înainte NFP lipsă = 0 < 50 → „se răcește”)
+    elif unrate_change > 0 or nfp_change < 50:
         bullets.append({"icon": "⚠️", "color": "#D29922", "text": f"PIAȚA MUNCII: Se răcește. Șomajul e la {ro(unrate_curr):.1f}%, iar joburile noi scârțâie ({ro(nfp_change):+.0f}K). Risc de recesiune dacă trendul continuă."})
     elif nfp_change > 150:
         bullets.append({"icon": "💪", "color": "#3FB950", "text": f"PIAȚA MUNCII: Robustă (Soft Landing). Crearea a {ro(nfp_change):+.0f}K joburi arată o economie de fier care ignoră dobânzile mari."})
@@ -982,7 +845,9 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
         bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"PIAȚA MUNCII: Echilibrată ({ro(nfp_change):+.0f}K joburi adăugate). Angajările sunt la un nivel sustenabil, fără surprize."})
 
     # Consum
-    if retail_change < -0.5:
+    if retail_change is None:
+        pass
+    elif retail_change < -0.5:
         bullets.append({"icon": "🛒", "color": "#F85149", "text": f"CONSUM: Fragil. Vânzările de retail au scăzut ({ro(retail_change):+.2f} pct). Motorul economiei americane dă semne de oboseală."})
     elif retail_change > 0.5:
         bullets.append({"icon": "🛍️", "color": "#3FB950", "text": f"CONSUM: Puternic. Populația cheltuie masiv ({ro(retail_change):+.2f} pct), ceea ce va susține direct profiturile companiilor."})
@@ -990,7 +855,9 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
         bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"CONSUM: Stabil. Vânzările de retail sunt constante ({ro(retail_change):+.2f} pct). Fără anomalii în comportamentul de cumpărare."})
 
     # Decizia FED
-    if fed_change < -0.1:
+    if fed_change is None:
+        pass
+    elif fed_change < -0.1:
         bullets.append({"icon": "💸", "color": "#3FB950", "text": f"POLITICA FED: Ciclu de relaxare (Tăieri de {ro(fed_change):+.2f} pct). Banii mai ieftini acționează ca un stimulent major pentru bursa de acțiuni."})
     elif fed_change > 0.1:
         bullets.append({"icon": "🏦", "color": "#F85149", "text": f"POLITICA FED: Restrictivă (Creșteri de {ro(fed_change):+.2f} pct). Dobânzile mari atrag capitalul dinspre acțiuni spre depozite și obligațiuni."})
@@ -1001,39 +868,56 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
     # STRATUL 3: PIAȚA FINANCIARĂ (Dolar, Petrol, Cupru, Opțiuni)
     # =========================================================
     
-    if dxy_trend > 0.015 and cross_asset_flags == 0:
+    if dxy_trend is None:
+        pass
+    elif dxy_trend > 0.015 and cross_asset_flags == 0:
         bullets.append({"icon": "💵", "color": "#F85149", "text": f"DOLAR: Puternic (+{ro(dxy_trend*100):.1f}% într-o lună). Moneda americană acționează ca un obstacol major pentru S&P 500."})
     elif dxy_trend < -0.015:
         bullets.append({"icon": "💸", "color": "#3FB950", "text": f"DOLAR: Slab (-{ro(abs(dxy_trend)*100):.1f}%). Oferă o fereastră de oportunitate masivă pentru piețele globale și cripto."})
     else:
         bullets.append({"icon": "⚖️", "color": "#8B949E", "text": f"DOLAR: Consolidare ({ro(dxy_trend*100):+.1f}%). Valuta se tranzacționează în interval neutru."})
 
-    if oil_trend > 0.06:
+    if oil_trend is None:
+        pass
+    elif oil_trend > 0.06:
         bullets.append({
             "icon": "🛢️", 
             "color": "#F85149", # Schimbăm în Roșu (era Galben) pentru că +40% e critic
-            "text": f"ȘOC PETROLIER: Țițeiul a explodat (+{ro(oil_trend*100):.1f}%). Această creștere violentă a costurilor la energie va pune o presiune imensă pe inflație și va forța FED-ul să rămână Hawkish."
+            "text": f"ȘOC PETROLIER: Țițeiul a urcat cu {ro(oil_trend*100):+.1f}% într-o lună. Această creștere violentă a costurilor la energie va pune o presiune imensă pe inflație și va forța FED-ul să rămână Hawkish."
         })
     elif oil_trend < -0.06:
         bullets.append({
             "icon": "⛽", 
             "color": "#3FB950", 
-            "text": f"RELAXARE ENERGETICĂ: Petrolul scade semnificativ (-{ro(abs(oil_trend)*100):.1f}%). Este un semnal puternic de dezinflație care ajută marjele de profit ale companiilor."
+            "text": f"RELAXARE ENERGETICĂ: Petrolul scade cu {ro(oil_trend*100):.1f}% într-o lună. Este un semnal puternic de dezinflație care ajută marjele de profit ale companiilor."
         })
     else:
         # Mesajul de stabilitate apare DOAR dacă variația e mică
         bullets.append({
             "icon": "⚖️", 
             "color": "#8B949E", 
-            "text": f"PETROL: Preț stabil ({ro(oil_trend*100):+.1f}%). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
+            "text": f"PETROL: Preț stabil ({ro(oil_trend*100):+.1f}% într-o lună). Sectorul energetic nu prezintă șocuri imediate pe lanțul global."
         })
 
-    if yield_spread < 0:
-        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({ro(yield_spread):.2f}). Semnalul istoric de recesiune este în continuare aprins."})
+    # Concluzia despre credit vine din pilonul „Piața de credit” (HYG/IEF față de media pe 50 de ședințe), nu din curbă:
+    # înainte, curba normală afirma „Creditarea corporativă este sănătoasă” chiar cu pilonul de credit la 0 (06.11).
+    credit_p = pillar_credit(credit_ratio_series)
+    credit_txt = credit_sentence(credit_p)
+    credit_tail = f" {credit_txt}" if credit_txt else ""
+    if yield_spread is None:
+        if credit_txt:  # curba indisponibilă: doar creditul, fără o valoare inventată pentru curbă
+            bullets.append({"icon": "📉" if credit_p["score"] == 0 else "📈" if credit_p["score"] == 100 else "⚖️",
+                            "color": "#F85149" if credit_p["score"] == 0 else "#3FB950" if credit_p["score"] == 100 else "#8B949E",
+                            "text": f"OBLIGAȚIUNI: {credit_txt}"})
+    elif yield_spread < 0:
+        bullets.append({"icon": "🚨", "color": "#F85149", "text": f"OBLIGAȚIUNI: Curba 10Y-3M rămâne inversată ({ro(yield_spread):.2f}). Semnalul istoric de recesiune este în continuare aprins.{credit_tail}"})
     else:
-        bullets.append({"icon": "📈", "color": "#3FB950", "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({ro(yield_spread):.2f}). Creditarea corporativă este sănătoasă."})
+        curve_col = "#D29922" if credit_p["score"] == 0 else "#3FB950"  # curbă normală, dar credit în retragere = semnal mixt
+        bullets.append({"icon": "📈", "color": curve_col, "text": f"OBLIGAȚIUNI: Curba dobânzilor e normală ({ro(yield_spread):.2f}).{credit_tail}"})
 
-    if vix_val > 22:
+    if vix_val is None:
+        pass  # VIX indisponibil: fără bullet
+    elif vix_val > 22:
         bullets.append({"icon": "⚡", "color": "#F85149", "text": f"VIX (OPȚIUNI): Panică ({ro(vix_val):.1f}). Cererea pentru contracte Put explodează. Volatilitatea e la putere."})
     elif vix_val < 14:
         bullets.append({"icon": "🧘", "color": "#3FB950", "text": f"VIX (OPȚIUNI): Liniște absolută ({ro(vix_val):.1f}). Piața e calmă, dar favorizează apariția unor „Black Swans”."})
@@ -1051,29 +935,44 @@ def generate_macro_ai_summary(vix_val, yield_spread, credit_ratio_series, df_sec
         return 4 # Gri (Neutru/Stabil) pus la final ca informare
         
     bullets.sort(key=sort_key)
-    
-    # Returnăm TOATE argumentele posibile (până la 15)
-    return bullets[:15]
+    bullets = bullets[:15]
+    missing = [n for n, v in (("aur", gold_trend), ("petrol", oil_trend), ("cupru", copper_trend), ("dolar", dxy_trend),
+                              ("CPI", cpi_change), ("șomaj", unrate_change), ("NFP", nfp_change), ("retail", retail_change),
+                              ("dobânda Fed", fed_change), ("producția industrială", indpro_change),
+                              ("curba 10Y-3M", yield_spread), ("VIX", vix_val)) if v is None]
+    if bullets or missing:
+        bullets.append({"icon": "ℹ️", "color": "#8B949E", "text": "Reguli orientative, netestate; mărfurile și dolarul pe o lună calendaristică, "
+                        "datele FRED pe ultima lună publicată." + (f" Fără date: {', '.join(missing)} (regulile lor nu s-au evaluat)." if missing else "")})
+    return bullets
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _finbert_label(title):
+    """Eticheta FinBERT a unui titlu (positive / negative / neutral), în cache 24 h după text. Eroarea iese ca excepție
+    (nu intră în cache)."""
+    return get_finbert_pipeline()(title)[0]['label']
+
+FINBERT_NA_LABEL = ("N/A", "impact-neu", "❔")   # eroare FinBERT sau etichetă necunoscută
 
 def get_gemini_sentiment_label(title):
     """
     Am păstrat numele funcției ca să nu modificăm app.py, 
-    dar acum folosește FinBERT în loc de Gemini.
+    dar acum folosește FinBERT în loc de Gemini. Același titlu nu mai trece prin model la fiecare clic (`_finbert_label`).
     """
     try:
-        analyzer = get_finbert_pipeline()
         # FinBERT returnează un dicționar: [{'label': 'positive', 'score': 0.92}]
-        result = analyzer(title)[0]
-        label = result['label']
+        label = _finbert_label(title)
         
-        print(f"🔍 [FinBERT] Titlu: {title[:30]}... -> Răspuns: {label.upper()}")
+        logger.debug(f"🔍 [FinBERT] Titlu: {title[:30]}... -> Răspuns: {label.upper()}")
 
         if label == "positive":
             return "Pozitiv", "impact-poz", "📈"
         elif label == "negative":
             return "Negativ", "impact-neg", "📉"
-        else:
+        elif label == "neutral":
             return "Neutru", "impact-neu", "➡️"
+        logger.warning(f"[FinBERT] etichetă necunoscută: {label!r}")
+        return FINBERT_NA_LABEL
     except Exception as e:
-        print(f"❌ [FinBERT ERROR] {e}")
-        return "Neutru", "impact-neu", "➡️"
+        # Lipsa etichetei nu e un sentiment neutru: se afișează N/A (standardul „lipsă ≠ valoare plauzibilă”).
+        logger.warning(f"[FinBERT ERROR] {e}")
+        return FINBERT_NA_LABEL

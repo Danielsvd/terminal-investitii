@@ -732,3 +732,84 @@ def tab_frame(positions):
         "Currency": open_["Currency"].astype(str).str.upper(),
     })
     return out[TAB_COLUMNS].sort_values(["Currency", "Symbol"]).reset_index(drop=True)
+
+
+SLEEVE_FLOW_TYPES = TRADE_TYPES | INCOME_TYPES | {"TAX", "FEE"}
+
+
+def currency_sleeve(ledger, currency, index, market_closes, nominal_classes=NOMINAL_CLASSES):
+    """Sub-portofoliul de acțiuni și ETF-uri dintr-o monedă, din registru: valoare zilnică și fluxuri.
+
+    Pentru indicatorii taburilor pe monedă (Sharpe, Sortino, VaR, beta), pe ce s-a întâmplat efectiv,
+    nu pe deținerile de azi aplicate pe trecut. Numerarul nu face parte din sub-portofoliu.
+
+    - valoarea: cantitatea deținută în fiecare zi × prețul zilei (piață; altfel prețul ultimei
+      tranzacții, proxy), în moneda sub-portofoliului; titlurile de stat și obligațiunile sunt excluse.
+      Înainte de prima deținere valoarea lipsește (NaN); după o vânzare totală e 0.
+    - intrările (`inflows`, la începutul zilei): cumpărările (−Amount, Amount fiind negativ),
+      soldurile de deschidere (−Amount sau cantitate × preț), impozitele și comisioanele pe simbol.
+    - ieșirile (`outflows`, la sfârșitul zilei): vânzările și dividendele/cupoanele încasate (Amount pozitiv).
+    Împărțirea face ca o vânzare totală să dea randamentul real al zilei, nu −100%.
+
+    Întoarce (valori, intrări, ieșiri, surse de preț, simboluri care lasă zile fără valoare).
+    `twr_in_out(valori, intrări, ieșiri)` dă randamentul ponderat cu timpul.
+    """
+    part = ledger[(ledger["Currency"] == currency) & ledger["Symbol"].ne("")
+                  & ~ledger["Class"].isin(nominal_classes)]
+    zero = pd.Series(0.0, index=index)
+    if part.empty:
+        return pd.Series(np.nan, index=index), zero, zero.copy(), {}, []
+    quantities = daily_quantities(part, index)
+    trade_prices = ledger_trade_prices(part, index)
+    prices, sources = build_price_table(index, {s: "" for s in quantities.columns}, market_closes, trade_prices)
+    values, blockers = portfolio_curve_base(quantities, prices, pd.DataFrame(index=index),
+                                            {s: currency for s in quantities.columns}, None, base=currency,
+                                            trade_days=cash_trade_days(part))
+    ins, outs = [], []
+    for rec in part[part["Type"].isin(SLEEVE_FLOW_TYPES)].itertuples(index=False):
+        if pd.notna(rec.Amount):
+            amount = float(rec.Amount)
+        elif rec.Type == "OPEN" and pd.notna(rec.Quantity) and pd.notna(rec.Price):
+            amount = -float(rec.Quantity) * float(rec.Price)
+        else:
+            continue
+        if amount < 0:
+            ins.append({"Date": rec.Date, "AmountBase": -amount})
+        elif amount > 0:
+            outs.append({"Date": rec.Date, "AmountBase": amount})
+    cols = ["Date", "AmountBase"]
+    inflows = flows_on_index(pd.DataFrame(ins, columns=cols), index)
+    outflows = flows_on_index(pd.DataFrame(outs, columns=cols), index)
+    held = quantities.abs().gt(1e-6).any(axis=1) if not quantities.empty else pd.Series(False, index=index)
+    if held.any():
+        values = values.where(index >= held[held].index[0])
+    else:
+        values = pd.Series(np.nan, index=index)
+    return values, inflows, outflows, sources, blockers
+
+
+def twr_in_out(values, inflows, outflows):
+    """TWR cu intrările la începutul zilei și ieșirile la sfârșitul ei:
+    r_t = (V_t + Ieșiri_t) / (V_{t−1} + Intrări_t) − 1.
+
+    Zilele fără valoare (NaN) întrerup lanțul: se calculează doar pe ultimul șir continuu.
+    O zi cu numitor 0 (nimic deținut, nimic cumpărat) are randament 0.
+    Întoarce (randamente zilnice, serie cumulată, randament total) sau (goale, None) sub două zile.
+    """
+    values = values.astype(float)
+    valid = values.notna()
+    if valid.sum() < 2:
+        return pd.Series(dtype="float64"), pd.Series(dtype="float64"), None
+    gaps = np.flatnonzero(~valid.to_numpy())
+    start = (gaps[-1] + 1) if len(gaps) else 0
+    v = values.iloc[start:]
+    if len(v) < 2:
+        return pd.Series(dtype="float64"), pd.Series(dtype="float64"), None
+    fin = inflows.reindex(v.index).fillna(0.0)
+    fout = outflows.reindex(v.index).fillna(0.0)
+    base_value = v.shift(1).fillna(0.0) + fin
+    r = ((v + fout) / base_value - 1.0).where(base_value > 0)
+    r.iloc[0] = 0.0 if not base_value.iloc[0] > 0 else r.iloc[0]
+    r = r.fillna(0.0)
+    cumulative = (1.0 + r).cumprod() - 1.0
+    return r, cumulative, float(cumulative.iloc[-1])

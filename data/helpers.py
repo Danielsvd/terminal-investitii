@@ -3,6 +3,7 @@ import calendar
 import csv
 import html
 import io
+import math
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -259,6 +260,21 @@ def positive_or_none(value):
     return float(number)
 
 
+NEAR_TARGET_PCT = 5.0   # „aproape de țintă”: prețul la mai puțin de 5% peste ea (cardul din Analiză și tabelul Watchlist)
+
+
+def target_zone(price, target):
+    """Zona prețului față de ținta din watchlist: "sub" (la sau sub țintă), "aproape" (peste, cu mai puțin de
+    NEAR_TARGET_PCT %), "peste"; None când prețul sau ținta lipsesc (≤ 0, NaN, None). O singură regulă pentru
+    cardul „Țintă intrare” și tabelul Watchlist."""
+    price, target = positive_or_none(price), positive_or_none(target)
+    if price is None or target is None:
+        return None
+    if price <= target:
+        return "sub"
+    return "aproape" if (price - target) / target * 100 < NEAR_TARGET_PCT else "peste"
+
+
 def entry_target_view(price, target):
     """Textele și culoarea cardului „Țintă intrare": (text țintă, status, culoare).
 
@@ -268,10 +284,11 @@ def entry_target_view(price, target):
     """
     if target is None or target != target or target <= 0:
         return "N/A", "Fără preț țintă în watchlist", "#8B949E"
-    if price <= target:
+    zone = target_zone(price, target)
+    if zone == "sub":
         return f"{ro(target):.2f}", "🚀 ZONĂ ACHIZIȚIE", "#3FB950"
     dist_pct = (price - target) / target * 100
-    color = "#D29922" if dist_pct < 5 else "#8B949E"
+    color = "#D29922" if zone == "aproape" else "#8B949E"
     return f"{ro(target):.2f}", f"⏳ +{ro(dist_pct):.1f}% peste țintă", color
 
 
@@ -348,6 +365,42 @@ def ro_spec(spec, suffix=""):
     return _fmt
 
 
+SMALL_PRICE = 10.0   # sub acest preț se afișează 4 zecimale (BVB are titluri sub 1 leu: 0,2350, nu 0,23)
+
+
+def price_ro(value):
+    """Un preț în format românesc: 4 zecimale sub SMALL_PRICE, 2 peste („0,2350”, „53,60”, „1.234,50”).
+    Lipsă, NaN, ≤ 0 sau text → „N/A”, niciodată 0."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v != v or v <= 0:
+        return "N/A"
+    return format_ro(v, 4 if v < SMALL_PRICE else 2)
+
+
+def score_ro(value, decimals=1):
+    """Un scor afișat lângă o etichetă cu prag, TĂIAT (nu rotunjit) la `decimals` zecimale, în format românesc.
+
+    Eticheta se decide pe scorul exact (de ex. moment ≥ 80 FAVORABIL, scor fundamental ≥ 70 FAVORABIL).
+    Rotunjit, un scor de 39,96 ar apărea „40,0” lângă NEFAVORABIL, iar 69,6 fără zecimale „70” lângă NEUTRU
+    (văzut de Daniel pe test1, 09.11). Tăiat, valoarea afișată nu trece niciodată peste scorul real:
+    39,96 → „39,9”; 79,6 → „79,6”; 80,04 → „80,0”. Lipsă sau NaN → „N/A”.
+    """
+    if value is None or isinstance(value, bool):
+        return "N/A"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v != v:
+        return "N/A"
+    factor = 10 ** decimals
+    # round(…, 6) înainte de floor: 2,3 × 10 = 22,999999999999996 în virgulă mobilă, care ar deveni 22
+    return format_ro(math.floor(round(v * factor, 6)) / factor, decimals)
+
+
 def format_ro(value, decimals=2, suffix="", trim=False):
     """Număr în format românesc: punct la mii, virgulă la zecimale („1.250”, „4.562,50”).
 
@@ -369,3 +422,20 @@ def format_ro(value, decimals=2, suffix="", trim=False):
     if text in ("-0", "-0,00") or (text.startswith("-") and set(text[1:]) <= set("0,.")):
         text = text[1:]
     return text + suffix
+
+
+def text_frame(df, formats, na="N/A"):
+    """Copie a tabelului în care coloanele din `formats` devin text gata de afișat.
+
+    `formats` = {coloană: funcție(valoare) → text}. O valoare lipsă (None, NaN) devine `na`
+    fără să mai treacă prin funcție. Motiv: `st.dataframe` arată celulele nule ca „None”
+    chiar și când `Styler.format(na_rep="N/A")` le-a dat alt text. Coloanele din afara
+    `formats` rămân neschimbate; tabelul original nu se modifică.
+    """
+    out = df.copy()
+    for col, fn in formats.items():
+        if col not in out.columns:
+            continue
+        out[col] = [na if v is None or (not isinstance(v, str) and pd.isna(v)) else fn(v)
+                    for v in out[col]]
+    return out

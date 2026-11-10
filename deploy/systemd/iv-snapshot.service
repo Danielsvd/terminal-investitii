@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=oneshot
 User=svd
 Group=svd
-WorkingDirectory=/home/svd/apps/iv-job
+WorkingDirectory=/home/svd/apps/terminal-investitii
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/svd/apps/terminal-investitii/.venv/bin/python -m tools.iv_snapshot --secrets /home/svd/apps/terminal-investitii/.streamlit/secrets.toml
 TimeoutStartSec=15min
