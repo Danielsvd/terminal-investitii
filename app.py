@@ -2964,7 +2964,7 @@ def render_ledger_total(ledger_df, positions, total_ron, asof):
     if risk is None:
         st.info(f"Prea puține zile cu valoare ({len(daily_returns)}) pentru indicatori de risc; sunt necesare cel puțin 60.")
         return
-    pct = lambda v, d=1: "N/A" if v is None else f"{v * 100:.{d}f}%"
+    pct = lambda v, d=1: "N/A" if v is None else f"{ro(v * 100):.{d}f}%"
     ratio = lambda v: "N/A" if v is None else f"{ro(v):.2f}"
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("Volatilitate anualizată", pct(risk["vol_ann"]), help=LEDGER_HELP["vol"])
