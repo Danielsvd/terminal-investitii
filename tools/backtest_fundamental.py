@@ -117,7 +117,10 @@ def prepare_statements(fd):
 def summarize(df):
     """Rezumatul: pe benzile de verdict și pe cincimi pentru scor și piloni, plus IC; orizonturile 1–12 luni."""
     tables = []
-    score_cols = ["fund_score"] + [c for c in df.columns if c.startswith("p_")] + [c for c in df.columns if c.startswith("c_")]
+    score_cols = (["fund_score", "v2_fund_score"] + [c for c in df.columns if c.startswith("p_")]
+                  + [c for c in df.columns if c.startswith("c_")] + [c for c in df.columns if c.startswith("v_")]
+                  + (["v2_evaluare"] if "v2_evaluare" in df.columns else []))
+    score_cols = [c for c in score_cols if c in df.columns]
     for col in score_cols:
         if pd.to_numeric(df[col], errors="coerce").notna().sum() == 0:
             continue
@@ -227,6 +230,15 @@ def main(argv=None):
         for _, r in piv.iterrows():
             print(f"  {r['scor']:<40} " + ("N/A" if pd.isna(r["ic_mediu"]) else f"{r['ic_mediu']:+.3f}")
                   + f"  (date: {int(r['ic_nr_date']) if pd.notna(r['ic_nr_date']) else 0})")
+    # Comparația cerută de Daniel (14.11): varianta 1 (aplicația) față de varianta 2 (DCF invers + PEG în notă)
+    ic12 = rez[(rez["orizont_luni"] == 12) & (rez["grupare"] == "cincimi")].drop_duplicates("scor").set_index("scor")
+    pairs = (("p_evaluare", "v2_evaluare", "Evaluare"), ("fund_score", "v2_fund_score", "Scor fundamental"))
+    if any(a in ic12.index and b in ic12.index for a, b, _ in pairs):
+        print("\nVarianta 1 (DCF invers; PEG doar ca rezervă) față de varianta 2 (DCF invers + PEG), IC la 12 luni:")
+        fmt = lambda k: "N/A" if k not in ic12.index or pd.isna(ic12.loc[k, "ic_mediu"]) else f"{ic12.loc[k, 'ic_mediu']:+.3f}"
+        for a, b, name in pairs:
+            print(f"  {name:<18} v1 {fmt(a)}   v2 {fmt(b)}")
+        print("  Diferențe sub ~0,03 nu spun nimic cu acest eșantion.")
     print("\nLimite: ~4 ani de situații Yahoo, firmele de azi (supraviețuire), situații posibil retratate. Orientativ.")
     print(f"\nScris: {args.out}\nScris: {rez_path}")
     return 0

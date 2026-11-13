@@ -812,6 +812,11 @@ def global_fundamental_inputs(real_sym, info, hist, risk_stats):
                eps=num(info, 'trailingEps'), aaa=aaa, aaa_label=aaa_label,
                piotroski=fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow")),
                altman=calculate_altman_z(info, sym, fin), ebitda=lev["ebitda"], coverage=lev["interest_coverage"])
+    # Evaluarea din 14.11: creșterea cerută de preț față de cea livrată (cifra de afaceri); PEG pe creșterea EPS
+    rev_g = fund.statement_cagr(fin.get("income"), fund.REVENUE_ROWS)
+    eps_g = fund.statement_cagr(fin.get("income"), fund.EPS_ROWS)
+    inp.update(rev_growth=(rev_g or {}).get("growth"), rev_growth_years=(rev_g or {}).get("years"),
+               eps_growth=(eps_g or {}).get("growth"), eps_growth_years=(eps_g or {}).get("years"))
     return inp
 
 

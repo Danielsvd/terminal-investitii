@@ -6,10 +6,14 @@ literatură și din convențiile proiectului și sunt NETESTATE pe datele noastr
 istoric. Eticheta o spune.
 
 Companii nefinanciare, trei piloni cu pondere egală (fiecare 0–1, media componentelor cu date):
-  Evaluare   DCF invers (creșterea FCF pe care o cere prețul) și randamentul profitului E/P față de
-             randamentul obligațiunilor AAA (criteriul lui Graham: E/P ≥ 2 × AAA). GN = P/E × P/BV
-             se afișează doar informativ: la companiile cu răscumpărări masive capitalul propriu
-             contabil e micșorat, iar P/BV și GN nu mai măsoară evaluarea.
+  Evaluare   (decizia lui Daniel, 14.11.2026) DCF invers pe 10 ani comparat cu creșterea livrată:
+             creșterea FCF pe care o cere prețul (5 ani constantă, apoi scade la g în anii 6–10) minus
+             CAGR-ul cifrei de afaceri pe ultimii 2–3 ani fiscali (plafonat la 30%). Prețul e scump când
+             cere mai mult decât a dovedit compania, nu doar când P/E e mare.
+             PEG (P/E ÷ creșterea EPS) intră în notă DOAR când DCF-ul invers nu se poate calcula
+             (FCF ≤ 0, DCF neaplicabil, creștere livrată lipsă); altfel e informativ.
+             Informative (nu intră în notă): E/P față de AAA (reperul absolut al lui Graham) și
+             GN = P/E × P/BV (la răscumpărări masive capitalul contabil e micșorat).
   Calitate   Piotroski F-Score (9 criterii, ultimii doi ani fiscali), pe criteriile evaluabile
   Sănătate   zona Altman, datorie netă / EBITDA, acoperirea dobânzii
 Bănci și asigurători (bilanțul lor nu se citește ca al unei companii industriale):
@@ -26,7 +30,11 @@ from data.helpers import ro
 
 TERMINAL_GROWTH = 0.02          # g terminal al DCF-ului invers și al P/BV justificat (ca valoarea implicită din calculator)
 REVERSE_DCF_BOUNDS = (-0.50, 1.00)
-REVERSE_DCF_SCALE = (0.20, 0.0)      # prețul cere ≥ 20% creștere/an → 0; ≤ 0% → 1
+REVERSE_DCF_SCALE = (0.20, 0.0)      # schema veche (5 ani, fără comparație): păstrată doar pentru referință
+DCF_YEARS, DCF_HIGH_YEARS = 10, 5    # DCF invers: 5 ani creștere constantă, apoi scade liniar la g în anii 6–10
+GROWTH_GAP_SCALE = (0.15, 0.0)       # creștere cerută − creștere livrată: ≥ +15 pp → 0; ≤ 0 pp → 1 (netestat)
+DELIVERED_GROWTH_CAP = 0.30          # creșterea livrată peste 30%/an rar se menține 5 ani: se plafonează (netestat)
+PEG_SCALE = (3.0, 1.0)               # PEG ≥ 3 → 0; ≤ 1 → 1 (Lynch: PEG ≈ 1 preț corect; netestat)
 GN_LIMIT = 22.5                      # Graham: P/E × P/BV ≤ 22,5
 GN_WORST = 90.0                      # de 4 ori pragul (de ex. P/E 30 × P/BV 3) → 0; scară logaritmică
 GN_UNINFORMATIVE_PBV = 10.0          # peste acest P/BV, GN e marcat „neinformativ” (capital contabil micșorat)
@@ -66,22 +74,32 @@ def _component(label, value_txt, score, text, info=False):
 
 # --- Evaluare -----------------------------------------------------------------
 
-def _equity_per_share(fcf0, growth, r, g, net_debt, shares, years):
-    """Valoarea capitalului pe acțiune din DCF (poate fi negativă). Aceeași schemă ca fund.dcf_fcf."""
+def _equity_per_share(fcf0, growth, r, g, net_debt, shares, years, high_years=0):
+    """Valoarea capitalului pe acțiune din DCF (poate fi negativă).
+    high_years = 0: schema din fund.dcf_fcf (creșterea scade liniar din anul 1 până la g în ultimul an).
+    high_years > 0: creștere constantă `high_years` ani, apoi scade liniar până la g în anul `years`."""
     fcf, pv = fcf0, 0.0
     step = (g - growth) / (years - 1) if years > 1 else 0.0
+    fade = years - high_years
     for t in range(1, years + 1):
-        fcf *= 1 + growth + step * (t - 1)
+        if high_years <= 0:
+            gt = growth + step * (t - 1)
+        elif t <= high_years:
+            gt = growth
+        else:
+            gt = growth + (g - growth) * (t - high_years) / fade
+        fcf *= 1 + gt
         pv += fcf / (1 + r) ** t
     tv = fcf * (1 + g) / (r - g)
     return (pv + tv / (1 + r) ** years - net_debt) / shares
 
 
-def reverse_dcf_growth(price, fcf0, discount_rate, net_debt, shares, terminal_growth=TERMINAL_GROWTH, years=5):
+def reverse_dcf_growth(price, fcf0, discount_rate, net_debt, shares, terminal_growth=TERMINAL_GROWTH, years=5,
+                       high_years=0):
     """Creșterea FCF din primul an pe care o cere prețul (DCF invers).
 
-    Aceeași schemă ca DCF-ul din calculator: creșterea scade liniar până la g terminal în anul 5,
-    apoi Gordon. Se caută prin bisecție creșterea pentru care valoarea pe acțiune = prețul.
+    Implicit, aceeași schemă ca DCF-ul din calculator: creșterea scade liniar până la g terminal în anul 5,
+    apoi Gordon. Scorul folosește years=10, high_years=5 (vezi _equity_per_share). Se caută prin bisecție creșterea pentru care valoarea pe acțiune = prețul.
     Întoarce {"growth", "bound"}: bound = "low" dacă și cu −50% valoarea depășește prețul,
     "high" dacă nici cu +100% nu ajunge la preț, altfel None. None dacă datele nu permit modelul.
     """
@@ -89,8 +107,11 @@ def reverse_dcf_growth(price, fcf0, discount_rate, net_debt, shares, terminal_gr
         return None
     if price <= 0 or fcf0 <= 0 or shares <= 0 or discount_rate <= terminal_growth:
         return None
+    if not (0 <= high_years < years):
+        return None
     lo, hi = REVERSE_DCF_BOUNDS
-    f = lambda gr: _equity_per_share(fcf0, gr, discount_rate, terminal_growth, net_debt, shares, years) - price
+    f = lambda gr: _equity_per_share(fcf0, gr, discount_rate, terminal_growth, net_debt, shares, years,
+                                     high_years) - price
     if f(lo) >= 0:
         return {"growth": lo, "bound": "low"}
     if f(hi) <= 0:
@@ -133,22 +154,26 @@ def earnings_yield_vs_aaa(ey, aaa_pct):
 
 
 def ey_component(inp):
-    """Componenta de evaluare „E/P față de AAA” (criteriul lui Graham pe randament)."""
+    """„E/P față de AAA” (criteriul lui Graham pe randament): informativ din 14.11.2026, nu intră în notă.
+    E reperul absolut: cât câștigi față de o obligațiune AAA; arată cât de scumpă e toată piața."""
     label = "E/P față de AAA"
     aaa, aaa_label = inp.get("aaa"), inp.get("aaa_label") or "randament AAA"
     ey, loss = earnings_yield(inp.get("pe"), inp.get("eps"))
     if loss:
-        return _component(label, "pierdere", 0.0,
-                          "E/P față de AAA: compania e pe pierdere în ultimele 12 luni, randamentul profitului e negativ "
-                          "(notă zero).")
+        return _component(label, "pierdere", None,
+                          "E/P față de AAA: compania e pe pierdere în ultimele 12 luni, randamentul profitului e negativ. "
+                          "Informativ, nu intră în notă.", info=True)
     if ey is None:
-        return _component(label, "N/A", None, "E/P față de AAA: N/A (lipsește P/E).")
+        return _component(label, "N/A", None, "E/P față de AAA: N/A (lipsește P/E). Informativ.", info=True)
     if not _num(aaa) or aaa <= 0:
-        return _component(label, "N/A", None, f"E/P față de AAA: N/A ({aaa_label}).")
-    ratio, score = earnings_yield_vs_aaa(ey, aaa)
-    return _component(label, f"{ro(ratio):.2f}×", score,
+        return _component(label, "N/A", None, f"E/P față de AAA: N/A ({aaa_label}). Informativ.", info=True)
+    ratio, _ = earnings_yield_vs_aaa(ey, aaa)
+    rel = "peste" if ratio >= 2 else "sub"
+    return _component(label, f"{ro(ratio):.2f}×", None,
                       f"Randamentul profitului E/P = 1 / P/E = {ro(ey * 100):.2f}% față de {ro(aaa):.2f}% ({aaa_label}): "
-                      f"{ro(ratio):.2f}× (Graham cerea minimum 2×; ≤ 1× → zero, ≥ 2× → notă maximă).")
+                      f"{ro(ratio):.2f}×, {rel} pragul lui Graham de 2×. Reper absolut (cât câștigi față de o obligațiune "
+                      "AAA), informativ: nu intră în notă; evaluarea se face prin DCF-ul invers față de creșterea livrată.",
+                      info=True)
 
 
 def gn_component(inp):
@@ -170,35 +195,96 @@ def gn_component(inp):
                       "(evaluarea pe profit se face prin E/P față de AAA).", info=True)
 
 
+def _growth_txt(g):
+    return f"{ro(g * 100):+.1f}%" if _num(g) else "N/A"
+
+
+def peg_component(inp, scored):
+    """PEG = P/E ÷ (creșterea anuală a EPS în %). `scored`: intră în notă (doar când DCF-ul invers lipsește).
+    Pierdere (EPS ≤ 0 fără P/E): notă zero dacă e în notă. Creștere ≤ 0 sau lipsă: N/A (PEG nu are sens)."""
+    label = "PEG"
+    role = ("Intră în notă pentru că DCF-ul invers nu se poate calcula." if scored
+            else "Informativ: nota vine din DCF-ul invers.")
+    pe, eps, eg = inp.get("pe"), inp.get("eps"), inp.get("eps_growth")
+    span = inp.get("eps_growth_years")
+    span_txt = f"{ro(span):.0f} ani" if _num(span) else "ultimii ani fiscali"
+    if not (_num(pe) and pe > 0) and _num(eps) and eps <= 0:
+        return _component(label, "pierdere", 0.0 if scored else None,
+                          f"PEG: compania e pe pierdere, P/E nu există. {role}", info=not scored)
+    if not (_num(pe) and pe > 0):
+        return _component(label, "N/A", None, f"PEG: N/A (lipsește P/E). {role}", info=not scored)
+    if not _num(eg):
+        return _component(label, "N/A", None, f"PEG: N/A (lipsește creșterea EPS pe {span_txt}). {role}",
+                          info=not scored)
+    if eg <= 0:
+        return _component(label, "N/A", None,
+                          f"PEG: N/A (EPS a scăzut, {_growth_txt(eg)}/an pe {span_txt}: PEG nu are sens). {role}",
+                          info=not scored)
+    peg = pe / (eg * 100.0)
+    return _component(label, f"{ro(peg):.2f}", linear_score(peg, *PEG_SCALE) if scored else None,
+                      f"PEG = P/E {ro(pe):.1f} ÷ creșterea EPS {ro(eg * 100):.1f}%/an (pe {span_txt}) = {ro(peg):.2f} "
+                      f"(≤ 1 → notă maximă, ≥ 3 → zero; reperul lui Peter Lynch, netestat). {role}", info=not scored)
+
+
 def valuation_components(inp):
+    """Evaluarea SUA/UE (decizia lui Daniel, 14.11.2026): DCF invers pe 10 ani față de creșterea livrată;
+    PEG în notă doar când DCF-ul invers lipsește; E/P față de AAA și GN informative.
+    Întoarce (componente, rezultatul DCF-ului invers sau None)."""
     out = []
     dcf_na = inp.get("dcf_na")
     wacc = inp.get("wacc")
     rev = None
+    label = "DCF invers"
     if dcf_na:
-        out.append(_component("DCF invers", "N/A", None, f"DCF invers: nu se aplică ({dcf_na})"))
+        dcf = _component(label, "N/A", None, f"DCF invers: nu se aplică ({dcf_na}).")
     elif not _num(wacc):
-        out.append(_component("DCF invers", "N/A", None,
-                              "DCF invers: N/A (WACC nu se poate calcula: lipsește rata fără risc, beta sau capitalizarea)."))
+        dcf = _component(label, "N/A", None,
+                         "DCF invers: N/A (WACC nu se poate calcula: lipsește rata fără risc, beta sau capitalizarea).")
     else:
-        rev = reverse_dcf_growth(inp.get("price"), inp.get("fcf"), wacc, inp.get("net_debt"), inp.get("shares"))
+        rev = reverse_dcf_growth(inp.get("price"), inp.get("fcf"), wacc, inp.get("net_debt"), inp.get("shares"),
+                                 years=DCF_YEARS, high_years=DCF_HIGH_YEARS)
         if rev is None:
             reason = ("FCF negativ sau zero" if _num(inp.get("fcf")) and inp["fcf"] <= 0
                       else "lipsesc FCF, datoria netă sau numărul de acțiuni")
-            out.append(_component("DCF invers", "N/A", None, f"DCF invers: N/A ({reason})."))
+            dcf = _component(label, "N/A", None, f"DCF invers: N/A ({reason}).")
         else:
             g = rev["growth"]
-            score = linear_score(g, *REVERSE_DCF_SCALE)
             if rev["bound"] == "low":
-                val, txt = "< −50%", "prețul e sub valoarea FCF-ului actual chiar cu o scădere de 50% pe an"
+                need_val, need_txt = "< −50%", "prețul e sub valoarea FCF-ului actual chiar cu o scădere de 50% pe an"
             elif rev["bound"] == "high":
-                val, txt = "> +100%", "prețul cere o creștere a FCF de peste 100% pe an"
+                need_val, need_txt = "> +100%", "prețul cere o creștere a FCF de peste 100% pe an"
             else:
-                val, txt = _pct(g), f"prețul cere o creștere a FCF de {ro(g * 100):.1f}% pe an"
+                need_val, need_txt = _pct(g), f"prețul cere o creștere a FCF de {ro(g * 100):.1f}% pe an"
             base = inp.get("fcf_basis") or "FCF"
-            out.append(_component("DCF invers", val, score,
-                                  f"DCF invers: {txt} în primul an, care scade spre {ro(TERMINAL_GROWTH * 100):.0f}% în anul 5 "
-                                  f"(WACC {ro(wacc * 100):.1f}%, pornind de la {base}). Sub 0% → notă maximă, peste 20% → zero."))
+            scheme = (f"{need_txt} timp de {DCF_HIGH_YEARS} ani, apoi scăzând spre {ro(TERMINAL_GROWTH * 100):.0f}% "
+                      f"în anul {DCF_YEARS} (WACC {ro(wacc * 100):.1f}%, pornind de la {base})")
+            delivered = inp.get("rev_growth")
+            span = inp.get("rev_growth_years")
+            span_txt = f"{ro(span):.0f} ani" if _num(span) else "ultimii ani fiscali"
+            if not _num(delivered):
+                dcf = _component(label, need_val, None,
+                                 f"DCF invers: {scheme}. Fără creșterea livrată a cifrei de afaceri (lipsesc "
+                                 f"situațiile pe {span_txt}), comparația nu se poate face: N/A.")
+            else:
+                used = min(delivered, DELIVERED_GROWTH_CAP)
+                cap_txt = (f", plafonată la {ro(DELIVERED_GROWTH_CAP * 100):.0f}%" if delivered > DELIVERED_GROWTH_CAP
+                           else "")
+                if rev["bound"] == "low":
+                    gap, score = None, 1.0
+                    gap_txt = "prețul cere mai puțin decât orice scenariu plauzibil"
+                elif rev["bound"] == "high":
+                    gap, score = None, 0.0
+                    gap_txt = "prețul cere mai mult decât orice scenariu plauzibil"
+                else:
+                    gap = g - used
+                    score = linear_score(gap, *GROWTH_GAP_SCALE)
+                    gap_txt = f"diferență {ro(gap * 100):+.1f} pp"
+                dcf = _component(label, f"{need_val} / {_growth_txt(delivered)}", score,
+                                 f"DCF invers: {scheme}. Compania a livrat {_growth_txt(delivered)}/an la cifra de afaceri "
+                                 f"pe {span_txt}{cap_txt}: {gap_txt} (≤ 0 pp → notă maximă, ≥ +15 pp → zero; "
+                                 "praguri netestate).")
+    out.append(dcf)
+    out.append(peg_component(inp, scored=not _num(dcf["score"])))
     out.append(ey_component(inp))
     out.append(gn_component(inp))
     return out, rev
@@ -310,7 +396,7 @@ def fundamental_score(inp):
     """Scorul fundamental SUA/UE dintr-un dict de intrări deja calculate (vezi app.py).
 
     Chei: financial (bool), price, dcf_na, wacc, fcf, fcf_basis, net_debt, shares, pe, eps, aaa (procente),
-    aaa_label, pbv, piotroski
+    aaa_label, pbv, rev_growth / rev_growth_years (CAGR cifra de afaceri), eps_growth / eps_growth_years, piotroski
     ({passed, evaluable}), altman ({value, variant, zone}), ebitda, coverage, roe, ke.
     Întoarce {score (0–100 sau None), label, color, note, pillars, financial, reverse_dcf}.
     """
