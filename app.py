@@ -10,7 +10,7 @@ from data.news import filter_company_news, future_note, holdings_news, mark_futu
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
-from ui.card_help import FUND_HELP, fund_help, BVB_HELP, PILLAR_HELP, PILLAR_TEST_NOTE, RISK_HELP, OPT_HELP, PORTF_HELP
+from ui.card_help import FUND_HELP, fund_help, BVB_HELP, PILLAR_HELP, PILLAR_TEST_NOTE, RISK_HELP, OPT_HELP, PORTF_HELP, MARKET_HELP
 from ui import theme as ui_theme
 from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
 # Cardurile HTML vechi au culori din paleta GitHub dark: la afișare trec pe tokenurile temei (ui/theme.py).
@@ -2129,7 +2129,7 @@ PDAY_HELP = {
     "Contribuție": ("P/L-ul poziției în lei ÷ valoarea tuturor acțiunilor și ETF-urilor incluse la închiderea precedentă, "
                     "în puncte procentuale. Suma contribuțiilor = variația acțiunilor și ETF-urilor."),
     "σ": ("Variația zilei ÷ abaterea standard a variațiilor zilnice din ultimele 60 de ședințe (fără ziua curentă; "
-          "minimum 20). Peste 2σ = mișcare neobișnuită pentru acest titlu (prag netestat)."),
+          "minimum 20). Sub 1σ obișnuită · 1–2σ mai mare decât de obicei · 2–3σ neobișnuită (~5% din zile) · peste 3σ extremă (praguri orientative, netestate)."),
 }
 
 
@@ -6297,7 +6297,8 @@ def main():
                 column_config={
                     "Trend": st.column_config.Column(help="Câte din 3 condiții sunt îndeplinite: închiderea peste media pe 50 de ședințe, "
                                                           "peste media pe 200, media pe 50 peste cea pe 200. 3/3 = trend ascendent complet."),
-                    "Momentum 12-1": st.column_config.Column(help="Randamentul de acum 12 luni până acum o lună (fără ultima lună), pe date calendaristice."),
+                    "Momentum 12-1": st.column_config.Column(help="Randamentul de acum 12 luni până acum o lună (fără ultima lună), pe date calendaristice. "
+                                                                  "Peste +20% puternic · 0 – +20% pozitiv · −20% – 0 negativ · sub −20% slab (praguri orientative, netestate)."),
                     "Scor moment": st.column_config.Column(help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
                                                                 "Pragurile 80/40 sunt testate pe acțiuni BVB, nu pe indici: aici valoarea e descriptivă, fără verdict."),
                     "De la maximul pe 52 săpt.": st.column_config.Column(help="Ultima închidere ÷ cea mai mare închidere din ultimele 52 de săptămâni − 1. "
@@ -6453,17 +6454,13 @@ def main():
         state_txt = {"stres": "🔴 stres acut", "tensiune": "🟠 tensiune", "normal": "🟢 normal"}
         c_st1.metric("VIX / VIX3M", "N/A" if vterm is None else f"{ro(vterm['ratio']):.2f}",
                      None if vterm is None else state_txt[vterm["state"]], delta_color="off",
-                     help="Volatilitatea implicită pe 30 de zile ÷ cea pe 3 luni (S&P 500), aceeași zi. "
-                          f"Sub {ro(stress_calc.VIX_TERM_TENSE):.2f}: normal (piața se teme mai puțin de imediat decât de viitor); "
-                          f"{ro(stress_calc.VIX_TERM_TENSE):.2f}–{ro(stress_calc.VIX_TERM_STRESS):.2f}: tensiune; peste 1: stres acut "
-                          "(apare în corecții și vânzări forțate). Praguri uzuale de piață, netestate."
-                          + ("" if vterm is None else f" VIX {ro(vterm['vix']):.2f}, VIX3M {ro(vterm['vix3m']):.2f}, {vterm['date']:%d.%m.%Y}."))
+                     help=MARKET_HELP["vix_term"]
+                          + ("" if vterm is None else f"\n\n**Acum:** VIX {ro(vterm['vix']):.2f}, VIX3M {ro(vterm['vix3m']):.2f}, {vterm['date']:%d.%m.%Y}."))
         for col, code, name in ((c_st2, "BAMLH0A0HYM2", "Spread high yield SUA"), (c_st3, "BAMLC0A0CM", "Spread investment grade SUA")):
             cs = credit[code]
             col.metric(name, "N/A" if cs["value"] is None else f"{ro(cs['value']):.2f} pp",
                        None if cs["d1m"] is None else f"{ro(cs['d1m']):+.2f} pp într-o lună", delta_color="inverse",
-                       help=f"ICE BofA option-adjusted spread (FRED {code}): randamentul obligațiunilor corporative peste titlurile de stat. "
-                            "Crește când investitorii cer mai mult pentru riscul de neplată (stres); scade când creditul e ieftin. "
+                       help=f"{MARKET_HELP['credit']}\n\n**Serie:** FRED {code}. "
                             + ("" if cs["value"] is None else
                                f"Ultima valoare {cs['date']:%d.%m.%Y}. Percentila în istoricul disponibil "
                                f"({cs['start']:%m.%Y}–{cs['date']:%m.%Y}, {cs['n']} zile): {ro(cs['pctile']):.0f}% "
@@ -7393,14 +7390,12 @@ def main():
             reg = markets_calc.market_regime(mk_closes_rz[sym] if sym in mk_closes_rz.columns else None)
             r1, r2, r3 = st.columns(3)
             r1.metric(f"Trend {name}", "N/A" if reg["trend_n"] is None else f"{reg['trend_n']}/3",
-                      help="Câte condiții sunt îndeplinite: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200. "
-                           "Aceeași regulă ca „Moment” din Analiză Companie (sub 200 de ședințe: N/A).")
+                      help=MARKET_HELP["trend"])
             with r2.container(key=ui_theme.signed_key(f"mom-{name}", reg["momentum"])):
                 st.metric("Momentum 12-1", _pct(reg["momentum"], 1),
-                          help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă).")
+                          help=MARKET_HELP["momentum"])
             r3.metric("Scor moment", "N/A" if reg["score"] is None else format_ro(reg["score"], 0),
-                      help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
-                           "Pragurile au fost testate pe acțiuni BVB, nu pe indici: aici e descriptiv.")
+                      help=MARKET_HELP["moment_score"])
 
         def _breadth_bar(b, scope):
             if not b["n"]:
@@ -7440,9 +7435,9 @@ def main():
                 view.style.format({"Preț": ro_spec(",.2f", unit), "Variație": ro_spec("+.2f", "%"), "σ": ro_spec("+.1f", "σ")})
                 .map(color, subset=["Variație"]),
                 width='stretch', hide_index=True,
-                column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice din "
+                column_config={"σ": st.column_config.Column(help=("Variația zilei ÷ abaterea standard a variațiilor zilnice din "
                                                                   "ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
-                                                                  "Peste 2σ = mișcare neobișnuită pentru acest titlu."),
+                                                                  "") + " Sub 1σ obișnuită · 1–2σ mai mare decât de obicei · 2–3σ neobișnuită (~5% din zile) · peste 3σ extremă (praguri orientative, netestate)."),
                                "Valoare": st.column_config.Column(help="Preț × volum în ședință (valoarea tranzacționată), "
                                                                         "în lei la cursul BNR."),
                                "Variație": st.column_config.Column(help="Față de închiderea ședinței precedente, preț neajustat.")})
@@ -7491,17 +7486,16 @@ def main():
                           help="Prețul ETF-ului care urmărește BET, nu nivelul indicelui (Yahoo nu are BET). "
                                + (f"Ultima cotație: {bet['date']:%d.%m.%Y}." if bet["date"] is not None else ""))
                 with m2.container(key=ui_theme.signed_key("bet-sigma", bet["sigma"])):
-                    st.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=briefing_calc.sigma_label(bet["sigma"]).capitalize()
-                              + f". Variația zilei ÷ abaterea standard a variațiilor din ultimele {bet['n']} ședințe (fără ziua curentă).")
+                    st.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=MARKET_HELP["sigma"]
+                              + f"\n\n**Azi:** {briefing_calc.sigma_label(bet['sigma'])}, față de ultimele {bet['n']} ședințe.")
                 m3.metric("Lățime (cresc / scad)", f"{bvb_b['up']} / {bvb_b['down']}" if bvb_b["n"] else "N/A",
-                          help="Companiile din universul urmărit (tools/univers_bvb.txt: BET Plus, BET-FI, BETAeRO) "
-                               "care au tranzacționat în ultima ședință.")
+                          help=MARKET_HELP["breadth"] + "\n\n**Univers:** BET Plus, BET-FI, BETAeRO (tools/univers_bvb.txt), "
+                               "companiile care au tranzacționat în ultima ședință.")
                 m4.metric("Valoare tranzacționată", briefing_calc.money_short(bvb_turn["today"], "RON"),
                           None if bvb_turn["ratio"] is None else f"×{format_ro(bvb_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
                           delta_arrow=briefing_calc.ratio_arrow(bvb_turn["ratio"]),
-                          help=f"Suma preț × volum pe universul urmărit în ultima ședință, față de mediana celor {bvb_turn['n']} "
-                               "ședințe dinainte (minimum 10). Doar universul, nu toată bursa.")
+                          help=MARKET_HELP["turnover"] + f"\n\n**Mediana:** din {bvb_turn['n']} ședințe dinainte.")
                 st.markdown("#### 🎯 Regimul BET (regula „Moment”)")
                 _regime_metrics(BRIEFING_BET_PROXY, "BET")
                 st.markdown("---")
@@ -7561,8 +7555,8 @@ def main():
                                              "σ": ro_spec("+.1f", "σ")}, na_rep="N/A")
                             .map(f_color, subset=["Variație"]),
                             width='stretch', hide_index=True, height=min(38 + 35 * len(fv), 600),
-                            column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor "
-                                                                             "din ultimele 60 de ședințe (fără ziua curentă; minimum 20)."),
+                            column_config={"σ": st.column_config.Column(help=("Variația zilei ÷ abaterea standard a variațiilor "
+                                                                             "din ultimele 60 de ședințe (fără ziua curentă; minimum 20).") + " Sub 1σ obișnuită · 1–2σ mai mare decât de obicei · 2–3σ neobișnuită (~5% din zile) · peste 3σ extremă (praguri orientative, netestate)."),
                                            "Valoare": st.column_config.Column(help="Preț × volum în ședință."),
                                            "Piață": st.column_config.Column(help="Secțiunea din tools/univers_bvb.txt "
                                                                                 "(componența BET Plus, BET-FI, BETAeRO la 04.11.2026).")})
@@ -7586,8 +7580,8 @@ def main():
                     mv = briefing_calc.daily_move(brief["eu_close"].get(sym))
                     col.metric(name, "N/A" if mv["last"] is None else format_ro(mv["last"], 2),
                                None if mv["pct"] is None else f"{_pct(mv['pct'])} · {_sig(mv['sigma'])}",
-                               help=briefing_calc.sigma_label(mv["sigma"]).capitalize()
-                                    + f". σ față de ultimele {mv['n']} ședințe. {kind.capitalize()}."
+                               help=MARKET_HELP["sigma"]
+                                    + f"\n\n**Azi:** {briefing_calc.sigma_label(mv['sigma'])}, față de ultimele {mv['n']} ședințe. {kind.capitalize()}."
                                     + (f" Ultima cotație: {mv['date']:%d.%m.%Y}." if mv["date"] is not None else ""))
 
                 eu_rates = {s: pday_calc.rate_for(briefing_calc.quote_currency(s), rz_fx) for s in eu_cols}
@@ -7609,13 +7603,13 @@ def main():
                 eu_fx_txt = "; ".join(_eu_fx(c) for c in eu_cur)
                 m1, m2 = st.columns(2)
                 m1.metric("Lățime (cresc / scad)", f"{eu_b['up']} / {eu_b['down']}" if eu_b["n"] else "N/A",
-                          help="Companiile din universul urmărit (tools/univers_urmarit_ue.txt: DAX 40, CAC 40, Londra, "
-                               "Milano) care au tranzacționat în ultima ședință.")
+                          help=MARKET_HELP["breadth"] + "\n\n**Univers:** DAX 40, CAC 40, Londra, Milano "
+                               "(tools/univers_urmarit_ue.txt), companiile care au tranzacționat în ultima ședință.")
                 m2.metric("Valoare tranzacționată (universul urmărit)", briefing_calc.money_short(eu_turn["today"], "RON"),
                           None if eu_turn["ratio"] is None else f"×{format_ro(eu_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
                           delta_arrow=briefing_calc.ratio_arrow(eu_turn["ratio"]),
-                          help="Preț × volum pe universul urmărit în ultima ședință, fiecare titlu în lei la cursul BNR al "
+                          help=MARKET_HELP["turnover"] + "\n\n**Detalii:** fiecare titlu în lei la cursul BNR al "
                                f"monedei lui ({eu_fx_txt}), față de mediana celor {eu_turn['n']} ședințe dinainte (minimum 10; "
                                "același curs pe toate ședințele, deci raportul nu depinde de curs). Doar universul, nu toată bursa.")
                 if eu_no_fx:
@@ -7681,9 +7675,9 @@ def main():
                                              else f"color: {DF_DOWN}" if str(v).startswith("-") else "")
                         st.dataframe(fv.style.map(s_color, subset=["Variație"]), width='stretch', hide_index=True,
                                      height=min(38 + 35 * len(fv), 600),
-                                     column_config={"σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a "
+                                     column_config={"σ": st.column_config.Column(help=("Variația zilei ÷ abaterea standard a "
                                                                                       "variațiilor din ultimele 60 de ședințe "
-                                                                                      "(fără ziua curentă; minimum 20)."),
+                                                                                      "(fără ziua curentă; minimum 20).") + " Sub 1σ obișnuită · 1–2σ mai mare decât de obicei · 2–3σ neobișnuită (~5% din zile) · peste 3σ extremă (praguri orientative, netestate)."),
                                                     "Valoare": st.column_config.Column(help="Preț × volum în ședință, în lei la cursul BNR."),
                                                     "Piață": st.column_config.Column(help="Secțiunea din tools/univers_urmarit_ue.txt.")})
 
@@ -7702,8 +7696,8 @@ def main():
                     mv = briefing_calc.daily_move(brief["us_close"].get(sym))
                     col.metric(name, "N/A" if mv["last"] is None else format_ro(mv["last"], 2),
                                None if mv["pct"] is None else f"{_pct(mv['pct'])} · {_sig(mv['sigma'])}",
-                               help=briefing_calc.sigma_label(mv["sigma"]).capitalize()
-                                    + f". σ față de ultimele {mv['n']} ședințe. Indice de preț (fără dividende).")
+                               help=MARKET_HELP["sigma"]
+                                    + f"\n\n**Azi:** {briefing_calc.sigma_label(mv['sigma'])}, față de ultimele {mv['n']} ședințe. Indice de preț (fără dividende).")
 
                 st.markdown("#### 🌡️ Volatilitatea așteptată (VIX)")
                 try:
@@ -7715,12 +7709,11 @@ def main():
                 vix_s = vix_c["^VIX"].dropna() if "^VIX" in vix_c.columns else pd.Series(dtype=float)
                 v1, v2, v3 = st.columns(3)
                 v1.metric("VIX", "N/A" if vix_s.empty else format_ro(vix_s.iloc[-1], 2),
-                          help="Volatilitatea anualizată pe 30 de zile implicită în opțiunile pe S&P 500 (puncte procentuale).")
+                          help=MARKET_HELP["vix"])
                 v2.metric("Percentila VIX pe 1 an", "N/A" if vix_s.empty else format_ro(stress_calc.percentile_rank(vix_s), 0, "%"),
-                          help=f"Ce procent din cele {len(vix_s)} închideri din ultimul an au fost ≤ VIX-ul de azi.")
+                          help=MARKET_HELP["vix_pct"] + f"\n\n**Eșantion:** {len(vix_s)} închideri.")
                 v3.metric("VIX / VIX3M", "N/A" if vt is None else f"{format_ro(vt['ratio'], 2)} ({vt['state']})",
-                          help="Frica pe 30 de zile față de cea pe 3 luni. ≥ 1,00 = stres (structură inversată), 0,90–1,00 = "
-                               "tensiune, sub 0,90 = normal. Praguri uzuale de piață, netestate în aplicație.")
+                          help=MARKET_HELP["vix_term"])
 
                 st.markdown("---")
                 st.markdown("#### ⚖️ Lățimea pieței")
@@ -7735,9 +7728,7 @@ def main():
                     with col.container(key=ui_theme.signed_key(f"latime-{a_sym}-{b_sym}", rd["diff_pp"])):
                         st.metric(f"{a_sym} − {b_sym} (o zi)",
                                   "N/A" if rd["diff_pp"] is None else ("+" if rd["diff_pp"] >= 0 else "") + format_ro(rd["diff_pp"], 2, " pp"),
-                                  help=f"{label}: variația zilei a lui {a_sym} minus a lui {b_sym} (prețuri ajustate). Pozitiv = "
-                                       "companiile cu pondere egală (sau cele mici) au făcut mai bine decât indicele ponderat cu "
-                                       "capitalizarea, deci mișcarea zilei a fost largă, nu dusă de câțiva giganți.")
+                                  help=MARKET_HELP["rsp_spy"] + f"\n\n**Pereche:** {label} ({a_sym} − {b_sym}, prețuri ajustate).")
                 _breadth_bar(briefing_calc.breadth_counts(us_t), f"Universul urmărit ({len(us_t)} simboluri, nu S&P 500)")
                 us_turn = briefing_calc.turnover_vs_median(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
                 usd_rz = rz_fx.get("USD")
@@ -7746,7 +7737,7 @@ def main():
                           None if us_turn["ratio"] is None else f"×{format_ro(us_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
                           delta_arrow=briefing_calc.ratio_arrow(us_turn["ratio"]),
-                          help=f"Preț × volum pe universul urmărit în ultima ședință, în lei la cursul BNR"
+                          help=MARKET_HELP["turnover"] + "\n\n**Detalii:** în lei la cursul BNR"
                                + (f" ({format_ro(usd_rz, 4)} lei/USD, {rz_fx_dates['USD']:%d.%m.%Y})" if usd_rz and "USD" in rz_fx_dates else " (indisponibil)")
                                + f", față de mediana celor {us_turn['n']} ședințe dinainte (raportul nu depinde de curs).")
 
@@ -7774,9 +7765,9 @@ def main():
                                  column_config={
                                      "Variație": st.column_config.Column(help="Față de închiderea precedentă, preț neajustat: în ziua "
                                                                               "ex-dividend scăderea include dividendul."),
-                                     "σ": st.column_config.Column(help="Variația zilei ÷ abaterea standard a variațiilor zilnice ale "
+                                     "σ": st.column_config.Column(help=("Variația zilei ÷ abaterea standard a variațiilor zilnice ale "
                                                                        "ETF-ului din ultimele 60 de ședințe (fără ziua curentă; minimum 20). "
-                                                                       "Peste 2σ = mișcare neobișnuită pentru sector (prag netestat)."),
+                                                                       "") + " Sub 1σ obișnuită · 1–2σ mai mare decât de obicei · 2–3σ neobișnuită (~5% din zile) · peste 3σ extremă (praguri orientative, netestate)."),
                                      "Față de S&P 500": st.column_config.Column(help="Variația ETF-ului minus variația S&P 500 în "
                                                                                      "aceeași ședință, în puncte procentuale. Pozitiv = "
                                                                                      "sectorul a făcut mai bine decât indicele.")})
