@@ -146,6 +146,10 @@ def premium_css():
         ' div[data-testid="stMetric"] [data-testid="stMetricDelta"] { justify-content: center; text-align: center; }'
         ' div[data-testid="stMetric"] [data-testid="stMetricLabel"] { grid-template-columns: auto auto; }'
         ' div[data-testid="stMetric"] div:has(> [data-testid="stMetricDelta"]) { justify-content: center; }'
+        # valoarea principală colorată după semn (st.metric colorează doar delta): containerul cu cheia
+        # „semn-poz-…” / „semn-neg-…” primește clasa st-key-…, vezi signed_key()
+        ' [class*="st-key-semn-poz-"] [data-testid="stMetricValue"] { color: var(--tk-up); }'
+        ' [class*="st-key-semn-neg-"] [data-testid="stMetricValue"] { color: var(--tk-down); }'
         " .fin-card:hover, .news-card:hover { border-color: var(--tk-border-strong); }"
         ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
         " background: var(--tk-surface); }"
@@ -259,3 +263,13 @@ def theme_figure_dict(obj, key=None, up=None):
     if isinstance(obj, str) and key is not None and "color" in key.lower():
         return _plot_color(key, obj, up)
     return obj
+
+
+def signed_key(name, value):
+    """Cheia unui `st.container(key=...)` care colorează valoarea `st.metric` din el după semnul lui `value`
+    (CSS în premium_css): pozitiv → verde, negativ → roșu, zero sau lipsă → culoarea normală.
+    `name` trebuie să fie unic pe pagină (cheile Streamlit nu se pot repeta)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")
+    if value is None or value != value or value == 0:
+        return f"semn-zero-{slug}"
+    return f"semn-{'poz' if value > 0 else 'neg'}-{slug}"
