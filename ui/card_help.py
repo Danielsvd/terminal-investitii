@@ -62,7 +62,7 @@ FUND_HELP = {
              "P/E × P/BV.",
              "cel mult 22,5 trece criteriul (P/E 15 × P/BV 1,5) · 22,5–50 peste · peste 50 departe.",
              "Graham folosea profitul mediu pe 3 ani; aici e P/E pe 12 luni. Informativ la SUA/UE (evaluarea din scor "
-             "folosește E/P față de AAA); neinformativ când P/BV e foarte mare."),
+             "folosește DCF-ul invers față de creșterea livrată); neinformativ când P/BV e foarte mare."),
     "trailingEps": _h("profitul care revine unei acțiuni.",
                       "profit net atribuibil acționarilor / numărul mediu de acțiuni, pe ultimele 12 luni.",
                       None, "se urmărește evoluția în timp, nu valoarea absolută; negativ = pierdere."),
@@ -213,12 +213,15 @@ BVB_HELP = {
 # --- Analiză companie: scorul fundamental SUA/UE (descriptiv), risc, îndatorare -----------------
 
 PILLAR_HELP = {
-    "evaluare": _h("cât de ieftină e acțiunea față de ce produce compania.",
-                   "media componentelor cu date. Nefinanciare: DCF invers (creșterea FCF pe care o cere prețul: ≤ 0% → 100, "
-                   "≥ 20% → 0) și randamentul profitului E/P față de randamentul AAA (≤ 1× → 0, ≥ 2× → 100). "
+    "evaluare": _h("cât cere prețul față de ce a dovedit compania (creșterea cerută față de cea livrată).",
+                   "Nefinanciare: DCF invers pe 10 ani = creșterea FCF pe care o cere prețul (5 ani constantă, apoi scade la "
+                   "2% în anii 6–10), minus creșterea anuală a cifrei de afaceri pe ultimii 2–3 ani fiscali (plafonată la 30%): "
+                   "≤ 0 pp → 100, ≥ +15 pp → 0. Când DCF-ul invers nu se poate calcula (FCF ≤ 0, DCF neaplicabil, fără "
+                   "creștere livrată), nota vine din PEG = P/E ÷ creșterea EPS: ≤ 1 → 100, ≥ 3 → 0. "
                    "Bănci și asigurători: P/BV față de P/BV justificat (ROE − g) / (ke − g): raport ≤ 0,7 → 100, ≥ 1,3 → 0.",
                    "peste 67 bun · 33–67 mediu · sub 33 slab.",
-                   "GN apare doar informativ.", praguri_titlu=SCORE_BANDS),
+                   "praguri netestate (decizia lui Daniel, 14.11.2026). Informative, fără notă: E/P față de AAA (reperul "
+                   "absolut al lui Graham), GN și PEG când există DCF invers.", praguri_titlu=SCORE_BANDS),
     "calitate": _h("calitatea și direcția rezultatelor financiare (Piotroski F-Score).",
                    "criterii îndeplinite / criterii evaluabile (minimum 6 din 9), ultimul an fiscal față de cel precedent.",
                    "peste 67 puternic (echivalent 7–9 din 9) · 33–67 mediu · sub 33 slab.", praguri_titlu=SCORE_BANDS),

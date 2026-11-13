@@ -911,6 +911,36 @@ def eps_growth_statements(annual_income, years=3):
     return {"growth": growth, "eps_new": eps_new, "eps_old": eps_old, "date_new": date_new, "date_old": date_old}
 
 
+def statement_cagr(annual_df, rows, max_years=3, min_years=2):
+    """CAGR-ul primului rând disponibil din `rows` în situațiile anuale Yahoo, pe cea mai lungă perioadă
+    între `min_years` și `max_years` ani (toleranță 6 luni la capete). Yahoo dă ~4 ani fiscali, deci de obicei 3.
+
+    Întoarce {growth, new, old, date_new, date_old, years} sau None (sub 2 puncte, perioadă prea scurtă,
+    capăt ≤ 0: CAGR nedefinit)."""
+    df = _sorted_desc(annual_df)
+    if df is None:
+        return None
+    points = []
+    for col in range(df.shape[1]):
+        v, d = stmt_value(df, rows, col), stmt_date(df, col)
+        if v is not None and d is not None:
+            points.append((d, v))
+    if len(points) < 2:
+        return None
+    date_new, v_new = points[0]
+    spans = [((date_new - d).days / 365.25, d, v) for d, v in points[1:]]
+    ok = [x for x in spans if min_years - 0.5 <= x[0] <= max_years + 0.5]
+    if not ok:
+        return None
+    span, date_old, v_old = max(ok, key=lambda x: x[0])
+    span = round(span)            # ani fiscali întregi (anii de 52/53 de săptămâni nu mută CAGR-ul)
+    growth = eps_cagr(v_new, v_old, span)
+    if growth is None:
+        return None
+    return {"growth": growth, "new": v_new, "old": v_old, "date_new": date_new, "date_old": date_old,
+            "years": span}
+
+
 def annual_pair_statements(annual_df, rows):
     """Ultimii doi ani fiscali din situațiile anuale Yahoo pentru primul rând disponibil din `rows`:
     (data_nouă, valoare_nouă, data_veche, valoare_veche) sau None."""
