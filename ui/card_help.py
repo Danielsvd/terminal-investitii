@@ -396,3 +396,56 @@ PORTF_HELP = {
                      "sub 0,5 slab · 0,5–1 acceptabil · 1–2 bun · peste 2 foarte bun.",
                      "e maximul posibil pe aceste date (cu plafonul de 25% pe poziție); în practică iese mai mic."),
 }
+
+
+# --- Rezumatul zilei și Piață globală -------------------------------------------------------------
+
+MARKET_HELP = {
+    "sigma": _h("cât de mare e mișcarea zilei față de cum se mișcă de obicei acel indice sau acea acțiune.",
+                "variația zilei ÷ abaterea standard a variațiilor zilnice din ședințele anterioare (fără ziua curentă).",
+                "sub 1σ obișnuită · 1–2σ mai mare decât de obicei · 2–3σ neobișnuită (~5% din zile) · peste 3σ extremă.",
+                "o singură zi nu e o tendință; semnul arată direcția (plus = creștere)."),
+    "breadth": _h("câte companii au crescut și câte au scăzut în ultima ședință.",
+                  "numărul de titluri din universul urmărit cu variație pozitivă / negativă în ultima ședință.",
+                  "creșteri de peste 2 ori mai multe decât scăderile = participare largă la creștere; invers = presiune largă de vânzare.",
+                  "universul urmărit, nu toată bursa."),
+    "turnover": _h("cât s-a tranzacționat în ultima ședință față de o ședință obișnuită.",
+                   "Σ preț × volum pe universul urmărit, față de mediana ședințelor dinainte (minimum 10).",
+                   "sub ×0,7 slabă · ×0,7–1,3 normală · ×1,3–2 ridicată · peste ×2 foarte ridicată.",
+                   "un volum mare confirmă mișcarea zilei (în orice direcție); un volum slab o face mai puțin credibilă."),
+    "trend": _h("direcția trendului indicelui pe termen mediu și lung.",
+                "câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200 (aceeași regulă ca „Moment” din Analiză companie).",
+                "3/3 trend ascendent clar · 2/3 mixt pozitiv · 1/3 mixt negativ · 0/3 trend descendent.",
+                "sub 200 de ședințe de istoric: N/A."),
+    "momentum": _h("cât a crescut indicele în ultimul an, fără ultima lună.",
+                   "randamentul de acum 12 luni până acum o lună (ultima lună exclusă).",
+                   "peste +20% puternic · 0 – +20% pozitiv · −20% – 0 negativ · sub −20% slab."),
+    "moment_score": _h("sub-scorul tehnic al indicelui, ca la acțiuni.",
+                       "media dintre trend (0–1) și momentumul scalat (−30% → 0, +30% → 1), × 100.",
+                       "80–100 favorabil · 40–80 neutru · sub 40 nefavorabil.",
+                       "pragurile au fost testate pe acțiuni BVB, nu pe indici: aici sunt descriptive.",
+                       praguri_titlu="Pragurile scorului (definite de aplicație)"),
+    "vix": _h("frica din piața americană: cât de mult se așteaptă să se miște S&P 500 în următoarele 30 de zile.",
+              "volatilitatea anualizată implicită în opțiunile pe S&P 500, în puncte procentuale (Cboe).",
+              "sub 15 calm · 15–20 normal · 20–30 tensiune · peste 30 frică.",
+              "VIX 20 ≈ mișcare așteptată de ±20%/an, adică ±1,26% pe zi."),
+    "vix_pct": _h("cât de ridicat e VIX-ul de azi față de ultimul an.",
+                  "procentul închiderilor din ultimul an cu VIX ≤ cel de azi.",
+                  "sub 20% calm față de ultimul an · 20–80% obișnuit · peste 80% tensionat față de ultimul an.",
+                  "e relativ la ultimul an: după un an liniștit, un VIX modest poate avea percentilă mare."),
+    "vix_term": _h("frica pe termen scurt față de cea pe 3 luni.",
+                   "VIX (30 de zile) ÷ VIX3M (3 luni), aceeași zi.",
+                   "sub 0,90 normal (piața se teme mai puțin de imediat decât de viitor) · 0,90–1,00 tensiune · "
+                   "peste 1,00 stres acut (structură inversată).",
+                   "inversarea apare de obicei în corecții și vânzări forțate și durează puțin."),
+    "credit": _h("cât cer investitorii în plus față de titlurile de stat ca să împrumute companiile.",
+                 "randamentul obligațiunilor corporative minus cel al titlurilor de stat americane (ICE BofA OAS, FRED).",
+                 "high yield: sub 3,5 pp credit ieftin · 3,5–5 normal · 5–7 tensiune · peste 7 stres. Investment grade: sub 1 "
+                 "pp ieftin · 1–1,5 normal · 1,5–2 tensiune · peste 2 stres.",
+                 "crește înaintea și în timpul recesiunilor; percentila de dedesubt e doar pe ultimii ~3 ani publicați de FRED."),
+    "rsp_spy": _h("dacă ziua a fost dusă de toată piața sau doar de câțiva giganți.",
+                  "variația zilei a ETF-ului cu pondere egală (sau a celui pe companii mici) minus cea a S&P 500 ponderat "
+                  "cu capitalizarea, în puncte procentuale.",
+                  "peste 0 participare largă · sub 0 mișcare dusă de companiile mari · peste ±0,5 pp diferență notabilă.",
+                  "pe o singură zi e zgomot; contează direcția pe mai multe zile."),
+}

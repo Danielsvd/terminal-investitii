@@ -69,3 +69,14 @@ def test_explicatii_portofoliu():
     src = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
     assert 'LEDGER_HELP.update({k: PORTF_HELP[k] for k in ("xirr", "twr", "twr_annual", "vol", "sharpe"' in src
     assert 'help=PORTF_HELP["divers"]' in src and "Eșantion: Eșantion" not in src
+
+
+def test_explicatii_piata():
+    from ui.card_help import MARKET_HELP
+    for key, text in MARKET_HELP.items():
+        assert text.startswith("**Ce e:**") and "\n\n**Calcul:**" in text, key
+    assert "sub 15 calm" in MARKET_HELP["vix"] and "peste 1,00 stres acut" in MARKET_HELP["vix_term"]
+    assert "2–3σ" in MARKET_HELP["sigma"] and "×0,7–1,3 normală" in MARKET_HELP["turnover"]
+    # pragurile VIX/VIX3M coincid cu cele din analytics.stress
+    from analytics import stress
+    assert (stress.VIX_TERM_TENSE, stress.VIX_TERM_STRESS) == (0.9, 1.0) and "0,90–1,00 tensiune" in MARKET_HELP["vix_term"]
