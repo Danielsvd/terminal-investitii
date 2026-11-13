@@ -10,7 +10,7 @@ from data.news import filter_company_news, future_note, holdings_news, mark_futu
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
-from ui.card_help import FUND_HELP, fund_help, BVB_HELP, PILLAR_HELP, PILLAR_TEST_NOTE, RISK_HELP, OPT_HELP
+from ui.card_help import FUND_HELP, fund_help, BVB_HELP, PILLAR_HELP, PILLAR_TEST_NOTE, RISK_HELP, OPT_HELP, PORTF_HELP
 from ui import theme as ui_theme
 from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
 # Cardurile HTML vechi au culori din paleta GitHub dark: la afișare trec pe tokenurile temei (ui/theme.py).
@@ -2544,33 +2544,11 @@ LEDGER_HELP = {
     "profit": "**Cum se calculează:** valoarea totală de azi − banii depuși net.\n\n**Ce înseamnă:** câștigul total în RON, din toate sursele: "
               "creșterea prețurilor, dividende, cupoane, dobânzi și cursul valutar, minus comisioane și impozite. "
               "Procentul de dedesubt îl raportează la banii depuși, fără să țină cont de cât timp au stat investiți.",
-    "xirr": "**Cum se calculează:** rata anuală care, aplicată fiecărei depuneri de la data ei până azi, dă exact valoarea de azi a portofoliului "
-            "(rata internă de rentabilitate pe fluxuri datate).\n\n**Ce înseamnă:** randamentul tău anual real, ținând cont de momentul în care ai depus fiecare sumă. "
-            "Se compară cu dobânda unui depozit sau a unui titlu de stat. Banii depuși recent cântăresc puțin, cei vechi mult.",
-    "twr": "**Cum se calculează:** randamentele zilnice ale portofoliului, înlănțuite, cu fiecare depunere scoasă din calcul în ziua ei: "
-           "randament zilnic = valoare azi ÷ (valoare ieri + depunerea de azi) − 1.\n\n**Ce înseamnă:** cât a crescut un leu investit la început, "
-           "indiferent de când și cât ai mai depus. Măsoară calitatea alegerilor de investiții și e direct comparabil cu un indice (BET, S&P 500).",
-    "twr_annual": "**Cum se calculează:** (1 + TWR total) ridicat la puterea 1 ÷ numărul de ani, minus 1.\n\n**Ce înseamnă:** TWR-ul exprimat ca medie pe an. "
-                  "Dacă e sub XIRR, ai depus mai mult înaintea perioadelor bune; dacă e peste, înaintea celor slabe.",
     "period": "Prima și ultima zi pentru care există valoare calculată. TWR și indicatorii de risc sunt măsurați pe acest interval.",
-    "vol": "**Cum se calculează:** deviația standard a randamentelor zilnice × √252 (zile de tranzacționare pe an).\n\n"
-           "**Ce înseamnă:** cât de mult fluctuează portofoliul într-un an obișnuit. La 10%, două treimi din ani ar trebui să se încheie la ±10% față de medie. "
-           "Aici e subestimată, pentru că obligațiunile și numerarul nu au variație zilnică.",
-    "sharpe": "**Cum se calculează:** (randamentul mediu zilnic − rata fără risc zilnică) ÷ deviația standard zilnică × √252.\n\n"
-              "**Ce înseamnă:** cât randament peste titlurile de stat primești pentru fiecare unitate de risc. Sub 0: mai slab decât titlurile de stat. "
-              "0–0,5: slab. 0,5–1: acceptabil. Peste 1: bun.",
-    "sortino": "**Cum se calculează:** ca Sharpe, dar la numitor intră doar variația zilelor sub rata fără risc (deviația în jos).\n\n"
-               "**Ce înseamnă:** randamentul raportat doar la riscul care doare, scăderile. Creșterile bruște nu sunt penalizate. Se citește ca Sharpe, dar valorile sunt de regulă mai mari.",
-    "max_dd": "**Cum se calculează:** cea mai mare scădere procentuală de la un vârf la minimul de după el, pe curba randamentelor (fără efectul depunerilor).\n\n"
-              "**Ce înseamnă:** cea mai rea perioadă prin care a trecut portofoliul. E pierderea pe care trebuie să fii pregătit să o vezi din nou.",
-    "var_hist": "**Cum se calculează:** percentila 5 a randamentelor zilnice din istoric.\n\n**Ce înseamnă:** într-o zi din 20, pierderea a fost mai mare decât atât. "
-                "Suma în RON aplică procentul la valoarea de azi a portofoliului.",
-    "cvar": "**Cum se calculează:** media randamentelor din cele mai rele 5% din zile.\n\n**Ce înseamnă:** cât pierzi, în medie, într-o zi proastă "
-            "(una dintre cele mai rele 20). E mai relevant decât VaR, pentru că arată cât de adâncă e coada, nu doar unde începe.",
-    "var_param": "**Cum se calculează:** media zilnică − 1,645 × deviația standard, adică percentila 5 dacă randamentele ar fi distribuite normal.\n\n"
-                 "**Ce înseamnă:** estimarea teoretică a aceleiași pierderi. Piețele au zile extreme mai dese decât distribuția normală, "
-                 "deci compară-l cu cel istoric: diferența dintre ele arată cât de neobișnuite sunt cozile.",
 }
+# Indicatorii de randament și risc: explicațiile cu praguri din ui/card_help.py (aceleași ca în taburile pe monede)
+LEDGER_HELP.update({k: PORTF_HELP[k] for k in ("xirr", "twr", "twr_annual", "vol", "sharpe", "sortino", "max_dd",
+                                               "var_hist", "cvar", "var_param")})
 LEDGER_COLUMN_HELP = {
     "Clasă": "Clasa de active din coloana Class a foii Tranzactii. Steluța marchează clasele în care cel puțin o poziție e evaluată la nominal (proxy), fără preț manual.",
     "Monedă": "Moneda în care sunt exprimate toate sumele de pe rând. Rândurile nu se adună între ele decât după conversie.",
@@ -5757,16 +5735,11 @@ def main():
 
                     c_mc1, c_mc2, c_mc3 = st.columns(3)
                     c_mc1.metric("Valoare în cel mai nefavorabil caz", f"{format_ro(mc['p5'])} {currency_symbol}",
-                                help="**Cum se calculează:** percentila 5 a valorii finale din cele 1000 de scenarii, fiecare construit din randamente zilnice "
-                                     "trase la întâmplare din istoricul portofoliului.\n\n**Ce înseamnă:** în 95% din scenarii portofoliul a terminat anul peste această valoare.")
+                                help=PORTF_HELP["mc_p5"])
                     c_mc2.metric("Variația în scenariul pesimist", f"{ro(mc['change_p5_pct']):+.2f}%",
-                                help="**Cum se calculează:** (valoarea din scenariul pesimist ÷ valoarea de azi − 1) × 100.\n\n"
-                                     "**Ce înseamnă:** cât ai pierde (minus) sau câștiga (plus) într-un an slab, de felul celor care apar o dată la 20. "
-                                     "Poate fi pozitivă dacă perioada aleasă a fost foarte bună.")
+                                help=PORTF_HELP["mc_p5_pct"])
                     c_mc3.metric("Probabilitatea de profit", f"{ro(mc['prob_profit']):.1f}%",
-                                help="**Cum se calculează:** câte scenarii din 1000 au terminat peste valoarea de azi.\n\n"
-                                     "**Ce înseamnă:** depinde direct de randamentul mediu al perioadei alese. Comparați cu varianta „fără tendință” de mai jos: "
-                                     "acolo iese puțin sub 50%, pentru că volatilitatea singură trage valoarea mediană în jos.")
+                                help=PORTF_HELP["mc_prob"])
                     st.caption(
                         f"Din {mc['simulations']} scenarii pe {mc['days']} de zile, construite prin reeșantionarea randamentelor zilnice din perioada aleasă mai sus "
                         f"({len(hist_curve) - 1} zile). Simularea presupune că randamentul mediu din această perioadă continuă. "
@@ -5840,15 +5813,13 @@ def main():
 
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
                 c_r1.metric("Max Drawdown", pct_t(rk.get("max_drawdown")),
-                            help="Cea mai mare scădere de la un vârf la minimul de după el, pe curba TWR din fereastra aleasă." + n_txt)
+                            help=PORTF_HELP["max_dd"] + "\n\n" + n_txt.strip())
                 c_r2.metric("Sharpe Ratio", rat_t(rk.get("sharpe")),
-                            help="(media zilnică − rata fără risc zilnică) / deviația standard zilnică × √252. "
-                                 "Sub 0: mai slab decât titlurile de stat; peste 1: bun. " + rf_txt + n_txt)
+                            help=PORTF_HELP["sharpe"] + "\n\n**Date:** " + rf_txt + n_txt)
                 c_r3.metric("VaR istoric (95%, 1 zi)", amt_t(rk.get("var95_hist")),
-                            help="Percentila 5 a randamentelor zilnice, aplicată la valoarea de azi: într-o zi din 20 pierderea a fost "
-                                 f"mai mare. Procent: {pct_t(rk.get('var95_hist'))}." + n_txt)
+                            help=PORTF_HELP["var_hist"] + f"\n\n**Procent:** {pct_t(rk.get('var95_hist'))}." + n_txt)
                 c_r4.metric("Volatilitate Anualizată", pct_t(rk.get("vol_ann")),
-                            help="Deviația standard a randamentelor zilnice × √252." + n_txt)
+                            help=PORTF_HELP["vol"] + "\n\n" + n_txt.strip())
 
                 st.write("")
                 c_b1, c_b2, c_b3, c_b4 = st.columns(4)
@@ -5857,24 +5828,21 @@ def main():
                           else " Sub 52 de săptămâni comune: N/A.")
                 corr_v = bc["corr"] if bc else None
                 c_b2.metric("Corelație cu Piața", rat_t(corr_v),
-                            help=f"Corelația randamentelor săptămânale TWR cu {bench_name}. 1,00 = mișcare identică." + bc_txt)
+                            help=PORTF_HELP["corr"] + f"\n\n**Indice:** {bench_name}." + bc_txt)
                 c_b3.metric("Beta Portofoliu", rat_t(bc["beta"] if bc else None),
-                            help=f"cov(portofoliu, {bench_name}) / var({bench_name}), pe randamente săptămânale. "
-                                 "Peste 1 = mai sensibil decât piața." + bc_txt)
+                            help=PORTF_HELP["beta"] + f"\n\n**Indice:** {bench_name}." + bc_txt)
                 c_b4.metric("Scor Diversificare", "N/A" if corr_v is None else f"{ro((1 - abs(corr_v)) * 100):.1f}%",
-                            help="(1 − |corelația cu piața|) × 100. Cât de independent se mișcă portofoliul față de indice.")
+                            help=PORTF_HELP["divers"])
 
                 st.write("")
                 c_s1, c_s2, c_s3 = st.columns(3)
                 sortino_val = rk.get("sortino")
                 c_s1.metric("Sortino Ratio", rat_t(sortino_val),
-                            help="Ca Sharpe, dar la numitor intră doar variația zilelor sub rata fără risc. " + rf_txt + n_txt)
+                            help=PORTF_HELP["sortino"] + "\n\n**Date:** " + rf_txt + n_txt)
                 c_s2.metric("CVaR (95%, 1 zi)", amt_t(rk.get("cvar95")),
-                            help="Media pierderilor din cele mai rele 5% din zile, aplicată la valoarea de azi. "
-                                 f"Procent: {pct_t(rk.get('cvar95'))}." + n_txt)
+                            help=PORTF_HELP["cvar"] + f"\n\n**Procent:** {pct_t(rk.get('cvar95'))}." + n_txt)
                 c_s3.metric("VaR parametric (95%)", amt_t(rk.get("var95_param")),
-                            help="media − 1,645 × deviația standard (presupune distribuție normală; subestimează cozile). "
-                                 f"Procent: {pct_t(rk.get('var95_param'))}." + n_txt)
+                            help=PORTF_HELP["var_param"] + f"\n\n**Procent:** {pct_t(rk.get('var95_param'))}." + n_txt)
                 if sortino_val is not None:
                     if sortino_val > 2:
                         st.success("🌟 **Sortino peste 2:** randament mare față de scăderile din perioadă (prag orientativ, netestat).")
@@ -6112,18 +6080,13 @@ def main():
                             c_op1, c_opt2, c_opt3 = st.columns(3)
                             
                             c_op1.metric("Randament Anual Istoric", f"{ro(opt_res['expected_return']):.2f}%",
-                                        help="**Cum se calculează:** media randamentelor zilnice ale alocării × 252, pe tot istoricul comun.\n\n"
-                                             "**Ce înseamnă:** cât ar fi adus această alocare în trecut. E calculat pe aceleași date pe care a fost aleasă, "
-                                             "deci e optimist prin construcție; nu e o estimare pentru viitor.")
+                                        help=PORTF_HELP["opt_return"])
                             
                             c_opt2.metric("Volatilitate (Risc)", f"{ro(opt_res['expected_volatility']):.2f}%",
-                                        help="**Cum se calculează:** deviația standard a randamentelor zilnice ale alocării × √252.\n\n"
-                                             "**Ce înseamnă:** cât de mult ar fi fluctuat alocarea într-un an obișnuit.")
+                                        help=PORTF_HELP["opt_vol"])
                             
                             c_opt3.metric("Sharpe Ratio", "N/A" if (opt_res['sharpe_ratio'] is None or rf_opt is None) else f"{ro(opt_res['sharpe_ratio']):.2f}",
-                                        help="**Cum se calculează:** (randament anual − rata fără risc) ÷ volatilitate.\n\n"
-                                             "**Ce înseamnă:** randamentul peste titlurile de stat pentru fiecare unitate de risc. E valoarea maximă posibilă pe aceste date, "
-                                             "cu plafonul pe poziție; în practică iese mai mic.")
+                                        help=PORTF_HELP["opt_sharpe"])
 
                             oos = opt_res.get("out_of_sample") or []
                             if oos:

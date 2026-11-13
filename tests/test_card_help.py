@@ -56,3 +56,16 @@ def test_explicatii_analiza_companie():
     # pragurile put/call coincid cu cele ale verdictului din aplicație (0,7 / 1,1)
     assert "sub 0,7 optimism" in OPT_HELP["pc_oi"] and "peste 1,1" in OPT_HELP["pc_oi"]
     assert "**Praguri" not in RISK_HELP["target"]
+
+
+def test_explicatii_portofoliu():
+    from ui.card_help import PORTF_HELP
+    for key, text in PORTF_HELP.items():
+        assert text.startswith("**Ce e:**") and "\n\n**Calcul:**" in text, key
+    assert "1–2 bun" in PORTF_HELP["sharpe"] and "peste 2 foarte bun" in PORTF_HELP["sortino"]
+    assert "sub −35% severă" in PORTF_HELP["max_dd"] and "peste 0,7 ridicată" in PORTF_HELP["corr"]
+    # sursa e aceeași în registru și în taburile pe monede
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
+    assert 'LEDGER_HELP.update({k: PORTF_HELP[k] for k in ("xirr", "twr", "twr_annual", "vol", "sharpe"' in src
+    assert 'help=PORTF_HELP["divers"]' in src and "Eșantion: Eșantion" not in src
