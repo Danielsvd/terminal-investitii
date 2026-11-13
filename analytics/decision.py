@@ -19,6 +19,7 @@ NEWS_CAVEAT = "potrivirea știrilor cu emitentul e nesigură; netestat"
 PC_BULLISH, PC_BEARISH = 0.7, 1.1          # P/C pe open interest (praguri netestate)
 IV_RANK_HIGH, IV_RANK_LOW = 80.0, 20.0     # IV Rank (praguri netestate)
 SENT_POS, SENT_NEG = 0.15, -0.15           # scorul de sentiment al știrilor, între −1 și 1
+SENT_EXTREME = 0.25                        # |scor| ≥ 0,25: euforie / panică (aceeași scară, netestat)
 Q_LOW, Q_HIGH = 0.7, 1.0                   # flux de numerar operațional / profit net
 
 
@@ -326,3 +327,35 @@ def upside(target, price):
     if target is None or price is None or price <= 0 or target <= 0:
         return None
     return target / price - 1.0
+
+
+# --- Sentimentul știrilor: un singur set de praguri pentru card, Context, sinteză și SWOT (14.11) -----
+
+def sentiment_band(score):
+    """(eticheta, nivel) pentru scorul FinBERT între −1 și +1, pe pragurile SENT_POS / SENT_NEG / SENT_EXTREME.
+    Nivel: 'up' / 'down' / 'muted'. Scor lipsă → ('N/A', 'muted')."""
+    s = _num(score)
+    if s is None:
+        return "N/A", "muted"
+    if s >= SENT_EXTREME:
+        return "Euforie media", "up"
+    if s > SENT_POS:
+        return "Optimism", "up"
+    if s <= -SENT_EXTREME:
+        return "Panică", "down"
+    if s < SENT_NEG:
+        return "Pesimism", "down"
+    return "Neutru", "muted"
+
+
+def news_window(items):
+    """„N titluri, dd.mm–dd.mm” din câmpul `date_str` („AAAA-LL-ZZ HH:MM”) al știrilor analizate.
+    Știrile fără dată se numără, dar nu intră în interval. Listă goală → „0 titluri”."""
+    items = list(items or [])
+    n = len(items)
+    head = f"{n} {'titlu' if n == 1 else 'titluri'}"
+    days = sorted(str(it.get("date_str") or "")[:10] for it in items if len(str(it.get("date_str") or "")) >= 10)
+    if not days:
+        return head
+    fmt = lambda d: f"{d[8:10]}.{d[5:7]}"
+    return head + (f", {fmt(days[0])}" if days[0] == days[-1] else f", {fmt(days[0])}–{fmt(days[-1])}")
