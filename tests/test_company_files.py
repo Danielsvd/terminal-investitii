@@ -149,3 +149,18 @@ def test_datorii_zero_necompletate():
     assert len(zero) == 3 and all(i["excluded"] for i in zero)
     # bilanțul nu mai e semnalat pe rândul cu datorii lipsă (nu se poate verifica)
     assert not [i for i in issues if i["field"] == "bilant" and i["months"] == 6]
+
+
+def test_annual_eps_growth():
+    import pandas as pd
+    from data.company_files import annual_eps_growth
+    df = pd.DataFrame({"year": [2021, 2022, 2023, 2024, 2024], "months": [12, 12, 12, 12, 6],
+                       "ni": [100.0, 110.0, 120.0, 133.1, 70.0], "shares": [1000.0] * 5})
+    g = annual_eps_growth(df)
+    assert (g["year_old"], g["year_new"]) == (2021, 2024) and g["growth"] == pytest.approx(0.10, abs=1e-9)
+    assert g["shares_changed"] is False
+    split = df.assign(shares=[1000.0, 1000.0, 1000.0, 10000.0, 10000.0])
+    assert annual_eps_growth(split)["growth"] is None and annual_eps_growth(split)["shares_changed"] is True
+    assert annual_eps_growth(df[df.year > 2021]) is None             # lipsește anul de acum 3 ani
+    loss = df.assign(ni=[-5.0, 110.0, 120.0, 133.1, 70.0])
+    assert annual_eps_growth(loss)["growth"] is None

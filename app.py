@@ -68,6 +68,7 @@ from analytics.scoring import technical_subscore, technical_components, moment_l
 from analytics import global_fundamental as gfund
 from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, final_verdict, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
+from data.company_files import annual_eps_growth
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median, peer_delta_color
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
@@ -833,7 +834,9 @@ def render_bvb_decision(real_sym, hist):
             "moment_basis": "prag testat pe BVB", "pillars": [], "history_text": history_text, "financial": False,
             # Randamentul dividendului din fișier (dividend total pe ultimul an / capitalizarea la prețul curent),
             # pentru cardul „Dividend (Randament)”: Yahoo nu îl trimite la BVB.
-            "dy": None if pd.isna(me["DY"]) else float(me["DY"]), "dy_year": me.get("raport_anual"), "price": price}
+            "dy": None if pd.isna(me["DY"]) else float(me["DY"]), "dy_year": me.get("raport_anual"), "price": price,
+            # Creșterea EPS pe 3 ani din foaia anuală a fișierului, pentru PEG (istoric)
+            "eps_growth": annual_eps_growth(data["companii"][tk])}
     st.markdown("---")
 
 
@@ -4046,6 +4049,28 @@ def main():
                     st.markdown("**Evaluare & Dividende**")
                     st.metric("P/E Ratio", format_num(info.get('trailingPE')), help=fund_help(info, "trailingPE"))
                     st.metric("Forward P/E", format_num(info.get('forwardPE')), help=fund_help(info, "forwardPE"))
+                    # PEG (Lynch): istoric = CAGR EPS 3 ani din situațiile raportate (la BVB din fișierul „Analiză
+                    # companii”); analiști = Yahoo trailingPegRatio. Nu intră în scor (scorul e testat fără el).
+                    if (bvb_decision or {}).get("is_bvb"):
+                        peg_g = bvb_decision.get("eps_growth")
+                        peg_src = ("fișierul „Analiză companii”, EPS = profit net / acțiuni emise"
+                                   + (f", {peg_g['year_old']} → {peg_g['year_new']}" if peg_g else ""))
+                    else:
+                        peg_g = fund.eps_growth_statements(get_financial_statements(real_sym).get("income"))
+                        peg_src = ("situațiile financiare anuale Yahoo (EPS diluat)"
+                                   + (f", {peg_g['date_old']:%Y} → {peg_g['date_new']:%Y}" if peg_g else ""))
+                    peg_growth = (peg_g or {}).get("growth")
+                    peg_hist = fund.peg_ratio(num(info, 'trailingPE'), peg_growth)
+                    peg_note = ("" if peg_g is None else
+                                f" EPS {ro(peg_g['eps_old']):.4f} → {ro(peg_g['eps_new']):.4f}"
+                                + ("" if peg_growth is None else f", creștere {ro(peg_growth * 100):+.1f}%/an") + ".")
+                    if (peg_g or {}).get("shares_changed"):
+                        peg_note += " Numărul de acțiuni s-a schimbat mult între cei doi ani: EPS-urile nu sunt comparabile (N/A)."
+                    st.metric("PEG (istoric, 3 ani)", f"{ro(peg_hist):.2f}" if peg_hist is not None else "N/A",
+                              help=f"{FUND_HELP['peg_hist']}\n\n**Sursă:** {peg_src}.{peg_note}")
+                    peg_an = num(info, 'trailingPegRatio')
+                    st.metric("PEG (estimări analiști)", f"{ro(peg_an):.2f}" if (peg_an is not None and peg_an > 0) else "N/A",
+                              help=f"{FUND_HELP['peg_analysts']}\n\n**Sursă:** Yahoo Finance.")
                     div_rate = info.get('dividendRate')
                     div_display = f"{ro(div_rate):.2f} ({ro((div_rate/curr_price*100)):.2f}%)" if (div_rate and curr_price) else "N/A"
                     div_help = fund_help(info, "dividendRate")
@@ -4054,7 +4079,7 @@ def main():
                         # BVB: din fișierul „Analiză companii” (Yahoo nu trimite dividendul); are prioritate.
                         dps = bvb_dy * bvb_decision["price"]
                         div_display = f"{ro(dps):.4f} ({ro(bvb_dy * 100):.2f}%)" if dps < 1 else f"{ro(dps):.2f} ({ro(bvb_dy * 100):.2f}%)"
-                        div_help = (f"{FUND_HELP['dividendRate']} Sursă: fișierul „Analiză companii” {bvb_symbol(real_sym)}: "
+                        div_help = (f"{FUND_HELP['dividendRate']}\n\n**Sursă:** fișierul „Analiză companii” {bvb_symbol(real_sym)}: "
                                     f"dividendul total din {bvb_decision.get('dy_year') or 'ultimul an'} / capitalizarea la prețul curent "
                                     f"({ro(bvb_decision['price']):.4f} lei); pe acțiune = randament × preț.")
                     st.metric("Dividend (Randament)", div_display, help=div_help)
