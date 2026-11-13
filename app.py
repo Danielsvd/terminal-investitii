@@ -5417,7 +5417,11 @@ def main():
                        help="**Ce e:** câte din criteriile tale minime de cumpărare („Hartă în investiții”) îndeplinește compania.\n\n"
                             "**Calcul:** marjă ≥ 10%, cifra de afaceri și profitul în creștere față de anul precedent, datorii / active "
                             "≤ 70%, P/E ≤ 15, P/BV ≤ 1,5, GN ≤ 22,5, ROA ≥ 5%, ROE ≥ 15%, capitalizare ≥ 1 mld. lei. Criteriile fără date "
-                            "nu se numără.\n\n**Atenție:** e regula ta, nu un test istoric; nu schimbă verdictul. Pe BVB, testul a găsit "
+                            "nu se numără.\n\n**Îndatorarea:** datorii totale (inclusiv furnizori, provizioane) / active totale = cât din "
+                            "activele companiei e finanțat de creditori; rata de îndatorare globală din foaia ta BVB. 70% din active "
+                            "≈ levier datorii / capital propriu de 2,33 (rândul „Levier financiar”): levier = rată / (1 − rată). "
+                            "Repere uzuale: sub 50% confortabil, 50–70% acceptabil, peste 70% îndatorare mare; băncile și "
+                            "utilitățile funcționează normal cu valori mari.\n\n**Atenție:** e regula ta, nu un test istoric; nu schimbă verdictul. Pe BVB, testul a găsit "
                             "putere de predicție la P/E și P/BV, dar nu la ROE, marjă și îndatorare.\n\n**Sursă:** " + "; ".join(crit_src) + ".")
             vs4.metric("Pasul 4 · Evaluare (DCF)", pct_sig(dcf_up),
                        None if an_up is None else f"analiști {pct_sig(an_up)}", delta_color="off", delta_arrow="off",
