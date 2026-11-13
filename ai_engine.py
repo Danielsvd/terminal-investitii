@@ -15,6 +15,7 @@ from datetime import date, datetime
 from analytics import options as opt_calc
 from analytics.options import max_pain
 from analytics.macro import period_return, pillar_credit, credit_sentence
+from analytics.decision import SENT_EXTREME
 from data.helpers import num, now_ro, ro
 from ui import theme as ui_theme
 
@@ -193,7 +194,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     # --- STRENGTHS ---
     if h_score is not None and h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
     if (num(info, 'profitMargins') or 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
-    if s_score is not None and s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
+    if s_score is not None and s_score >= SENT_EXTREME: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
     if _altman_distress(z_val): swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")

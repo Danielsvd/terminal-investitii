@@ -157,3 +157,25 @@ def test_indatorarea_datorii_pe_active_cu_levierul_echivalent():
     assert row(0.70)["value"] == "70,0% (levier 2,33)" and row(0.50)["value"] == "50,0% (levier 1,00)"
     assert row(1.2)["value"] == "120,0% (capital propriu negativ)" and row(1.2)["ok"] is False
     assert "2,33" in row(0.5)["threshold"]
+
+
+# --- Sentiment: praguri comune și fereastra știrilor (14.11) ---
+
+def test_sentiment_band_praguri():
+    from analytics.decision import sentiment_band
+    assert sentiment_band(-0.08) == ("Neutru", "muted")       # AAPL 13.11: cardul spunea „Pesimism”
+    assert sentiment_band(0.15) == ("Neutru", "muted")        # pragul exact rămâne neutru (ca în Context: s > 0,15)
+    assert sentiment_band(0.16) == ("Optimism", "up")
+    assert sentiment_band(0.25) == ("Euforie media", "up")
+    assert sentiment_band(-0.16) == ("Pesimism", "down")
+    assert sentiment_band(-0.25) == ("Panică", "down")
+    assert sentiment_band(None) == ("N/A", "muted")
+    assert sentiment_band(float("nan")) == ("N/A", "muted")
+
+
+def test_news_window():
+    from analytics.decision import news_window
+    items = [{"date_str": "2026-11-13 18:00"}, {"date_str": "2026-11-10 09:30"}, {"title": "fără dată"}]
+    assert news_window(items) == "3 titluri, 10.11–13.11"
+    assert news_window([{"date_str": "2026-11-13 18:00"}]) == "1 titlu, 13.11"
+    assert news_window([]) == "0 titluri"

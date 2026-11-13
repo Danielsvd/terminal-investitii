@@ -66,6 +66,7 @@ from analytics.risk import beta_benchmark, beta_weekly, beta_corr_weekly, jensen
 from analytics.risk import CORR_HIGH, CORR_MID, CORR_BANDS, correlation_band
 from analytics.audit import get_sector_benchmarks, generate_advanced_audit_v2
 from analytics.scoring import technical_subscore, technical_components, moment_label, rsi_description, explain_moment
+from analytics.decision import sentiment_band, news_window
 from analytics import global_fundamental as gfund
 from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, final_verdict, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
@@ -5034,43 +5035,36 @@ def main():
             
             # --- PARTEA ACTUALIZATĂ (Scorul FinBERT cu Legendă) ---
             with cai1:
-                st.write("📊 **Analiză Sentiment AI (Context 24h)**")
+                st.write("📊 **Analiză Sentiment AI (știrile recente)**")
                 if c_news_ai:
                     with st.spinner("FinBERT procesează narațiunea pieței..."):
                         s_score = analyze_sentiment_ai(c_news_ai)
-                        
-                        # --- LOGICĂ EXTINSĂ PE 5 PRAGURI ---
+                        # Aceleași praguri ca în „Context” și în sinteză (decision.sentiment_band, 14.11)
                         if s_score is None:      # FinBERT indisponibil: fără scor, nu 0 „neutru”
                             c_ai, status_text = "#8B949E", "Indisponibil: FinBERT nu a putut analiza știrile"
-                        elif s_score >= 0.25:
-                            c_ai, status_text = "#3FB950", "🚀 Euforie media"
-                        elif s_score >= 0.05:
-                            c_ai, status_text = "#3FB950", "📈 Optimism moderat"
-                        elif s_score <= -0.25:
-                            c_ai, status_text = "#F85149", "🚨 Panică extremă"
-                        elif s_score <= -0.05:
-                            c_ai, status_text = "#F85149", "📉 Îngrijorare / Pesimism"
                         else:
-                            c_ai, status_text = "#8B949E", "⚖️ Zgomot neutru"
-                        
-                        # UI PRO: Indicator vizual de încredere
-                        confidence = "RIDICATĂ" if len(c_news_ai) > 5 else "MODERATĂ"
-                        
+                            s_lbl, s_lvl = sentiment_band(s_score)
+                            c_ai = {"up": "#3FB950", "down": "#F85149"}.get(s_lvl, "#8B949E")
+                            status_text = s_lbl
+                        news_txt = html.escape(news_window(c_news_ai[:10]))   # exact titlurile analizate
+
                         st.markdown(f"""
                         <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {c_ai}; text-align:center;'>
                             <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{"N/A" if s_score is None else f"{ro(s_score):.2f}"}</h1>
                             <div style='color:{c_ai}; font-weight:bold; font-size:18px; margin-top:5px;'>{status_text}</div>
-                            <p style='color:#8B949E; font-size:11px; margin-top:10px;'>Încredere Model: {confidence} ({len(c_news_ai)} surse)</p>
+                            <p style='color:#8B949E; font-size:11px; margin-top:10px;'>{news_txt} · netestat</p>
                         </div>
-                        
+
                         <div style='margin-top: 15px; padding: 15px; background: #21262D; border-radius: 10px; border-left: 3px solid #58A6FF;'>
-                            <p style='color:#8B949E; font-size: 11px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Ghid Intervale (Scală -1 la +1)</p>
+                            <p style='color:#8B949E; font-size: 11px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Cum se calculează (scală −1 la +1)</p>
                             <div style='color:#C9D1D9; font-size: 13px; line-height: 1.8;'>
-                                <div><span style='color:#3FB950;'>■</span> <b>+0,25 la +1,00:</b> Euforie media</div>
-                                <div><span style='color:#3FB950; opacity:0.7;'>■</span> <b>+0,05 la +0,24:</b> Optimism moderat</div>
-                                <div><span style='color:#8B949E;'>■</span> <b>-0,05 la +0,05:</b> Zgomot neutru</div>
-                                <div><span style='color:#F85149; opacity:0.7;'>■</span> <b>-0,24 la -0,06:</b> Îngrijorare / Pesimism</div>
-                                <div><span style='color:#F85149;'>■</span> <b>-1,00 la -0,25:</b> Panică extremă</div>
+                                <div>Media pe titluri: +încrederea FinBERT la „pozitiv”, −încrederea la „negativ”, 0 la „neutru”. Nu e o probabilitate.</div>
+                                <div><span style='color:#3FB950;'>■</span> <b>≥ +0,25:</b> Euforie media</div>
+                                <div><span style='color:#3FB950; opacity:0.7;'>■</span> <b>+0,15 la +0,25:</b> Optimism</div>
+                                <div><span style='color:#8B949E;'>■</span> <b>−0,15 la +0,15:</b> Neutru</div>
+                                <div><span style='color:#F85149; opacity:0.7;'>■</span> <b>−0,25 la −0,15:</b> Pesimism</div>
+                                <div><span style='color:#F85149;'>■</span> <b>≤ −0,25:</b> Panică</div>
+                                <div style='color:#8B949E; font-size:12px;'>Praguri netestate; cu puține titluri, unul singur poate muta scorul.</div>
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
@@ -5509,7 +5503,7 @@ def main():
                         text_news = f"Narațiunea mediatică este dominată de îngrijorări sau reglementări stricte. Titlurile recente reflectă pesimism, precum: «{top_news}»."
                         bullets.append({"icon": "↘️", "color": "#F85149", "text": text_news})
                     else:
-                        text_news = f"Acoperirea în presă este neutră, fără șocuri reputaționale majore în ultimele 24 de ore. Subiectul momentului: «{top_news}»."
+                        text_news = f"Acoperirea în presă este neutră în știrile recente, fără șocuri reputaționale majore. Subiectul momentului: «{top_news}»."
                         bullets.append({"icon": "➡️", "color": "#8B949E", "text": text_news})
 
                 # --- BULLET 3: Volatilitate / Risc (Analiză Beta) ---
