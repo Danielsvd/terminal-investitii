@@ -139,3 +139,12 @@ def test_criteriile_lui_daniel():
     assert my_criteria({"pe": -8.0})[0][4]["ok"] is False             # P/E negativ (pierdere) nu trece
     assert growth(110, 100) == pytest.approx(0.10) and growth(5, -2) is None and growth(None, 1) is None
     assert upside(120, 100) == pytest.approx(0.20) and upside(120, 0) is None
+
+
+def test_verdict_note_bvb_testat_sua_descriptiv():
+    from analytics.decision import verdict_note
+    from analytics.bvb_fundamental import final_verdict as bvb_two_step
+    _, _, hist = bvb_two_step(2, 85)                                  # FAVORABIL + moment ≥ 80
+    note = verdict_note(True, hist)
+    assert "testată pe BVB" in note and "+9,2%" in note and "N = 386" in note
+    assert "putere de predicție" in verdict_note(False) and "UE netestat" in verdict_note(False)

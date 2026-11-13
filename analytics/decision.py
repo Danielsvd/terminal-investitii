@@ -238,8 +238,17 @@ def count_alerts(flags):
 
 # --- Verdictul final (aprobat de Daniel 13.11): tabel de reguli, nu sumă de puncte -------------------
 
-VERDICT_NOTE = ("Descriptiv: regula combinată (fundamental × moment) nu e încă testată istoric; pe SUA/UE nici "
-                "pașii luați separat nu au arătat putere de predicție.")
+VERDICT_NOTE_US = ("Descriptiv: pe SUA (2012–2026) nici scorul fundamental, nici momentul n-au arătat putere de "
+                   "predicție în testul istoric; UE netestat.")
+
+
+def verdict_note(is_bvb, history_text=None):
+    """Baza verdictului: la BVB rezultatul testului istoric pe combinația exactă fundamental × moment
+    (`bvb_fundamental.TWO_STEP`, 2017–2026); în rest, nota „descriptiv”."""
+    if is_bvb:
+        base = "Descriptiv, cu bază testată pe BVB (31 de emitenți, 2017–2026). "
+        return base + (history_text or "Combinația nu are rezultat istoric (date insuficiente).")
+    return VERDICT_NOTE_US
 
 
 def final_verdict(fund_label, moment_score):
