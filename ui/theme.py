@@ -150,6 +150,10 @@ def premium_css():
         # „semn-poz-…” / „semn-neg-…” primește clasa st-key-…, vezi signed_key()
         ' [class*="st-key-semn-poz-"] [data-testid="stMetricValue"] { color: var(--tk-up); }'
         ' [class*="st-key-semn-neg-"] [data-testid="stMetricValue"] { color: var(--tk-down); }'
+        # explicațiile „?” încap pe lățimea telefonului (pe S25 ieșeau din ecran: containerul are
+        # width: max-content, iar max-width-ul Streamlit e relativ la el, nu la ecran)
+        ' [data-testid="stTooltipContent"] { max-width: min(560px, calc(100vw - 24px)) !important;'
+        " white-space: normal !important; overflow-wrap: anywhere; }"
         " .fin-card:hover, .news-card:hover { border-color: var(--tk-border-strong); }"
         ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
         " background: var(--tk-surface); }"

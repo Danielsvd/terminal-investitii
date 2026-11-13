@@ -84,3 +84,9 @@ def test_signed_key_si_css():
     css = theme.premium_css()
     assert '[class*="st-key-semn-poz-"] [data-testid="stMetricValue"] { color: var(--tk-up); }' in css
     assert '[class*="st-key-semn-neg-"] [data-testid="stMetricValue"] { color: var(--tk-down); }' in css
+
+
+def test_tooltip_incape_pe_telefon():
+    from ui import theme
+    css = theme.premium_css()
+    assert '[data-testid="stTooltipContent"] { max-width: min(560px, calc(100vw - 24px)) !important;' in css
