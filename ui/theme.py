@@ -158,6 +158,10 @@ def premium_css():
         ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
         " background: var(--tk-surface); }"
         f" {inline} {{ box-shadow: {_CARD_SHADOW}; }}"
+        # bannerul „Mediul de piață SUA”: pe telefon verdictul și scorul se pun unul sub altul, centrate,
+        # ca cardurile VIX și Fear & Greed de dedesubt (cerut de Daniel pe 14.11); pe desktop rămâne neschimbat
+        " @media (max-width: 640px) { .macro-hero { justify-content: center !important; text-align: center; }"
+        " .macro-hero > div { flex-basis: 100% !important; } }"
     )
 
 
