@@ -7549,6 +7549,7 @@ def main():
                 m4.metric("Valoare tranzacționată", briefing_calc.money_short(bvb_turn["today"], "RON"),
                           None if bvb_turn["ratio"] is None else f"×{format_ro(bvb_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
+                          delta_arrow=briefing_calc.ratio_arrow(bvb_turn["ratio"]),
                           help=f"Suma preț × volum pe universul urmărit în ultima ședință, față de mediana celor {bvb_turn['n']} "
                                "ședințe dinainte (minimum 10). Doar universul, nu toată bursa.")
                 st.markdown("#### 🎯 Regimul BET (regula „Moment”)")
@@ -7663,6 +7664,7 @@ def main():
                 m2.metric("Valoare tranzacționată (universul urmărit)", briefing_calc.money_short(eu_turn["today"], "RON"),
                           None if eu_turn["ratio"] is None else f"×{format_ro(eu_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
+                          delta_arrow=briefing_calc.ratio_arrow(eu_turn["ratio"]),
                           help="Preț × volum pe universul urmărit în ultima ședință, fiecare titlu în lei la cursul BNR al "
                                f"monedei lui ({eu_fx_txt}), față de mediana celor {eu_turn['n']} ședințe dinainte (minimum 10; "
                                "același curs pe toate ședințele, deci raportul nu depinde de curs). Doar universul, nu toată bursa.")
@@ -7792,6 +7794,7 @@ def main():
                           briefing_calc.money_short(us_turn["today"] * usd_rz if (usd_rz and us_turn["today"] is not None) else None, "RON"),
                           None if us_turn["ratio"] is None else f"×{format_ro(us_turn['ratio'], 2)} față de mediană",
                           delta_color="off",
+                          delta_arrow=briefing_calc.ratio_arrow(us_turn["ratio"]),
                           help=f"Preț × volum pe universul urmărit în ultima ședință, în lei la cursul BNR"
                                + (f" ({format_ro(usd_rz, 4)} lei/USD, {rz_fx_dates['USD']:%d.%m.%Y})" if usd_rz and "USD" in rz_fx_dates else " (indisponibil)")
                                + f", față de mediana celor {us_turn['n']} ședințe dinainte (raportul nu depinde de curs).")

@@ -465,3 +465,12 @@ def top_frames(table, n=TOP_N):
 
     gain, lose = top_moves(table, n=n)
     return view(gain), view(lose)
+
+
+def ratio_arrow(ratio):
+    """Săgeata pentru `st.metric(delta_arrow=...)` la un raport față de mediană („×1,52”, „×0,58”).
+    Textul „×0,58” nu are semn, deci săgeata automată a Streamlit iese mereu ↑: peste 1 → „up”,
+    sub 1 → „down”, egal cu 1 sau lipsă → „off”."""
+    if ratio is None or ratio != ratio or ratio == 1:
+        return "off"
+    return "up" if ratio > 1 else "down"

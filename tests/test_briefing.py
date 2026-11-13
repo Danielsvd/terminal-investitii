@@ -259,3 +259,9 @@ def test_simboluri_fara_pret_acoperire_si_completare():
     assert merged.loc[pd.Timestamp("2026-11-05"), "ADS.DE"] == 179.6        # valoarea din prima citire rămâne
     assert coverage(merged, syms) == 1.0 and coverage(pd.DataFrame(), []) == 1.0
     assert symbols_without_prices(None, ["A"]) == ["A"]
+
+
+def test_ratio_arrow():
+    from analytics.briefing import ratio_arrow
+    assert ratio_arrow(1.52) == "up" and ratio_arrow(0.58) == "down"
+    assert ratio_arrow(1.0) == "off" and ratio_arrow(None) == "off" and ratio_arrow(float("nan")) == "off"
