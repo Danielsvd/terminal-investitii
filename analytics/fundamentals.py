@@ -909,3 +909,22 @@ def eps_growth_statements(annual_income, years=3):
     span = (date_new - date_old).days / 365.25
     growth = eps_cagr(eps_new, eps_old, span)
     return {"growth": growth, "eps_new": eps_new, "eps_old": eps_old, "date_new": date_new, "date_old": date_old}
+
+
+def annual_pair_statements(annual_df, rows):
+    """Ultimii doi ani fiscali din situațiile anuale Yahoo pentru primul rând disponibil din `rows`:
+    (data_nouă, valoare_nouă, data_veche, valoare_veche) sau None."""
+    df = _sorted_desc(annual_df)
+    if df is None:
+        return None
+    points = []
+    for col in range(df.shape[1]):
+        v, d = stmt_value(df, rows, col), stmt_date(df, col)
+        if v is not None and d is not None:
+            points.append((d, v))
+        if len(points) == 2:
+            break
+    if len(points) < 2:
+        return None
+    (d_new, v_new), (d_old, v_old) = points
+    return d_new, v_new, d_old, v_old

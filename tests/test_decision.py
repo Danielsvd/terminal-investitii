@@ -113,3 +113,29 @@ def test_flags_do_not_return_scores():
     for f in flags:
         assert set(f) == {"level", "title", "text"}
         assert not any(isinstance(v, (int, float)) and not math.isnan(v) for v in f.values() if not isinstance(v, str))
+
+
+def test_final_verdict_tabelul_aprobat():
+    from analytics.decision import final_verdict
+    assert final_verdict("FAVORABIL", 85) == ("CANDIDAT DE CUMPĂRARE", "up")
+    assert final_verdict("FAVORABIL", 79.9)[0] == "DE URMĂRIT, AȘTEAPTĂ MOMENTUL"
+    assert final_verdict("FAVORABIL", None)[0] == "DE URMĂRIT, AȘTEAPTĂ MOMENTUL"
+    assert final_verdict("NEUTRU", 100) == ("NEUTRU", "muted")
+    assert final_verdict("NEFAVORABIL", 100) == ("EVITĂ", "down")
+    assert final_verdict(None, 90) == ("FĂRĂ VERDICT", "muted")
+    assert final_verdict("DATE INSUFICIENTE", 90)[0] == "FĂRĂ VERDICT"
+
+
+def test_criteriile_lui_daniel():
+    from analytics.decision import my_criteria, growth, upside
+    vals = {"margin": 0.12, "rev_growth": 0.05, "ni_growth": -0.02, "debt": 0.45, "pe": 12.0, "pbv": 1.6,
+            "gn": 19.2, "roa": 0.05, "roe": None, "cap_ron": 2.5e9}
+    rows, ok, n = my_criteria(vals)
+    assert (ok, n) == (7, 9) and len(rows) == 10
+    by = {r["key"]: r for r in rows}
+    assert by["ni_growth"]["ok"] is False and by["pbv"]["ok"] is False and by["roe"]["ok"] is None
+    assert by["roa"]["ok"] is True                                    # pragul e inclusiv (≥ 5%)
+    assert by["margin"]["value"] == "12,0%" and by["cap_ron"]["value"] == "2,50 mld. lei"
+    assert my_criteria({"pe": -8.0})[0][4]["ok"] is False             # P/E negativ (pierdere) nu trece
+    assert growth(110, 100) == pytest.approx(0.10) and growth(5, -2) is None and growth(None, 1) is None
+    assert upside(120, 100) == pytest.approx(0.20) and upside(120, 0) is None
