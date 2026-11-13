@@ -10,7 +10,7 @@ from data.news import filter_company_news, future_note, holdings_news, mark_futu
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
-from ui.card_help import FUND_HELP, fund_help
+from ui.card_help import FUND_HELP, fund_help, BVB_HELP, PILLAR_HELP, PILLAR_TEST_NOTE, RISK_HELP, OPT_HELP
 from ui import theme as ui_theme
 from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
 # Cardurile HTML vechi au culori din paleta GitHub dark: la afișare trec pe tokenurile temei (ui/theme.py).
@@ -589,35 +589,6 @@ def bvb_file_market_cap(symbol, price):
     return None if pd.isna(mcap) else float(mcap)
 
 
-BVB_HELP = {
-    "scor": ("Media percentilelor a patru indicatori față de celelalte companii BVB din fișierele tale "
-             "(P/E, P/BV, randament dividend, Piotroski). 100 = cea mai bună pe toți, 0 = cea mai slabă. "
-             "Treimea de sus = FAVORABIL, mijlocul = NEUTRU, treimea de jos = NEFAVORABIL. "
-             "Test 2017–2026: treimea de sus a bătut media BVB cu +6,0% la 6 luni (56% cazuri pozitive), "
-             "treimea de jos a rămas cu −7,0% în urmă (33% pozitive)."),
-    "pe": ("P/E TTM = capitalizare (preț curent × acțiuni din ultimul raport) / profit net pe ultimele 12 luni, "
-           "construit din cifrele cumulate din fișier. Mai mic = mai ieftin. Test: ieftinul a bătut scumpul (IC +0,17)."),
-    "pbv": ("P/BV = capitalizare / capital propriu din ultimul raport. Mai mic = mai ieftin raportat la activul net. "
-            "Test: IC +0,13, mai slab decât P/E."),
-    "dy": ("Randament dividend = profitul distribuit din ultimul an / capitalizarea de azi. "
-           "Test: dividendul mare a bătut dividendul mic (IC +0,13)."),
-    "pio": ("Piotroski simplificat: 6 criterii, ultimul raport față de același raport de acum un an: ROA pozitiv, "
-            "ROA în creștere, lichiditate curentă în creștere, datorii pe termen lung/active în scădere, fără emisiune "
-            "de acțiuni, rotația activelor în creștere. Fără criteriile de flux de numerar (nu sunt în fișiere). "
-            "Cel mai puternic indicator în test (IC +0,28)."),
-    "gn": ("GN = P/E × P/BV, pragul lui Graham 22,5. Test: GN ≤ 22,5 → +2,9% față de media BVB la 6 luni "
-           "(50% pozitive); GN > 22,5 → −3,6% (39% pozitive)."),
-    "moment": ("Media dintre trend (preț peste SMA 50 și SMA 200, SMA 50 peste SMA 200) și momentum 12-1 luni. "
-               "Test BVB 2012–2025: ≥ 80 → +6,1% față de media BVB la 6 luni (54% pozitive); "
-               "< 40 → −7,2% (32% pozitive). RSI nu intră: în test „supravândut” a continuat să scadă."),
-    "rsi": "RSI 14 (Wilder), doar descriptiv. În testul pe BVB nu a dat semnal de intrare.",
-    "roe": "ROE TTM = profit net pe 12 luni / capital propriu. În test NU a prezis randamentul (IC ≈ 0): informație, fără puncte.",
-    "marja": "Marja netă TTM = profit net / cifră de afaceri pe 12 luni. În test NU a prezis randamentul: informație.",
-    "indatorare": ("Datorii TOTALE (inclusiv furnizori, provizioane, venituri în avans) / capital propriu, din ultimul raport "
-                   "din fișier. Diferă de cardul „Datorii/Capital” din Yahoo, care ia doar datoria financiară. "
-                   "În test NU a prezis randamentul: informație de risc."),
-}
-
 
 def _bvb_fmt(value, kind):
     if value is None or pd.isna(value):
@@ -762,10 +733,9 @@ def render_bvb_decision(real_sym, hist):
     t1.metric("Moment", "N/A" if moment is None else f"{score_ro(moment)}/100", m_label, delta_color="off", delta_arrow="off", help=BVB_HELP["moment"])
     trend = comp["trend"]
     t2.metric("Trend SMA 50/200", "N/A" if trend is None else f"{ro(trend * 3):.0f} din 3" if len(close.dropna()) >= 200 else f"{ro(trend):.0f} din 1",
-              help="Câte din: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200 (sub 200 de ședințe: doar preț > SMA 50).")
+              help=BVB_HELP["trend"])
     mom_raw = comp["raw"]["momentum_12_1"]
-    t3.metric("Momentum 12-1 luni", _bvb_fmt(mom_raw, "pct"),
-              help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă), pe date calendaristice.")
+    t3.metric("Momentum 12-1 luni", _bvb_fmt(mom_raw, "pct"), help=BVB_HELP["momentum"])
     t4.metric("RSI 14", rsi_description(comp["raw"]["rsi"]), help=BVB_HELP["rsi"])
     t5.metric("GN (P/E × P/BV)", _bvb_fmt(gn, "x"), gn_txt, delta_color="off", delta_arrow="off", help=BVB_HELP["gn"])
 
@@ -952,21 +922,10 @@ def render_global_decision(real_sym, info, hist, risk_stats):
             </div>"""), unsafe_allow_html=True)
     st.write("")
 
-    pillar_help = {
-        "evaluare": ("Media componentelor cu date. Nefinanciare: DCF invers (creșterea FCF pe care o cere prețul; "
-                     "≤ 0% → 100, ≥ 20% → 0) și randamentul profitului E/P față de randamentul AAA (criteriul lui "
-                     "Graham: ≤ 1× → 0, ≥ 2× → 100). GN = P/E × P/BV apare doar informativ. "
-                     "Bănci și asigurători: P/BV față de P/BV justificat (ROE − g) / (ke − g); raport ≤ 0,7 → 100, ≥ 1,3 → 0."),
-        "calitate": "Piotroski F-Score: criterii îndeplinite / criterii evaluabile (minimum 6 din 9), ultimul an fiscal față de cel precedent.",
-        "sanatate": ("Media: zona Altman (sigură 100, gri 50, dificultate 0), datorie netă / EBITDA (≤ 1 → 100, ≥ 4 → 0), "
-                     "acoperirea dobânzii EBIT / dobânzi (≤ 1,5 → 0, ≥ 8 → 100)."),
-        "rentabilitate": "ROE față de costul capitalului propriu ke = rf + beta × 5%: −5 pp → 0, +5 pp → 100.",
-    }
     cols = st.columns(len(res["pillars"]))
     for col, p in zip(cols, res["pillars"]):
         col.metric(p["label"], "N/A" if p["score"] is None else f"{ro(p['score'] * 100):.0f}/100",
-                   help=pillar_help[p["key"]] + " Test istoric SUA 2022–2026: fără putere de predicție; "
-                   "pragurile sunt orientative.")
+                   help=PILLAR_HELP[p["key"]] + PILLAR_TEST_NOTE)
 
     with st.expander("Componentele scorului fundamental"):
         st.dataframe(pd.DataFrame([{
@@ -4102,8 +4061,8 @@ def main():
                     st.metric("Quick Ratio", format_num(info.get('quickRatio')), help=fund_help(info, "quickRatio"))
                 with c_risc:
                     st.markdown("**Risc (Alpha & Beta)**")
-                    st.metric("Beta", format_num(beta_val), help=f"Sursă: {risk_stats['beta_label']}")
-                    st.metric("Alpha (1Y)", format_num(alpha_val, True), help=f"Alpha Jensen. {risk_stats['alpha_label']}")
+                    st.metric("Beta", format_num(beta_val), help=f"{RISK_HELP['beta']}\n\n**Sursă:** {risk_stats['beta_label']}")
+                    st.metric("Alpha (1Y)", format_num(alpha_val, True), help=f"{RISK_HELP['alpha']}\n\n**Sursă:** {risk_stats['alpha_label']}")
             
             # ==================================================
             # MODUL NOU: DATE FINANCIARE VIZUALE (STIL XTB)
@@ -4386,8 +4345,9 @@ def main():
                     pos_p = (max(1.0, min(5.0, rec_mean)) - 1.0) / 4.0 * 100.0
                     st.markdown(f"""<div class="analyst-bar-container"><div class="analyst-bar-gradient"></div><div class="analyst-marker" style="left:{pos_p}%;"></div></div>""", unsafe_allow_html=True)
                 st.metric("Preț Țintă (Mediu)", f"{ro(target):,.2f} {info.get('currency','USD')}" if target else "N/A",
-                          help="Media prețurilor țintă ale analiștilor care acoperă compania (Yahoo `targetMeanPrice`), de "
-                               "obicei la 12 luni. Opinia analiștilor, nu o evaluare a aplicației; la BVB lipsește des.")
+                          help=RISK_HELP["target"]
+                               + (f"\n\n**Față de prețul curent:** {ro((target / curr_price - 1) * 100):+.1f}%."
+                                  if (target and curr_price) else ""))
 
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
@@ -4857,15 +4817,14 @@ def main():
                 """, unsafe_allow_html=True)
                 nd_ebitda = lev["net_debt_to_ebitda"]
                 st.metric("Datorie netă / EBITDA", "N/A" if nd_ebitda is None else f"{ro(nd_ebitda):.2f}x",
-                          help="Câți ani de EBITDA ar acoperi datoria netă. Negativ = numerar net. N/A când EBITDA e negativ sau lipsește. "
-                               f"Datorie netă {format_amount(lev['net_debt'])}, EBITDA {format_amount(lev['ebitda'])}.")
+                          help=f"{RISK_HELP['nd_ebitda']}\n\n**Valori:** datorie netă {format_amount(lev['net_debt'])}, "
+                               f"EBITDA {format_amount(lev['ebitda'])}.")
                 int_cov = lev["interest_coverage"]
                 st.metric("Acoperirea dobânzii", "N/A" if int_cov is None else f"{ro(int_cov):.1f}x",
-                          help="EBIT împărțit la cheltuielile cu dobânzile raportate. Sub 1,5x profitul operațional abia acoperă dobânda. "
-                               f"EBIT {format_amount(lev['ebit'])}, dobânzi {format_amount(lev['interest_expense'])}. "
-                               + ("N/A aici: dobânzile raportate depășesc 25% din datorie, deci rândul include și alte costuri financiare."
-                                  if lev["interest_unreliable"] else
-                                  "Atenție: la unele companii „dobânzile” raportate includ și alte costuri financiare."))
+                          help=f"{RISK_HELP['int_cov']}\n\n**Valori:** EBIT {format_amount(lev['ebit'])}, "
+                               f"dobânzi {format_amount(lev['interest_expense'])}."
+                               + (" N/A aici: dobânzile raportate depășesc 25% din datorie, deci rândul include și alte "
+                                  "costuri financiare." if lev["interest_unreliable"] else ""))
             with pio_right:
                 pio_icons = {True: "✅ trecut", False: "❌ picat", None: "➖ N/A"}
                 st.dataframe(pd.DataFrame(
@@ -5308,23 +5267,21 @@ def main():
                     oi_pc, vol_pc = opt_data['oi_pc_ratio'], opt_data['vol_pc_ratio']
                     m1, m2 = st.columns(2)
                     m1.metric("Put/Call (open interest)", _f(oi_pc, ".2f"),
-                              help="Σ open interest put / Σ open interest call, pe expirarea aleasă. Poziții deschise acumulate. "
-                                   "Pragurile <0,7 optimism / >1,1 pesimism sunt convenții de piață, netestate aici. N/A = fără open interest la call-uri.")
+                              help=OPT_HELP["pc_oi"])
                     m2.metric("Put/Call (volum)", _f(vol_pc, ".2f"),
-                              help="Σ volum put / Σ volum call, pe expirarea aleasă, în ședința curentă. Se mișcă mai repede decât open interest-ul. N/A = fără volum la call-uri.")
+                              help=OPT_HELP["pc_vol"])
 
                     m3, m4 = st.columns(2)
                     mp = opt_data['max_pain']
                     mp_display = f"{ro(mp):.2f} USD" if mp is not None else "N/A"
-                    mp_help = ("Strike-ul la care opțiunile acestei expirări ar valora cel mai puțin la expirare, "
-                               "calculat din open interest. Este un reper, nu o țintă de preț.")
+                    mp_help = OPT_HELP["max_pain"]
                     if mp is not None:
                         diff_mp = ((mp / spot_opt) - 1) * 100
                         m3.metric("Preț Max Pain", mp_display, f"{ro(diff_mp):.1f}% față de preț", help=mp_help)
                     else:
                         m3.metric("Preț Max Pain", mp_display, help=mp_help)
                     m4.metric("Expirare", opt_data['expiration'], f"{opt_data['days']} zile", delta_color="off",
-                              help="Expirarea cu 20–45 de zile rămase cea mai apropiată de 30. Expirările de câteva zile au IV deformat de timpul scurt.")
+                              help=OPT_HELP["expirare"])
 
                 # --- IV RANK, PERCENTILE ȘI IV / VOLATILITATE REALIZATĂ ---
                 with col_met:
@@ -5339,15 +5296,13 @@ def main():
                     obs_txt = f"{rk['n']} zile de istoric" + ("" if rk["n"] >= opt_calc.MIN_IV_OBS else f" (minimum {opt_calc.MIN_IV_OBS})")
                     c_rank1, c_rank2, c_rank3 = st.columns(3)
                     c_rank1.metric("IV Rank", _f(iv_rank, ".1f") + ("%" if iv_rank is not None else ""), obs_txt, delta_color="off",
-                                   help="(IV de azi − minim) / (maxim − minim) pe ultimul an, din istoricul IV la bani salvat zilnic în foaia IV_istoric. "
-                                        f"Sub {opt_calc.MIN_IV_OBS} de zile de istoric nu se calculează (N/A).")
+                                   help=OPT_HELP["iv_rank"] + f"\n\n**Minimum:** {opt_calc.MIN_IV_OBS} de zile de istoric.")
                     c_rank2.metric("IV Percentile", _f(rk["percentile"], ".1f") + ("%" if rk["percentile"] is not None else ""),
                                    obs_txt, delta_color="off",
-                                   help="Procentul zilelor din ultimul an cu IV la bani mai mic decât azi. Cere același istoric ca IV Rank.")
+                                   help=OPT_HELP["iv_pct"])
                     c_rank3.metric("IV / volatilitate realizată 30z", _f(iv_hv, ".2f"),
                                    f"realizată {ro(hv30*100):.1f}%" if hv30 else None, delta_color="off",
-                                   help="IV la bani / volatilitatea realizată pe ultimele 30 de zile calendaristice (randamente log, √252). "
-                                        "Peste 1: piața plătește pentru mai multă mișcare decât a avut acțiunea recent. Nu este IV Rank.")
+                                   help=OPT_HELP["iv_hv"])
 
                 st.caption(iv_store["note"])
 
@@ -5363,20 +5318,19 @@ def main():
                 if gc and gp:
                     g1, g2, g3, g4 = st.columns(4)
                     g1.metric("Delta call / put", f"{ro(gc['delta']):.2f} / {ro(gp['delta']):.2f}",
-                              help="Variația prețului opțiunii la +1 USD în prețul acțiunii. Black-Scholes cu IV la bani, r și q din antet.")
+                              help=OPT_HELP["delta"])
                     g2.metric("Gamma", f"{ro(gc['gamma']):.4f}",
-                              help="Variația deltei la +1 USD în prețul acțiunii; aceeași pentru call și put.")
+                              help=OPT_HELP["gamma"])
                     g3.metric("Theta call / put (pe zi)", f"{ro(gc['theta_day']):.3f} / {ro(gp['theta_day']):.3f}",
-                              help="Pierderea de valoare într-o zi calendaristică, pe o acțiune suport (un contract = 100). Theta anual / 365.")
+                              help=OPT_HELP["theta"])
                     g4.metric("Vega (la 1 pp de IV)", f"{ro(gc['vega_pt']):.3f}",
-                              help="Variația prețului opțiunii la +1 punct procentual de volatilitate implicită; aceeași pentru call și put.")
+                              help=OPT_HELP["vega"])
                 else:
                     st.info("Greeks N/A: lipsesc IV la bani sau rata fără risc (vezi antetul secțiunii).")
                 em = opt_data['expected_move']
                 if em is not None:
                     st.metric("Mișcare așteptată până la expirare (±1σ)", f"±{ro(em):.2f} ({ro(em / spot_opt * 100):.1f}%)",
-                              help="Preț × IV la bani × √(zile/365). Intervalul de ±1 abatere standard implicat de opțiuni "
-                                   "(~68% probabilitate sub ipoteza de normalitate, care subestimează cozile).")
+                              help=OPT_HELP["expected_move"])
 
                 # --- RÂNDUL 2: VERDICTUL PUT/CALL (praguri netestate) ---
                 iv_val = opt_data['iv']
