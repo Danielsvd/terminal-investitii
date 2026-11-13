@@ -5329,7 +5329,7 @@ def main():
             st.markdown("---")
             st.subheader("🏁 Verdict final")
             from analytics.decision import (characterize, context_flags, count_alerts, final_verdict, my_criteria,
-                                            growth as dec_growth, upside as dec_upside, VERDICT_NOTE)
+                                            growth as dec_growth, upside as dec_upside, verdict_note)
             rsi_now = hist["RSI"].iloc[-1] if "RSI" in hist.columns else None
             opt_ok = bool(opt_data) and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None
             is_bvb_sym = str(real_sym).upper().endswith(".RO")
@@ -5383,6 +5383,7 @@ def main():
             dcf_up = None if (mos_val is None or mos_val >= 100) else 1 / (1 - mos_val / 100) - 1
             an_up = dec_upside(num(info, 'targetMeanPrice'), curr_price)
 
+            v_note = verdict_note(False)
             if score_decision is None:
                 v_label, v_level = "FĂRĂ VERDICT", "muted"
                 st.info("Fără scor fundamental pentru acest simbol (ETF, fond, indice sau emitent .RO fără fișier în "
@@ -5390,6 +5391,7 @@ def main():
             else:
                 d = score_decision
                 v_label, v_level = final_verdict(d["fund_label"], d["moment"])
+                v_note = verdict_note(d["is_bvb"], d["history_text"])
             v_color = ui_theme.var(v_level) if v_level in ("up", "down", "warn") else ui_theme.var("muted")
             st.markdown(compact_html(f"""
                 <div style="background:var(--tk-surface); border:1px solid var(--tk-border); border-left:8px solid {v_color};
@@ -5397,7 +5399,7 @@ def main():
                     <div style="color:var(--tk-muted); font-size:12px; text-transform:uppercase; letter-spacing:1px;">Verdict (descriptiv)</div>
                     <div style="color:{v_color}; font-weight:700; font-size:clamp(22px, 6vw, 30px); margin:6px 0;
                                 overflow-wrap:normal; word-break:keep-all;">{html.escape(v_label)}</div>
-                    <div style="color:var(--tk-muted); font-size:13px;">{html.escape(VERDICT_NOTE)}</div>
+                    <div style="color:var(--tk-muted); font-size:13px;">{html.escape(v_note)}</div>
                 </div>"""), unsafe_allow_html=True)
 
             pct_sig = lambda v: "N/A" if v is None else f"{ro(v * 100):+.1f}%"
