@@ -145,3 +145,145 @@ def test_new_records_sare_peste_ce_exista_si_iese_in_formatul_foii():
     assert aaa["Quantity"] == pytest.approx(8.0)
     # cost: 241,9 pe 100 ; vândute 40 -> rămâne 60% din cost = 145,14 ; gratuitele și consolidarea nu schimbă costul
     assert aaa["CostBasis"] == pytest.approx(145.14)
+
+
+# --- IBKR (Flex Query CSV cu coduri de secțiune). Cont, ID-uri și sume inventate. -------------
+
+IB_TRNT = ["ClientAccountID", "CurrencyPrimary", "AssetClass", "SubCategory", "Symbol", "Description", "ISIN",
+           "ListingExchange", "Multiplier", "DateTime", "TradeDate", "Exchange", "Quantity", "TradePrice", "Proceeds",
+           "Taxes", "IBCommission", "IBCommissionCurrency", "NetCash", "Open/CloseIndicator", "Buy/Sell", "TradeID",
+           "TransactionID", "LevelOfDetail"]
+IB_CTRN = ["ClientAccountID", "CurrencyPrimary", "AssetClass", "SubCategory", "Symbol", "Description", "ISIN",
+           "ListingExchange", "Date/Time", "SettleDate", "Amount", "Type", "TransactionID", "LevelOfDetail"]
+IB_CRTT = ["ClientAccountID", "CurrencyPrimary", "LevelOfDetail", "StartingCash", "EndingCash"]
+IB_POST = ["ClientAccountID", "CurrencyPrimary", "AssetClass", "SubCategory", "Symbol", "ISIN", "ListingExchange",
+           "Multiplier", "Quantity", "LevelOfDetail"]
+
+
+def ib(code, header, **values):
+    return ["DATA", code] + [str(values.get(col, "")) for col in header]
+
+
+def ib_trade(**v):
+    base = dict(ClientAccountID="U00000000", Multiplier="1", Taxes="0", LevelOfDetail="EXECUTION")
+    return ib("TRNT", IB_TRNT, **{**base, **v})
+
+
+def ib_cash(**v):
+    return ib("CTRN", IB_CTRN, **{**dict(ClientAccountID="U00000000", LevelOfDetail="DETAIL"), **v})
+
+
+IB_ROWS = [
+    ["HEADER", "TRNT"] + IB_TRNT,
+    ib_trade(CurrencyPrimary="EUR", AssetClass="STK", SubCategory="ETF", Symbol="EGLN", Description="ISHARES PHYSICAL GOLD ETC",
+             ISIN="IE00B4ND3602", ListingExchange="FWB2", DateTime="2026-11-12;03:38:44", TradeDate="2026-11-12",
+             Exchange="IBIS2", Quantity="3", TradePrice="50", Proceeds="-150", IBCommission="-1.25",
+             IBCommissionCurrency="EUR", NetCash="-151.25", **{"Buy/Sell": "BUY", "Open/CloseIndicator": "O"},
+             TradeID="11", TransactionID="1001"),
+    ib_trade(CurrencyPrimary="USD", AssetClass="CASH", Symbol="EUR.USD", DateTime="2026-11-12;04:25:05", Quantity="-500",
+             TradePrice="1.1", Proceeds="550", IBCommission="-2", IBCommissionCurrency="EUR", NetCash="0",
+             **{"Buy/Sell": "SELL"}, TradeID="12", TransactionID="1002"),
+    ib_trade(CurrencyPrimary="USD", AssetClass="STK", SubCategory="COMMON", Symbol="BRK B", ISIN="US0000000001",
+             ListingExchange="NYSE", DateTime="2026-07-01;10:00:00", Quantity="1", TradePrice="400", Proceeds="-400",
+             IBCommission="-1", IBCommissionCurrency="USD", **{"Buy/Sell": "BUY", "Open/CloseIndicator": "O"},
+             TradeID="13", TransactionID="1003"),
+    ib_trade(CurrencyPrimary="USD", AssetClass="OPT", Symbol="XYZ   261218C00050000", ListingExchange="CBOE",
+             Multiplier="100", DateTime="2026-11-13;10:00:00", Quantity="2", TradePrice="1.5", Proceeds="-300",
+             IBCommission="-1.3", IBCommissionCurrency="USD", **{"Buy/Sell": "BUY", "Open/CloseIndicator": "O"},
+             TradeID="14", TransactionID="1004"),
+    ib_trade(CurrencyPrimary="USD", AssetClass="OPT", Symbol="XYZ   261218P00040000", ListingExchange="CBOE",
+             Multiplier="100", DateTime="2026-11-13;10:05:00", Quantity="-1", TradePrice="0.8", Proceeds="80",
+             IBCommission="-1", IBCommissionCurrency="USD", **{"Buy/Sell": "SELL", "Open/CloseIndicator": "O"},
+             TradeID="15", TransactionID="1005"),
+    ib_trade(CurrencyPrimary="EUR", AssetClass="STK", SubCategory="COMMON", Symbol="ABC", ListingExchange="IBIS",
+             DateTime="2026-11-12;05:00:00", Quantity="1", TradePrice="10", Proceeds="-10", IBCommission="-1",
+             IBCommissionCurrency="EUR", **{"Buy/Sell": "BUY"}, TradeID="16", TransactionID="1006",
+             LevelOfDetail="ORDER"),                                       # nivel ORDER: dublură a execuției, ignorat
+    ["HEADER", "CTRN"] + IB_CTRN,
+    ib_cash(CurrencyPrimary="EUR", Description="CASH RECEIPTS", **{"Date/Time": "2026-11-06"}, Amount="1000",
+            Type="Deposits/Withdrawals", TransactionID="2001"),
+    ib_cash(ClientAccountID="-", CurrencyPrimary="EUR", **{"Date/Time": "2026-11-06"}, Amount="1000",
+            Type="Deposits/Withdrawals", LevelOfDetail="SUMMARY"),
+    ib_cash(CurrencyPrimary="USD", AssetClass="STK", SubCategory="COMMON", Symbol="BRK B", ListingExchange="NYSE",
+            Description="BRK B CASH DIVIDEND", **{"Date/Time": "2026-11-10;20:20:00"}, Amount="2",
+            Type="Dividends", TransactionID="2002"),
+    ib_cash(CurrencyPrimary="USD", AssetClass="STK", SubCategory="COMMON", Symbol="BRK B", ListingExchange="NYSE",
+            Description="BRK B US TAX", **{"Date/Time": "2026-11-10;20:20:00"}, Amount="-0.3",
+            Type="Withholding Tax", TransactionID="2003"),
+    ib_cash(CurrencyPrimary="EUR", **{"Date/Time": "2026-11-11"}, Amount="-0.5", Type="Ceva Nou", TransactionID="2004"),
+    ["HEADER", "CRTT"] + IB_CRTT,
+    ib("CRTT", IB_CRTT, ClientAccountID="U00000000", CurrencyPrimary="BASE_SUMMARY", LevelOfDetail="BaseCurrency",
+       StartingCash="0", EndingCash="999"),
+    ib("CRTT", IB_CRTT, ClientAccountID="U00000000", CurrencyPrimary="EUR", LevelOfDetail="Currency",
+       StartingCash="100", EndingCash="446.75"),
+    ib("CRTT", IB_CRTT, ClientAccountID="U00000000", CurrencyPrimary="USD", LevelOfDetail="Currency",
+       StartingCash="0", EndingCash="-73.6"),
+    ["HEADER", "POST"] + IB_POST,
+    ib("POST", IB_POST, ClientAccountID="U00000000", CurrencyPrimary="EUR", AssetClass="STK", SubCategory="ETF",
+       Symbol="EGLN", ISIN="IE00B4ND3602", ListingExchange="FWB2", Multiplier="1", Quantity="3", LevelOfDetail="SUMMARY"),
+    ib("POST", IB_POST, ClientAccountID="U00000000", CurrencyPrimary="USD", AssetClass="OPT",
+       Symbol="XYZ   261218P00040000", ListingExchange="CBOE", Multiplier="100", Quantity="-1", LevelOfDetail="SUMMARY"),
+]
+
+
+def test_parse_ibkr_tipuri_simboluri_clase_si_sume():
+    records, problems, control = B.parse_ibkr(IB_ROWS)
+    rows = {r["ID"]: r for r in records}
+    assert set(rows) == {"IB-1001", "IB-1002-EUR", "IB-1002-USD", "IB-1002-FEE", "IB-1003", "IB-1004", "IB-1005",
+                         "IB-2001", "IB-2002", "IB-2003"}
+    gold = rows["IB-1001"]                                   # simbolul Yahoo vine din ISIN, ora New York -> România
+    assert (gold["Symbol"], gold["Class"], gold["Type"], gold["Quantity"], gold["Price"], gold["Fees"], gold["Amount"]) == \
+        ("PPFB.DE", "ETF", "BUY", 3, 50, 1.25, -151.25)
+    assert gold["Date"] == "2026-11-12 10:38:44" and gold["Currency"] == "EUR" and gold["Broker"] == "IBKR"
+    assert "ETC aur" in gold["Notes"] and "EGLN" in gold["Notes"]
+    assert (rows["IB-1002-EUR"]["Amount"], rows["IB-1002-USD"]["Amount"], rows["IB-1002-FEE"]["Amount"]) == (-500, 550, -2)
+    assert rows["IB-1002-FEE"]["Currency"] == "EUR" and rows["IB-1002-USD"]["Type"] == "FX"
+    brk = rows["IB-1003"]                                    # vară: New York UTC-4, București UTC+3
+    assert (brk["Symbol"], brk["Class"], brk["Date"], brk["Amount"], brk["Fees"]) == ("BRK-B", "Actiuni SUA", "2026-07-01 17:00:00", -401, 1)
+    call = rows["IB-1004"]                                   # opțiuni: cantitatea în acțiuni-suport, prețul pe acțiune
+    assert (call["Symbol"], call["Class"], call["Quantity"], call["Price"], call["Amount"]) == ("XYZ261218C00050000", "Optiuni", 200, 1.5, -301.3)
+    assert rows["IB-2001"]["Type"] == "DEPOSIT" and rows["IB-2001"]["Amount"] == 1000 and rows["IB-2001"]["Date"] == "2026-11-06 00:00:00"
+    assert (rows["IB-2002"]["Type"], rows["IB-2002"]["Symbol"], rows["IB-2003"]["Type"], rows["IB-2003"]["Amount"]) == ("DIV", "BRK-B", "TAX", -0.3)
+    assert all("U00000000" not in str(v) for r in records for v in r.values())     # contul nu ajunge în foaie
+    assert any("short" in p and "XYZ261218P00040000" in p for p in problems)
+    assert any("Ceva Nou" in p for p in problems)
+    assert any("CBOE" in p for p in problems) is False                          # opțiunile nu cer bursă cunoscută
+    # numerar: EUR 1000 − 151,25 − 500 − 2 = 346,75 = 446,75 − 100 ; USD 550 − 401 − 301,3 + 79 + 2 − 0,3 = −71,6 ≠ −73,6
+    assert control["cash"]["EUR"] == (346.75, 346.75)
+    assert control["cash"]["USD"] == (-73.6, -71.6)
+    assert control["positions"] == {"PPFB.DE": 3.0, "XYZ261218P00040000": -100.0}
+
+
+def test_parse_ibkr_bursa_necunoscuta_si_fara_coduri_de_sectiune():
+    rows = [["HEADER", "TRNT"] + IB_TRNT,
+            ib_trade(CurrencyPrimary="EUR", AssetClass="STK", Symbol="QQQ1", ListingExchange="XYZEX", DateTime="2026-11-12;05:00:00",
+                     Quantity="1", TradePrice="5", Proceeds="-5", IBCommission="-1", IBCommissionCurrency="EUR",
+                     **{"Buy/Sell": "BUY"}, TradeID="1", TransactionID="9")]
+    records, problems, _ = B.parse_ibkr(rows)
+    assert records[0]["Symbol"] == "QQQ1" and any("XYZEX" in p for p in problems)
+    records, problems, control = B.parse_ibkr([["ClientAccountID", "Symbol"], ["U1", "AAA"]])
+    assert records == [] and "Include section code" in problems[0] and control == {}
+
+
+def test_ibkr_detectie_csv_si_registru():
+    text = "﻿" + "\n".join(",".join(f'"{c}"' for c in row) for row in IB_ROWS)
+    rows = B.read_csv_rows(text.encode("utf-8"))
+    assert rows[0][0] == "HEADER"
+    broker, records, _, _ = B.parse_export({"csv": rows})
+    assert broker == "IBKR" and len(records) == 10
+    assert B.detect_broker({"x": [("data", "data", "simbol")]}) is None
+    ledger, problems = L.parse_ledger([L.COLUMNS] + B.to_sheet_rows(records))
+    assert problems == []
+    cash = L.cash_balances(ledger).set_index("Currency")["Cash"].round(2).to_dict()
+    assert cash == {"EUR": 346.75, "USD": -71.6}
+    positions, _ = L.build_positions(ledger)
+    gold = positions.set_index("Symbol").loc["PPFB.DE"]
+    assert gold["Quantity"] == 3 and gold["CostBasis"] == pytest.approx(151.25)
+
+
+def test_position_gaps():
+    records = [dict(Broker="IBKR", Symbol="AAA", Type="BUY", Quantity=10), dict(Broker="IBKR", Symbol="AAA", Type="SELL", Quantity=4),
+               dict(Broker="XTB", Symbol="AAA", Type="BUY", Quantity=99), dict(Broker="IBKR", Symbol="", Type="FX", Quantity=""),
+               dict(Broker="IBKR", Symbol="BBB", Type="BUY", Quantity=float("nan"))]
+    assert B.position_gaps(records, {"AAA": 6.0}) == []
+    assert B.position_gaps(records, {"AAA": 12.0, "CCC": 1.0}) == [("AAA", 6.0, 12.0), ("CCC", 0.0, 1.0)]

@@ -2994,13 +2994,14 @@ def _ledger_num(value, decimals=2, suffix=""):
 
 def render_ledger_import(values):
     """Importul unui export de la broker în foaia `Tranzactii`: previzualizare, apoi scriere doar a rândurilor noi."""
-    with st.expander("📥 Importă un export de la broker (Tradeville, XTB)"):
+    with st.expander("📥 Importă un export de la broker (Tradeville, XTB, IBKR)"):
         st.caption(
-            "Încarcă raportul de activitate Tradeville sau exportul XTB (.xlsx), exact cum l-ai descărcat. "
+            "Încarcă raportul de activitate Tradeville sau exportul XTB (.xlsx), ori Flex Query-ul IBKR `Terminal_complet` (.csv), "
+            "exact cum l-ai descărcat. "
             "Rândurile deja existente în foaie sunt recunoscute după ID și sărite, deci poți încărca oricând exportul complet. "
             "Nimic nu se scrie până nu apeși butonul de adăugare."
         )
-        files = st.file_uploader("Fișiere .xlsx", type=["xlsx"], accept_multiple_files=True, key="ledger_import_files")
+        files = st.file_uploader("Fișiere .xlsx / .csv", type=["xlsx", "csv"], accept_multiple_files=True, key="ledger_import_files")
         if not files:
             return
         if not values or "ID" not in values[0]:
@@ -3011,8 +3012,11 @@ def render_ledger_import(values):
         fresh_all = []
         for uploaded in files:
             try:
-                sheets = broker_import.read_workbook(uploaded)
-            except (zipfile.BadZipFile, KeyError, ValueError, OSError) as e:
+                if uploaded.name.lower().endswith(".csv"):
+                    sheets = {"csv": broker_import.read_csv_rows(uploaded)}
+                else:
+                    sheets = broker_import.read_workbook(uploaded)
+            except (zipfile.BadZipFile, KeyError, ValueError, OSError, broker_import.csv.Error) as e:
                 st.error(f"**{uploaded.name}**: fișierul nu a putut fi citit ({e}).")
                 continue
             broker, records, import_problems, control = broker_import.parse_export(sheets)
@@ -3025,6 +3029,18 @@ def render_ledger_import(values):
             if control and control.get("reported") is not None and abs(control["reported"] - control["parsed"]) > 0.01:
                 st.warning(f"⚠️ Numerarul citit ({ro(control['parsed']):,.2f}) diferă de totalul din raport ({ro(control['reported']):,.2f}): "
                            "importul e incomplet. Vezi operațiunile nerecunoscute de mai jos.")
+            cash_gaps = {cur: pair for cur, pair in (control.get("cash") or {}).items() if abs(pair[0] - pair[1]) > 0.01}
+            for cur, (reported, parsed) in cash_gaps.items():
+                st.warning(f"⚠️ {cur}: numerarul citit ({ro(parsed):,.2f}) diferă de variația din Cash Report IBKR "
+                           f"({ro(reported):,.2f}): importul e incomplet. Vezi operațiunile nerecunoscute de mai jos.")
+            if control.get("positions") is not None:
+                ledger_now, _ = ledger_calc.parse_ledger(values)
+                position_gaps = broker_import.position_gaps(ledger_now.to_dict("records") + fresh_all + fresh, control["positions"])
+                for symbol, mine, theirs in position_gaps:
+                    st.warning(f"⚠️ {symbol}: în registru {ro(mine):g}, la IBKR {ro(theirs):g}. Cauze posibile: split sau altă "
+                               "acțiune corporativă (neimportate), ori un export care nu începe de la deschiderea contului.")
+                if control.get("cash") and not cash_gaps and not position_gaps:
+                    st.caption("✅ Numerarul pe fiecare monedă și pozițiile se potrivesc cu raportul IBKR.")
             for problem in import_problems[:20]:
                 st.write(f"- ⚠️ {problem}")
             fresh_all.extend(fresh)
