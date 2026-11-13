@@ -306,3 +306,93 @@ OPT_HELP = {
                         "în aproximativ 68% din cazuri prețul ar rămâne în interval (sub ipoteza de normalitate).",
                         "distribuția normală subestimează mișcările extreme."),
 }
+
+
+# --- Portofoliu: performanță și risc (registrul Tranzactii și taburile pe monede) -------------------
+
+PORTF_HELP = {
+    "xirr": _h("randamentul tău anual real, ținând cont de momentul în care ai depus fiecare sumă.",
+               "rata anuală care, aplicată fiecărei depuneri de la data ei până azi, dă exact valoarea de azi a portofoliului "
+               "(rata internă de rentabilitate pe fluxuri datate).",
+               "fără benzi absolute: compară-l cu inflația, cu dobânda titlurilor de stat (TEZAUR/FIDELIS) și cu "
+               "benchmarkul în aceeași monedă. Sub dobânda titlurilor de stat = riscul nu a fost plătit.",
+               "banii depuși recent cântăresc puțin, cei vechi mult; cu puține fluxuri (sub ~20) e orientativ."),
+    "twr": _h("cât a crescut un leu investit la început, indiferent când și cât ai mai depus.",
+              "randamentele zilnice înlănțuite, cu fiecare depunere scoasă din calcul în ziua ei: valoare azi ÷ "
+              "(valoare ieri + depunerea de azi) − 1.",
+              "fără benzi absolute: se compară direct cu un indice (BET, S&P 500) pe aceeași perioadă. Peste indice = "
+              "alegerile tale au bătut piața.",
+              "măsoară calitatea alegerilor, nu câți bani ai făcut (aia e XIRR)."),
+    "twr_annual": _h("TWR-ul exprimat ca medie pe an.",
+                     "(1 + TWR total) ^ (1 ÷ numărul de ani) − 1.",
+                     "reper istoric pe termen lung: acțiunile globale ~7–10%/an în monedă locală; sub inflație = pierdere reală.",
+                     "dacă e sub XIRR, ai depus mai mult înaintea perioadelor bune; dacă e peste, înaintea celor slabe."),
+    "vol": _h("cât de mult fluctuează portofoliul într-un an obișnuit.",
+              "deviația standard a randamentelor zilnice × √252.",
+              "sub 10% scăzută · 10–20% moderată (piața largă are ~15–20%) · 20–30% ridicată · peste 30% foarte ridicată.",
+              "la 10%, cam două treimi din ani se încheie la ±10% față de medie. Obligațiunile și numerarul nu au variație "
+              "zilnică în calcul, deci volatilitatea totală e ușor subestimată."),
+    "sharpe": _h("cât randament peste titlurile de stat primești pentru fiecare unitate de risc.",
+                 "(randamentul mediu zilnic − rata fără risc zilnică) ÷ deviația standard zilnică × √252.",
+                 "sub 0 mai slab decât titlurile de stat · 0–0,5 slab · 0,5–1 acceptabil · 1–2 bun · peste 2 foarte bun.",
+                 "pe perioade scurte sau într-o piață foarte bună iese exagerat; compară-l pe aceeași perioadă cu indicele."),
+    "sortino": _h("ca Sharpe, dar penalizează doar scăderile, nu și creșterile bruște.",
+                  "(randamentul mediu − rata fără risc) ÷ deviația zilelor sub rata fără risc × √252.",
+                  "sub 1 slab · 1–2 bun · peste 2 foarte bun (aceleași praguri ca mesajul de sub carduri).",
+                  "valorile sunt de regulă mai mari decât Sharpe pe aceleași date."),
+    "max_dd": _h("cea mai rea perioadă prin care a trecut portofoliul.",
+                 "cea mai mare scădere procentuală de la un vârf la minimul de după el, pe curba randamentelor (fără efectul depunerilor).",
+                 "până la −10% mică · −10% … −20% moderată · −20% … −35% mare · sub −35% severă. Reper: S&P 500 a scăzut "
+                 "−34% în 2020 și −57% în 2008–2009.",
+                 "e pierderea pe care trebuie să fii pregătit să o vezi din nou."),
+    "var_hist": _h("pierderea unei zile proaste: în 1 zi din 20, pierderea a fost mai mare decât atât.",
+                   "percentila 5 a randamentelor zilnice din istoric; suma aplică procentul la valoarea de azi.",
+                   "fără benzi fixe: raportează-l la volatilitate — la un portofoliu cu volatilitate 15%/an, VaR-ul zilnic e de "
+                   "obicei în jur de −1,5%.",
+                   "nu spune cât de mare poate fi pierderea în acele zile (vezi CVaR)."),
+    "cvar": _h("cât pierzi, în medie, în cele mai rele 5% din zile.",
+               "media randamentelor zilnice sub VaR-ul istoric; suma aplică procentul la valoarea de azi.",
+               "fără benzi fixe: un CVaR mult mai mare decât VaR (de ex. de peste 1,5 ori) arată cozi groase — zilele rele sunt "
+               "foarte rele.",
+               "e mai relevant decât VaR, pentru că arată cât de adâncă e coada."),
+    "var_param": _h("aceeași pierdere de 1 zi din 20, dar calculată teoretic.",
+                    "media zilnică − 1,645 × deviația standard (presupune distribuție normală).",
+                    "se citește comparat cu VaR-ul istoric: dacă istoricul e mult mai mare, piața ta are zile extreme mai dese "
+                    "decât spune teoria.",
+                    "distribuția normală subestimează zilele extreme."),
+    "corr": _h("cât de mult se mișcă portofoliul la fel cu piața.",
+               "corelația randamentelor săptămânale TWR ale portofoliului cu ale indicelui (−1 … 1).",
+               "sub 0,3 slabă (portofoliu independent de indice) · 0,3–0,7 moderată · peste 0,7 ridicată (mergi practic cu piața).",
+               "cere cel puțin 52 de săptămâni comune; altfel N/A."),
+    "beta": _h("cât de sensibil e portofoliul la mișcările pieței.",
+               "covarianța randamentelor săptămânale cu indicele / varianța indicelui.",
+               "sub 0,8 defensiv · 0,8–1,2 ca piața · peste 1,2 agresiv (la −10% pe piață, portofoliul scade mai mult).",
+               "cere cel puțin 52 de săptămâni comune."),
+    "divers": _h("cât de independent se mișcă portofoliul față de indice.",
+                 "(1 − |corelația cu piața|) × 100.",
+                 "sub 30% diversificare mică față de indice · 30–70% moderată · peste 70% mare.",
+                 "măsoară doar legătura cu indicele, nu diversificarea între pozițiile tale."),
+    "mc_p5": _h("valoarea portofoliului într-un an slab, de felul celor care apar o dată la 20.",
+                "percentila 5 a valorii finale din cele 1000 de scenarii, construite din randamente zilnice trase la întâmplare "
+                "din istoricul portofoliului.",
+                None, "presupune că randamentul mediu al perioadei alese continuă; vezi varianta „fără tendință” de sub grafic."),
+    "mc_p5_pct": _h("cât ai pierde (minus) sau câștiga (plus) în acel an slab.",
+                    "(valoarea din scenariul pesimist ÷ valoarea de azi − 1) × 100.",
+                    "raportează-l la cât ești dispus să pierzi într-un an; poate ieși pozitiv dacă perioada aleasă a fost foarte bună.",
+                    "nu e o prognoză."),
+    "mc_prob": _h("în câte scenarii portofoliul termină anul peste valoarea de azi.",
+                  "scenarii peste valoarea de azi / 1000.",
+                  "în jur de 50% = rezultat de tip „aruncat cu banul”; peste 70% depinde de un randament mediu trecut ridicat.",
+                  "depinde direct de randamentul perioadei alese; fără tendință iese puțin sub 50%."),
+    "opt_return": _h("cât ar fi adus alocarea de Sharpe maxim în trecut.",
+                     "media randamentelor zilnice ale alocării × 252, pe tot istoricul comun.",
+                     None, "e calculat pe aceleași date pe care a fost aleasă alocarea, deci e optimist prin construcție; "
+                           "vezi tabelul pe date nevăzute."),
+    "opt_vol": _h("cât de mult ar fi fluctuat alocarea într-un an obișnuit.",
+                  "deviația standard a randamentelor zilnice × √252.",
+                  "sub 10% scăzută · 10–20% moderată · 20–30% ridicată · peste 30% foarte ridicată."),
+    "opt_sharpe": _h("randamentul peste titlurile de stat pentru fiecare unitate de risc, al alocării optime.",
+                     "(randament anual − rata fără risc) ÷ volatilitate.",
+                     "sub 0,5 slab · 0,5–1 acceptabil · 1–2 bun · peste 2 foarte bun.",
+                     "e maximul posibil pe aceste date (cu plafonul de 25% pe poziție); în practică iese mai mic."),
+}
