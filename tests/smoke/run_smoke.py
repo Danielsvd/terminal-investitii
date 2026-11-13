@@ -882,6 +882,9 @@ def main():
             at.toggle(key="ledger_curve").set_value(True).run()
             check(at, "3. Portofoliu cu curba reală din registru")
         if section == "4. Piață Globală":
+            # starea zilei: cardurile VIX și Fear & Greed (fără rețea → Fear & Greed N/A, fără excepție)
+            mets_pg = {m.label: str(m.value) for m in at.metric}
+            assert "VIX azi" in mets_pg and mets_pg.get("Fear & Greed (CNN) azi") == "N/A", mets_pg
             # verdictul macro pe piloni: 6 piloni, fiecare cu pondere, scor (sau N/A) și bază; ponderile dau 100
             pil = next((d.value for d in at.dataframe if {"Pilon", "Pondere %", "Scor", "Bază"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
