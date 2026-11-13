@@ -68,7 +68,7 @@ from analytics.scoring import technical_subscore, technical_components, moment_l
 from analytics import global_fundamental as gfund
 from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, final_verdict, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
-from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median
+from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median, peer_delta_color
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data import bnr as bnr_data
@@ -4251,7 +4251,8 @@ def main():
                 p_title = p_label.replace(" (%)", "")
                 p_help = (f"{p_title} al companiei față de mediana comparabililor din același sector și aceeași regiune. "
                           "Diferența = (valoarea − mediana) ÷ |mediana|; n = câți comparabili au valoarea. Mediana apare de la "
-                          "3 comparabili; la P/E se iau doar valorile pozitive. Fără verdict: eșantionul e mic. Sursa: foaia BVB "
+                          "3 comparabili; la P/E se iau doar valorile pozitive. Fără verdict: eșantionul e mic. Culoarea arată doar sensul: "
+                          "verde = P/E sub mediană, respectiv ROE/ROA/marjă peste mediană; P/E negativ rămâne gri. Sursa: foaia BVB "
                           "la emitenții BVB, altfel Yahoo, completat din situațiile financiare.")
                 if p_own is None:
                     p_col.metric(p_title, "N/A",
@@ -4261,7 +4262,8 @@ def main():
                                   help=p_help)
                 else:
                     p_col.metric(p_title, p_fmt.format(ro(p_own)),
-                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})", delta_color="off",
+                                 f"{ro(p_diff * 100):+.0f}% față de mediana {p_fmt.format(ro(p_med))} (n={p_n})",
+                                 delta_color=peer_delta_color(p_label, p_own),
                                   help=p_help)
 
             st.write("")
