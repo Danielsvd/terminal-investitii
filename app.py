@@ -3399,6 +3399,23 @@ def get_breadth_closes():
         raise ValueError("Yahoo: RSP/IWM/SPY fără date")
     return closes
 
+CNN_FEAR_GREED_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_cnn_fear_greed():
+    """Indicele Fear & Greed de la CNN (endpoint public neoficial, fără cheie). Excepție la eșec (nu se salvează
+    în cache), ca următoarea deschidere să reîncerce; interfața afișează N/A."""
+    resp = requests.get(CNN_FEAR_GREED_URL, timeout=10, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "application/json", "Referer": "https://edition.cnn.com/markets/fear-and-greed"})
+    resp.raise_for_status()
+    parsed = stress_calc.parse_cnn_fear_greed(resp.json())
+    if parsed is None:
+        raise ValueError("CNN Fear & Greed: răspuns fără scor")
+    return parsed
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def get_spy_trailing_pe():
     """P/E-ul pe ultimele 12 luni al SPY (Yahoo `info`), proxy pentru S&P 500. Lipsă sau ≤ 0 → excepție (nu se salvează în cache)."""
@@ -6220,6 +6237,29 @@ def main():
                 </div>
             </div>
         """, unsafe_allow_html=True)
+
+        # --- 3a. STAREA PIEȚEI AZI: VIX și Fear & Greed (CNN), fără istoric (cerut de Daniel 13.11) ---
+        try:
+            fg = get_cnn_fear_greed()
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("CNN Fear & Greed: %s", exc)
+            fg = None
+        sv1, sv2 = st.columns(2)
+        vix_lbl = stress_calc.vix_state(vix_val)
+        with sv1.container(key=ui_theme.signed_key("azi-vix", None if vix_val is None else 20 - vix_val)):
+            st.metric("VIX azi", "N/A" if vix_val is None else format_ro(vix_val, 2), vix_lbl, delta_color="off",
+                      delta_arrow="off",
+                      help=MARKET_HELP["vix"] + (f"\n\n**Data:** {vix_date:%d.%m.%Y}." if vix_date is not None else ""))
+        fg_score = None if fg is None else fg["score"]
+        with sv2.container(key=ui_theme.signed_key("azi-fg", None if fg_score is None or 45 <= fg_score < 55 else fg_score - 50)):
+            st.metric("Fear & Greed (CNN) azi", "N/A" if fg_score is None else f"{ro(fg_score):.0f} / 100",
+                      None if fg is None else fg["label"], delta_color="off", delta_arrow="off",
+                      help=MARKET_HELP["fear_greed"]
+                           + ("\n\n**Acum:** CNN nu a răspuns (se reîncearcă la următoarea deschidere)." if fg is None else
+                              "\n\n**Acum:** "
+                              + (f"actualizat {fg['date'].tz_convert('Europe/Bucharest'):%d.%m.%Y %H:%M}; " if fg["date"] is not None else "")
+                              + ("" if fg["prev_close"] is None else f"închiderea precedentă {ro(fg['prev_close']):.0f}; ")
+                              + ("" if fg["prev_week"] is None else f"acum o săptămână {ro(fg['prev_week']):.0f}.")))
 
         # --- 3b. SINTEZA AI (mutată aici de jos, 06.11) ---
         st.subheader("✨ Sinteza Inteligenței Artificiale")

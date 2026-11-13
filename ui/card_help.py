@@ -443,6 +443,15 @@ MARKET_HELP = {
                  "high yield: sub 3,5 pp credit ieftin · 3,5–5 normal · 5–7 tensiune · peste 7 stres. Investment grade: sub 1 "
                  "pp ieftin · 1–1,5 normal · 1,5–2 tensiune · peste 2 stres.",
                  "crește înaintea și în timpul recesiunilor; percentila de dedesubt e doar pe ultimii ~3 ani publicați de FRED."),
+    "fear_greed": _h("indicele CNN care rezumă frica și lăcomia din piața americană într-o singură cifră 0–100.",
+                     "media a 7 indicatori, fiecare raportat la media lui istorică: momentumul S&P 500 față de media pe 125 "
+                     "de zile, maximele vs minimele pe 52 de săptămâni (NYSE), lățimea pieței (McClellan), put/call pe 5 zile, "
+                     "VIX față de media pe 50 de zile, cererea de obligațiuni riscante (junk vs investment grade) și cererea de "
+                     "refugiu (acțiuni vs titluri de stat pe 20 de zile). Calculat și publicat de CNN.",
+                     "0–25 frică extremă · 25–45 frică · 45–55 neutru · 55–75 lăcomie · 75–100 lăcomie extremă (benzile CNN).",
+                     "se citește adesea invers: frica extremă a coincis istoric mai des cu zone bune de cumpărare decât cu "
+                     "vânzarea, dar pe datele tale e netestat — arată starea pieței, nu dă verdict. Sursa e un endpoint public "
+                     "neoficial CNN: dacă nu răspunde, cardul arată N/A."),
     "rsp_spy": _h("dacă ziua a fost dusă de toată piața sau doar de câțiva giganți.",
                   "variația zilei a ETF-ului cu pondere egală (sau a celui pe companii mici) minus cea a S&P 500 ponderat "
                   "cu capitalizarea, în puncte procentuale.",
