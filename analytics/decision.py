@@ -272,7 +272,8 @@ MY_CRITERIA = (
     ("margin", "Marjă de profit", "≥ 10%", lambda v: v >= 0.10),
     ("rev_growth", "Cifra de afaceri", "în creștere", lambda v: v > 0),
     ("ni_growth", "Profit net", "în creștere", lambda v: v > 0),
-    ("debt", "Grad de îndatorare (datorii / active)", "≤ 70%", lambda v: v <= 0.70),
+    ("debt", "Grad de îndatorare (datorii totale / active totale)", "≤ 70% (≈ levier datorii / capital ≤ 2,33)",
+     lambda v: v <= 0.70),
     ("pe", "P/E", "≤ 15", lambda v: 0 < v <= 15),
     ("pbv", "P/BV", "≤ 1,5", lambda v: 0 < v <= 1.5),
     ("gn", "GN (P/E × P/BV)", "≤ 22,5", lambda v: 0 < v <= 22.5),
@@ -283,6 +284,9 @@ MY_CRITERIA = (
 
 
 def _crit_value_txt(key, v):
+    if key == "debt":
+        lev = f"levier {ro(v / (1 - v)):.2f}" if v < 1 else "capital propriu negativ"
+        return f"{ro(v * 100):.1f}% ({lev})"
     if key in ("margin", "debt", "roa", "roe"):
         return f"{ro(v * 100):.1f}%"
     if key in ("rev_growth", "ni_growth"):

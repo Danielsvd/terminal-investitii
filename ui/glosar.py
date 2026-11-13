@@ -249,6 +249,8 @@ CHAPTERS = [
 
 În aplicație: Analiză companie → **Verdict final → Pasul 3 · Criteriile tale**, cu ✅/❌ pe fiecare criteriu.
 
+**Îndatorarea, pe scurt:** datorii totale / active totale arată cât din activele companiei e finanțat de creditori (0–100%; peste 100% = capital propriu negativ). Varianta cealaltă din cărți, datorii / capital propriu (levierul), spune același lucru altfel: levier = rată / (1 − rată), deci 50% ≈ 1,00 și **70% ≈ 2,33**. Pragul tău de 70% e pe datorii / active; pe levier ar fi 2,33. Datorii / active e mai robustă pentru un filtru: nu explodează când capitalul propriu e mic sau negativ.
+
 Notă: pe BVB, testul istoric din aplicație a găsit putere de predicție la P/E, P/BV, dividend și Piotroski, dar **nu** la ROE, marjă și îndatorare — acestea rămân filtre de calitate și risc, nu semnale de randament.
 """),
         ],

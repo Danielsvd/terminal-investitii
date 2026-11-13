@@ -148,3 +148,12 @@ def test_verdict_note_bvb_testat_sua_descriptiv():
     note = verdict_note(True, hist)
     assert "testată pe BVB" in note and "+9,2%" in note and "N = 386" in note
     assert "putere de predicție" in verdict_note(False) and "UE netestat" in verdict_note(False)
+
+
+def test_indatorarea_datorii_pe_active_cu_levierul_echivalent():
+    from analytics.decision import my_criteria
+    row = lambda v: next(r for r in my_criteria({"debt": v})[0] if r["key"] == "debt")
+    assert row(0.70)["ok"] is True and row(0.7001)["ok"] is False
+    assert row(0.70)["value"] == "70,0% (levier 2,33)" and row(0.50)["value"] == "50,0% (levier 1,00)"
+    assert row(1.2)["value"] == "120,0% (capital propriu negativ)" and row(1.2)["ok"] is False
+    assert "2,33" in row(0.5)["threshold"]
