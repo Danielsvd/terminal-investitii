@@ -69,7 +69,7 @@ from analytics.scoring import technical_subscore, technical_components, moment_l
 from analytics import global_fundamental as gfund
 from analytics.bvb_fundamental import current_indicators, cross_section, verdict_banner, score_rank, explain_fundamental, piotroski_value_text, final_verdict, GN_LIMIT, TEST_NOTE
 from data.company_files import load_company, is_bank_template, ticker_from_title, period_label, FIELD_LABELS as COMPANY_FIELD_LABELS
-from data.company_files import annual_eps_growth
+from data.company_files import annual_eps_growth, annual_pair, latest_ratio
 from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_list, peer_medians, versus_median, peer_delta_color
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
@@ -807,7 +807,10 @@ def render_bvb_decision(real_sym, hist):
             # pentru cardul „Dividend (Randament)”: Yahoo nu îl trimite la BVB.
             "dy": None if pd.isna(me["DY"]) else float(me["DY"]), "dy_year": me.get("raport_anual"), "price": price,
             # Creșterea EPS pe 3 ani din foaia anuală a fișierului, pentru PEG (istoric)
-            "eps_growth": annual_eps_growth(data["companii"][tk])}
+            "eps_growth": annual_eps_growth(data["companii"][tk]),
+            # Pentru criteriile lui Daniel din „Verdict final”: CA și profit pe ultimii doi ani, datorii / active
+            "rev_pair": annual_pair(data["companii"][tk], "rev"), "ni_pair": annual_pair(data["companii"][tk], "ni"),
+            "debt_ratio": latest_ratio(data["companii"][tk], "liab", "assets")}
     st.markdown("---")
 
 
@@ -946,7 +949,7 @@ def render_global_decision(real_sym, info, hist, risk_stats):
                        "Piotroski) sunt în secțiunile de mai jos.")
         if inp.get("statement_errors"):
             st.caption("Situații financiare necitite de la Yahoo: " + ", ".join(inp["statement_errors"]) + ".")
-    st.caption("„Decizie Master AI” de mai jos reia acest scor și momentul, fără să le recalculeze.")
+    st.caption("„Verdict final” de mai jos reia acest scor și momentul, fără să le recalculeze.")
     st.markdown("---")
     return {"is_bvb": False, "fund_label": res["label"], "fund_color": res["color"], "fund_score": res["score"],
             "fund_detail": fund_detail, "fund_basis": "descriptiv, netestat", "moment": moment,
@@ -5375,8 +5378,9 @@ def main():
             # contextul e o listă de alerte fără puncte. Metoda veche rămâne în arhivă, neschimbată.
             # =================================================================
             st.markdown("---")
-            st.subheader("👑 Decizie Master AI")
-            from analytics.decision import characterize, context_flags, count_alerts
+            st.subheader("🏁 Verdict final")
+            from analytics.decision import (characterize, context_flags, count_alerts, final_verdict, my_criteria,
+                                            growth as dec_growth, upside as dec_upside, VERDICT_NOTE)
             rsi_now = hist["RSI"].iloc[-1] if "RSI" in hist.columns else None
             opt_ok = bool(opt_data) and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None
             is_bvb_sym = str(real_sym).upper().endswith(".RO")
@@ -5392,38 +5396,102 @@ def main():
                 inst_pct=inst_percent, q_ratio=q_ratio, rsi=rsi_now, rvol=rvol)
             n_alerts = count_alerts(ctx_flags)
 
+            # --- Pasul 3: criteriile lui Daniel („Hartă în investiții”) — aceleași valori ca în cardurile de sus ---
+            pe_v, pbv_v = num(info, 'trailingPE'), num(info, 'priceToBook')
+            crit_src = []
+            if score_decision is not None and score_decision.get("is_bvb"):
+                rp, np_, dr = score_decision.get("rev_pair"), score_decision.get("ni_pair"), score_decision.get("debt_ratio")
+                crit_src.append(f"creșteri și îndatorare din fișierul „{COMPANY_FOLDER_NAME}”"
+                                + (f" ({rp[2]} → {rp[0]})" if rp else ""))
+            else:
+                fs_v = get_financial_statements(real_sym)
+                rp = fund.annual_pair_statements(fs_v.get("income"), ("Total Revenue", "Operating Revenue"))
+                np_ = fund.annual_pair_statements(fs_v.get("income"), ("Net Income", "Net Income Common Stockholders"))
+                liab = fund.annual_pair_statements(fs_v.get("balance"), ("Total Liabilities Net Minority Interest", "Total Liabilities"))
+                assets = fund.annual_pair_statements(fs_v.get("balance"), ("Total Assets",))
+                dr = (liab[1] / assets[1], None, None) if (liab and assets and assets[1] > 0) else None
+                crit_src.append("creșteri și îndatorare din situațiile financiare anuale Yahoo"
+                                + (f" ({rp[2]:%Y} → {rp[0]:%Y})" if rp else ""))
+            cap_ron = None
+            cap_v, cap_cur = num(info, 'marketCap'), (info.get('currency') or "")
+            if cap_v is not None:
+                if cap_cur.upper() == "RON":
+                    cap_ron = cap_v
+                else:
+                    fx_v, _fx_d = rezumat_fx()
+                    rate = fx_v.get("GBP") / 100 if cap_cur == "GBp" and fx_v.get("GBP") else fx_v.get(cap_cur.upper())
+                    cap_ron = cap_v * rate if rate else None
+            crit_rows, crit_ok, crit_n = my_criteria({
+                "margin": num(info, 'profitMargins'),
+                "rev_growth": dec_growth(rp[1], rp[3]) if rp else None,
+                "ni_growth": dec_growth(np_[1], np_[3]) if np_ else None,
+                "debt": dr[0] if dr else None,
+                "pe": pe_v, "pbv": pbv_v,
+                "gn": pe_v * pbv_v if (pe_v is not None and pbv_v is not None and pe_v > 0 and pbv_v > 0) else None,
+                "roa": num(info, 'returnOnAssets'), "roe": num(info, 'returnOnEquity'), "cap_ron": cap_ron})
+
+            # --- Pasul 4: evaluarea (DCF de mai sus și prețul țintă al analiștilor, citit neschimbat din Yahoo) ---
+            dcf_up = None if (mos_val is None or mos_val >= 100) else 1 / (1 - mos_val / 100) - 1
+            an_up = dec_upside(num(info, 'targetMeanPrice'), curr_price)
+
             if score_decision is None:
+                v_label, v_level = "FĂRĂ VERDICT", "muted"
                 st.info("Fără scor fundamental pentru acest simbol (ETF, fond, indice sau emitent .RO fără fișier în "
-                        f"„{COMPANY_FOLDER_NAME}”). Sinteza arată doar contextul; metoda veche e în arhivă.")
+                        f"„{COMPANY_FOLDER_NAME}”): verdictul lipsește; criteriile și contextul de mai jos rămân.")
             else:
                 d = score_decision
-                alert_color = "#F85149" if any(f["level"] == "alerta" for f in ctx_flags) else (
-                    "#D29922" if n_alerts else "#3FB950")
+                v_label, v_level = final_verdict(d["fund_label"], d["moment"])
+            v_color = ui_theme.var(v_level) if v_level in ("up", "down", "warn") else ui_theme.var("muted")
+            st.markdown(compact_html(f"""
+                <div style="background:var(--tk-surface); border:1px solid var(--tk-border); border-left:8px solid {v_color};
+                            border-radius:14px; padding:16px 18px; margin:8px 0 12px 0;">
+                    <div style="color:var(--tk-muted); font-size:12px; text-transform:uppercase; letter-spacing:1px;">Verdict (descriptiv)</div>
+                    <div style="color:{v_color}; font-weight:700; font-size:clamp(22px, 6vw, 30px); margin:6px 0;
+                                overflow-wrap:normal; word-break:keep-all;">{html.escape(v_label)}</div>
+                    <div style="color:var(--tk-muted); font-size:13px;">{html.escape(VERDICT_NOTE)}</div>
+                </div>"""), unsafe_allow_html=True)
+
+            pct_sig = lambda v: "N/A" if v is None else f"{ro(v * 100):+.1f}%"
+            vs1, vs2, vs3, vs4 = st.columns(4)
+            if score_decision is not None:
+                vs1.metric("Pasul 1 · Fundamental", f"{d['fund_label']}", d['fund_detail'], delta_color="off", delta_arrow="off",
+                           help=f"Scorul companiei din secțiunea de scor de sus, neschimbat. {d['fund_basis']}.")
+                vs2.metric("Pasul 2 · Moment", d['moment_label'], d['moment_detail'], delta_color="off", delta_arrow="off",
+                           help=BVB_HELP["moment"] + f"\n\n**Aici:** {d['moment_basis']}.")
+            else:
+                vs1.metric("Pasul 1 · Fundamental", "N/A", help="Fără scor fundamental (ETF, fond, indice sau .RO fără fișier).")
+                vs2.metric("Pasul 2 · Moment", "N/A", help="Fără scor fundamental, verdictul nu se calculează; momentul e în secțiunile de mai sus.")
+            vs3.metric("Pasul 3 · Criteriile tale", f"{crit_ok} din {crit_n}" if crit_n else "N/A",
+                       f"{10 - crit_n} fără date" if crit_n < 10 else None, delta_color="off", delta_arrow="off",
+                       help="**Ce e:** câte din criteriile tale minime de cumpărare („Hartă în investiții”) îndeplinește compania.\n\n"
+                            "**Calcul:** marjă ≥ 10%, cifra de afaceri și profitul în creștere față de anul precedent, datorii / active "
+                            "≤ 70%, P/E ≤ 15, P/BV ≤ 1,5, GN ≤ 22,5, ROA ≥ 5%, ROE ≥ 15%, capitalizare ≥ 1 mld. lei. Criteriile fără date "
+                            "nu se numără.\n\n**Atenție:** e regula ta, nu un test istoric; nu schimbă verdictul. Pe BVB, testul a găsit "
+                            "putere de predicție la P/E și P/BV, dar nu la ROE, marjă și îndatorare.\n\n**Sursă:** " + "; ".join(crit_src) + ".")
+            vs4.metric("Pasul 4 · Evaluare (DCF)", pct_sig(dcf_up),
+                       None if an_up is None else f"analiști {pct_sig(an_up)}", delta_color="off", delta_arrow="off",
+                       help="**Ce e:** cât e de la prețul de azi până la valoarea DCF calculată mai sus (cu ipotezele tale) și, "
+                            "dedesubt, până la prețul țintă mediu al analiștilor (Yahoo, neschimbat).\n\n**Calcul:** valoare / preț − 1.\n\n"
+                            "**Praguri orientative (reguli practice din literatură, nu standard oficial și netestate pe datele tale):** "
+                            "peste +10% sub valoare · ±10% la valoare · sub −10% peste valoare (banda neutră a DCF-ului).\n\n"
+                            "**Atenție:** DCF-ul depinde de ipoteze; ținta analiștilor e opinia lor. Nu schimbă verdictul.")
+
+            if score_decision is not None:
                 phrase = characterize(is_bvb=d["is_bvb"], fund_label=d["fund_label"], fund_score=d["fund_score"],
                                       moment_score=d["moment"], pillars=d["pillars"], n_alerts=n_alerts,
                                       history_text=d["history_text"])
-                st.markdown(compact_html(f"""
-                    <div style="background:#161B22; border:1px solid #30363D; border-radius:12px; padding:16px; margin:8px 0 12px 0;">
-                        <div style="display:flex; flex-wrap:wrap; gap:32px; align-items:baseline;">
-                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 1 · Fundamental</span><br>
-                                <span style="color:{d['fund_color']}; font-weight:bold; font-size:22px;">{html.escape(d['fund_label'])}</span>
-                                <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(d['fund_detail'])}</span><br>
-                                <span style="color:#8B949E; font-size:12px;">{html.escape(d['fund_basis'])}</span></div>
-                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 2 · Moment</span><br>
-                                <span style="color:{d['moment_color']}; font-weight:bold; font-size:22px;">{html.escape(d['moment_label'])}</span>
-                                <span style="color:#C9D1D9; font-size:15px;">&nbsp;{html.escape(d['moment_detail'])}</span><br>
-                                <span style="color:#8B949E; font-size:12px;">{html.escape(d['moment_basis'])}</span></div>
-                            <div><span style="color:#8B949E; font-size:12px; text-transform:uppercase;">Pasul 3 · Context</span><br>
-                                <span style="color:{alert_color}; font-weight:bold; font-size:22px;">{n_alerts} {'alertă' if n_alerts == 1 else 'alerte'}</span><br>
-                                <span style="color:#8B949E; font-size:12px;">fără puncte</span></div>
-                        </div>
-                        <div style="color:#C9D1D9; font-size:14px; margin-top:12px; line-height:1.5;">{html.escape(phrase)}</div>
-                    </div>"""), unsafe_allow_html=True)
+                st.markdown(f"<div style='color:var(--tk-text); font-size:14px; line-height:1.5; margin:8px 0;'>"
+                            f"{html.escape(phrase)}</div>", unsafe_allow_html=True)
                 if d["pillars"]:
                     p_cols = st.columns(len(d["pillars"]))
                     for col, (p_name, p_score) in zip(p_cols, d["pillars"]):
                         col.metric(p_name, "N/A" if p_score is None else f"{ro(p_score):.0f}/100",
                                    help="Pilonul scorului fundamental din secțiunea „Scor fundamental” de sus; aceeași valoare.")
+
+            with st.expander(f"Criteriile tale: {crit_ok} din {crit_n} îndeplinite" if crit_n else "Criteriile tale"):
+                st.dataframe(pd.DataFrame([{"Criteriu": r["name"], "Prag": r["threshold"], "Valoare": r["value"],
+                                            "Îndeplinit": {True: "✅", False: "❌", None: "➖ fără date"}[r["ok"]]}
+                                           for r in crit_rows]), hide_index=True, width='stretch')
 
             st.markdown("#### 🧭 Context (alerte fără puncte)")
             flag_style = {"alerta": ("rgba(248, 81, 73, 0.15)", "#F85149", "🚨"),

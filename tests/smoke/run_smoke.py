@@ -699,19 +699,25 @@ def main():
     assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
 
     def master_matches_top(sym):
-        """Sinteza „Decizie Master AI”: pasul 1 are exact eticheta și scorul din secțiunea de scor de sus;
-        metoda veche e doar în arhivă (expander)."""
+        """„Verdict final”: pasul 1 are exact eticheta și scorul din secțiunea de scor de sus; verdictul vine din
+        tabelul de reguli; pașii 3 (criteriile tale) și 4 (evaluare) există."""
+        mets = {m.label: m for m in at.metric}
+        p1 = mets.get("Pasul 1 · Fundamental")
+        assert p1 is not None, f"lipsește verdictul final la {sym}"
+        label, detail = str(p1.value), str(p1.delta)
         texts = [str(m.value) for m in at.markdown]
-        master = [t for t in texts if "Pasul 1 · Fundamental" in t and "Pasul 3 · Context" in t]
-        assert master, f"lipsește sinteza Master AI în trei pași la {sym}"
-        m = re.search(r"Pasul 1 · Fundamental</span><br>\s*<span[^>]*>([^<]+)</span>\s*<span[^>]*>&nbsp;([^<]+)</span>", master[0])
-        assert m, f"pasul 1 necitibil la {sym}: {master[0][:200]!r}"
-        label, detail = m.group(1), m.group(2)
-        top = [t for t in texts if "Pasul 3 · Context" not in t and label in t and detail in t]
-        assert top, f"pasul 1 din Master AI ({label} {detail}) diferă de secțiunea de scor la {sym}"
-        assert "Pasul 3 · Context" in master[0] and "fără puncte" in master[0], f"lipsește pasul 3 la {sym}"
-        assert any("Metoda veche" in str(e.label) for e in at.expander), f"lipsește arhiva metodei vechi la {sym}"
-        print(f"{sym} Master AI pasul 1: {label} {detail}")
+        top = [t for t in texts if label in t and detail in t]
+        assert top, f"pasul 1 din verdict ({label} {detail}) diferă de secțiunea de scor la {sym}"
+        from analytics.decision import final_verdict
+        expect = final_verdict(label, None)[0]
+        banner = [t for t in texts if "Verdict (descriptiv)" in t]
+        assert banner, f"lipsește bannerul verdictului la {sym}"
+        if label != "FAVORABIL":                     # la FAVORABIL eticheta depinde și de moment
+            assert expect in banner[0], f"verdict {sym}: {label} → {expect}, pe pagină: {banner[0][:300]!r}"
+        assert "Pasul 3 · Criteriile tale" in mets and "Pasul 4 · Evaluare (DCF)" in mets, f"lipsesc pașii 3–4 la {sym}"
+        assert any(str(e.label).startswith("Criteriile tale") for e in at.expander), f"lipsește tabelul criteriilor la {sym}"
+        print(f"{sym} verdict: {label} {detail} | criterii {mets['Pasul 3 · Criteriile tale'].value} | "
+              f"evaluare {mets['Pasul 4 · Evaluare (DCF)'].value}")
 
     alpha_aapl = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
     alpha_help = alpha_aapl.proto.help if alpha_aapl is not None else ""

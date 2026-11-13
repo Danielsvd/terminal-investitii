@@ -270,3 +270,26 @@ def annual_eps_growth(df, years=3):
         growth = None
     return {"growth": growth, "eps_new": e_new, "eps_old": e_old, "year_new": y_new, "year_old": y_old,
             "shares_changed": changed}
+
+
+def annual_pair(df, field):
+    """Ultimii doi ani din foaia anuală (luni = 12) cu `field` completat: (an_nou, valoare_nouă, an_vechi, valoare_veche)
+    sau None. Pentru „cifra de afaceri / profitul în creștere” din criteriile lui Daniel."""
+    if df is None or df.empty or field not in df.columns:
+        return None
+    annual = df[(df["months"] == 12) & df[field].notna()].sort_values("year")
+    if len(annual) < 2:
+        return None
+    new, old = annual.iloc[-1], annual.iloc[-2]
+    return int(new["year"]), float(new[field]), int(old["year"]), float(old[field])
+
+
+def latest_ratio(df, num_field, den_field):
+    """num / den din cel mai recent raport (orice perioadă) cu ambele valori și numitor > 0: (raport, an, luni) sau None."""
+    if df is None or df.empty or num_field not in df.columns or den_field not in df.columns:
+        return None
+    rows = df[df[num_field].notna() & (df[den_field].fillna(0) > 0)].sort_values(["year", "months"])
+    if rows.empty:
+        return None
+    last = rows.iloc[-1]
+    return float(last[num_field]) / float(last[den_field]), int(last["year"]), int(last["months"])

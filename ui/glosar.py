@@ -234,18 +234,20 @@ CHAPTERS = [
 12. Investiția minimă: **1.000 lei / ordin** (comisioanele fixe cântăresc mult la ordine mici).
 """),
             ("Criteriile tale minime de cumpărare", """
-| Criteriu | Prag | Unde îl vezi în aplicație |
-|---|---|---|
-| Marjă de profit | minimum 10% | Indicatori fundamentali → Marjă netă |
-| Cifra de afaceri | în creștere | grafic Venit / Venit net |
-| Profit net | în creștere | grafic Venit / Venit net |
-| Grad de îndatorare | maximum 70% | Decizie BVB → Datorii totale / capital |
-| P/E | maximum 15 | Indicatori fundamentali / Decizie BVB |
-| P/BV | maximum 1,5 | Indicatori fundamentali / Decizie BVB |
-| GN (P/E × P/BV) | maximum 22,5 | Indicatori fundamentali / Decizie BVB |
-| ROA | minimum 5% | Indicatori fundamentali |
-| ROE | minimum 15% | Indicatori fundamentali |
-| Capitalizare | minimum 1 mld. lei | antetul Analizei companiei |
+| Criteriu | Prag |
+|---|---|
+| Marjă de profit | minimum 10% |
+| Cifra de afaceri | în creștere |
+| Profit net | în creștere |
+| Grad de îndatorare (datorii totale / active totale) | maximum 70% |
+| P/E | maximum 15 |
+| P/BV | maximum 1,5 |
+| GN (P/E × P/BV) | maximum 22,5 |
+| ROA | minimum 5% |
+| ROE | minimum 15% |
+| Capitalizare | minimum 1 mld. lei |
+
+În aplicație: Analiză companie → **Verdict final → Pasul 3 · Criteriile tale**, cu ✅/❌ pe fiecare criteriu.
 
 Notă: pe BVB, testul istoric din aplicație a găsit putere de predicție la P/E, P/BV, dividend și Piotroski, dar **nu** la ROE, marjă și îndatorare — acestea rămân filtre de calitate și risc, nu semnale de randament.
 """),
