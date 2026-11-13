@@ -10,6 +10,7 @@ from data.news import filter_company_news, future_note, holdings_news, mark_futu
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
+from ui import glosar
 from ui.card_help import FUND_HELP, fund_help, BVB_HELP, PILLAR_HELP, PILLAR_TEST_NOTE, RISK_HELP, OPT_HELP, PORTF_HELP, MARKET_HELP
 from ui import theme as ui_theme
 from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
@@ -3702,6 +3703,7 @@ def main():
         "6. Rezumatul Zilei": ":material/today: Rezumatul zilei",
         "7. Scanner Volum": ":material/radar: Scanner volum",
         "8. Watchlist": ":material/visibility: Watchlist",
+        "9. Glosar Economic": ":material/menu_book: Glosar economic",
     }
     sectiune = st.sidebar.radio("Mergi la:", list(_MENU_LABEL), format_func=_MENU_LABEL.get)
     st.sidebar.markdown("---")
@@ -8195,6 +8197,9 @@ def main():
 
         elif not df_wl.attrs.get("problems"):
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
+
+    elif sectiune == "9. Glosar Economic":
+        glosar.render(st)
 
 if __name__ == "__main__":
     main()

@@ -1077,6 +1077,13 @@ def main():
             oks = [str(s.value) for s in at.success]
             assert any(s.startswith("Șters ") for s in oks), oks
 
+    radio().set_value("9. Glosar Economic").run()
+    check(at, "9. Glosar Economic")
+    assert len(at.expander) >= 20, len(at.expander)
+    at.text_input(key="glosar_cautare").set_value("aur").run()
+    check(at, "9. Glosar Economic (căutare „aur”)")
+    assert 0 < len(at.expander) < 20, len(at.expander)
+
     for w in sorted(set(app_warnings)):
         problems.append(f"[avertisment în codul aplicației] {w}")
     print(f"Director testat: {APP_DIR}")
