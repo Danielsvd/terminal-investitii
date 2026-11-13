@@ -42,3 +42,17 @@ def test_explicatii_cu_praguri_pe_randuri():
         assert text.startswith("**Ce e:**") and "\n\n**Calcul:**" in text and "**Praguri orientative" in text, key
     assert "**Praguri" not in FUND_HELP["trailingEps"]          # sumele nu primesc praguri
     assert "10–15 corect" in FUND_HELP["trailingPE"] and "22,5" in FUND_HELP["gn"]
+
+
+def test_explicatii_analiza_companie():
+    from ui.card_help import BVB_HELP, PILLAR_HELP, RISK_HELP, OPT_HELP
+    for group in (BVB_HELP, PILLAR_HELP, RISK_HELP, OPT_HELP):
+        for key, text in group.items():
+            assert text.startswith("**Ce e:**") and "\n\n**Calcul:**" in text, key
+    # pragurile testate pe BVB apar separat de regulile practice
+    assert "**Testat pe datele tale (BVB):**" in BVB_HELP["scor"] and "Pragurile scorului" in BVB_HELP["scor"]
+    assert "**Testat pe datele tale (BVB):**" in BVB_HELP["moment"] and "80–100 FAVORABIL" in BVB_HELP["moment"]
+    assert "Praguri orientative" in BVB_HELP["pe"] and "IC +0,17" in BVB_HELP["pe"]
+    # pragurile put/call coincid cu cele ale verdictului din aplicație (0,7 / 1,1)
+    assert "sub 0,7 optimism" in OPT_HELP["pc_oi"] and "peste 1,1" in OPT_HELP["pc_oi"]
+    assert "**Praguri" not in RISK_HELP["target"]
