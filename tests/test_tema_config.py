@@ -73,3 +73,14 @@ def test_contrast_text_pe_fundal_si_card():
 def test_css_global_nu_forteaza_fundalul_paginii():
     src = (ROOT / "app.py").read_text(encoding="utf-8")
     assert not re.search(r"\.stApp\s*\{\s*background-color", src)
+
+
+def test_signed_key_si_css():
+    from ui import theme
+    assert theme.signed_key("mom-S&P 500", 0.143) == "semn-poz-mom-s-p-500"
+    assert theme.signed_key("bet-sigma", -0.4) == "semn-neg-bet-sigma"
+    assert theme.signed_key("x", 0) == "semn-zero-x" and theme.signed_key("x", None) == "semn-zero-x"
+    assert theme.signed_key("x", float("nan")) == "semn-zero-x"
+    css = theme.premium_css()
+    assert '[class*="st-key-semn-poz-"] [data-testid="stMetricValue"] { color: var(--tk-up); }' in css
+    assert '[class*="st-key-semn-neg-"] [data-testid="stMetricValue"] { color: var(--tk-down); }' in css

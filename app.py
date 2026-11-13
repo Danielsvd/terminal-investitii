@@ -7450,8 +7450,9 @@ def main():
             r1.metric(f"Trend {name}", "N/A" if reg["trend_n"] is None else f"{reg['trend_n']}/3",
                       help="Câte condiții sunt îndeplinite: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200. "
                            "Aceeași regulă ca „Moment” din Analiză Companie (sub 200 de ședințe: N/A).")
-            r2.metric("Momentum 12-1", _pct(reg["momentum"], 1),
-                      help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă).")
+            with r2.container(key=ui_theme.signed_key(f"mom-{name}", reg["momentum"])):
+                st.metric("Momentum 12-1", _pct(reg["momentum"], 1),
+                          help="Randamentul de acum 12 luni până acum o lună (ultima lună exclusă).")
             r3.metric("Scor moment", "N/A" if reg["score"] is None else format_ro(reg["score"], 0),
                       help="Sub-scorul tehnic 0–100 = media trendului (0–1) și a momentumului scalat (−30% → 0, +30% → 1). "
                            "Pragurile au fost testate pe acțiuni BVB, nu pe indici: aici e descriptiv.")
@@ -7544,8 +7545,9 @@ def main():
                           None if bet["pct"] is None else _pct(bet["pct"]),
                           help="Prețul ETF-ului care urmărește BET, nu nivelul indicelui (Yahoo nu are BET). "
                                + (f"Ultima cotație: {bet['date']:%d.%m.%Y}." if bet["date"] is not None else ""))
-                m2.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=briefing_calc.sigma_label(bet["sigma"]).capitalize()
-                          + f". Variația zilei ÷ abaterea standard a variațiilor din ultimele {bet['n']} ședințe (fără ziua curentă).")
+                with m2.container(key=ui_theme.signed_key("bet-sigma", bet["sigma"])):
+                    st.metric("Mișcarea BET în σ", _sig(bet["sigma"]), help=briefing_calc.sigma_label(bet["sigma"]).capitalize()
+                              + f". Variația zilei ÷ abaterea standard a variațiilor din ultimele {bet['n']} ședințe (fără ziua curentă).")
                 m3.metric("Lățime (cresc / scad)", f"{bvb_b['up']} / {bvb_b['down']}" if bvb_b["n"] else "N/A",
                           help="Companiile din universul urmărit (tools/univers_bvb.txt: BET Plus, BET-FI, BETAeRO) "
                                "care au tranzacționat în ultima ședință.")
@@ -7785,11 +7787,12 @@ def main():
                 b1, b2 = st.columns(2)
                 for col, (a_sym, b_sym, label) in zip((b1, b2), markets_calc.BREADTH_PAIRS):
                     rd = briefing_calc.relative_day(br_c.get(a_sym), br_c.get(b_sym)) if not br_c.empty else {"diff_pp": None}
-                    col.metric(f"{a_sym} − {b_sym} (o zi)",
-                               "N/A" if rd["diff_pp"] is None else ("+" if rd["diff_pp"] >= 0 else "") + format_ro(rd["diff_pp"], 2, " pp"),
-                               help=f"{label}: variația zilei a lui {a_sym} minus a lui {b_sym} (prețuri ajustate). Pozitiv = "
-                                    "companiile cu pondere egală (sau cele mici) au făcut mai bine decât indicele ponderat cu "
-                                    "capitalizarea, deci mișcarea zilei a fost largă, nu dusă de câțiva giganți.")
+                    with col.container(key=ui_theme.signed_key(f"latime-{a_sym}-{b_sym}", rd["diff_pp"])):
+                        st.metric(f"{a_sym} − {b_sym} (o zi)",
+                                  "N/A" if rd["diff_pp"] is None else ("+" if rd["diff_pp"] >= 0 else "") + format_ro(rd["diff_pp"], 2, " pp"),
+                                  help=f"{label}: variația zilei a lui {a_sym} minus a lui {b_sym} (prețuri ajustate). Pozitiv = "
+                                       "companiile cu pondere egală (sau cele mici) au făcut mai bine decât indicele ponderat cu "
+                                       "capitalizarea, deci mișcarea zilei a fost largă, nu dusă de câțiva giganți.")
                 _breadth_bar(briefing_calc.breadth_counts(us_t), f"Universul urmărit ({len(us_t)} simboluri, nu S&P 500)")
                 us_turn = briefing_calc.turnover_vs_median(brief["us_close"][us_cols], brief["us_volume"].reindex(columns=us_cols))
                 usd_rz = rz_fx.get("USD")
