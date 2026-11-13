@@ -4152,7 +4152,8 @@ def main():
                                 marker=dict(size=10, symbol='diamond', color='#FFAB00', line=dict(width=1, color='white')),
                                 text=df_plot['Net Margin'].apply(lambda x: f"{ro(x):.1f}%"),
                                 textposition='top center',
-                                textfont=dict(color='#FFAB00', weight='bold')
+                                textfont=dict(color='#FFAB00', weight='bold'),
+                                hovertemplate="%{y:.1f}%"
                             ), secondary_y=True)
 
                             # Stilizare layout pentru un aspect curat și "aerisit"
@@ -4169,7 +4170,7 @@ def main():
                             
                             # Setări specifice pentru cele două axe Y
                             fig.update_yaxes(title_text="", showgrid=True, gridcolor='#30363D', secondary_y=False)
-                            fig.update_yaxes(title_text="Marjă (%)", showgrid=False, ticksuffix="%", color="#FFAB00", secondary_y=True)
+                            fig.update_yaxes(title_text="Marjă (%)", showgrid=False, ticksuffix="%", tickformat=".1f", color="#FFAB00", secondary_y=True)
                             
                             plot_ro(fig, width='stretch')
 
