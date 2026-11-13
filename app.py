@@ -7338,13 +7338,16 @@ def main():
             else:
                 def _bvb_fmt(col):
                     if col not in bvb_units:
-                        return lambda v: "N/A" if v is None else v       # coloană text
+                        return lambda v: v                               # coloană text (golurile sunt deja „N/A”)
                     unit = bvb_units[col]
                     if unit == "%":
                         return ro_spec(".2f", "%")
                     if unit == " lei" or "eps" in col.lower() or "câștig pe acțiune" in col.lower():
                         return ro_spec(".4f", unit)
                     return ro_spec(",.2f", unit)
+                # Coloanele text: celula goală devine textul „N/A” (st.dataframe afișează „None” la orice celulă nulă,
+                # oricum ar formata Styler-ul). Coloanele numerice rămân numerice, ca sortarea să meargă (decizie 13.11).
+                bvb_df = sheet_view.text_columns_na(bvb_df, bvb_units)
                 st.dataframe(
                     bvb_df.style.format({c: _bvb_fmt(c) for c in bvb_df.columns}),
                     height=600, width='stretch',

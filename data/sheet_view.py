@@ -187,3 +187,14 @@ def mixed_currency_rows(df, currencies, name_column="Companii"):
             name = df.at[idx, name_column] if name_column in df.columns else idx
             out.append((name, main, {c: v for c, v in row.items() if v != main}))
     return out
+
+
+def text_columns_na(df, units):
+    """Coloanele fără unitate numerică (text, de ex. „Raportare”): celulele goale → „N/A”.
+    Coloanele din `units` (numerice) rămân neatinse, ca st.dataframe să le sorteze numeric."""
+    out = df.copy()
+    for col in out.columns:
+        if col not in units:
+            out[col] = [("N/A" if v is None or (isinstance(v, float) and v != v) or str(v).strip() == "" else v)
+                        for v in out[col]]
+    return out
