@@ -17,6 +17,7 @@ from analytics.options import max_pain
 from analytics.macro import period_return, pillar_credit, credit_sentence
 from analytics.decision import SENT_EXTREME
 from data.helpers import num, now_ro, ro
+from analytics.technical import regime_hit_rates
 from ui import theme as ui_theme
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
@@ -226,9 +227,8 @@ def detect_market_regime_ai(hist_data):
         df_ml['Return'] = hist_data['Close'].pct_change(fill_method=None) * 100
         df_ml['Volatility'] = df_ml['Return'].rolling(window=10).std()
         
-        # Calculăm "Forward Return" la 20 de zile (ce s-a întâmplat după semnal)
-        # Shift(-20) aduce prețul din viitor în rândul curent pentru calcul
-        df_ml['Fwd_20d_Ret'] = df_ml['Return'].shift(-20).rolling(20).sum()
+        # Randamentul următoarelor 20 de ședințe, compus: Close(t+20) / Close(t) − 1 (înainte: suma randamentelor zilnice)
+        df_ml['Fwd_20d_Ret'] = (hist_data['Close'].shift(-20) / hist_data['Close'] - 1) * 100
         df_ml = df_ml.dropna(subset=['Return', 'Volatility'])
         
         # 2. Clustering K-Means (3 regimuri)
@@ -243,12 +243,14 @@ def detect_market_regime_ai(hist_data):
         
         # 3. LOGICA DE BACKTESTING
         # Analizăm toate zilele din trecut care au fost în același cluster cu ziua de azi
-        cluster_history = df_ml[df_ml['Cluster'] == current_cluster].dropna(subset=['Fwd_20d_Ret'])
+        hr = regime_hit_rates(df_ml['Fwd_20d_Ret'], df_ml['Cluster'], current_cluster)
         
-        if not cluster_history.empty:
-            win_rate = (cluster_history['Fwd_20d_Ret'] > 0).mean() * 100
-            avg_fwd_ret = cluster_history['Fwd_20d_Ret'].mean()
-            backtest_msg = f"📊 **Backtest:** Rata de succes istorică {ro(win_rate):.1f}% | Profit mediu forward (20z): {ro(avg_fwd_ret):+.2f}%"
+        if hr is not None:
+            backtest_msg = (
+                f"📊 <b>Istoric (în eșantion, netestat):</b> în acest regim, {ro(hr['regime_rate']):.1f}% din cele {hr['regime_n']} zile "
+                f"au urmat 20 de ședințe pe plus (medie {ro(hr['regime_mean']):+.2f}%) · toate zilele: "
+                f"{ro(hr['base_rate']):.1f}% (medie {ro(hr['base_mean']):+.2f}%) · diferență {ro(hr['edge_pp']):+.1f} pp. "
+                "Regimurile sunt învățate pe tot istoricul și ferestrele se suprapun: diferența nu dovedește un avantaj.")
         else:
             backtest_msg = "ℹ️ Date istorice insuficiente pentru un backtest relevant."
 
