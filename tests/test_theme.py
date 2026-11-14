@@ -213,6 +213,18 @@ def test_metricile_centrate_si_compacte():
     assert "justify-content: center" in css
 
 
+def test_meniul_lateral_cu_tinte_mari():
+    css = theme.premium_css()
+    nav = 'section[data-testid="stSidebar"] [data-testid="stRadio"]'
+    assert f'{nav} [data-testid="stRadioOption"] {{ width: 100%; min-height: 44px;' in css
+    assert f'{nav} [data-testid="stRadioOption"][data-selected]' in css
+    # doar radio-ul din bara laterală; radio-urile din pagini nu sunt atinse
+    assert css.count('[data-testid="stRadioOption"]') == css.count(f'{nav} [data-testid="stRadioOption"]')
+    assert css.count('[data-testid="stRadioGroup"]') == css.count(f'{nav} [data-testid="stRadioGroup"]')
+    # acoladele CSS sunt echilibrate
+    assert css.count("{") == css.count("}")
+
+
 def test_sign_css_dupa_semn():
     up, down = "#0A0", "#A00"
     assert theme.sign_css("+1,23%", up, down) == "color: #0A0"
