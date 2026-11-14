@@ -147,10 +147,13 @@ def summary(res, split=SPLIT):
     return pd.DataFrame(rows)
 
 
-def _fmt(x, pct=True):
+def _fmt(x, pct=True, sign=True):
+    """Procent („+4,5%”, fără semn la volatilitate și luni pozitive) sau număr („0,54”); lipsă → „N/A”."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return "N/A"
-    return f"{x * 100:+.1f}%".replace(".", ",") if pct else f"{x:.2f}".replace(".", ",")
+    if not pct:
+        return f"{x:.2f}".replace(".", ",")
+    return (f"{x * 100:+.1f}%" if sign else f"{x * 100:.1f}%").replace(".", ",")
 
 
 def main(argv=None):
@@ -191,9 +194,9 @@ def main(argv=None):
             continue
         print(f"\n== {per}: {part['start'].min():%m.%Y} – {part['sfarsit'].max():%m.%Y} ==")
         for _, r in part.iterrows():
-            print(f"  {r['strategie']:<30} anualizat {_fmt(r['anualizat'])}  vol {_fmt(r['volatilitate'], True)}  "
+            print(f"  {r['strategie']:<30} anualizat {_fmt(r['anualizat'])}  vol {_fmt(r['volatilitate'], sign=False)}  "
                   f"Sharpe {_fmt(r['sharpe'], False)}  scădere max {_fmt(r['scadere_max'])}  "
-                  f"luni pozitive {_fmt(r['luni_pozitive'])}  N = {r['N_luni']}")
+                  f"luni pozitive {_fmt(r['luni_pozitive'], sign=False)}  N = {r['N_luni']}")
     print(f"\nSeria lunară: {args.out}\nRezumat: {rez_path}")
     print("Limite: universul crește în timp (istorii diferite), numerarul e proxy, fără taxe și fără efect valutar.")
     return 0

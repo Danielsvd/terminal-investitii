@@ -343,3 +343,8 @@ def test_details_use_romanian_format():
     assert "+4,5% în 90 de zile" in ideas.revision_catalyst(0.045, "0y")["detail"]
     assert ideas.high_catalyst(-0.018)["detail"].startswith("-1,8%")
     assert ideas.quality_filter("safe", 6, 9, 5.3419, False)["checks"][2]["detail"] == "5,34×"
+
+
+def test_strategies_with_test_results():
+    assert "−13,8%" in ideas.STRATEGIES["trend"]["test"] and "2013–2026" in ideas.STRATEGIES["sector_us"]["test"]
+    assert "test" not in ideas.STRATEGIES["sector_eu"] and "test" not in ideas.STRATEGIES["stock"]
