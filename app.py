@@ -64,6 +64,8 @@ from data import broker_import
 from analytics import ideas as ideas_calc
 from analytics import bvb_fundamental as bvb_calc
 from data.ucits import ucits_for, ucits_symbols, ucits_currency
+from analytics import events as events_calc
+from data import entities as entities_data
 import math
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, beta_corr_weekly, jensen_alpha, performance_risk, common_day_correlation
@@ -3716,12 +3718,12 @@ def _ideas_fetch_error(what, exc):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_ideas_prices(symbols, period="3y"):
-    """Close / High / Low AJUSTATE (dividende incluse) pentru simbolurile date (tuplu), într-o singură cerere Yahoo.
-    dict câmp → DataFrame (index fără fus orar). Fără nicio închidere → excepție (nu intră în cache)."""
+    """Close / High / Low / Volume AJUSTATE (dividende incluse) pentru simbolurile date (tuplu), într-o singură cerere
+    Yahoo. dict câmp → DataFrame (index fără fus orar). Fără nicio închidere → excepție (nu intră în cache)."""
     syms = list(symbols)
     _yf_limiter.wait_if_needed()
     data = yf.download(syms, period=period, progress=False, auto_adjust=True, group_by="column")
-    out = {f: _naive_index(field_frame(data, f, syms)) for f in ("Close", "High", "Low")}
+    out = {f: _naive_index(field_frame(data, f, syms)) for f in ("Close", "High", "Low", "Volume")}
     if out["Close"].empty:
         raise ValueError("Yahoo: nicio închidere pentru simbolurile cerute")
     return out
@@ -4408,6 +4410,244 @@ def render_ideas_page():
         render_ideas_bvb(ctx)
     with t_jur:
         render_ideas_journal(today)
+    render_event_radar()
+
+
+# --- Radar evenimente (analytics/events.py, data/entities.py). Propunerea: claude/propunere_radar_evenimente_2026-11-14.md.
+# Decizii Daniel (14.11.2026): doar reguli (fără AI), jurnal `Evenimente_jurnal` da, SEC 8-K mai târziu.
+RADAR_BENCH = {"us": "SPY", "eu": "EXSA.DE", "bvb": "TVBETETF.RO"}
+RADAR_MARKETS = (("us", "🇺🇸 SUA"), ("eu", "🇪🇺 Europa"), ("bvb", "🇷🇴 România"))
+RADAR_YAHOO_BATCH = 10
+RADAR_HELP = {
+    "reactie": "Randamentul anormal = randamentul acțiunii minus al benchmarkului pieței (SPY / EXSA.DE / TVBETETF.RO), "
+               "de la ultima închidere dinaintea știrii până la ultima închidere. z = anormal ÷ (volatilitatea zilnică a "
+               "randamentului anormal pe 60 de ședințe × √ședințe). „Deja în preț”: z ≥ 2 în direcția așteptată; "
+               "„contrazis”: z ≥ 2 invers; „încă nereflectat”: sub 2. Volum relativ: volumul ultimei ședințe ÷ media "
+               "celor 20 dinainte. Praguri netestate.",
+}
+
+
+def _parse_yahoo_batch(symbols):
+    """Titlurile din fluxul Yahoo RSS pentru un grup de simboluri (fără cache; apelat din get_radar_headlines)."""
+    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={','.join(symbols)}&region=US&lang=en-US"
+    try:
+        feed = feedparser.parse(url)
+    except Exception as exc:  # feedparser: rețea, format
+        logger.warning("radar, Yahoo RSS %s: %s", symbols[0], exc)
+        return []
+    out = []
+    for entry in getattr(feed, "entries", [])[:40]:
+        dt = parse_date(entry)
+        out.append({"title": getattr(entry, "title", ""), "link": getattr(entry, "link", ""),
+                    "source": "Yahoo Finance", "date_obj": dt.replace(tzinfo=None)})
+    return out
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_radar_headlines(batches):
+    """Titlurile Yahoo RSS pe grupuri de câte 10 simboluri (tuplu de tupluri), descărcate în paralel; cache 15 min."""
+    items = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for part in pool.map(_parse_yahoo_batch, batches):
+            items.extend(part)
+    return items
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_event_journal_values():
+    """Conținutul brut al foii `Evenimente_jurnal`; None dacă foaia nu există încă sau nu poate fi citită."""
+    ws = connect_to_gsheets(events_calc.JOURNAL_SHEET)
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values()
+    except gspread.exceptions.GSpreadException as e:
+        logger.warning(f"foaia {events_calc.JOURNAL_SHEET} nu a putut fi citită: {e}")
+        return None
+
+
+def append_event_journal(rows):
+    """Adaugă în `Evenimente_jurnal` rândurile cu chei noi (foaia se creează la prima scriere, cu antetul
+    JOURNAL_COLUMNS; aprobat de Daniel, 14.11.2026). Întoarce (câte rânduri noi, mesaj de eroare sau None)."""
+    if not rows:
+        return 0, None
+    values = load_event_journal_values()
+    df, _ = events_calc.parse_journal(values)
+    known = set(df["Cheie"]) if not df.empty else set()
+    new = [r for r in rows if r[-1] not in known]
+    if not new:
+        return 0, None
+    try:
+        ws = connect_to_gsheets(events_calc.JOURNAL_SHEET)
+        if ws is None:
+            book = _get_spreadsheet()
+            if book is None:
+                return 0, "portofoliu_db nu e accesibil"
+            ws = book.add_worksheet(title=events_calc.JOURNAL_SHEET, rows=2000, cols=len(events_calc.JOURNAL_COLUMNS))
+            ws.append_row(events_calc.JOURNAL_COLUMNS, value_input_option="RAW")
+        ws.append_rows(new, value_input_option="RAW")
+    except (gspread.exceptions.GSpreadException, requests.RequestException, AttributeError) as exc:
+        logger.warning("Evenimente_jurnal, scriere eșuată: %s", exc)
+        return 0, "scrierea în Evenimente_jurnal a eșuat"
+    load_event_journal_values.clear()   # doar cache-ul jurnalului
+    return len(new), None
+
+
+def _radar_name(sym):
+    return entities_data.NAMES.get(sym, (sym,))[0]
+
+
+def _radar_rows(pairs, reactions, ev_key, holdings, groups=None):
+    """Tabelul companiilor dintr-un eveniment: simbol, direcție, reacție, „deții”."""
+    rows = []
+    for sym, d in pairs:
+        r = reactions.get((ev_key, sym), {})
+        rows.append({"Simbol": sym, "Companie": _radar_name(sym),
+                     "Așteptat": {1: "↑ favorabil", -1: "↓ nefavorabil"}.get(d, "· menționat / ambiguu"),
+                     "Anormal": _pct_txt(r.get("abnormal")), "z": format_ro(r.get("z"), 1),
+                     "Volum relativ": format_ro(r.get("rvol"), 1, "×"), "Reacția pieței": r.get("label", "N/A"),
+                     **({"Grup": ", ".join(groups.get(sym, []))} if groups is not None else {}),
+                     "Deții": "da" if sym in holdings else ""})
+    return pd.DataFrame(rows)
+
+
+def render_event_radar():
+    st.divider()
+    st.header("📰 Radar evenimente")
+    st.caption("Titlurile din ultimele 48 de ore (fluxurile RSS din Știri + Yahoo pe fiecare acțiune din universuri) "
+               "legate de companii prin nume și clasificate prin reguli (fără AI): cine e afectat, ce concurenți pot "
+               "câștiga cotă, cum a reacționat deja piața. Titlurile ajung cu întârziere: nu e semnal de tranzacționare "
+               "rapidă; valoarea e alerta pe ce deții și efectele de ordinul 2. " + events_calc.UNTESTED.capitalize() + ".")
+    c1, c2 = st.columns(2)
+    if c1.button("📰 Scanează știrile", key="radar_btn", type="primary"):
+        st.session_state["radar_on"] = True
+    if c2.button("🔄 Reîmprospătează știrile", key="radar_refresh"):
+        get_radar_headlines.clear()
+        fetch_news_data.clear()
+        st.session_state["radar_on"] = True
+    if not st.session_state.get("radar_on"):
+        return
+    now = now_ro().replace(tzinfo=None)
+    us, eu, bvb = universes.symbols("us"), universes.symbols("eu"), universes.symbols("bvb")
+    holdings = ideas_holdings()
+    tracked = list(dict.fromkeys(us + eu + bvb + sorted(holdings)))
+    yahoo_syms = [s for s in tracked if not s.endswith(".RO")]
+    batches = tuple(tuple(yahoo_syms[i:i + RADAR_YAHOO_BATCH]) for i in range(0, len(yahoo_syms), RADAR_YAHOO_BATCH))
+    with st.spinner("Citesc titlurile și le leg de companii..."):
+        items = list(fetch_news_data()) + list(get_radar_headlines(batches))
+        matcher = events_calc.EntityMatcher(tracked, entities_data.NAMES, entities_data.COMMON_TICKER_WORDS)
+        evs = events_calc.detect_events(items, matcher, entities_data.COMPETITOR_GROUPS, now, universes.market_of)
+        mentioned = {s for it in events_calc.clean_items(items, now) for s in matcher.find(it.get("title"))}
+    involved = sorted({s for e in evs for s, _ in e["affected"]} | {s for e in evs for s in e["beneficiaries"]})
+    try:
+        with st.spinner("Descarc prețurile universului (reacția pieței și mișcările fără știre)..."):
+            px = get_ideas_prices(tuple(sorted(set(tracked) | set(involved) | set(RADAR_BENCH.values()))), "6mo")
+    except Exception as exc:  # yfinance
+        px = None
+        st.info(_ideas_fetch_error("prețurile pentru radar", exc))
+    reactions = {}
+    if px is not None:
+        for e in evs:
+            pairs = list(e["affected"]) + [(s, 1) for s in e["beneficiaries"]]
+            for sym, d in pairs:
+                mk = universes.market_of(sym)
+                reactions[(e["key"], sym)] = events_calc.reaction(
+                    _ideas_close(px, sym), _ideas_close(px, RADAR_BENCH[mk]),
+                    px["Volume"][sym] if "Volume" in px and sym in px["Volume"].columns else None, e["time"], mk, d)
+    moves = []
+    if px is not None:
+        bench_of = {s: _ideas_close(px, RADAR_BENCH[universes.market_of(s)]) for s in px["Close"].columns}
+        closes = px["Close"][[s for s in px["Close"].columns if s in set(tracked) and s not in RADAR_BENCH.values()]]
+        moves = events_calc.big_moves(closes, bench_of, exclude=mentioned)
+    n_new, j_err = append_event_journal(events_calc.journal_rows(evs, reactions, RADAR_BENCH, universes.market_of, moves))
+
+    n_items = len(events_calc.clean_items(items, now))
+    st.caption(f"{n_items} {'titlu' if n_items == 1 else 'titluri'} în ultimele 48 de ore, {len(evs)} "
+               f"{'eveniment' if len(evs) == 1 else 'evenimente'}. Jurnal: {n_new} "
+               f"{'rând nou' if n_new == 1 else 'rânduri noi'} în {events_calc.JOURNAL_SHEET}"
+               + (f" ({j_err})." if j_err else "."))
+    hit = [(e, events_calc.touches(e, holdings)) for e in evs]
+    hit = [(e, t) for e, t in hit if t]
+    if hit:
+        st.info("⚠️ Evenimente care ating pozițiile tale: " + "; ".join(
+            f"{', '.join(t)} — {e['label'].lower()}" for e, t in hit[:8]))
+    icon = {3: "🔴", 2: "🟠", 1: "🟡"}
+    tabs = st.tabs([lbl for _, lbl in RADAR_MARKETS])
+    for (mk, _lbl), tab in zip(RADAR_MARKETS, tabs):
+        with tab:
+            m_evs = [e for e in evs if mk in e["markets"]]
+            if not m_evs:
+                st.caption("Niciun eveniment detectat pe această piață în ultimele 48 de ore.")
+            for e in m_evs:
+                aff = [(s, d) for s, d in e["affected"] if universes.market_of(s) == mk] if e["kind"] == "sector" else e["affected"]
+                subj = e["label"] if e["kind"] == "sector" else f"{_radar_name(aff[0][0])} ({aff[0][0]})"
+                kind = {1: "↑", -1: "↓", 0: "?"}[e["direction"]] if e["kind"] == "sector" else ""
+                sev = icon[min(3, e["severity_total"])]
+                touched = events_calc.touches(e, holdings)
+                with st.expander(f"{sev} {subj}{' ' + kind if kind else ''} — "
+                                 f"{e['label'] if e['kind'] == 'companie' else 'eveniment sectorial'} · "
+                                 f"{e['time']:%d.%m %H:%M}" + (" · deții" if touched else ""), expanded=bool(touched)):
+                    for h in e["headlines"][:5]:
+                        title = html.escape(plain_text(h["title"])).replace("[", "(").replace("]", ")")
+                        link = safe_link(h["link"])
+                        st.markdown(f"- {'[' + title + '](' + link + ')' if link else title} — "
+                                    f"{html.escape(str(h['source'] or ''))}, {h['time']:%d.%m %H:%M}")
+                    st.markdown("**Afectate**" if e["kind"] == "companie" else
+                                f"**Companii expuse** (direcția temei: {kind}; grupuri: {', '.join(e.get('groups', []))})",
+                                help=RADAR_HELP["reactie"])
+                    st.dataframe(_radar_rows(aff, reactions, e["key"], holdings), hide_index=True, width='stretch')
+                    if e["beneficiaries"]:
+                        st.markdown("**Pot câștiga cotă (concurenți din același grup)**", help=RADAR_HELP["reactie"])
+                        st.dataframe(_radar_rows([(s, 1) for s in e["beneficiaries"]], reactions, e["key"], holdings,
+                                                 groups=e["beneficiaries"]), hide_index=True, width='stretch')
+                    extra = f" Alte tipuri în titlu: {', '.join(events_calc.EVENT_TYPES[t]['label'].lower() for t in e['other_types'])}." if e["other_types"] else ""
+                    st.caption("Direcția vine din tipul evenimentului (reguli pe cuvinte, doar titlul); beneficiarii, "
+                               "doar la evenimentele care pot muta cotă de piață. Regulile nu înțeleg negații sau ironie: "
+                               "citește titlul." + extra)
+            m_moves = [m for m in moves if universes.market_of(m["symbol"]) == mk]
+            st.markdown("**Mișcări mari fără știre potrivită** (|z| ≥ 3 în ultima ședință)",
+                        help="Randamentul anormal al ultimei ședințe ÷ volatilitatea lui pe 60 de ședințe, pentru acțiunile "
+                             "din univers fără niciun titlu care să le numească în 48 de ore. Chan (2003): după mișcări "
+                             "mari fără știre publică prețul tinde să revină parțial; după cele cu știre tinde să continue. "
+                             "Netestat în aplicație.")
+            if m_moves:
+                st.dataframe(pd.DataFrame([{"Simbol": m["symbol"], "Companie": _radar_name(m["symbol"]),
+                                            "Data": f"{m['date']:%d.%m}", "Randament": _pct_txt(m["ret"]),
+                                            "Anormal": _pct_txt(m["abnormal"]), "z": format_ro(m["z"], 1),
+                                            "Deții": "da" if m["symbol"] in holdings else ""} for m in m_moves[:15]]),
+                             hide_index=True, width='stretch')
+            else:
+                st.caption("Niciuna.")
+
+    with st.expander("📓 Jurnalul radarului: s-a confirmat direcția?"):
+        values = load_event_journal_values()
+        jdf, probs = events_calc.parse_journal(values)
+        for p in probs:
+            st.caption(p)
+        if jdf.empty:
+            st.caption("Jurnalul e gol: se completează automat la fiecare scanare.")
+            return
+        syms = tuple(sorted(set(jdf["Symbol"]) | {b for b in jdf["Benchmark"] if b}))
+        try:
+            jpx = get_ideas_prices(syms, "2y")
+        except Exception as exc:  # yfinance
+            st.caption(_ideas_fetch_error("prețurile jurnalului", exc))
+            return
+        res = jdf.copy()
+        evals = [events_calc.evaluate_event(_ideas_close(jpx, r["Symbol"]), _ideas_close(jpx, r["Benchmark"]), r["Data_ref"])
+                 for _, r in jdf.iterrows()]
+        for k in events_calc.EVAL_SESSIONS:
+            res[f"ab{k}"] = [x[k] for x in evals]
+        summ = events_calc.journal_summary(res)
+        st.dataframe(pd.DataFrame({
+            "Rol": summ["Rol"],
+            **{f"N la {k} ședințe": summ[f"N {k}"] for k in events_calc.EVAL_SESSIONS},
+            **{f"Direcție corectă la {k}": [_pct_txt(x, 0, sign=False) for x in summ[f"Nimerite {k}"]] for k in events_calc.EVAL_SESSIONS},
+            **{f"Anormal mediu în direcție, {k}": [_pct_txt(x) for x in summ[f"Medie {k}"]] for k in events_calc.EVAL_SESSIONS},
+            "Verdict": ["eșantion mic (< 20 la 20 de ședințe), fără verdict" if s else "—" for s in summ["small"]]}),
+            hide_index=True, width='stretch')
+        st.caption(f"{len(jdf)} rânduri. Afectat: direcția din tipul evenimentului; beneficiar: ↑; fără știre: invers "
+                   "mișcării (revenire, Chan 2003). Anormal = față de benchmarkul pieței, pe prețuri ajustate.")
 
 
 # --- MAIN APP ---

@@ -314,7 +314,12 @@ def fake_feed(url):
             summary="<p>Rezumat cu <a href='x'>HTML</a> netăiat corect " + "text " * 80,
             published_parsed=ts, updated_parsed=ts, published="x")
     feed = types.SimpleNamespace(get=lambda k, d=None: "Ziarul Financiar Test" if k == "title" else d)
-    return types.SimpleNamespace(entries=[entry(i) for i in range(6)], feed=feed)
+    entries = [entry(i) for i in range(6)]
+    if "s=NVDA," in url:     # Radar evenimente: un eveniment cu beneficiari (fluxul Yahoo pe grupul NVDA, MSFT...)
+        ts = time.gmtime(time.time() - 2 * 3600)
+        entries.append(types.SimpleNamespace(title="Nvidia faces espionage probe; shares fall", link="https://example.com/n",
+                                             summary="", published_parsed=ts, updated_parsed=ts, published="x"))
+    return types.SimpleNamespace(entries=entries, feed=feed)
 
 
 # --------------------------------------------------------------------------
@@ -385,11 +390,13 @@ class FakeWorksheet:
 
     def append_row(self, row, *a, **k):
         APPENDED.append((self.name, list(row)))
-        if self.name == "Idei_jurnal":          # jurnalul ideilor: rândul rămâne în foaie (se citește înapoi)
+        if self.name in ("Idei_jurnal", "Evenimente_jurnal"):   # jurnalele: rândul rămâne în foaie (se citește înapoi)
             SHEETS[self.name].append(list(row))
 
     def append_rows(self, rows, *a, **k):
-        pass
+        if self.name == "Evenimente_jurnal":    # jurnalul radarului: rândurile rămân în foaie
+            SHEETS[self.name].extend(list(r) for r in rows)
+            APPENDED.extend((self.name, list(r)) for r in rows)
 
     def find(self, *a, **k):
         return None
@@ -1150,6 +1157,20 @@ def main():
     sv.click().run()
     check(at, "10. Idei (salvare dublă)")
     assert len([r for name, r in APPENDED if name == "Idei_jurnal"]) == 2, "Idei: a doua salvare în aceeași zi a scris"
+
+    at.button(key="radar_btn").click().run()
+    check(at, "10. Idei (radar evenimente)")
+    radar = [str(e.label) for e in at.expander if "Nvidia (NVDA)" in str(e.label)]
+    assert radar, f"Radar: lipsește evenimentul Nvidia: {[str(e.label) for e in at.expander][-8:]}"
+    ben = next((d.value for d in at.dataframe if "Grup" in getattr(d.value, "columns", [])), None)
+    assert ben is not None and {"AMD", "AVGO", "INTC"} <= set(ben["Simbol"]), "Radar: lipsesc beneficiarii AMD/AVGO/INTC"
+    ev_rows = [r for name, r in APPENDED if name == "Evenimente_jurnal"]
+    assert ev_rows and ev_rows[0][0] == "Data" and any(r[2] == "NVDA" and r[3] == "afectat" for r in ev_rows), ev_rows[:3]
+    n_before = len(ev_rows)
+    at.button(key="radar_btn").click().run()
+    check(at, "10. Idei (radar, a doua scanare)")
+    assert len([r for name, r in APPENDED if name == "Evenimente_jurnal"]) == n_before, "Radar: rânduri duble în jurnal"
+    print(f"Radar: {radar[0]}; rânduri în Evenimente_jurnal: {n_before - 1}")
 
     radio().set_value("9. Glosar Economic").run()
     check(at, "9. Glosar Economic")
