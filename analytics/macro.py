@@ -5,6 +5,21 @@ import pandas as pd
 from data.helpers import ro, score_ro
 
 
+# Serii FRED publicate în persoane, aduse la mii ca să fie comparabile cu PAYEMS (mii) și cu pragurile din
+# interpret_fred. ADPMNUSNERSA (ADP, nivel lunar, ajustat sezonier) înlocuiește ADPCHGS, scoasă din FRED (404, nov. 2026).
+FRED_ADP = "ADPMNUSNERSA"
+FRED_PERSONS_TO_THOUSANDS = frozenset({FRED_ADP})
+
+
+def fred_in_thousands(code, series):
+    """Seria FRED în unitatea folosită de aplicație: persoane → mii pentru codurile din FRED_PERSONS_TO_THOUSANDS.
+
+    Celelalte serii rămân neschimbate. Exemplu: ADP 132.885.000 → 132.885,0 (mii); variația lunară
+    132.971.000 − 132.885.000 = 86.000 persoane devine +86,0K, comparabilă cu NFP."""
+    s = pd.Series(series, dtype="float64")
+    return s / 1000.0 if code in FRED_PERSONS_TO_THOUSANDS else s
+
+
 def yoy_pct(series, max_gap_days=45):
     """Variația procentuală an/an a unei serii lunare (ex. indicele CPI).
 
@@ -408,7 +423,7 @@ def interpret_fred(df_macro):
                        "Context în care Fed-ul are spațiu să taie dobânzile.")
 
     # 2. PIAȚA MUNCII
-    nfp, adp, unrate, unrate_chg, jolts_chg = gc('PAYEMS'), gc('ADPCHGS'), gv('UNRATE'), gc('UNRATE'), gc('JTSJOL')
+    nfp, adp, unrate, unrate_chg, jolts_chg = gc('PAYEMS'), gc(FRED_ADP), gv('UNRATE'), gc('UNRATE'), gc('JTSJOL')
     if has(nfp, adp) and nfp > 200 and adp < 100:
         bullets.append("🔄 **DIVERGENȚĂ PRIVAT-STAT:** Angajările oficiale (NFP) sunt susținute de sectorul public, în timp ce sectorul privat (ADP) frânează. Semnal de ciclu târziu.")
     if has(unrate, unrate_chg) and unrate_chg > 0.1 and unrate > 4.0:
