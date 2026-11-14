@@ -3973,7 +3973,6 @@ def _ideas_exec(px, sym):
     ex_sym, ex_desc = ucits_for(sym)
     if ex_sym is None:
         return None, ex_desc, None, None, None
-    check = None if ex_sym == sym else ideas_calc.tracking_check(_ideas_close(px, sym), _ideas_close(px, ex_sym))
     # Moneda liniei de cotare din Yahoo (cache 7 zile): la Londra același ETF poate cota în USD sau în pence (GBp);
     # dedusă din sufix, dimensionarea ieșea de 100 de ori greșită (SJPA.L, SGLN.L, captura din 14.11).
     try:
@@ -3981,6 +3980,11 @@ def _ideas_exec(px, sym):
     except (requests.RequestException, KeyError, ValueError, AttributeError, TypeError) as exc:
         logger.warning("idei, moneda %s: %s", ex_sym, exc)
         cur = ucits_currency(ex_sym)
+    # Corelația în USD (ETF-ul semnal e în USD): fără conversie, cursul EUR/USD cobora corelația la obligațiuni
+    # (CBU0.DE 0,70 în captura din 15.11), deși instrumentul e corect.
+    ucits_usd = ideas_calc.in_usd(_ideas_close(px, ex_sym), cur, _ideas_close(px, "USDRON=X"),
+                                  _ideas_close(px, "EURRON=X"), _ideas_close(px, "GBPRON=X"))
+    check = None if ex_sym == sym else ideas_calc.tracking_check(_ideas_close(px, sym), ucits_usd)
     return ex_sym, ex_desc, _ideas_last(px, ex_sym), cur, check
 
 
@@ -4168,7 +4172,7 @@ def render_ideas_etf(px, px_err, ctx):
         for sym in [s for s, _ in ideas_calc.ASSET_CLASSES] + list(ideas_calc.US_SECTORS):
             ex_sym, ex_desc, ex_price, ex_cur, check = _ideas_exec(px, sym)
             rows.append({"Semnal": sym, "UCITS": ex_sym or "—", "Descriere": ex_desc,
-                         "Ultimul preț": price_ro(ex_price), "Monedă": ex_cur or "N/A", "Corelație săpt. 12 luni":
+                         "Ultimul preț": price_ro(ex_price), "Monedă": ex_cur or "N/A", "Corelație săpt. 12 luni (în USD)":
                          "N/A" if not check or check["corr"] is None else format_ro(check["corr"], 2),
                          "Stare": "—" if ex_sym is None else ("fără date Yahoo" if ex_price is None else
                                   ("de verificat" if not check or not check["ok"] else "consistent"))})
