@@ -299,6 +299,14 @@ NAMES = {
     "LIH.RO": ("Life Is Hard",),
 }
 
+# Mărci și produse: un titlu în care compania apare DOAR prin ele (de ex. „Fake Toyota airbag recall notices
+# circulating on WhatsApp”, 14.11) e despre altceva care se întâmplă pe produs, nu despre companie. Evenimentul rămâne
+# vizibil, dar fără direcție, fără beneficiari, fără alertă și fără rând în jurnal.
+PRODUCT_ALIASES = frozenset({
+    "WhatsApp", "Instagram", "YouTube", "Waymo", "iPhone", "Azure", "AWS", "Wegovy", "Ozempic", "Zepbound",
+    "Mounjaro", "Gucci", "Booking.com",
+})
+
 # Tickere care sunt și cuvinte sau acronime obișnuite: nu se potrivesc după ticker, doar după nume.
 COMMON_TICKER_WORDS = frozenset({
     "NET", "CAT", "LNG", "COST", "SNOW", "CRM", "RIO", "AIR", "ADS", "CON", "SAN", "ORA", "CAP", "ENG", "REL", "BATS",

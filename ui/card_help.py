@@ -234,7 +234,7 @@ PILLAR_HELP = {
                         "peste 50 ROE peste costul capitalului (creează valoare) · sub 50 sub costul capitalului.",
                         praguri_titlu=SCORE_BANDS),
 }
-PILLAR_TEST_NOTE = ("\n\n**Test istoric SUA 2022–2026:** fără putere de predicție; scorul descrie compania, "
+PILLAR_TEST_NOTE = ("\n\n**Test istoric SUA 2021–2026:** fără putere de predicție demonstrată; scorul descrie compania, "
                     "pragurile sunt orientative.")
 
 RISK_HELP = {

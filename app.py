@@ -4535,7 +4535,8 @@ def render_event_radar():
     batches = tuple(tuple(yahoo_syms[i:i + RADAR_YAHOO_BATCH]) for i in range(0, len(yahoo_syms), RADAR_YAHOO_BATCH))
     with st.spinner("Citesc titlurile și le leg de companii..."):
         items = list(fetch_news_data()) + list(get_radar_headlines(batches))
-        matcher = events_calc.EntityMatcher(tracked, entities_data.NAMES, entities_data.COMMON_TICKER_WORDS)
+        matcher = events_calc.EntityMatcher(tracked, entities_data.NAMES, entities_data.COMMON_TICKER_WORDS,
+                                            entities_data.PRODUCT_ALIASES)
         evs = events_calc.detect_events(items, matcher, entities_data.COMPETITOR_GROUPS, now, universes.market_of)
         mentioned = {s for it in events_calc.clean_items(items, now) for s in matcher.find(it.get("title"))}
     involved = sorted({s for e in evs for s, _ in e["affected"]} | {s for e in evs for s in e["beneficiaries"]})
@@ -6317,7 +6318,8 @@ def main():
             st.markdown("---")
             st.subheader("🏁 Verdict final")
             from analytics.decision import (characterize, context_flags, count_alerts, final_verdict, my_criteria,
-                                            growth as dec_growth, upside as dec_upside, verdict_note)
+                                            growth as dec_growth, upside as dec_upside, verdict_note,
+                                            VERDICT_NOTE_NONE)
             rsi_now = hist["RSI"].iloc[-1] if "RSI" in hist.columns else None
             opt_ok = bool(opt_data) and opt_data.get('oi_pc_ratio') is not None and opt_data.get('iv') is not None
             is_bvb_sym = str(real_sym).upper().endswith(".RO")
@@ -6371,7 +6373,7 @@ def main():
             dcf_up = None if (mos_val is None or mos_val >= 100) else 1 / (1 - mos_val / 100) - 1
             an_up = dec_upside(num(info, 'targetMeanPrice'), curr_price)
 
-            v_note = verdict_note(False)
+            v_note = VERDICT_NOTE_NONE   # fără scor (ETF, .RO fără fișier): nota despre testul SUA nu are sens aici
             if score_decision is None:
                 v_label, v_level = "FĂRĂ VERDICT", "muted"
                 st.info("Fără scor fundamental pentru acest simbol (ETF, fond, indice sau emitent .RO fără fișier în "
