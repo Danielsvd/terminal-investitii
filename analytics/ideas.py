@@ -642,9 +642,9 @@ JOURNAL_MIN_N = 20
 
 
 def journal_row(date, symbol, instrument, strategy, entry, stop, horizon_days, benchmark, signals):
-    """Rândul de scris în `Idei_jurnal` (date AAAA-LL-ZZ, numere brute)."""
+    """Rândul de scris în `Idei_jurnal` (date AAAA-LL-ZZ; prețul și stopul cu 4 zecimale: Yahoo dă 50,099998)."""
     return [pd.Timestamp(date).strftime("%Y-%m-%d"), str(symbol).upper(), str(instrument or ""), str(strategy),
-            round(float(entry), 6), round(float(stop), 6), int(horizon_days), str(benchmark or ""), str(signals)[:400]]
+            round(float(entry), 4), round(float(stop), 4), int(horizon_days), str(benchmark or ""), str(signals)[:400]]
 
 
 def parse_journal(values, cell_number):

@@ -256,7 +256,7 @@ def test_position_size():
 def test_journal_roundtrip_and_dedupe():
     row = ideas.journal_row("2026-11-14", "xlk", "ZPDT.DE", "Rotație sectoare SUA", 250.123456789, 230.5, 30,
                             "SPY", "mom 12-1 +25%")
-    assert row[:4] == ["2026-11-14", "XLK", "ZPDT.DE", "Rotație sectoare SUA"] and row[4] == 250.123457
+    assert row[:4] == ["2026-11-14", "XLK", "ZPDT.DE", "Rotație sectoare SUA"] and row[4] == 250.1235 and ideas.journal_row("2026-11-14", "EL.RO", "", "x", 50.099998, 48.756601, 182, "", "")[4:6] == [50.1, 48.7566]
     values = [ideas.JOURNAL_COLUMNS, row, ["2026-11-15", "", "", "x", "1", "", "5", "", ""], ["", "", ""]]
     df, problems = ideas.parse_journal(values, cell_number)
     assert len(df) == 1 and df.iloc[0]["Horizon"] == 30 and df.iloc[0]["Stop"] == 230.5
