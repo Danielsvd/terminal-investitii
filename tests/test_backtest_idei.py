@@ -72,3 +72,8 @@ def test_main_end_to_end(tmp_path, monkeypatch, capsys):
     assert "A. trend (regula)" in set(rez["strategie"])
     text = capsys.readouterr().out
     assert "Fără date:" in text and "EEM" in text                             # simbolurile lipsă sunt raportate
+
+
+def test_fmt_sign_only_on_returns():
+    assert bt._fmt(0.045) == "+4,5%" and bt._fmt(0.057, sign=False) == "5,7%"
+    assert bt._fmt(0.54, pct=False) == "0,54" and bt._fmt(None) == "N/A"

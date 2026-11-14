@@ -609,10 +609,16 @@ STRATEGIES = {
     "trend": {"name": "Trend clase de active", "horizon": 30, "benchmark": "AOR",
               "evidence": "Faber (2007), regula pe media de 10 luni; Moskowitz, Ooi & Pedersen (2012), "
                           "time-series momentum pe 58 de piețe",
-              "exit": "închiderea lunară sub media pe 10 luni sau randamentul pe 12 luni sub numerar; revizie lunară"},
+              "exit": "închiderea lunară sub media pe 10 luni sau randamentul pe 12 luni sub numerar; revizie lunară",
+              "test": "Testat 2000 – oct. 2026 (tools/backtest_idei, cost 0,1%): față de aceleași active ținute, scăderea "
+                      "maximă −13,8% în loc de −43,5% și Sharpe 0,54 în loc de 0,29, la randament apropiat (4,6% față de "
+                      "4,4% pe an); la fel în ambele perioade (2000–2012 și 2013–2026). Reduce riscul, nu crește randamentul"},
     "sector_us": {"name": "Rotație sectoare SUA", "horizon": 30, "benchmark": "SPY",
                   "evidence": "Moskowitz & Grinblatt (1999), momentum pe industrii; Antonacci (2014), momentum dublu",
-                  "exit": "iese din primele 3 sau pierde filtrul absolut (sub SMA 200 sau sub numerar); revizie lunară"},
+                  "exit": "iese din primele 3 sau pierde filtrul absolut (sub SMA 200 sau sub numerar); revizie lunară",
+                  "test": "Testat 2000 – oct. 2026: 6,6% pe an față de 8,4% la SPY, Sharpe 0,44 față de 0,48; a bătut SPY în "
+                          "2000–2012 (3,1% față de 2,4%), a rămas în urmă în 2013–2026 (10,0% față de 14,3%). Reduce scăderea "
+                          "maximă (−29,4% față de −50,8%), nu aduce randament în plus"},
     "sector_eu": {"name": "Rotație sectoare Europa", "horizon": 30, "benchmark": "EXSA.DE",
                   "evidence": "Moskowitz & Grinblatt (1999), momentum pe industrii; Antonacci (2014), momentum dublu",
                   "exit": "iese din primele 3 sau pierde filtrul absolut (sub SMA 200 sau sub numerar); revizie lunară"},

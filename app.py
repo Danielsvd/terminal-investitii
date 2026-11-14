@@ -3960,7 +3960,7 @@ def render_idea(idea, ctx):
         st.markdown(f"- **Evenimente (14 zile):** {'; '.join(ev) if ev else 'nimic cu impact mare'}.")
         for title, link in idea.get("news", []):
             st.markdown(f"  - [{title}]({link})" if link else f"  - {title}")
-        base = "Testat în aplicație" if idea["strategy"] == "bvb" else ideas_calc.UNTESTED.capitalize()
+        base = strat.get("test") or ("Testat în aplicație" if idea["strategy"] == "bvb" else ideas_calc.UNTESTED.capitalize())
         st.caption(f"Baza: {strat['evidence']}. {base}. Orizont: {strat['horizon']} de zile; benchmark în jurnal: "
                    f"{idea.get('benchmark') or 'N/A'}.")
         if st.button("📓 Salvează în jurnal", key=f"idea_save_{idea['strategy']}_{idea['symbol']}"):
