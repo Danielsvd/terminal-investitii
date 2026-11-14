@@ -3,6 +3,8 @@
 De ce: ETF-urile domiciliate în SUA nu au KID (PRIIPs), deci XTB și IBKR Irlanda nu le vând clienților de retail
 din UE. Semnalul se calculează pe ETF-ul SUA (istorie lungă, date curate); execuția se face pe echivalentul UCITS.
 
+Broker pentru ETF-uri: IBKR (Daniel, 14.11.2026; la XTB nu mai cumpără ETF-uri), cu preferință pentru Xetra.
+
 ATENȚIE: simbolurile de mai jos NU au fost verificate din mediul de lucru (fără acces la Yahoo). Aplicația verifică
 singură, la afișare, dacă Yahoo are date pentru simbolul UCITS și cât de corelate sunt randamentele săptămânale cu
 ETF-ul semnal (analytics/ideas.tracking_check). Înainte de o tranzacție: verifică ISIN-ul și indicele la emitent și
@@ -15,8 +17,8 @@ UCITS = {
     "VGK": ("EXSA.DE", "iShares STOXX Europe 600 UCITS (Dist), Xetra"),
     "EEM": ("IS3N.DE", "iShares Core MSCI EM IMI UCITS (Acc), Xetra"),
     "EWJ": ("SJPA.L", "iShares Core MSCI Japan IMI UCITS (Acc), Londra"),
-    "IEF": ("IBTM.L", "iShares $ Treasury Bond 7-10yr UCITS (Dist), Londra"),
-    "TLT": ("IDTL.L", "iShares $ Treasury Bond 20+yr UCITS (Dist), Londra"),
+    "IEF": ("CBU0.DE", "iShares $ Treasury Bond 7-10yr UCITS, Xetra — linia de la IBKR (Daniel, 14.11)"),
+    "TLT": ("IS04.DE", "iShares $ Treasury Bond 20+yr UCITS, Xetra — linia de la IBKR (Daniel, 14.11)"),
     "TIP": ("ITPS.L", "iShares $ TIPS UCITS (Acc), Londra"),
     "GLD": ("SGLN.L", "iShares Physical Gold ETC, Londra"),
     "DBC": ("CMOD.L", "Invesco Bloomberg Commodity UCITS (Acc), Londra"),
