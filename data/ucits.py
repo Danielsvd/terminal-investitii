@@ -11,26 +11,26 @@ la broker. Fără date de portofoliu aici (repo public).
 
 # simbol semnal → (simbol Yahoo UCITS sau None, descriere)
 UCITS = {
-    "SPY": ("SXR8.DE", "iShares Core S&P 500 UCITS (Acc), Xetra, EUR"),
-    "VGK": ("EXSA.DE", "iShares STOXX Europe 600 UCITS (Dist), Xetra, EUR"),
-    "EEM": ("IS3N.DE", "iShares Core MSCI EM IMI UCITS (Acc), Xetra, EUR"),
-    "EWJ": ("SJPA.L", "iShares Core MSCI Japan IMI UCITS (Acc), Londra, USD"),
-    "IEF": ("IBTM.L", "iShares $ Treasury Bond 7-10yr UCITS (Dist), Londra, USD"),
-    "TLT": ("IDTL.L", "iShares $ Treasury Bond 20+yr UCITS (Dist), Londra, USD"),
-    "TIP": ("ITPS.L", "iShares $ TIPS UCITS (Acc), Londra, USD"),
-    "GLD": ("SGLN.L", "iShares Physical Gold ETC, Londra, USD"),
-    "DBC": ("CMOD.L", "Invesco Bloomberg Commodity UCITS (Acc), Londra, USD"),
+    "SPY": ("SXR8.DE", "iShares Core S&P 500 UCITS (Acc), Xetra"),
+    "VGK": ("EXSA.DE", "iShares STOXX Europe 600 UCITS (Dist), Xetra"),
+    "EEM": ("IS3N.DE", "iShares Core MSCI EM IMI UCITS (Acc), Xetra"),
+    "EWJ": ("SJPA.L", "iShares Core MSCI Japan IMI UCITS (Acc), Londra"),
+    "IEF": ("IBTM.L", "iShares $ Treasury Bond 7-10yr UCITS (Dist), Londra"),
+    "TLT": ("IDTL.L", "iShares $ Treasury Bond 20+yr UCITS (Dist), Londra"),
+    "TIP": ("ITPS.L", "iShares $ TIPS UCITS (Acc), Londra"),
+    "GLD": ("SGLN.L", "iShares Physical Gold ETC, Londra"),
+    "DBC": ("CMOD.L", "Invesco Bloomberg Commodity UCITS (Acc), Londra"),
     "UUP": (None, "fără echivalent UCITS simplu: expunerea pe dolar se ia prin active în USD"),
-    "XLK": ("ZPDT.DE", "SPDR S&P U.S. Technology Select Sector UCITS, Xetra, EUR"),
-    "XLV": ("ZPDH.DE", "SPDR S&P U.S. Health Care Select Sector UCITS, Xetra, EUR"),
-    "XLF": ("ZPDF.DE", "SPDR S&P U.S. Financials Select Sector UCITS, Xetra, EUR"),
-    "XLE": ("ZPDE.DE", "SPDR S&P U.S. Energy Select Sector UCITS, Xetra, EUR"),
-    "XLY": ("ZPDD.DE", "SPDR S&P U.S. Consumer Discretionary Select Sector UCITS, Xetra, EUR"),
-    "XLP": ("ZPDS.DE", "SPDR S&P U.S. Consumer Staples Select Sector UCITS, Xetra, EUR"),
-    "XLI": ("ZPDI.DE", "SPDR S&P U.S. Industrials Select Sector UCITS, Xetra, EUR"),
-    "XLB": ("ZPDM.DE", "SPDR S&P U.S. Materials Select Sector UCITS, Xetra, EUR"),
-    "XLU": ("ZPDU.DE", "SPDR S&P U.S. Utilities Select Sector UCITS, Xetra, EUR"),
-    "XLC": ("ZPDX.DE", "SPDR S&P U.S. Communication Services Select Sector UCITS, Xetra, EUR"),
+    "XLK": ("ZPDT.DE", "SPDR S&P U.S. Technology Select Sector UCITS, Xetra"),
+    "XLV": ("ZPDH.DE", "SPDR S&P U.S. Health Care Select Sector UCITS, Xetra"),
+    "XLF": ("ZPDF.DE", "SPDR S&P U.S. Financials Select Sector UCITS, Xetra"),
+    "XLE": ("ZPDE.DE", "SPDR S&P U.S. Energy Select Sector UCITS, Xetra"),
+    "XLY": ("ZPDD.DE", "SPDR S&P U.S. Consumer Discretionary Select Sector UCITS, Xetra"),
+    "XLP": ("ZPDS.DE", "SPDR S&P U.S. Consumer Staples Select Sector UCITS, Xetra"),
+    "XLI": ("ZPDI.DE", "SPDR S&P U.S. Industrials Select Sector UCITS, Xetra"),
+    "XLB": ("ZPDM.DE", "SPDR S&P U.S. Materials Select Sector UCITS, Xetra"),
+    "XLU": ("ZPDU.DE", "SPDR S&P U.S. Utilities Select Sector UCITS, Xetra"),
+    "XLC": ("ZPDX.DE", "SPDR S&P U.S. Communication Services Select Sector UCITS, Xetra"),
     "XLRE": (None, "fără echivalent UCITS sectorial identificat: de căutat la broker"),
 }
 
@@ -46,7 +46,8 @@ def ucits_for(symbol):
 
 
 def ucits_currency(symbol):
-    """Valuta liniei de cotare: .DE → EUR; .L → USD (liniile din tabel sunt în USD); .RO → RON; fără sufix → USD."""
+    """Valuta DEDUSĂ din sufix, doar ca rezervă când Yahoo nu răspunde: .DE → EUR; .L → USD; .RO → RON; fără sufix →
+    USD. La Londra deducția poate greși (SJPA.L, SGLN.L cotează în pence, GBp): aplicația cere întâi moneda de la Yahoo."""
     s = str(symbol or "").upper()
     if s.endswith(".DE"):
         return "EUR"
