@@ -121,6 +121,9 @@ def root_css():
     return f":root {{ {body} }}"
 
 
+# radio-ul de navigare din bara laterală (singurul st.radio din sidebar)
+_NAV = 'section[data-testid="stSidebar"] [data-testid="stRadio"]'
+
 _CARD_SHADOW = "inset 0 1px 0 var(--tk-highlight), 0 1px 2px var(--tk-shadow), 0 10px 28px var(--tk-shadow)"
 
 
@@ -162,6 +165,20 @@ def premium_css():
         # ca cardurile VIX și Fear & Greed de dedesubt (cerut de Daniel pe 14.11); pe desktop rămâne neschimbat
         " @media (max-width: 640px) { .macro-hero { justify-content: center !important; text-align: center; }"
         " .macro-hero > div { flex-basis: 100% !important; } }"
+        # meniul lateral: fiecare opțiune e un rând de min. 44px (ținta de atingere pe telefon), text mai mare,
+        # fundal la hover și rândul ales evidențiat cu accentul (cerut de Daniel pe 15.11). Streamlit 1.65 desenează
+        # radio-ul cu react-aria: grupul = stRadioGroup, opțiunea = <label data-testid="stRadioOption"> cu data-selected
+        f' {_NAV} [data-testid="stRadioGroup"] {{ align-items: stretch; gap: 4px; }}'
+        f' {_NAV} [data-testid="stRadioOption"] {{ width: 100%; min-height: 44px; display: flex; align-items: center;'
+        " box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; border-radius: 10px;"
+        " transition: background-color .15s, border-color .15s; }"
+        f' {_NAV} [data-testid="stRadioOption"]:hover {{ background: var(--tk-surface-2); }}'
+        f' {_NAV} [data-testid="stRadioOption"][data-selected] {{'
+        " background: color-mix(in srgb, var(--tk-accent) 16%, transparent);"
+        " border-color: color-mix(in srgb, var(--tk-accent) 45%, transparent); }"
+        f' {_NAV} [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p {{'
+        " font-size: 1.05rem; line-height: 1.35; }"
+        f' {_NAV} [data-testid="stRadioOption"] [data-testid="stIconMaterial"] {{ font-size: 1.3rem; }}'
     )
 
 
