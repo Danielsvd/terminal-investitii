@@ -239,8 +239,9 @@ def count_alerts(flags):
 
 # --- Verdictul final (aprobat de Daniel 13.11): tabel de reguli, nu sumă de puncte -------------------
 
-VERDICT_NOTE_US = ("Descriptiv: pe SUA (2012–2026) nici scorul fundamental, nici momentul n-au arătat putere de "
-                   "predicție în testul istoric; UE netestat.")
+VERDICT_NOTE_US = ("Descriptiv: pe SUA nici scorul fundamental (testat 2021–2026), nici momentul (testat 2012–2025) "
+                   "n-au arătat putere de predicție în testul istoric; UE netestat.")
+VERDICT_NOTE_NONE = "Fără scor: nu există bază pentru un verdict (simbolul nu are scor fundamental)."
 
 
 def verdict_note(is_bvb, history_text=None):

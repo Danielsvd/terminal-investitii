@@ -190,3 +190,15 @@ def test_no_streamlit():
     for mod in (ev, entities):
         src = inspect.getsource(mod)
         assert "import streamlit" not in src and "requests" not in src
+
+
+def test_product_alias_only_gives_no_direction():
+    from data.entities import PRODUCT_ALIASES
+    m = ev.EntityMatcher(SYMS + ["META", "GOOGL"], NAMES, COMMON_TICKER_WORDS, PRODUCT_ALIASES)
+    e = ev.detect_events([_item("Fake Toyota airbag recall notices circulating on WhatsApp, Hongkongers warned", 1)],
+                         m, COMPETITOR_GROUPS, NOW, universes.market_of)[0]
+    assert e["affected"] == [("META", 0)] and e["beneficiaries"] == {} and e["severity"] == 1
+    assert ev.touches(e, {"GOOGL", "META"}) == []
+    strong = ev.detect_events([_item("Meta hit by WhatsApp data breach", 1)], m, COMPETITOR_GROUPS, NOW,
+                              universes.market_of)[0]
+    assert strong["affected"][0] == ("META", -1) and "GOOGL" in strong["beneficiaries"]

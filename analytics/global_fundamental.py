@@ -49,14 +49,15 @@ MIN_PILLARS = 2
 
 PILLAR_LABELS = {"evaluare": "Evaluare", "calitate": "Calitate", "sanatate": "Sănătate financiară",
                  "rentabilitate": "Rentabilitate"}
-# Testul istoric (tools/backtest_fundamental.py, rulat de Daniel pe 22.10.2026): 56 de companii S&P 500,
-# 2021–2026, exces față de media universului. IC 6 luni +0,04, 12 luni −0,03; banda ≥ 70 a rămas în urmă
-# (median −10,9% la 12 luni, 33% din cazuri peste medie). Decizia lui Daniel: scorul și etichetele rămân,
-# dar ca descriere, nu ca predicție (la fel ca momentul tehnic pe SUA).
-TEST_NOTE = ("Scor descriptiv, fără putere de predicție demonstrată: în testul istoric pe SUA (56 de companii "
-             "S&P 500, 2022–2026) corelația scor → randament a fost ≈ 0 (IC −0,03 la 12 luni), iar banda "
-             "FAVORABIL a rămas în urma mediei (median −10,9% la 12 luni). Etichetele descriu compania, nu "
-             "prezic prețul. UE: netestat.")
+# Testul istoric (tools/backtest_fundamental.py). Prima rulare (22.10.2026): IC 12 luni −0,03, banda ≥ 70 în urma
+# mediei. Ultima rulare (Daniel, 14.11.2026, varianta 1 a evaluării): 57 de companii, 2021–2026, IC 12 luni +0,135
+# (t +2,23, optimist), dar pe benzi invers: scor 0–40 median +4,0% față de medie, scor 70–100 median −4,9%. Cu ~4 ani
+# de situații Yahoo, concluzia rămâne aceeași: scorul descrie compania, nu prezice prețul (decizia lui Daniel).
+TEST_NOTE = ("Scor descriptiv, fără putere de predicție demonstrată: în testul istoric pe SUA (57 de companii, "
+             "2021–2026) corelația scor → randament la 12 luni a fost slab pozitivă (+0,14), dar companiile cu scor "
+             "sub 40 au avut cel mai mare câștig față de medie (median +4,0%), iar cele cu scor ≥ 70 au rămas în urmă "
+             "(median −4,9%); eșantion mic (~4 ani de situații). Etichetele descriu compania, nu prezic prețul. "
+             "UE: netestat.")
 
 
 def _num(x):

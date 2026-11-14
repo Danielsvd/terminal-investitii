@@ -130,8 +130,9 @@ class EntityMatcher:
     `symbols`: simbolurile urmărite; `names`: {simbol: (nume, alias...)}; `common`: tickere care nu se potrivesc
     după ticker. Numele: cu majuscule exact sau totul cu majuscule; tickerul: ≥ 3 litere, doar cu majuscule."""
 
-    def __init__(self, symbols, names, common=frozenset()):
+    def __init__(self, symbols, names, common=frozenset(), weak=frozenset()):
         self.term_to_symbols = {}
+        self.weak_terms = {v for w in weak for v in (w, w.upper())}   # mărci/produse: mențiune slabă
         for sym in symbols:
             for n in names.get(sym, ()):
                 for variant in {n, n.upper()}:
@@ -150,6 +151,16 @@ class EntityMatcher:
         for m in self.regex.finditer(str(text)):
             for sym in self.term_to_symbols.get(m.group(0), ()):
                 out.setdefault(sym, []).append(m.start())
+        return out
+
+    def strong(self, text):
+        """Simbolurile numite prin numele companiei, persoane sau ticker (nu doar printr-o marcă/un produs)."""
+        out = set()
+        if not self.regex or not text:
+            return out
+        for m in self.regex.finditer(str(text)):
+            if m.group(0) not in self.weak_terms:
+                out |= set(self.term_to_symbols.get(m.group(0), ()))
         return out
 
     def find(self, text):
@@ -295,18 +306,19 @@ def detect_events(items, matcher, groups, now, market_of, max_age_hours=MAX_AGE_
             t = types[0]
             spec = EVENT_TYPES[t]
             primary = subject(title, t, syms, matcher)
+            direction = spec["direction"] if primary in matcher.strong(title) else 0   # doar prin produs → fără direcție
             key = _event_key(t, syms, it["date_obj"].date())
             ev = events.get(key)
             if ev is None:
                 ben = {}
-                if spec["share_shift"] and spec["direction"] < 0:
+                if spec["share_shift"] and direction < 0:
                     # concurenții, inclusiv cei menționați în același titlu („AMD crushes as Nvidia scandal...”)
                     for c, gs in competitors(primary, groups).items():
                         ben[c] = list(gs)
                 ev = events[key] = {
-                    "key": key, "kind": "companie", "type": t, "label": spec["label"], "direction": spec["direction"],
-                    "severity": spec["severity"],
-                    "affected": [(primary, spec["direction"])] + [(s, 0) for s in syms if s != primary and s not in ben],
+                    "key": key, "kind": "companie", "type": t, "label": spec["label"], "direction": direction,
+                    "severity": spec["severity"] if direction else 1,
+                    "affected": [(primary, direction)] + [(s, 0) for s in syms if s != primary and s not in ben],
                     "beneficiaries": ben, "markets": {market_of(s) for s in syms}, "headlines": [],
                     "time": it["date_obj"], "other_types": types[1:]}
             ev["headlines"].append(head)
