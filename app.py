@@ -3617,7 +3617,7 @@ def get_fred_macro_data():
         'PCEPILFE': 'Core PCE (indice, favorita FED)',
         'UNRATE': 'Rata Șomajului (%)',
         'PAYEMS': 'Nonfarm Payrolls (NFP Oficial)',
-        'ADPCHGS': 'ADP Private Payrolls',
+        macro_calc.FRED_ADP: 'ADP Private Payrolls',
         'JTSJOL': 'JOLTS (Job Openings)',
         'FEDFUNDS': 'Dobânda Cheie FED (%)',
         'RSAFS': 'Vânzări de Retail (Consum)',
@@ -3632,13 +3632,13 @@ def get_fred_macro_data():
     for code, name in indicators.items():
         try:
             df_item = web.DataReader(code, 'fred', start, end)
-            col_data = df_item[code].dropna()
+            col_data = macro_calc.fred_in_thousands(code, df_item[code].dropna())  # ADP: persoane → mii
             
             if len(col_data) >= 2:
                 val_curr = col_data.iloc[-1]
                 val_prev = col_data.iloc[-2]
                 
-                if code in ['PAYEMS', 'ADPCHGS', 'JTSJOL']:
+                if code in ['PAYEMS', macro_calc.FRED_ADP, 'JTSJOL']:
                     change = val_curr - val_prev
                     trend = f"{ro(change):+.0f}K"
                 elif code in ['UNRATE', 'FEDFUNDS', 'UMCSENT']:
