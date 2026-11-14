@@ -4094,9 +4094,11 @@ def render_ideas_etf(px, px_err, ctx):
     for idea in sorted(trend_ideas, key=lambda i: {"aliniat": 0, "neutru": 1, None: 1, "contra": 2}[i["alignment"]]):
         render_idea(idea, ctx)
 
-    # B. Rotația sectoarelor
-    for title, universe, cash, strategy in (("B. Rotația sectoarelor SUA (momentum dublu)", ideas_calc.US_SECTORS, cash_usd, "sector_us"),
-                                            ("B. Rotația sectoarelor Europa (STOXX 600)", ideas_calc.EU_SECTORS, cash_eur, "sector_eu")):
+    # B. Rotația sectoarelor: doar tabel informativ (decizia lui Daniel, 14.11.2026, după testul istoric 2000–2026:
+    # rotația SUA nu a bătut SPY pe ansamblu; cea UE e netestată). Fără fișe de idei; strategiile rămân în
+    # ideas.STRATEGIES pentru rândurile deja salvate în Idei_jurnal.
+    for title, universe, cash, strategy in (("B. Puterea sectoarelor SUA (momentum dublu, informativ)", ideas_calc.US_SECTORS, cash_usd, "sector_us"),
+                                            ("B. Puterea sectoarelor Europa (STOXX 600, informativ)", ideas_calc.EU_SECTORS, cash_eur, "sector_eu")):
         st.subheader(title)
         tab = ideas_calc.dual_momentum_table({s: _ideas_close(px, s) for s in universe}, cash)
         view = pd.DataFrame({
@@ -4105,25 +4107,16 @@ def render_ideas_etf(px, px_err, ctx):
             "Momentum 12-1": [_pct_txt(x) for x in tab["mom"]], "12 luni": [_pct_txt(x) for x in tab["r12"]],
             "Peste SMA 200": ["N/A" if x is None else ("da" if x else "nu") for x in tab["above200"]],
             "Bate numerarul": ["N/A" if x is None else ("da" if x else "nu") for x in tab["beats_cash"]],
-            "Idee": ["✅" if x else "" for x in tab["selected"]]})
+            "Primele 3": ["✅" if x else "" for x in tab["selected"]]})
         st.dataframe(view, hide_index=True, width='stretch')
         missing = [s for s, m in zip(tab["symbol"], tab["mom"]) if m is None]
         if missing:
             st.caption("Fără istoric suficient la Yahoo (simbol de verificat): " + ", ".join(missing) + ".")
-        sel = tab[tab["selected"]]
-        if sel.empty:
-            st.info("Niciun sector nu trece filtrul absolut: momentumul dublu indică numerar sau obligațiuni scurte.")
-        for _, r in sel.iterrows():
-            sym = r["symbol"]
-            thesis = (f"{universe[sym]} e pe locul {int(r['rank'])} după momentum 12-1 ({_pct_txt(r['mom'])}) și trece "
-                      f"filtrul absolut: peste SMA 200 și {_pct_txt(r['r12'])} pe 12 luni, peste numerar.")
-            steps = [("Fundamental", "nu se aplică (ETF sectorial)"),
-                     ("Tehnic", f"momentum 12-1 {_pct_txt(r['mom'])}; 12 luni {_pct_txt(r['r12'])}; peste SMA 200"),
-                     ("Regim", _align_txt(sym, quad))]
-            sig = f"loc {int(r['rank'])}; mom12-1 {_pct_txt(r['mom'])}; 12l {_pct_txt(r['r12'])}; {quad['key'] or 'fără cadran'}"
-            render_idea(_ideas_etf_idea(px, ctx, strategy, sym, universe[sym], thesis, steps, sig), ctx)
+        st.caption("Context, nu idee de tranzacționare: arată unde e puterea pieței (util la analiza unei acțiuni din "
+                   "sector). " + (ideas_calc.STRATEGIES["sector_us"]["test"] + "." if strategy == "sector_us" else
+                                  "Netestat; pe SUA, aceeași regulă nu a adus randament în plus față de piață."))
     st.caption("EU: simbolurile sectoarelor STOXX 600 nu au fost verificate din mediul de dezvoltare; cele fără date "
-               "apar mai sus. Execuție directă (sunt UCITS, în EUR).")
+               "apar mai sus.")
 
     # C. Regiuni
     st.subheader("C. Regiuni (în USD; ordinea e aceeași în lei)")
