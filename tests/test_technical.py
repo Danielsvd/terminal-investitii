@@ -83,3 +83,18 @@ def test_macd_is_zero_on_flat_prices_and_positive_on_uptrend():
     assert flat_line.abs().max() == 0 and flat_sig.abs().max() == 0
     up_line, _ = macd(pd.Series(np.arange(1.0, 101.0)))
     assert up_line.iloc[-1] > 0
+
+
+def test_regime_hit_rates_fata_de_rata_de_baza():
+    from analytics.technical import regime_hit_rates
+    fwd = [1.0, -1.0, 2.0, 3.0, float("nan")]      # ultima zi: randament viitor necunoscut
+    cl = [0, 0, 1, 0, 0]
+    r = regime_hit_rates(fwd, cl, 0)
+    # regim 0: [1, -1, 3] → 2/3 pozitive, medie 1; toate: [1, -1, 2, 3] → 3/4, medie 1,25
+    assert r["regime_n"] == 3 and r["base_n"] == 4
+    assert r["regime_rate"] == pytest.approx(200 / 3)
+    assert r["regime_mean"] == pytest.approx(1.0)
+    assert r["base_rate"] == pytest.approx(75.0)
+    assert r["base_mean"] == pytest.approx(1.25)
+    assert r["edge_pp"] == pytest.approx(200 / 3 - 75.0)
+    assert regime_hit_rates(fwd, cl, 2) is None

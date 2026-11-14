@@ -113,3 +113,69 @@ def test_flags_do_not_return_scores():
     for f in flags:
         assert set(f) == {"level", "title", "text"}
         assert not any(isinstance(v, (int, float)) and not math.isnan(v) for v in f.values() if not isinstance(v, str))
+
+
+def test_final_verdict_tabelul_aprobat():
+    from analytics.decision import final_verdict
+    assert final_verdict("FAVORABIL", 85) == ("CANDIDAT DE CUMPĂRARE", "up")
+    assert final_verdict("FAVORABIL", 79.9)[0] == "DE URMĂRIT, AȘTEAPTĂ MOMENTUL"
+    assert final_verdict("FAVORABIL", None)[0] == "DE URMĂRIT, AȘTEAPTĂ MOMENTUL"
+    assert final_verdict("NEUTRU", 100) == ("NEUTRU", "muted")
+    assert final_verdict("NEFAVORABIL", 100) == ("EVITĂ", "down")
+    assert final_verdict(None, 90) == ("FĂRĂ VERDICT", "muted")
+    assert final_verdict("DATE INSUFICIENTE", 90)[0] == "FĂRĂ VERDICT"
+
+
+def test_criteriile_lui_daniel():
+    from analytics.decision import my_criteria, growth, upside
+    vals = {"margin": 0.12, "rev_growth": 0.05, "ni_growth": -0.02, "debt": 0.45, "pe": 12.0, "pbv": 1.6,
+            "gn": 19.2, "roa": 0.05, "roe": None, "cap_ron": 2.5e9}
+    rows, ok, n = my_criteria(vals)
+    assert (ok, n) == (7, 9) and len(rows) == 10
+    by = {r["key"]: r for r in rows}
+    assert by["ni_growth"]["ok"] is False and by["pbv"]["ok"] is False and by["roe"]["ok"] is None
+    assert by["roa"]["ok"] is True                                    # pragul e inclusiv (≥ 5%)
+    assert by["margin"]["value"] == "12,0%" and by["cap_ron"]["value"] == "2,50 mld. lei"
+    assert my_criteria({"pe": -8.0})[0][4]["ok"] is False             # P/E negativ (pierdere) nu trece
+    assert growth(110, 100) == pytest.approx(0.10) and growth(5, -2) is None and growth(None, 1) is None
+    assert upside(120, 100) == pytest.approx(0.20) and upside(120, 0) is None
+
+
+def test_verdict_note_bvb_testat_sua_descriptiv():
+    from analytics.decision import verdict_note
+    from analytics.bvb_fundamental import final_verdict as bvb_two_step
+    _, _, hist = bvb_two_step(2, 85)                                  # FAVORABIL + moment ≥ 80
+    note = verdict_note(True, hist)
+    assert "testată pe BVB" in note and "+9,2%" in note and "N = 386" in note
+    assert "putere de predicție" in verdict_note(False) and "UE netestat" in verdict_note(False)
+
+
+def test_indatorarea_datorii_pe_active_cu_levierul_echivalent():
+    from analytics.decision import my_criteria
+    row = lambda v: next(r for r in my_criteria({"debt": v})[0] if r["key"] == "debt")
+    assert row(0.70)["ok"] is True and row(0.7001)["ok"] is False
+    assert row(0.70)["value"] == "70,0% (levier 2,33)" and row(0.50)["value"] == "50,0% (levier 1,00)"
+    assert row(1.2)["value"] == "120,0% (capital propriu negativ)" and row(1.2)["ok"] is False
+    assert "2,33" in row(0.5)["threshold"]
+
+
+# --- Sentiment: praguri comune și fereastra știrilor (14.11) ---
+
+def test_sentiment_band_praguri():
+    from analytics.decision import sentiment_band
+    assert sentiment_band(-0.08) == ("Neutru", "muted")       # AAPL 13.11: cardul spunea „Pesimism”
+    assert sentiment_band(0.15) == ("Neutru", "muted")        # pragul exact rămâne neutru (ca în Context: s > 0,15)
+    assert sentiment_band(0.16) == ("Optimism", "up")
+    assert sentiment_band(0.25) == ("Euforie media", "up")
+    assert sentiment_band(-0.16) == ("Pesimism", "down")
+    assert sentiment_band(-0.25) == ("Panică", "down")
+    assert sentiment_band(None) == ("N/A", "muted")
+    assert sentiment_band(float("nan")) == ("N/A", "muted")
+
+
+def test_news_window():
+    from analytics.decision import news_window
+    items = [{"date_str": "2026-11-13 18:00"}, {"date_str": "2026-11-10 09:30"}, {"title": "fără dată"}]
+    assert news_window(items) == "3 titluri, 10.11–13.11"
+    assert news_window([{"date_str": "2026-11-13 18:00"}]) == "1 titlu, 13.11"
+    assert news_window([]) == "0 titluri"

@@ -143,6 +143,23 @@ class FakeTicker:
     def fast_info(self):
         return _FastInfo(self.ticker)
 
+    def get_earnings_dates(self, limit=12):
+        # Idei și strategii: ultimul anunț acum 20 de zile (surpriză +5%), următorul peste 6 zile (steag „rezultate”).
+        if self.ticker.endswith(".RO"):
+            return None
+        idx = pd.DatetimeIndex([TODAY + pd.Timedelta(days=6), TODAY - pd.Timedelta(days=20),
+                                TODAY - pd.Timedelta(days=111)]).tz_localize("America/New_York")
+        return pd.DataFrame({"EPS Estimate": [1.2, 1.0, 0.9], "Reported EPS": [np.nan, 1.05, 0.95],
+                             "Surprise(%)": [np.nan, 5.0, 5.6]}, index=idx)
+
+    @property
+    def eps_trend(self):
+        if self.ticker.endswith(".RO"):
+            return None
+        return pd.DataFrame({"current": [1.1, 1.2, 4.6, 5.1], "7daysAgo": [1.1, 1.2, 4.6, 5.1],
+                             "30daysAgo": [1.08, 1.18, 4.55, 5.0], "60daysAgo": [1.06, 1.15, 4.5, 4.95],
+                             "90daysAgo": [1.05, 1.1, 4.4, 4.9]}, index=["0q", "+1q", "0y", "+1y"])
+
     @property
     def earnings_history(self):
         if self.ticker.endswith(".RO"):
@@ -280,8 +297,8 @@ def fake_fred(code, source, start, end):
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
-            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5}[code]
-    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10") else 0.0
+            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5, "CFNAIMA3": 0.25}[code]
+    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10", "CFNAIMA3") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)
 
 
@@ -297,7 +314,12 @@ def fake_feed(url):
             summary="<p>Rezumat cu <a href='x'>HTML</a> netăiat corect " + "text " * 80,
             published_parsed=ts, updated_parsed=ts, published="x")
     feed = types.SimpleNamespace(get=lambda k, d=None: "Ziarul Financiar Test" if k == "title" else d)
-    return types.SimpleNamespace(entries=[entry(i) for i in range(6)], feed=feed)
+    entries = [entry(i) for i in range(6)]
+    if "s=NVDA," in url:     # Radar evenimente: un eveniment cu beneficiari (fluxul Yahoo pe grupul NVDA, MSFT...)
+        ts = time.gmtime(time.time() - 2 * 3600)
+        entries.append(types.SimpleNamespace(title="Nvidia faces espionage probe; shares fall", link="https://example.com/n",
+                                             summary="", published_parsed=ts, updated_parsed=ts, published="x"))
+    return types.SimpleNamespace(entries=entries, feed=feed)
 
 
 # --------------------------------------------------------------------------
@@ -368,9 +390,13 @@ class FakeWorksheet:
 
     def append_row(self, row, *a, **k):
         APPENDED.append((self.name, list(row)))
+        if self.name in ("Idei_jurnal", "Evenimente_jurnal"):   # jurnalele: rândul rămâne în foaie (se citește înapoi)
+            SHEETS[self.name].append(list(row))
 
     def append_rows(self, rows, *a, **k):
-        pass
+        if self.name == "Evenimente_jurnal":    # jurnalul radarului: rândurile rămân în foaie
+            SHEETS[self.name].extend(list(r) for r in rows)
+            APPENDED.extend((self.name, list(r)) for r in rows)
 
     def find(self, *a, **k):
         return None
@@ -387,6 +413,10 @@ class FakeSpreadsheet:
             import gspread
             raise gspread.exceptions.WorksheetNotFound(name)
         return FakeWorksheet(name)
+
+    def add_worksheet(self, title, rows=1000, cols=26):
+        SHEETS[title] = []
+        return FakeWorksheet(title)
 
 
 # Fișierele „Analiză companii” (Drive): un emitent cu șablon de bancă (sărit) și 8 emitenți cu date cumulate.
@@ -583,6 +613,7 @@ EXPECTED_MESSAGES = (
     "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
     "Fără opțiuni listate în Yahoo", "Yahoo nu a trimis lista de expirări", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
+    "e deja în jurnal azi",                       # Idei și strategii: a doua salvare a aceleiași idei în aceeași zi
     "Ședința e în desfășurare",                   # Rezumatul Zilei rulat în timpul ședinței (depinde de ceas)
     "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
@@ -699,19 +730,25 @@ def main():
     assert "expirarea **" in page_text() and "zile; aleasă din 20–45" in page_text(), "lipsește expirarea 20–45 de zile la AAPL"
 
     def master_matches_top(sym):
-        """Sinteza „Decizie Master AI”: pasul 1 are exact eticheta și scorul din secțiunea de scor de sus;
-        metoda veche e doar în arhivă (expander)."""
+        """„Verdict final”: pasul 1 are exact eticheta și scorul din secțiunea de scor de sus; verdictul vine din
+        tabelul de reguli; pașii 3 (criteriile tale) și 4 (evaluare) există."""
+        mets = {m.label: m for m in at.metric}
+        p1 = mets.get("Pasul 1 · Fundamental")
+        assert p1 is not None, f"lipsește verdictul final la {sym}"
+        label, detail = str(p1.value), str(p1.delta)
         texts = [str(m.value) for m in at.markdown]
-        master = [t for t in texts if "Pasul 1 · Fundamental" in t and "Pasul 3 · Context" in t]
-        assert master, f"lipsește sinteza Master AI în trei pași la {sym}"
-        m = re.search(r"Pasul 1 · Fundamental</span><br>\s*<span[^>]*>([^<]+)</span>\s*<span[^>]*>&nbsp;([^<]+)</span>", master[0])
-        assert m, f"pasul 1 necitibil la {sym}: {master[0][:200]!r}"
-        label, detail = m.group(1), m.group(2)
-        top = [t for t in texts if "Pasul 3 · Context" not in t and label in t and detail in t]
-        assert top, f"pasul 1 din Master AI ({label} {detail}) diferă de secțiunea de scor la {sym}"
-        assert "Pasul 3 · Context" in master[0] and "fără puncte" in master[0], f"lipsește pasul 3 la {sym}"
-        assert any("Metoda veche" in str(e.label) for e in at.expander), f"lipsește arhiva metodei vechi la {sym}"
-        print(f"{sym} Master AI pasul 1: {label} {detail}")
+        top = [t for t in texts if label in t and detail in t]
+        assert top, f"pasul 1 din verdict ({label} {detail}) diferă de secțiunea de scor la {sym}"
+        from analytics.decision import final_verdict
+        expect = final_verdict(label, None)[0]
+        banner = [t for t in texts if "Verdict (descriptiv)" in t]
+        assert banner, f"lipsește bannerul verdictului la {sym}"
+        if label != "FAVORABIL":                     # la FAVORABIL eticheta depinde și de moment
+            assert expect in banner[0], f"verdict {sym}: {label} → {expect}, pe pagină: {banner[0][:300]!r}"
+        assert "Pasul 3 · Criteriile tale" in mets and "Pasul 4 · Evaluare (DCF)" in mets, f"lipsesc pașii 3–4 la {sym}"
+        assert any(str(e.label).startswith("Criteriile tale") for e in at.expander), f"lipsește tabelul criteriilor la {sym}"
+        print(f"{sym} verdict: {label} {detail} | criterii {mets['Pasul 3 · Criteriile tale'].value} | "
+              f"evaluare {mets['Pasul 4 · Evaluare (DCF)'].value}")
 
     alpha_aapl = next((m for m in at.metric if m.label == "Alpha (1Y)"), None)
     alpha_help = alpha_aapl.proto.help if alpha_aapl is not None else ""
@@ -882,6 +919,9 @@ def main():
             at.toggle(key="ledger_curve").set_value(True).run()
             check(at, "3. Portofoliu cu curba reală din registru")
         if section == "4. Piață Globală":
+            # starea zilei: cardurile VIX și Fear & Greed (fără rețea → Fear & Greed N/A, fără excepție)
+            mets_pg = {m.label: str(m.value) for m in at.metric}
+            assert "VIX azi" in mets_pg and mets_pg.get("Fear & Greed (CNN) azi") == "N/A", mets_pg
             # verdictul macro pe piloni: 6 piloni, fiecare cu pondere, scor (sau N/A) și bază; ponderile dau 100
             pil = next((d.value for d in at.dataframe if {"Pilon", "Pondere %", "Scor", "Bază"} <= set(
                 getattr(getattr(d.value, "data", d.value), "columns", []))), None)
@@ -1076,6 +1116,68 @@ def main():
             check(at, "8. Watchlist (ștergere)")
             oks = [str(s.value) for s in at.success]
             assert any(s.startswith("Șters ") for s in oks), oks
+
+    radio().set_value("10. Idei și Strategii").run()
+    check(at, "10. Idei și Strategii")
+    subs = [str(h.value) for h in at.subheader]
+    for want in ("A. Trend pe clase de active", "C. Regiuni (în USD; ordinea e aceeași în lei)", "🌡️ Episoade de stres (VIX / VIX3M)"):
+        assert want in subs, f"Idei: lipsește subtitlul {want}: {subs}"
+    at.number_input(key="ideas_capital").set_value(200000.0).run()
+    check(at, "10. Idei (capital)")
+    at.button(key="ideas_scan_stocks_btn").click().run()
+    check(at, "10. Idei (acțiuni)")
+    # Datele sintetice au Piotroski 2/9 și datorie netă / EBITDA 5,3: toate acțiunile sunt excluse (calea de excludere).
+    # Cu filtrul de calitate neutralizat temporar rulează și fișa unei acțiuni (catalizatori, știri, steagul de rezultate).
+    from analytics import ideas as ideas_mod
+    real_filter = ideas_mod.quality_filter
+    ideas_mod.quality_filter = lambda *a: {**real_filter(*a), "excluded": False}
+    at.run()
+    check(at, "10. Idei (fișe acțiuni)")
+    ideas_mod.quality_filter = real_filter
+    stock_cards = [str(e.label) for e in at.expander if "Acțiuni cu catalizator" in str(e.label)]
+    assert stock_cards, "Idei: nicio fișă de acțiune cu filtrul de calitate neutralizat"
+    assert any("rezultate trimestriale peste 6 zile" in str(m.value) for m in at.markdown), "Idei: lipsește steagul de rezultate"
+    print(f"Idei, fișe acțiuni: {len(stock_cards)}, de ex. {stock_cards[0]}")
+    at.button(key="ideas_bvb_btn").click().run()
+    check(at, "10. Idei (BVB)")
+    saves = [b for b in at.button if b.label == "📓 Salvează în jurnal"]
+    print(f"Idei: {len(saves)} fișe; expandere: {len(at.expander)}")
+    assert saves, "Idei: nicio fișă de idee pe datele sintetice"
+    dims = [str(m.value) for m in at.markdown if "Dimensionare (risc 1%)" in str(m.value)]
+    assert dims and any(" × " in d for d in dims), f"Idei: dimensionarea lipsește: {dims[:3]}"
+    saves[0].click().run()
+    check(at, "10. Idei (salvare în jurnal)")
+    journal = [r for name, r in APPENDED if name == "Idei_jurnal"]
+    assert len(journal) == 2 and journal[0][0] == "Date", f"Idei: jurnalul nu a fost creat corect: {journal}"
+    print("Idei, rând în jurnal:", journal[1])
+    assert any("Salvată în Idei_jurnal" in str(s.value) for s in at.success), [str(s.value) for s in at.success]
+    jt = next((d.value for d in at.dataframe if "Strategie" in getattr(d.value, "columns", []) and "Exces" in getattr(d.value, "columns", [])), None)
+    assert jt is not None and len(jt) == 1, "Idei: tabelul jurnalului lipsește după salvare"
+    sv = next(b for b in at.button if b.label == "📓 Salvează în jurnal" and b.key == saves[0].key)
+    sv.click().run()
+    check(at, "10. Idei (salvare dublă)")
+    assert len([r for name, r in APPENDED if name == "Idei_jurnal"]) == 2, "Idei: a doua salvare în aceeași zi a scris"
+
+    at.button(key="radar_btn").click().run()
+    check(at, "10. Idei (radar evenimente)")
+    radar = [str(e.label) for e in at.expander if "Nvidia (NVDA)" in str(e.label)]
+    assert radar, f"Radar: lipsește evenimentul Nvidia: {[str(e.label) for e in at.expander][-8:]}"
+    ben = next((d.value for d in at.dataframe if "Grup" in getattr(d.value, "columns", [])), None)
+    assert ben is not None and {"AMD", "AVGO", "INTC"} <= set(ben["Simbol"]), "Radar: lipsesc beneficiarii AMD/AVGO/INTC"
+    ev_rows = [r for name, r in APPENDED if name == "Evenimente_jurnal"]
+    assert ev_rows and ev_rows[0][0] == "Data" and any(r[2] == "NVDA" and r[3] == "afectat" for r in ev_rows), ev_rows[:3]
+    n_before = len(ev_rows)
+    at.button(key="radar_btn").click().run()
+    check(at, "10. Idei (radar, a doua scanare)")
+    assert len([r for name, r in APPENDED if name == "Evenimente_jurnal"]) == n_before, "Radar: rânduri duble în jurnal"
+    print(f"Radar: {radar[0]}; rânduri în Evenimente_jurnal: {n_before - 1}")
+
+    radio().set_value("9. Glosar Economic").run()
+    check(at, "9. Glosar Economic")
+    assert len(at.expander) >= 20, len(at.expander)
+    at.text_input(key="glosar_cautare").set_value("aur").run()
+    check(at, "9. Glosar Economic (căutare „aur”)")
+    assert 0 < len(at.expander) < 20, len(at.expander)
 
     for w in sorted(set(app_warnings)):
         problems.append(f"[avertisment în codul aplicației] {w}")

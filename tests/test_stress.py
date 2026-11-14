@@ -35,3 +35,19 @@ def test_spread_credit():
     short = spread_stats(s.loc["2026-09-15":])
     assert short["d1m"] is not None and short["d1y"] is None
     assert spread_stats(None)["value"] is None
+
+
+def test_vix_si_fear_greed():
+    from analytics import stress as S
+    assert [S.vix_state(v) for v in (12, 15, 19.9, 20, 29.9, 30, None)] == \
+        ["calm", "normal", "normal", "tensiune", "tensiune", "frică", None]
+    assert [S.fg_state(v) for v in (10, 25, 44.9, 45, 54.9, 55, 74.9, 75, float("nan"))] == \
+        ["frică extremă", "frică", "frică", "neutru", "neutru", "lăcomie", "lăcomie", "lăcomie extremă", None]
+    p = {"fear_and_greed": {"score": 62.8, "rating": "greed", "timestamp": "2026-11-13T21:00:00+00:00",
+                            "previous_close": 58.1, "previous_1_week": "40.0"}}
+    r = S.parse_cnn_fear_greed(p)
+    assert r["score"] == 62.8 and r["label"] == "lăcomie" and r["prev_close"] == 58.1 and r["prev_week"] == 40.0
+    assert r["date"].year == 2026
+    assert S.parse_cnn_fear_greed({}) is None and S.parse_cnn_fear_greed(None) is None
+    assert S.parse_cnn_fear_greed({"fear_and_greed": {"score": "n/a"}}) is None
+    assert S.parse_cnn_fear_greed({"fear_and_greed": {"score": 150}}) is None

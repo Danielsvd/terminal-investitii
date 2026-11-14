@@ -129,3 +129,25 @@ def price_changes(window_close, full_close):
             out["day"] = last - prev
             out["day_pct"] = (last - prev) / prev * 100.0
     return out
+
+
+def regime_hit_rates(fwd_returns, clusters, current):
+    """Rata de reușită a regimului curent față de rata de bază (toate zilele).
+
+    `fwd_returns`: randamentul următoarelor 20 de ședințe pentru fiecare zi (NaN la final);
+    `clusters`: eticheta regimului pe aceeași axă; `current`: regimul de azi.
+    Întoarce {regime_rate, regime_mean, regime_n, base_rate, base_mean, base_n, edge_pp} (rate în %),
+    sau None dacă regimul curent nu are zile cu randament viitor cunoscut.
+    Atenție: rezultatul e în eșantion (regimurile sunt învățate pe tot istoricul) și ferestrele de
+    20 de zile se suprapun, deci N nu înseamnă N observații independente.
+    """
+    df = pd.DataFrame({"fwd": pd.Series(fwd_returns, dtype="float64").to_numpy(),
+                       "cl": pd.Series(clusters).to_numpy()}).dropna(subset=["fwd"])
+    reg = df.loc[df["cl"] == current, "fwd"]
+    if reg.empty:
+        return None
+    base = df["fwd"]
+    regime_rate, base_rate = float((reg > 0).mean() * 100), float((base > 0).mean() * 100)
+    return {"regime_rate": regime_rate, "regime_mean": float(reg.mean()), "regime_n": int(len(reg)),
+            "base_rate": base_rate, "base_mean": float(base.mean()), "base_n": int(len(base)),
+            "edge_pp": regime_rate - base_rate}

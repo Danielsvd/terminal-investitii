@@ -74,8 +74,12 @@ def test_intrarea_la_data_calculata_de_mana():
     assert inp["piotroski"]["prior_year"] == pd.Timestamp("2022-12-31")
     row = bf.score_row("TEST", "2024-06-30", inp, fy)
     assert row["fund_score"] == fundamental_score(inp)["score"]
-    # E/P 5% / AAA 5% = 1× → componenta ia 0
-    assert row["c_E/P față de AAA"] == 0.0
+    # E/P față de AAA e informativ din 14.11: nu mai apare printre componentele cu notă
+    assert "c_E/P față de AAA" not in row and "c_DCF invers" in row
+    # Cifra de afaceri publicată la dată: 2021 = 100, 2023 = 120 → CAGR pe 2 ani = 1,2^(1/2) − 1 = 9,545%
+    assert inp["rev_growth"] == pytest.approx(1.2 ** 0.5 - 1) and inp["rev_growth_years"] == 2
+    assert row["rev_growth"] == pytest.approx(1.2 ** 0.5 - 1)
+    assert inp["eps_growth"] is None                                     # fără rândul EPS în situații: N/A, nu 0
 
 
 def test_fara_informatie_din_viitor():
@@ -151,3 +155,19 @@ def test_rulare_script(tmp_path, monkeypatch, capsys):
     assert {"benzi", "cincimi"} <= set(rez["grupare"]) and "fund_score" in set(rez["scor"])
     printed = capsys.readouterr().out
     assert "Fără date: LIPSA" in printed and "ani fiscali distincți" in printed and "Orientativ" in printed
+
+
+def test_varianta_2_pentru_comparatie():
+    # Intrare sintetică: DCF invers 0,5 (vezi test_global_fundamental._industrial), PEG 13,33 / 10 = 1,333 → 0,833;
+    # varianta 2: evaluare (0,5 + 0,833) / 2 = 0,667; calitate 6/9, sănătate 2/3 → scor 66,7
+    from tests.test_global_fundamental import _industrial
+    inp = _industrial()
+    res = fundamental_score(inp)
+    v = bf.variant_2(res, inp)
+    assert v["v_peg"] == pytest.approx((3 - 4 / 3) / 2 * 100)
+    assert v["v2_evaluare"] == pytest.approx((0.5 + (3 - 4 / 3) / 2) / 2 * 100)
+    assert v["v2_fund_score"] == pytest.approx(66.7)
+    assert res["score"] == pytest.approx(61.1)                          # varianta 1 (aplicația) rămâne 61,1
+    # Fără PEG (creștere EPS lipsă), varianta 2 = evaluarea doar din DCF invers
+    v = bf.variant_2(fundamental_score(_industrial(eps_growth=None)), _industrial(eps_growth=None))
+    assert v["v_peg"] is None and v["v2_evaluare"] == pytest.approx(50.0)

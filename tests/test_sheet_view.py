@@ -97,3 +97,13 @@ def test_global_monede_amestecate_pe_rand():
 def test_global_gol():
     df, units, cur = global_view([])
     assert df.empty and units == {} and cur.empty
+
+
+def test_text_columns_na():
+    import pandas as pd
+    from data.sheet_view import text_columns_na
+    df = pd.DataFrame({"Raportare": ["Q2 26", None, ""], "P/E": [10.0, float("nan"), 5.0]})
+    out = text_columns_na(df, {"P/E": ""})
+    assert list(out["Raportare"]) == ["Q2 26", "N/A", "N/A"]
+    assert out["P/E"].isna().tolist() == [False, True, False]          # numericul rămâne numeric
+    assert df["Raportare"].iloc[0] == "Q2 26" and pd.isna(df["Raportare"].iloc[1])   # originalul neatins

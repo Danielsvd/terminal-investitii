@@ -608,3 +608,20 @@ def test_marja_aaa_negativa_si_date_lipsa():
     assert aaa_treasury_spread(pd.Series([5.0], index=idx), pd.Series([4.0], index=pd.to_datetime(["2026-08-01"]))) is None
     assert aaa_treasury_spread(None, pd.Series([4.0], index=idx)) is None
     assert aaa_treasury_spread(pd.Series(dtype=float), pd.Series([4.0], index=idx)) is None
+
+
+def test_peg_si_cagr_eps():
+    import pandas as pd
+    from analytics import fundamentals as F
+    assert F.eps_cagr(2.0, 1.0, 3) == pytest.approx(2 ** (1 / 3) - 1)
+    assert F.eps_cagr(1.0, -1.0, 3) is None and F.eps_cagr(None, 1.0, 3) is None
+    assert F.peg_ratio(20.0, 0.20) == pytest.approx(1.0)
+    assert F.peg_ratio(-5.0, 0.2) is None and F.peg_ratio(20.0, -0.1) is None and F.peg_ratio(None, 0.1) is None
+    # 4 ani de raportare (Yahoo: coloane = date, cea mai recentă prima); 2,662 / 2,0 pe 3 ani = +10%/an
+    cols = pd.to_datetime(["2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31"])
+    inc = pd.DataFrame([[2.662, 2.42, 2.2, 2.0]], index=["Diluted EPS"], columns=cols)
+    g = F.eps_growth_statements(inc)
+    assert g["growth"] == pytest.approx(0.10, abs=2e-4) and g["eps_old"] == 2.0
+    assert F.peg_ratio(15.0, g["growth"]) == pytest.approx(1.5, abs=0.01)
+    assert F.eps_growth_statements(inc.iloc[:, :2]) is None          # fără capătul de acum 3 ani
+    assert F.eps_growth_statements(None) is None

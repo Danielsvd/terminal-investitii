@@ -146,10 +146,22 @@ def premium_css():
         ' div[data-testid="stMetric"] [data-testid="stMetricDelta"] { justify-content: center; text-align: center; }'
         ' div[data-testid="stMetric"] [data-testid="stMetricLabel"] { grid-template-columns: auto auto; }'
         ' div[data-testid="stMetric"] div:has(> [data-testid="stMetricDelta"]) { justify-content: center; }'
+        # valoarea principală colorată după semn (st.metric colorează doar delta): containerul cu cheia
+        # „semn-poz-…” / „semn-neg-…” primește clasa st-key-…, vezi signed_key()
+        ' [class*="st-key-semn-poz-"] [data-testid="stMetricValue"] { color: var(--tk-up); }'
+        ' [class*="st-key-semn-neg-"] [data-testid="stMetricValue"] { color: var(--tk-down); }'
+        # explicațiile „?” încap pe lățimea telefonului (pe S25 ieșeau din ecran: containerul are
+        # width: max-content, iar max-width-ul Streamlit e relativ la el, nu la ecran)
+        ' [data-testid="stTooltipContent"] { max-width: min(560px, calc(100vw - 24px)) !important;'
+        " white-space: normal !important; overflow-wrap: anywhere; }"
         " .fin-card:hover, .news-card:hover { border-color: var(--tk-border-strong); }"
         ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
         " background: var(--tk-surface); }"
         f" {inline} {{ box-shadow: {_CARD_SHADOW}; }}"
+        # bannerul „Mediul de piață SUA”: pe telefon verdictul și scorul se pun unul sub altul, centrate,
+        # ca cardurile VIX și Fear & Greed de dedesubt (cerut de Daniel pe 14.11); pe desktop rămâne neschimbat
+        " @media (max-width: 640px) { .macro-hero { justify-content: center !important; text-align: center; }"
+        " .macro-hero > div { flex-basis: 100% !important; } }"
     )
 
 
@@ -259,3 +271,13 @@ def theme_figure_dict(obj, key=None, up=None):
     if isinstance(obj, str) and key is not None and "color" in key.lower():
         return _plot_color(key, obj, up)
     return obj
+
+
+def signed_key(name, value):
+    """Cheia unui `st.container(key=...)` care colorează valoarea `st.metric` din el după semnul lui `value`
+    (CSS în premium_css): pozitiv → verde, negativ → roșu, zero sau lipsă → culoarea normală.
+    `name` trebuie să fie unic pe pagină (cheile Streamlit nu se pot repeta)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")
+    if value is None or value != value or value == 0:
+        return f"semn-zero-{slug}"
+    return f"semn-{'poz' if value > 0 else 'neg'}-{slug}"

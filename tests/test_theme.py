@@ -242,3 +242,10 @@ def test_theme_figure_dict_verde_crestere():
     assert "decreasing" not in out["data"][2]
     assert out["data"][3]["increasing"]["line"]["color"] == "#123456"             # culoare explicită păstrată
     assert theme.theme_figure_dict(fig)["data"][0]["marker"]["color"][0] == "#3FB950"   # fără up: neschimbat
+
+
+def test_premium_css_centreaza_bannerul_macro_pe_telefon():
+    css = theme.premium_css()
+    assert "@media (max-width: 640px)" in css
+    assert ".macro-hero { justify-content: center !important; text-align: center; }" in css
+    assert ".macro-hero > div { flex-basis: 100% !important; }" in css

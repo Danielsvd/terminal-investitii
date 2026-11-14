@@ -19,6 +19,7 @@ NEWS_CAVEAT = "potrivirea știrilor cu emitentul e nesigură; netestat"
 PC_BULLISH, PC_BEARISH = 0.7, 1.1          # P/C pe open interest (praguri netestate)
 IV_RANK_HIGH, IV_RANK_LOW = 80.0, 20.0     # IV Rank (praguri netestate)
 SENT_POS, SENT_NEG = 0.15, -0.15           # scorul de sentiment al știrilor, între −1 și 1
+SENT_EXTREME = 0.25                        # |scor| ≥ 0,25: euforie / panică (aceeași scară, netestat)
 Q_LOW, Q_HIGH = 0.7, 1.0                   # flux de numerar operațional / profit net
 
 
@@ -234,3 +235,128 @@ def context_flags(*, is_bvb, is_financial=False, altman_zone=None, spread=None, 
 def count_alerts(flags):
     """Numărul alertelor roșii și al atenționărilor (fără pozitive și informații)."""
     return sum(1 for f in flags if f["level"] in ("alerta", "atentie"))
+
+
+# --- Verdictul final (aprobat de Daniel 13.11): tabel de reguli, nu sumă de puncte -------------------
+
+VERDICT_NOTE_US = ("Descriptiv: pe SUA nici scorul fundamental (testat 2021–2026), nici momentul (testat 2012–2025) "
+                   "n-au arătat putere de predicție în testul istoric; UE netestat.")
+VERDICT_NOTE_NONE = "Fără scor: nu există bază pentru un verdict (simbolul nu are scor fundamental)."
+
+
+def verdict_note(is_bvb, history_text=None):
+    """Baza verdictului: la BVB rezultatul testului istoric pe combinația exactă fundamental × moment
+    (`bvb_fundamental.TWO_STEP`, 2017–2026); în rest, nota „descriptiv”."""
+    if is_bvb:
+        base = "Descriptiv, cu bază testată pe BVB (31 de emitenți, 2017–2026). "
+        return base + (history_text or "Combinația nu are rezultat istoric (date insuficiente).")
+    return VERDICT_NOTE_US
+
+
+def final_verdict(fund_label, moment_score):
+    """(eticheta, nivel) din tabelul aprobat:
+    FAVORABIL + moment ≥ 80 → CANDIDAT DE CUMPĂRARE; FAVORABIL + moment < 80 sau necunoscut → DE URMĂRIT;
+    NEUTRU → NEUTRU; NEFAVORABIL → EVITĂ; fără fundamental → FĂRĂ VERDICT.
+    Nivel: 'up' / 'warn' / 'muted' / 'down' (culoarea din temă)."""
+    if fund_label == "FAVORABIL":
+        if moment_band(moment_score) == "high":
+            return "CANDIDAT DE CUMPĂRARE", "up"
+        return "DE URMĂRIT, AȘTEAPTĂ MOMENTUL", "warn"
+    if fund_label == "NEUTRU":
+        return "NEUTRU", "muted"
+    if fund_label == "NEFAVORABIL":
+        return "EVITĂ", "down"
+    return "FĂRĂ VERDICT", "muted"
+
+
+# Criteriile minime ale lui Daniel („Hartă în investiții”): (cheie, nume, prag afișat, test)
+MY_CRITERIA = (
+    ("margin", "Marjă de profit", "≥ 10%", lambda v: v >= 0.10),
+    ("rev_growth", "Cifra de afaceri", "în creștere", lambda v: v > 0),
+    ("ni_growth", "Profit net", "în creștere", lambda v: v > 0),
+    ("debt", "Grad de îndatorare (datorii totale / active totale)", "≤ 70% (≈ levier datorii / capital ≤ 2,33)",
+     lambda v: v <= 0.70),
+    ("pe", "P/E", "≤ 15", lambda v: 0 < v <= 15),
+    ("pbv", "P/BV", "≤ 1,5", lambda v: 0 < v <= 1.5),
+    ("gn", "GN (P/E × P/BV)", "≤ 22,5", lambda v: 0 < v <= 22.5),
+    ("roa", "ROA", "≥ 5%", lambda v: v >= 0.05),
+    ("roe", "ROE", "≥ 15%", lambda v: v >= 0.15),
+    ("cap_ron", "Capitalizare", "≥ 1 mld. lei", lambda v: v >= 1e9),
+)
+
+
+def _crit_value_txt(key, v):
+    if key == "debt":
+        lev = f"levier {ro(v / (1 - v)):.2f}" if v < 1 else "capital propriu negativ"
+        return f"{ro(v * 100):.1f}% ({lev})"
+    if key in ("margin", "debt", "roa", "roe"):
+        return f"{ro(v * 100):.1f}%"
+    if key in ("rev_growth", "ni_growth"):
+        return f"{ro(v * 100):+.1f}% față de anul precedent"
+    if key == "cap_ron":
+        return f"{ro(v / 1e9):.2f} mld. lei"
+    return f"{ro(v):.2f}"
+
+
+def my_criteria(values):
+    """Criteriile lui Daniel pe valorile companiei. `values`: cheie → număr (fracții la marje/ROA/ROE/datorii,
+    variație fracțională la creșteri, lei la capitalizare) sau None. P/E sau P/BV ≤ 0 (pierdere / capital negativ)
+    nu trec. Întoarce (rânduri, îndeplinite, evaluabile); rând = {name, threshold, value, ok (True/False/None)}."""
+    rows, ok_n, n = [], 0, 0
+    for key, name, thr, test in MY_CRITERIA:
+        v = _num(values.get(key))
+        ok = None if v is None else bool(test(v))
+        if ok is not None:
+            n += 1
+            ok_n += int(ok)
+        rows.append({"key": key, "name": name, "threshold": thr,
+                     "value": "N/A" if v is None else _crit_value_txt(key, v), "ok": ok})
+    return rows, ok_n, n
+
+
+def growth(new, old):
+    """Variația new / old − 1, doar când vechiul e pozitiv (altfel procentul nu are sens); None la lipsă."""
+    new, old = _num(new), _num(old)
+    if new is None or old is None or old <= 0:
+        return None
+    return new / old - 1.0
+
+
+def upside(target, price):
+    """Distanța până la o valoare țintă, în fracție: țintă / preț − 1; None la lipsă sau preț ≤ 0."""
+    target, price = _num(target), _num(price)
+    if target is None or price is None or price <= 0 or target <= 0:
+        return None
+    return target / price - 1.0
+
+
+# --- Sentimentul știrilor: un singur set de praguri pentru card, Context, sinteză și SWOT (14.11) -----
+
+def sentiment_band(score):
+    """(eticheta, nivel) pentru scorul FinBERT între −1 și +1, pe pragurile SENT_POS / SENT_NEG / SENT_EXTREME.
+    Nivel: 'up' / 'down' / 'muted'. Scor lipsă → ('N/A', 'muted')."""
+    s = _num(score)
+    if s is None:
+        return "N/A", "muted"
+    if s >= SENT_EXTREME:
+        return "Euforie media", "up"
+    if s > SENT_POS:
+        return "Optimism", "up"
+    if s <= -SENT_EXTREME:
+        return "Panică", "down"
+    if s < SENT_NEG:
+        return "Pesimism", "down"
+    return "Neutru", "muted"
+
+
+def news_window(items):
+    """„N titluri, dd.mm–dd.mm” din câmpul `date_str` („AAAA-LL-ZZ HH:MM”) al știrilor analizate.
+    Știrile fără dată se numără, dar nu intră în interval. Listă goală → „0 titluri”."""
+    items = list(items or [])
+    n = len(items)
+    head = f"{n} {'titlu' if n == 1 else 'titluri'}"
+    days = sorted(str(it.get("date_str") or "")[:10] for it in items if len(str(it.get("date_str") or "")) >= 10)
+    if not days:
+        return head
+    fmt = lambda d: f"{d[8:10]}.{d[5:7]}"
+    return head + (f", {fmt(days[0])}" if days[0] == days[-1] else f", {fmt(days[0])}–{fmt(days[-1])}")

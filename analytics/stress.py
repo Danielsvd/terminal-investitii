@@ -49,3 +49,55 @@ def spread_stats(series):
             out[key] = float(s.iloc[-1] - s[s.index <= cutoff].iloc[-1])
     out["pctile"] = percentile_rank(s)
     return out
+
+
+# --- Starea zilei: VIX și Fear & Greed (CNN) ---------------------------------------------------------
+
+VIX_BANDS = ((15.0, "calm"), (20.0, "normal"), (30.0, "tensiune"))   # peste 30: frică
+FG_BANDS = ((25.0, "frică extremă"), (45.0, "frică"), (55.0, "neutru"), (75.0, "lăcomie"))   # peste 75: lăcomie extremă
+FG_RATINGS = {"extreme fear": "frică extremă", "fear": "frică", "neutral": "neutru", "greed": "lăcomie",
+              "extreme greed": "lăcomie extremă"}
+
+
+def vix_state(vix):
+    """Eticheta VIX: sub 15 calm, 15–20 normal, 20–30 tensiune, peste 30 frică; None la lipsă."""
+    if vix is None or not np.isfinite(vix):
+        return None
+    for limit, label in VIX_BANDS:
+        if vix < limit:
+            return label
+    return "frică"
+
+
+def fg_state(score):
+    """Eticheta Fear & Greed după benzile CNN (0–25, 25–45, 45–55, 55–75, 75–100); None la lipsă."""
+    if score is None or not np.isfinite(score):
+        return None
+    for limit, label in FG_BANDS:
+        if score < limit:
+            return label
+    return "lăcomie extremă"
+
+
+def parse_cnn_fear_greed(payload):
+    """Răspunsul JSON CNN (`fear_and_greed`: score, rating, timestamp, previous_close, previous_1_week)
+    -> dict {score, label, date, prev_close, prev_week} sau None dacă lipsește scorul.
+
+    Eticheta vine din scor (benzile CNN), nu din textul lor, ca să fie mereu în română și consecventă."""
+    fg = (payload or {}).get("fear_and_greed") if isinstance(payload, dict) else None
+    if not isinstance(fg, dict):
+        return None
+
+    def _val(key):
+        try:
+            v = float(fg.get(key))
+        except (TypeError, ValueError):
+            return None
+        return v if np.isfinite(v) and 0 <= v <= 100 else None
+
+    score = _val("score")
+    if score is None:
+        return None
+    date = pd.to_datetime(fg.get("timestamp"), utc=True, errors="coerce")
+    return {"score": score, "label": fg_state(score), "date": None if pd.isna(date) else date,
+            "prev_close": _val("previous_close"), "prev_week": _val("previous_1_week")}

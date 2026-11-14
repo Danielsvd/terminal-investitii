@@ -15,7 +15,9 @@ from datetime import date, datetime
 from analytics import options as opt_calc
 from analytics.options import max_pain
 from analytics.macro import period_return, pillar_credit, credit_sentence
+from analytics.decision import SENT_EXTREME
 from data.helpers import num, now_ro, ro
+from analytics.technical import regime_hit_rates
 from ui import theme as ui_theme
 
 # Incarcare model de sentiment specializat pe finante (FinBERT)
@@ -193,7 +195,7 @@ def generate_ai_swot_analysis(info, h_score, z_val, mos_val, alpha, s_score, yie
     # --- STRENGTHS ---
     if h_score is not None and h_score >= 8: swot["Strengths"].append("Bilanț 'Safe Haven' (Sănătate financiară de elită).")
     if (num(info, 'profitMargins') or 0) > 0.15: swot["Strengths"].append(f"Profitabilitate peste medie în sectorul {sector}.")
-    if s_score is not None and s_score > 0.2: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
+    if s_score is not None and s_score >= SENT_EXTREME: swot["Strengths"].append("Narațiune extrem de pozitivă în media financiară.")
 
     # --- WEAKNESSES ---
     if _altman_distress(z_val): swot["Weaknesses"].append("Z-Score în zona de stres (Risc structural).")
@@ -225,9 +227,8 @@ def detect_market_regime_ai(hist_data):
         df_ml['Return'] = hist_data['Close'].pct_change(fill_method=None) * 100
         df_ml['Volatility'] = df_ml['Return'].rolling(window=10).std()
         
-        # Calculăm "Forward Return" la 20 de zile (ce s-a întâmplat după semnal)
-        # Shift(-20) aduce prețul din viitor în rândul curent pentru calcul
-        df_ml['Fwd_20d_Ret'] = df_ml['Return'].shift(-20).rolling(20).sum()
+        # Randamentul următoarelor 20 de ședințe, compus: Close(t+20) / Close(t) − 1 (înainte: suma randamentelor zilnice)
+        df_ml['Fwd_20d_Ret'] = (hist_data['Close'].shift(-20) / hist_data['Close'] - 1) * 100
         df_ml = df_ml.dropna(subset=['Return', 'Volatility'])
         
         # 2. Clustering K-Means (3 regimuri)
@@ -242,12 +243,14 @@ def detect_market_regime_ai(hist_data):
         
         # 3. LOGICA DE BACKTESTING
         # Analizăm toate zilele din trecut care au fost în același cluster cu ziua de azi
-        cluster_history = df_ml[df_ml['Cluster'] == current_cluster].dropna(subset=['Fwd_20d_Ret'])
+        hr = regime_hit_rates(df_ml['Fwd_20d_Ret'], df_ml['Cluster'], current_cluster)
         
-        if not cluster_history.empty:
-            win_rate = (cluster_history['Fwd_20d_Ret'] > 0).mean() * 100
-            avg_fwd_ret = cluster_history['Fwd_20d_Ret'].mean()
-            backtest_msg = f"📊 **Backtest:** Rata de succes istorică {ro(win_rate):.1f}% | Profit mediu forward (20z): {ro(avg_fwd_ret):+.2f}%"
+        if hr is not None:
+            backtest_msg = (
+                f"📊 <b>Istoric (în eșantion, netestat):</b> în acest regim, {ro(hr['regime_rate']):.1f}% din cele {hr['regime_n']} zile "
+                f"au urmat 20 de ședințe pe plus (medie {ro(hr['regime_mean']):+.2f}%) · toate zilele: "
+                f"{ro(hr['base_rate']):.1f}% (medie {ro(hr['base_mean']):+.2f}%) · diferență {ro(hr['edge_pp']):+.1f} pp. "
+                "Regimurile sunt învățate pe tot istoricul și ferestrele se suprapun: diferența nu dovedește un avantaj.")
         else:
             backtest_msg = "ℹ️ Date istorice insuficiente pentru un backtest relevant."
 
@@ -489,177 +492,6 @@ def _options_analysis_cached(ticker_sym, dividend_rate=None):
         "missing": missing,
         "timestamp": now_ro().strftime("%H:%M")
     }
-
-def calculate_master_ai_score(info, hist, h_score, mos_val, inst_pct, rvol, s_score, opt_data, spread, z_score, q_ratio, regime_msg):
-    """
-    Sistem de Decizie Multicriterial (10 Piloni).
-    Punctaj maxim 100. Include penalizări drastice (Red Flags) pentru a preveni 'capcanele valorii'.
-    """
-    score = 0
-    reasons = []
-    # Pilonii fundamentali pentru care nu există date. Un pilon lipsă nu primește puncte
-    # și nu e penalizat; dacă lipsesc prea mulți, verdictul devine „DATE INSUFICIENTE".
-    missing = []
-
-    # 1. EVALUARE (DCF Margin of Safety) - MAX 20 puncte
-    if mos_val is None:
-        missing.append("evaluare DCF")
-        reasons.append("ℹ️ **Evaluare:** DCF indisponibil sau neaplicabil acestui emitent (vezi motivul în calculatorul de valoare intrinsecă). Pilon neinclus în scor.")
-    elif mos_val > 25:
-        score += 20
-        reasons.append("✅ **Subevaluare Masivă:** Discount excelent față de valoarea intrinsecă (Model DCF).")
-    elif mos_val > 5:
-        score += 10
-        reasons.append("✅ **Preț Corect:** Acțiunea se tranzacționează în limite rezonabile de evaluare.")
-    elif mos_val < -15:
-        score += 0
-        reasons.append("🚨 **Supraevaluare Critică:** Prețul este nejustificat de mare matematic. Premium periculos.")
-    else:
-        score += 5
-        reasons.append("⚖️ **Evaluare Neutră:** Fără marjă de siguranță clară împotriva erorilor.")
-
-    # 2. SĂNĂTATE FINANCIARĂ & FALIMENT (Max 15 puncte)
-    if h_score is None:
-        missing.append("bilanț")
-        reasons.append("ℹ️ **Bilanț:** lipsesc datoriile, ROE și lichiditatea. Pilon neinclus în scor.")
-    elif h_score >= 8:
-        score += 15
-        reasons.append(f"✅ **Bilanț Fortăreață:** Scor de sănătate extrem de solid ({h_score}/10).")
-    elif h_score >= 5:
-        score += 7
-        reasons.append(f"⚖️ **Bilanț Mediu:** Datorii și lichiditate în limite acceptabile ({h_score}/10).")
-    else:
-        reasons.append(f"🚨 **Risc de Bilanț:** Sănătate financiară precară, grad de îndatorare mare ({h_score}/10).")
-        
-    if _altman_distress(z_score):
-        score -= 20 # Penalizare fatală
-        reasons.append("🚨 **ALERTĂ ALTMAN Z:** Risc statistic sever de faliment sau restructurare în următorii 2 ani!")
-
-    # 3. CALITATEA PROFITULUI (Cash-Flow) (Max 10 puncte)
-    if q_ratio is None:
-        missing.append("calitatea profitului")
-        reasons.append("ℹ️ **Calitatea profitului:** nu se poate evalua (date lipsă sau profit net negativ). Pilon neinclus în scor.")
-    elif q_ratio > 1.0:
-        score += 10
-        reasons.append("✅ **Cash Machine:** Compania generează mai mult cash real (în bancă) decât profit contabil.")
-    elif q_ratio > 0.7:
-        score += 5
-        reasons.append("✅ **Profit Calitativ:** Fluxurile de numerar susțin bine câștigurile raportate.")
-    else:
-        score -= 10 # Penalizare
-        reasons.append("⚠️ **Profit pe Hârtie:** Firma raportează profit, dar nu încasează cash. Risc de contabilitate creativă.")
-
-    # 4. SMART MONEY & VOLUM (Max 15 puncte)
-    if inst_pct is None:
-        missing.append("acționariat")
-        reasons.append("ℹ️ **Acționariat:** Yahoo nu a trimis deținerile instituționale. Pilon neinclus în scor.")
-    elif inst_pct > 60:
-        score += 10
-        reasons.append(f"✅ **Dominare Instituțională:** Balenele dețin {ro(inst_pct):.0f}%, oferind stabilitate prețului.")
-    elif inst_pct < 30:
-        reasons.append(f"⚠️ **Lipsă Instituții:** Doar {ro(inst_pct):.0f}% la fonduri. Preț expus la speculă de retail.")
-    else:
-        score += 5
-        
-    if rvol > 1.3:
-        score += 5
-        reasons.append("✅ **Momentum de Volum:** Activitate anormal de mare recent. Banii inteligenți se mișcă.")
-
-    # 5. PIAȚA DE OPȚIUNI & IV (Max 15 puncte)
-    if opt_data:
-        oi_pc = opt_data.get('oi_pc_ratio', 1)
-        iv = opt_data.get('iv', 50)
-        
-        if oi_pc < 0.7:
-            score += 10
-            reasons.append("✅ **Opțiuni Bullish:** Market Makerii văd pariuri masive pe creștere.")
-        elif oi_pc > 1.1:
-            score -= 10
-            reasons.append("🚨 **Frică în Opțiuni:** Număr disproporționat de contracte Put. Se așteaptă o cădere.")
-        else:
-            score += 5
-            
-        if iv < 30:
-            score += 5
-            reasons.append(f"✅ **Volatilitate (IV) Scăzută:** Primele de asigurare sunt ieftine ({ro(iv):.1f}%).")
-        elif iv > 50:
-            score -= 10 # Penalizare
-            reasons.append(f"⚠️ **IV Extem ({ro(iv):.1f}%):** Opțiunile sunt foarte scumpe. Piața așteaptă șocuri de preț.")
-
-    # 6. SENTIMENT NLP (Max 10 puncte)
-    if s_score > 0.15:
-        score += 10
-        reasons.append("✅ **Sentiment Media AI:** Știrile procesate de FinBERT sunt clar optimiste.")
-    elif s_score < -0.15:
-        score -= 5
-        reasons.append("🚨 **Presă Negativă:** Titlurile recente generează frică și presiune de vânzare.")
-    else:
-        score += 5
-
-    # 7. TEHNIC & TREND (Max 10 puncte)
-    try:
-        current_price = hist['Close'].iloc[-1]
-        sma50 = hist['SMA50'].iloc[-1]
-        rsi = hist['RSI'].iloc[-1]
-        
-        if current_price > sma50:
-            score += 5
-            reasons.append("✅ **Trend Tehnic:** Acțiunea navighează curat peste media mobilă (SMA 50).")
-        else:
-            reasons.append("⚠️ **Trend Descendent:** Prețul a rupt suportul de 50 de zile. Momentum negativ.")
-            
-        if rsi < 35:
-            score += 5
-            reasons.append("✅ **Oversold (Supra-vândut):** Indicatorul RSI sugerează o panică exagerată. Bun de intrare.")
-        elif rsi > 75:
-            score -= 15 # Penalizare gravă
-            reasons.append(f"🚨 **Overbought (RSI {ro(rsi):.0f}):** Acțiunea este extrem de supra-cumpărată. Corecție iminentă!")
-        else:
-            score += 5
-    except Exception as exc:  # înainte: except: gol
-        logger.warning("calculate_master_ai_score: %s", exc)
-        pass
-
-    # 8. MACROECONOMIE & REGIM (Max 5 puncte)
-    if spread is None:
-        reasons.append("ℹ️ **Macro:** curba randamentelor pieței acțiunii indisponibilă; fără puncte.")
-    elif spread > 0:
-        score += 5
-    else:
-        score -= 10
-        reasons.append("🚨 **Avertisment Macro:** Curba randamentelor 10Y-3M a pieței acțiunii inversată. Risc sistemic!")
-        
-    if "PANICĂ" in str(regime_msg).upper():
-        score -= 15 # Penalizare drastică
-        reasons.append("🚨 **Regim de Piață K-Means:** AI-ul detectează vânzări emoționale generalizate în piață.")
-
-    # Asigurăm intervalul strict 1-100
-    final_score = max(1, min(100, score))
-
-    # Ponderare Verdict Final
-    if final_score >= 75:
-        action, color = "CUMPĂRĂ (STRONG BUY)", "#3FB950"
-        advice = "Toate filtrele cuantice și fundamentale sunt aliniate pozitiv. Risc minim, potențial maxim."
-    elif final_score >= 55:
-        action, color = "ACUMULEAZĂ / HOLD", "#238636"
-        advice = "Companie robustă, dar prezintă 1-2 puncte slabe (ex: preț tehnic ridicat sau volatilitate). Intrări treptate."
-    elif final_score >= 40:
-        action, color = "ATENȚIE (NEUTRU)", "#D29922"
-        advice = "Semnale contradictorii puternice. De exemplu: fundamente bune, dar regim de piață panicat."
-    else:
-        action, color = "EVITĂ SAU VINDE", "#F85149"
-        advice = "Steaguri roșii critice: Risc de faliment, supraevaluare masivă, lipsă cash sau fugă instituțională."
-
-    # Cu cel puțin 3 din cei 4 piloni fundamentali lipsă, scorul descrie doar tehnicul și sentimentul.
-    if len(missing) >= 3:
-        action, color = "DATE INSUFICIENTE", "#8B949E"
-        advice = ("Lipsesc datele fundamentale (" + ", ".join(missing) + "). Scorul acoperă doar pilonii "
-                  "tehnici, de sentiment și macro și nu poate susține o decizie de cumpărare sau vânzare.")
-
-    # Sortăm lista ca să punem Steagurile Roșii (🚨) sus de tot
-    reasons.sort(key=lambda x: "🚨" not in x)
-
-    return final_score, action, color, advice, reasons
 
 class _OwnershipUnavailable(Exception):
     """Acționariatul nu a putut fi citit (eroare Yahoo). Excepțiile nu intră în cache: se reîncearcă la următoarea afișare."""

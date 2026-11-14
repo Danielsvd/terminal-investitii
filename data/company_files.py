@@ -240,3 +240,56 @@ def load_company(q_values, a_values):
         return df, [], missing
     clean, issues = validate(df)
     return add_ttm(clean), issues, missing
+
+
+def annual_eps_growth(df, years=3):
+    """CAGR-ul EPS anual din fișierul „Analiză companii”: EPS = profit net / acțiuni emise, din foaia anuală
+    (luni = 12), între ultimul an cu date și cu `years` ani înainte. dict {growth, eps_new, eps_old,
+    year_new, year_old, shares_changed} sau None (lipsă, EPS ≤ 0 la un capăt)."""
+    if df is None or df.empty:
+        return None
+    annual = df[(df["months"] == 12) & df["ni"].notna() & (df["shares"].fillna(0) > 0)]
+    if annual.empty:
+        return None
+    eps = {int(y): float(n) / float(s) for y, n, s in zip(annual["year"], annual["ni"], annual["shares"])}
+    shares = {int(y): float(s) for y, s in zip(annual["year"], annual["shares"])}
+    y_new = max(eps)
+    y_old = y_new - years
+    if y_old not in eps:
+        return None
+    e_new, e_old = eps[y_new], eps[y_old]
+    if e_new <= 0 or e_old <= 0:
+        growth = None
+    else:
+        growth = (e_new / e_old) ** (1.0 / years) - 1.0
+    ratio = shares[y_new] / shares[y_old]
+    # Numărul de acțiuni schimbat mult (split, acțiuni gratuite, majorare): EPS-urile nu mai sunt comparabile,
+    # deci creșterea nu se calculează (N/A), nu se „corectează”.
+    changed = not (0.8 <= ratio <= 1.25)
+    if changed:
+        growth = None
+    return {"growth": growth, "eps_new": e_new, "eps_old": e_old, "year_new": y_new, "year_old": y_old,
+            "shares_changed": changed}
+
+
+def annual_pair(df, field):
+    """Ultimii doi ani din foaia anuală (luni = 12) cu `field` completat: (an_nou, valoare_nouă, an_vechi, valoare_veche)
+    sau None. Pentru „cifra de afaceri / profitul în creștere” din criteriile lui Daniel."""
+    if df is None or df.empty or field not in df.columns:
+        return None
+    annual = df[(df["months"] == 12) & df[field].notna()].sort_values("year")
+    if len(annual) < 2:
+        return None
+    new, old = annual.iloc[-1], annual.iloc[-2]
+    return int(new["year"]), float(new[field]), int(old["year"]), float(old[field])
+
+
+def latest_ratio(df, num_field, den_field):
+    """num / den din cel mai recent raport (orice perioadă) cu ambele valori și numitor > 0: (raport, an, luni) sau None."""
+    if df is None or df.empty or num_field not in df.columns or den_field not in df.columns:
+        return None
+    rows = df[df[num_field].notna() & (df[den_field].fillna(0) > 0)].sort_values(["year", "months"])
+    if rows.empty:
+        return None
+    last = rows.iloc[-1]
+    return float(last[num_field]) / float(last[den_field]), int(last["year"]), int(last["months"])

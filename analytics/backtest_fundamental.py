@@ -25,7 +25,8 @@ import math
 import pandas as pd
 
 from analytics import fundamentals as fund
-from analytics.global_fundamental import fundamental_score
+from analytics.global_fundamental import MIN_PILLARS, PEG_SCALE, fundamental_score
+from analytics.scoring import linear_score
 from analytics.risk import beta_weekly
 
 PUBLICATION_LAG = pd.DateOffset(days=90)
@@ -205,7 +206,41 @@ def inputs_at(date, price, income, balance, cashflow, sector, symbol, rf, beta, 
                aaa_label="FRED AAA, ultima lună publicată",
                piotroski=fund.piotroski(inc, bal, cf), altman=alt,
                ebitda=lev["ebitda"], coverage=lev["interest_coverage"])
+    # Aceleași funcții ca aplicația, pe situațiile publicate la dată. EPS-ul din Yahoo poate să nu fie
+    # retratat după split-uri: PEG intră în notă doar când DCF-ul invers lipsește, deci efectul e limitat.
+    rev_g = fund.statement_cagr(inc, fund.REVENUE_ROWS)
+    eps_g = fund.statement_cagr(inc, fund.EPS_ROWS)
+    inp.update(rev_growth=(rev_g or {}).get("growth"), rev_growth_years=(rev_g or {}).get("years"),
+               eps_growth=(eps_g or {}).get("growth"), eps_growth_years=(eps_g or {}).get("years"))
     return inp, fy
+
+
+def _peg_score(inp):
+    """Nota PEG (0–1) independent de rolul ei în scor; None când PEG nu are sens sau lipsesc date."""
+    pe, eg = inp.get("pe"), inp.get("eps_growth")
+    if not (_num(pe) and pe > 0 and _num(eg) and eg > 0):
+        return None
+    return linear_score(pe / (eg * 100.0), *PEG_SCALE)
+
+
+def variant_2(res, inp):
+    """Varianta respinsă pe 14.11 (DCF invers și PEG ambele în notă, câte jumătate din pilonul Evaluare),
+    calculată în paralel ca testul istoric să le compare: v_peg (nota PEG), v2_evaluare, v2_fund_score.
+    Ca în aplicație: media doar pe ce are date, scorul doar cu minimum MIN_PILLARS piloni."""
+    out = {"v_peg": None, "v2_evaluare": None, "v2_fund_score": None}
+    if res.get("financial"):
+        return out
+    peg = _peg_score(inp)
+    out["v_peg"] = None if peg is None else peg * 100
+    pillars = {p["key"]: p for p in res["pillars"]}
+    dcf = next((c["score"] for c in pillars["evaluare"]["components"] if c["label"] == "DCF invers"), None)
+    parts = [x for x in (dcf, peg) if _num(x)]
+    ev = sum(parts) / len(parts) if parts else None
+    out["v2_evaluare"] = None if ev is None else ev * 100
+    present = [x for x in (ev, pillars["calitate"]["score"], pillars["sanatate"]["score"]) if _num(x)]
+    if len(present) >= MIN_PILLARS:
+        out["v2_fund_score"] = round(sum(present) / len(present) * 100, 1)
+    return out
 
 
 def score_row(symbol, date, inp, fiscal_year):
@@ -222,9 +257,11 @@ def score_row(symbol, date, inp, fiscal_year):
                 row[f"c_{c['label']}"] = None if c["score"] is None else c["score"] * 100
     rev = res.get("reverse_dcf")
     row["reverse_dcf_growth"] = None if not rev else rev["growth"]
+    row["rev_growth"], row["eps_growth"] = inp.get("rev_growth"), inp.get("eps_growth")
+    row.update(variant_2(res, inp))
     row["pe"], row["pbv"] = inp.get("pe"), inp.get("pbv")
     return row
 
 
-__all__ = ["statements_as_of", "value_as_of", "split_factor_after", "share_basis", "split_adjust_shares",
+__all__ = ["statements_as_of", "value_as_of", "split_factor_after", "share_basis", "split_adjust_shares", "variant_2",
            "beta_as_of", "inputs_at", "score_row", "PUBLICATION_LAG"]

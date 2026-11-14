@@ -864,3 +864,97 @@ def dcf_verdict(price, value, fcf_distorted, on_average_basis, band=VALUATION_NE
     if fcf_distorted and not on_average_basis:
         return DCF_NO_VERDICT, "none", diff
     return text, zone, diff
+
+
+# --- PEG (Peter Lynch) -------------------------------------------------------
+
+EPS_ROWS = ("Diluted EPS", "Basic EPS")
+
+
+def eps_cagr(eps_new, eps_old, years):
+    """Creșterea anuală compusă a EPS. None dacă un capăt lipsește sau e ≤ 0 (CAGR nedefinit)."""
+    if not (_is_num(eps_new) and _is_num(eps_old) and _is_num(years)) or years <= 0 or eps_old <= 0 or eps_new <= 0:
+        return None
+    return (eps_new / eps_old) ** (1.0 / years) - 1.0
+
+
+def peg_ratio(pe, growth):
+    """PEG = P/E ÷ creșterea anuală a EPS în procente (`growth` e fracție: 0,20 = 20%).
+    None la P/E ≤ 0 (pierdere), creștere ≤ 0 sau lipsă: PEG nu are sens acolo."""
+    if not (_is_num(pe) and _is_num(growth)) or pe <= 0 or growth <= 0:
+        return None
+    return pe / (growth * 100.0)
+
+
+def eps_growth_statements(annual_income, years=3):
+    """CAGR-ul EPS (diluat, altfel de bază) din contul de profit anual Yahoo, pe `years` ani.
+
+    Capătul vechi = raportarea cea mai apropiată de (ultima − `years` ani), la cel mult 6 luni distanță.
+    Întoarce dict {growth, eps_new, eps_old, date_new, date_old} sau None."""
+    df = _sorted_desc(annual_income)
+    if df is None:
+        return None
+    points = []
+    for col in range(df.shape[1]):
+        eps, date = stmt_value(df, EPS_ROWS, col), stmt_date(df, col)
+        if eps is not None and date is not None:
+            points.append((date, eps))
+    if len(points) < 2:
+        return None
+    date_new, eps_new = points[0]
+    target = date_new - pd.DateOffset(years=years)
+    date_old, eps_old = min(points[1:], key=lambda p: abs((p[0] - target).days))
+    if abs((date_old - target).days) > 183:
+        return None
+    span = (date_new - date_old).days / 365.25
+    growth = eps_cagr(eps_new, eps_old, span)
+    return {"growth": growth, "eps_new": eps_new, "eps_old": eps_old, "date_new": date_new, "date_old": date_old}
+
+
+def statement_cagr(annual_df, rows, max_years=3, min_years=2):
+    """CAGR-ul primului rând disponibil din `rows` în situațiile anuale Yahoo, pe cea mai lungă perioadă
+    între `min_years` și `max_years` ani (toleranță 6 luni la capete). Yahoo dă ~4 ani fiscali, deci de obicei 3.
+
+    Întoarce {growth, new, old, date_new, date_old, years} sau None (sub 2 puncte, perioadă prea scurtă,
+    capăt ≤ 0: CAGR nedefinit)."""
+    df = _sorted_desc(annual_df)
+    if df is None:
+        return None
+    points = []
+    for col in range(df.shape[1]):
+        v, d = stmt_value(df, rows, col), stmt_date(df, col)
+        if v is not None and d is not None:
+            points.append((d, v))
+    if len(points) < 2:
+        return None
+    date_new, v_new = points[0]
+    spans = [((date_new - d).days / 365.25, d, v) for d, v in points[1:]]
+    ok = [x for x in spans if min_years - 0.5 <= x[0] <= max_years + 0.5]
+    if not ok:
+        return None
+    span, date_old, v_old = max(ok, key=lambda x: x[0])
+    span = round(span)            # ani fiscali întregi (anii de 52/53 de săptămâni nu mută CAGR-ul)
+    growth = eps_cagr(v_new, v_old, span)
+    if growth is None:
+        return None
+    return {"growth": growth, "new": v_new, "old": v_old, "date_new": date_new, "date_old": date_old,
+            "years": span}
+
+
+def annual_pair_statements(annual_df, rows):
+    """Ultimii doi ani fiscali din situațiile anuale Yahoo pentru primul rând disponibil din `rows`:
+    (data_nouă, valoare_nouă, data_veche, valoare_veche) sau None."""
+    df = _sorted_desc(annual_df)
+    if df is None:
+        return None
+    points = []
+    for col in range(df.shape[1]):
+        v, d = stmt_value(df, rows, col), stmt_date(df, col)
+        if v is not None and d is not None:
+            points.append((d, v))
+        if len(points) == 2:
+            break
+    if len(points) < 2:
+        return None
+    (d_new, v_new), (d_old, v_old) = points
+    return d_new, v_new, d_old, v_old

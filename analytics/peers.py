@@ -224,3 +224,14 @@ def split_financial_peers(rows, sector, own_industry):
     kept = [row for row in rows if row.get("Industrie") and is_bank_industry(row["Industrie"]) == own_bank]
     excluded = [row["Simbol"] for row in rows if row not in kept]
     return kept, excluded, "bănci" if own_bank else "financiar nebancar"
+
+
+def peer_delta_color(label, own):
+    """`delta_color` pentru cardul „față de mediană”: culoarea arată sensul, nu un verdict.
+
+    P/E: mai mic decât mediana e verde („inverse”); P/E negativ sau zero (pierdere) → neutru, altfel
+    o companie pe pierdere ar ieși verde. ROE, ROA, marjă: mai mare e verde („normal”).
+    """
+    if label.startswith("P/E"):
+        return "inverse" if own is not None and own > 0 else "off"
+    return "normal"

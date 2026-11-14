@@ -149,3 +149,10 @@ def test_split_financial_peers_nu_filtreaza_fara_date_sau_in_alt_sector():
     assert split_financial_peers(rows, "Financial Services", None) == (rows, [], None)
     no_industry = [{"Simbol": "BAC"}, {"Simbol": "V", "Industrie": None}]
     assert split_financial_peers(no_industry, "Financial Services", "Banks - Diversified") == (no_industry, [], None)
+
+
+def test_peer_delta_color():
+    from analytics.peers import peer_delta_color
+    assert peer_delta_color("P/E", 12.0) == "inverse"            # sub mediană → verde
+    assert peer_delta_color("P/E", -4.9) == "off" and peer_delta_color("P/E", None) == "off"
+    assert peer_delta_color("ROE (%)", 10.0) == "normal" and peer_delta_color("Marjă netă (%)", -2.0) == "normal"
