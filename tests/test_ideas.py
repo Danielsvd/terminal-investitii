@@ -348,3 +348,16 @@ def test_details_use_romanian_format():
 def test_strategies_with_test_results():
     assert "−13,8%" in ideas.STRATEGIES["trend"]["test"] and "2013–2026" in ideas.STRATEGIES["sector_us"]["test"]
     assert "test" not in ideas.STRATEGIES["sector_eu"] and "test" not in ideas.STRATEGIES["stock"]
+
+
+def test_in_usd_conversion():
+    idx = pd.bdate_range("2026-01-05", periods=3)
+    eur_px = pd.Series([10.0, 10.0, 10.0], index=idx)
+    eurron = pd.Series([5.0, 5.1, 5.2], index=idx)
+    usdron = pd.Series([4.0, 4.0, 4.0], index=idx)
+    # 10 EUR × 5,0 lei / 4,0 lei = 12,5 USD ...
+    assert list(ideas.in_usd(eur_px, "EUR", usdron, eurron=eurron).round(4)) == [12.5, 12.75, 13.0]
+    gbp = pd.Series([1.0, 1.0, 1.0], index=idx)
+    assert list(ideas.in_usd(pd.Series(500.0, index=idx), "GBp", usdron, gbpron=gbp * 6.0)) == [7.5, 7.5, 7.5]
+    assert ideas.in_usd(eur_px, "USD", usdron).equals(ideas._series(eur_px))
+    assert ideas.in_usd(eur_px, "CHF", usdron).empty

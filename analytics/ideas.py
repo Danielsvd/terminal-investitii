@@ -299,9 +299,24 @@ def to_usd(close_ron, usdron):
     return (c / aligned).dropna()
 
 
+def in_usd(close, currency, usdron, eurron=None, gbpron=None):
+    """Prețurile unei linii UCITS convertite în USD prin cursurile în lei (EUR/USD = EURRON ÷ USDRON etc.), ca
+    verificarea corelației să compare același lucru: pe obligațiuni, mișcarea EUR/USD e cât mișcarea ETF-ului și
+    ar coborî corelația fără ca instrumentul să fie greșit. USD → neschimbat; valută fără curs → serie goală."""
+    c = _series(close)
+    if c.empty or currency == "USD":
+        return c
+    per_ron = {"EUR": eurron, "GBP": gbpron, "GBp": gbpron}.get(currency)
+    if per_ron is None:
+        return pd.Series(dtype="float64")
+    ron = c * _series(per_ron).reindex(c.index.union(_series(per_ron).index)).ffill(limit=5).reindex(c.index)
+    out = to_usd(ron.dropna(), usdron)
+    return out / 100 if currency == "GBp" else out
+
+
 def tracking_check(signal_close, ucits_close, min_weeks=26):
     """Corelația randamentelor săptămânale (vineri, pe ultimele 12 luni) dintre ETF-ul semnal și echivalentul UCITS.
-    dict corr, n (săptămâni comune), ok (corr ≥ 0,80; None sub `min_weeks`). Valute diferite scad corelația puțin."""
+    dict corr, n (săptămâni comune), ok (corr ≥ 0,80; None sub `min_weeks`). Liniile în altă valută se trec întâi prin `in_usd`."""
     a, b = _series(signal_close), _series(ucits_close)
     out = {"corr": None, "n": 0, "ok": None}
     if a.empty or b.empty:
