@@ -332,7 +332,7 @@ COMPETITOR_GROUPS = {
     "Servicii petroliere": ("SLB", "HAL"),
     "Rafinare": ("MPC", "VLO"),
     "Gaz natural lichefiat": ("LNG", "VG"),
-    "Nuclear": ("CEG", "OKLO", "SMR", "UUUU", "SNN.RO"),
+    "Reactoare modulare mici (SMR)": ("SMR", "OKLO"),
     "Apărare": ("LMT", "RTX", "GD", "NOC", "KTOS", "RHM.DE", "BA.L", "LDO.MI", "HO.PA"),
     "Aeronave civile": ("BA", "AIR.PA", "AIR.DE"),
     "Motoare de avion": ("GE", "RR.L", "SAF.PA", "MTX.DE"),

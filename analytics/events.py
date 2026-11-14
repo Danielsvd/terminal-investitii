@@ -142,6 +142,16 @@ class EntityMatcher:
         terms = sorted(self.term_to_symbols, key=len, reverse=True)
         self.regex = re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(t) for t in terms) + r")(?![\w&])") if terms else None
 
+    def positions(self, text):
+        """{simbol: [pozițiile de început ale mențiunilor]} în text."""
+        out = {}
+        if not self.regex or not text:
+            return out
+        for m in self.regex.finditer(str(text)):
+            for sym in self.term_to_symbols.get(m.group(0), ()):
+                out.setdefault(sym, []).append(m.start())
+        return out
+
     def find(self, text):
         """Simbolurile numite, în ordinea apariției, fără dubluri."""
         if not self.regex or not text:
@@ -152,6 +162,22 @@ class EntityMatcher:
                 if sym not in out:
                     out.append(sym)
         return out
+
+
+def subject(title, type_key, syms, matcher):
+    """Compania la care se referă evenimentul: mențiunea cea mai apropiată de cuvântul-cheie al tipului (în „AMD Just
+    Crushed It as Nvidia Scandal Grows” scandalul e lângă Nvidia), cu penalizare pentru mențiunile de după el. La egalitate sau fără poziții: prima numită.
+    Distanța e în caractere; textul normalizat are aproape aceeași lungime ca originalul (diacriticele rămân litere)."""
+    if len(syms) == 1:
+        return syms[0]
+    kws = [m.start() for m in _TYPE_RE[type_key].finditer(normalize(title))]
+    pos = matcher.positions(title)
+    if not kws or not pos:
+        return syms[0]
+    # O mențiune DUPĂ cuvântul-cheie contează de 3 ori mai departe: subiectul stă de obicei înaintea verbului
+    # („Nvidia faces espionage probe as AMD gains” → Nvidia), dar „the scandal at Nvidia” rămâne Nvidia.
+    dist = {s: min((k - p) if p <= k else 3 * (p - k) for p in pos.get(s, [10 ** 6]) for k in kws) for s in syms}
+    return min(syms, key=lambda s: (dist[s], syms.index(s)))
 
 
 def competitors(symbol, groups):
@@ -168,10 +194,10 @@ def competitors(symbol, groups):
 # --- Evenimente sectoriale -----------------------------------------------------------------------------------------
 UP_WORDS = _kw_regex(("rise", "rises", "rising", "jump", "jumps", "surge", "surges", "soar", "soars", "rally",
                       "rallies", "climb", "climbs", "gain", "gains", "record high", "spike", "spikes", "hike", "boost",
-                      "increase", "crestere", "creste", "cresc", "urca", "urcat", "explodeaza", "maxim record", "majorare",
+                      "increase", "higher", "crestere", "creste", "cresc", "urca", "urcat", "explodeaza", "maxim record", "majorare",
                       "majoreaza", "scumpire", "se scumpeste"))
 DOWN_WORDS = _kw_regex(("fall", "falls", "falling", "drop", "drops", "plunge", "plunges", "slump", "slumps", "tumble",
-                        "tumbles", "sink", "sinks", "slide", "slides", "decline", "declines", "record low", "lowest",
+                        "tumbles", "sink", "sinks", "slide", "slides", "decline", "declines", "record low", "lowest", "lower",
                         "scade", "scad", "scadere", "coboara", "prabusire", "se prabuseste", "ieftinire", "se ieftineste"))
 
 # trigger: expresiile care identifică tema; groups: efectul pe grup când tema „crește” (+1) sau efectul fix (fixed=True).
@@ -268,19 +294,19 @@ def detect_events(items, matcher, groups, now, market_of, max_age_hours=MAX_AGE_
             # CEO faces probe as AMD gains” AMD nu e afectată negativ.
             t = types[0]
             spec = EVENT_TYPES[t]
-            primary = syms[0]
+            primary = subject(title, t, syms, matcher)
             key = _event_key(t, syms, it["date_obj"].date())
             ev = events.get(key)
             if ev is None:
                 ben = {}
                 if spec["share_shift"] and spec["direction"] < 0:
+                    # concurenții, inclusiv cei menționați în același titlu („AMD crushes as Nvidia scandal...”)
                     for c, gs in competitors(primary, groups).items():
-                        if c not in syms:
-                            ben[c] = list(gs)
+                        ben[c] = list(gs)
                 ev = events[key] = {
                     "key": key, "kind": "companie", "type": t, "label": spec["label"], "direction": spec["direction"],
                     "severity": spec["severity"],
-                    "affected": [(primary, spec["direction"])] + [(s, 0) for s in syms[1:]],
+                    "affected": [(primary, spec["direction"])] + [(s, 0) for s in syms if s != primary and s not in ben],
                     "beneficiaries": ben, "markets": {market_of(s) for s in syms}, "headlines": [],
                     "time": it["date_obj"], "other_types": types[1:]}
             ev["headlines"].append(head)
@@ -311,9 +337,12 @@ def detect_events(items, matcher, groups, now, market_of, max_age_hours=MAX_AGE_
 
 
 def touches(event, holdings):
-    """Simbolurile din deținerile tale atinse de eveniment (afectate sau beneficiari)."""
-    syms = {s for s, _ in event["affected"]} | set(event["beneficiaries"])
-    return sorted(syms & set(holdings or ()))
+    """Deținerile atinse de eveniment cu o direcție (afectate cu direcție ≠ 0 sau beneficiari): [(simbol, rol)].
+    Mențiunile fără direcție (fuziuni ambigue, companii doar numite) nu dau alertă."""
+    held = set(holdings or ())
+    out = [(s, "afectat") for s, d in event["affected"] if d and s in held]
+    out += [(s, "beneficiar") for s in event["beneficiaries"] if s in held]
+    return sorted(out)
 
 
 # --- Reacția pieței ------------------------------------------------------------------------------------------------

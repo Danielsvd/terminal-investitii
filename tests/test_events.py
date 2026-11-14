@@ -61,14 +61,22 @@ def test_detect_company_event_with_beneficiaries():
     assert set(e["beneficiaries"]) == {"AMD", "AVGO", "INTC"}
     assert len(e["headlines"]) == 2 and e["severity_total"] == 4   # 3 + două surse
     assert e["markets"] == {"us"}
-    assert ev.touches(e, {"AMD", "TLV.RO"}) == ["AMD"]
+    assert ev.touches(e, {"AMD", "NVDA", "TLV.RO"}) == [("AMD", "beneficiar"), ("NVDA", "afectat")]
 
 
 def test_detect_primary_subject_and_no_share_shift():
     evs = ev.detect_events([_item("Nvidia faces espionage probe as AMD gains", 1)], _matcher(), COMPETITOR_GROUPS,
                            NOW, universes.market_of)
-    assert evs[0]["affected"] == [("NVDA", -1), ("AMD", 0)]
-    assert "AMD" not in evs[0]["beneficiaries"]
+    # AMD e menționat, dar e concurent în același grup: trece la beneficiari, nu la „menționat”
+    assert evs[0]["affected"] == [("NVDA", -1)] and "AMD" in evs[0]["beneficiaries"]
+    # Subiectul = compania cea mai apropiată de cuvântul-cheie, nu prima numită (cazul real din 14.11)
+    near = ev.detect_events([_item("AMD Just Crushed It as the Nvidia Scandal Grows", 1)], _matcher(),
+                            COMPETITOR_GROUPS, NOW, universes.market_of)[0]
+    assert near["affected"][0] == ("NVDA", -1) and "AMD" in near["beneficiaries"]
+    # Mențiunile fără direcție nu dau alertă pe deținute
+    amb = ev.detect_events([_item("Investor buys drilling firm with contracts for Romgaz and Petrom in acquisition", 1)],
+                           _matcher(), COMPETITOR_GROUPS, NOW, universes.market_of)[0]
+    assert amb["direction"] == 0 and ev.touches(amb, {"SNG.RO", "SNP.RO"}) == []
     juridic = ev.detect_events([_item("Apple fined in EU antitrust case", 1)], _matcher(), COMPETITOR_GROUPS, NOW,
                                universes.market_of)
     assert juridic[0]["type"] == "juridic" and juridic[0]["beneficiaries"] == {}
@@ -95,6 +103,7 @@ def test_detect_sector_events_and_age_filter():
     assert ("TLV.RO", -1) in by["taxe_banci"]["affected"] and by["taxe_banci"]["severity"] == 2
     assert ev.sector_direction("Oil prices mixed", "petrol") == 0
     assert ev.sector_direction("Brent hits record low", "petrol") == -1
+    assert ev.sector_direction("Lower Oil Prices Could Lift Uber Stock", "petrol") == -1
 
 
 def test_reference_session():
@@ -148,7 +157,7 @@ def test_journal_rows_parse_evaluate_summary():
     moves = [{"symbol": "TLV.RO", "date": pd.Timestamp("2026-11-13"), "z": 3.4}]
     rows = ev.journal_rows([e], reac, {"us": "SPY", "eu": "EXSA.DE", "bvb": "TVBETETF.RO"}, universes.market_of, moves)
     roles = {(r[2], r[3]): r for r in rows}
-    assert set(roles) == {("NVDA", "afectat"), ("AVGO", "beneficiar"), ("TLV.RO", "fara_stire")}   # AMD (0) și INTC (fără ref) lipsesc
+    assert set(roles) == {("NVDA", "afectat"), ("AVGO", "beneficiar"), ("TLV.RO", "fara_stire")}   # AMD, INTC: fără ref
     assert roles[("NVDA", "afectat")][4] == -1 and roles[("AVGO", "beneficiar")][4] == 1
     assert roles[("TLV.RO", "fara_stire")][4] == -1 and roles[("TLV.RO", "fara_stire")][7] == "TVBETETF.RO"
     df, probs = ev.parse_journal([ev.JOURNAL_COLUMNS] + rows + [["x"] * 10])

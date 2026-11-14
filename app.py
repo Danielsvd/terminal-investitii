@@ -4569,8 +4569,10 @@ def render_event_radar():
     hit = [(e, events_calc.touches(e, holdings)) for e in evs]
     hit = [(e, t) for e, t in hit if t]
     if hit:
+        subj = lambda e: e["label"] if e["kind"] == "sector" else _radar_name(e["affected"][0][0])
         st.info("⚠️ Evenimente care ating pozițiile tale: " + "; ".join(
-            f"{', '.join(t)} — {e['label'].lower()}" for e, t in hit[:8]))
+            f"{', '.join(f'{s} ({r})' for s, r in t)} — {subj(e)}"
+            + (f": {e['label'].lower()}" if e["kind"] == "companie" else "") for e, t in hit[:8]))
     icon = {3: "🔴", 2: "🟠", 1: "🟡"}
     tabs = st.tabs([lbl for _, lbl in RADAR_MARKETS])
     for (mk, _lbl), tab in zip(RADAR_MARKETS, tabs):
