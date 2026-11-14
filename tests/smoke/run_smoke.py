@@ -143,6 +143,23 @@ class FakeTicker:
     def fast_info(self):
         return _FastInfo(self.ticker)
 
+    def get_earnings_dates(self, limit=12):
+        # Idei și strategii: ultimul anunț acum 20 de zile (surpriză +5%), următorul peste 6 zile (steag „rezultate”).
+        if self.ticker.endswith(".RO"):
+            return None
+        idx = pd.DatetimeIndex([TODAY + pd.Timedelta(days=6), TODAY - pd.Timedelta(days=20),
+                                TODAY - pd.Timedelta(days=111)]).tz_localize("America/New_York")
+        return pd.DataFrame({"EPS Estimate": [1.2, 1.0, 0.9], "Reported EPS": [np.nan, 1.05, 0.95],
+                             "Surprise(%)": [np.nan, 5.0, 5.6]}, index=idx)
+
+    @property
+    def eps_trend(self):
+        if self.ticker.endswith(".RO"):
+            return None
+        return pd.DataFrame({"current": [1.1, 1.2, 4.6, 5.1], "7daysAgo": [1.1, 1.2, 4.6, 5.1],
+                             "30daysAgo": [1.08, 1.18, 4.55, 5.0], "60daysAgo": [1.06, 1.15, 4.5, 4.95],
+                             "90daysAgo": [1.05, 1.1, 4.4, 4.9]}, index=["0q", "+1q", "0y", "+1y"])
+
     @property
     def earnings_history(self):
         if self.ticker.endswith(".RO"):
@@ -280,8 +297,8 @@ def fake_fred(code, source, start, end):
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
             "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
-            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5}[code]
-    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10") else 0.0
+            "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5, "CFNAIMA3": 0.25}[code]
+    step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10", "CFNAIMA3") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)
 
 
@@ -368,6 +385,8 @@ class FakeWorksheet:
 
     def append_row(self, row, *a, **k):
         APPENDED.append((self.name, list(row)))
+        if self.name == "Idei_jurnal":          # jurnalul ideilor: rândul rămâne în foaie (se citește înapoi)
+            SHEETS[self.name].append(list(row))
 
     def append_rows(self, rows, *a, **k):
         pass
@@ -387,6 +406,10 @@ class FakeSpreadsheet:
             import gspread
             raise gspread.exceptions.WorksheetNotFound(name)
         return FakeWorksheet(name)
+
+    def add_worksheet(self, title, rows=1000, cols=26):
+        SHEETS[title] = []
+        return FakeWorksheet(title)
 
 
 # Fișierele „Analiză companii” (Drive): un emitent cu șablon de bancă (sărit) și 8 emitenți cu date cumulate.
@@ -583,6 +606,7 @@ EXPECTED_MESSAGES = (
     "(netestat):** call-urile", "DIVERGENȚĂ (netestat)", "PESIMISM ÎN OPȚIUNI (netestat)", "NEUTRU (netestat)",  # verdict put/call
     "Fără opțiuni listate în Yahoo", "Yahoo nu a trimis lista de expirări", "Nicio expirare cu 20–45", "Greeks N/A",   # simboluri fără opțiuni sau fără cotații
     "Simbol invalid sau date indisponibile",      # simbolul INVALID
+    "e deja în jurnal azi",                       # Idei și strategii: a doua salvare a aceleiași idei în aceeași zi
     "Ședința e în desfășurare",                   # Rezumatul Zilei rulat în timpul ședinței (depinde de ceas)
     "Foaia BVB nu mai are rândurile așteptate",    # foaia BVB simulată are doar 3 rânduri de indicatori
     "Fără preț disponibil pentru",                 # NODATA.RO în portofoliu
@@ -1085,6 +1109,47 @@ def main():
             check(at, "8. Watchlist (ștergere)")
             oks = [str(s.value) for s in at.success]
             assert any(s.startswith("Șters ") for s in oks), oks
+
+    radio().set_value("10. Idei și Strategii").run()
+    check(at, "10. Idei și Strategii")
+    subs = [str(h.value) for h in at.subheader]
+    for want in ("A. Trend pe clase de active", "C. Regiuni (în USD; ordinea e aceeași în lei)", "🌡️ Episoade de stres (VIX / VIX3M)"):
+        assert want in subs, f"Idei: lipsește subtitlul {want}: {subs}"
+    at.number_input(key="ideas_capital").set_value(200000.0).run()
+    check(at, "10. Idei (capital)")
+    at.button(key="ideas_scan_stocks_btn").click().run()
+    check(at, "10. Idei (acțiuni)")
+    # Datele sintetice au Piotroski 2/9 și datorie netă / EBITDA 5,3: toate acțiunile sunt excluse (calea de excludere).
+    # Cu filtrul de calitate neutralizat temporar rulează și fișa unei acțiuni (catalizatori, știri, steagul de rezultate).
+    from analytics import ideas as ideas_mod
+    real_filter = ideas_mod.quality_filter
+    ideas_mod.quality_filter = lambda *a: {**real_filter(*a), "excluded": False}
+    at.run()
+    check(at, "10. Idei (fișe acțiuni)")
+    ideas_mod.quality_filter = real_filter
+    stock_cards = [str(e.label) for e in at.expander if "Acțiuni cu catalizator" in str(e.label)]
+    assert stock_cards, "Idei: nicio fișă de acțiune cu filtrul de calitate neutralizat"
+    assert any("rezultate trimestriale peste 6 zile" in str(m.value) for m in at.markdown), "Idei: lipsește steagul de rezultate"
+    print(f"Idei, fișe acțiuni: {len(stock_cards)}, de ex. {stock_cards[0]}")
+    at.button(key="ideas_bvb_btn").click().run()
+    check(at, "10. Idei (BVB)")
+    saves = [b for b in at.button if b.label == "📓 Salvează în jurnal"]
+    print(f"Idei: {len(saves)} fișe; expandere: {len(at.expander)}")
+    assert saves, "Idei: nicio fișă de idee pe datele sintetice"
+    dims = [str(m.value) for m in at.markdown if "Dimensionare (risc 1%)" in str(m.value)]
+    assert dims and any(" × " in d for d in dims), f"Idei: dimensionarea lipsește: {dims[:3]}"
+    saves[0].click().run()
+    check(at, "10. Idei (salvare în jurnal)")
+    journal = [r for name, r in APPENDED if name == "Idei_jurnal"]
+    assert len(journal) == 2 and journal[0][0] == "Date", f"Idei: jurnalul nu a fost creat corect: {journal}"
+    print("Idei, rând în jurnal:", journal[1])
+    assert any("Salvată în Idei_jurnal" in str(s.value) for s in at.success), [str(s.value) for s in at.success]
+    jt = next((d.value for d in at.dataframe if "Strategie" in getattr(d.value, "columns", []) and "Exces" in getattr(d.value, "columns", [])), None)
+    assert jt is not None and len(jt) == 1, "Idei: tabelul jurnalului lipsește după salvare"
+    sv = next(b for b in at.button if b.label == "📓 Salvează în jurnal" and b.key == saves[0].key)
+    sv.click().run()
+    check(at, "10. Idei (salvare dublă)")
+    assert len([r for name, r in APPENDED if name == "Idei_jurnal"]) == 2, "Idei: a doua salvare în aceeași zi a scris"
 
     radio().set_value("9. Glosar Economic").run()
     check(at, "9. Glosar Economic")

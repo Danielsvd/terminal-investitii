@@ -20,7 +20,7 @@ def test_fiecare_sectiune_are_eticheta():
 
 def test_etichete_cu_icon_material_fara_numar():
     for value, label in _menu().items():
-        assert re.match(r"\d\. ", value), value
+        assert re.match(r"\d+\. ", value), value
         assert re.match(r":material/[a-z_]+: [A-ZȘȚ]", label), label
         assert not re.search(r"\d\.", label), label
 

@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import feedparser
-from data.news import filter_company_news, future_note, holdings_news, mark_future, news_card_html, safe_link
+from data.news import filter_company_news, future_note, holdings_news, mark_future, news_card_html, safe_link, plain_text
 from data import fred_calendar as fred_cal
 from data import sheet_view
 from data import universes
@@ -61,6 +61,10 @@ from analytics import options as opt_calc
 from data import portfolio_sheet
 from data import iv_history
 from data import broker_import
+from analytics import ideas as ideas_calc
+from analytics import bvb_fundamental as bvb_calc
+from data.ucits import ucits_for, ucits_symbols, ucits_currency
+import math
 import zipfile
 from analytics.risk import beta_benchmark, beta_weekly, beta_corr_weekly, jensen_alpha, performance_risk, common_day_correlation
 from analytics.risk import CORR_HIGH, CORR_MID, CORR_BANDS, correlation_band
@@ -3664,6 +3668,748 @@ def interpret_macro_data_ai(df_macro):
     """Interpretarea Barometrului FED (analytics/macro.py: interpret_fred, testată)."""
     return macro_calc.interpret_fred(df_macro)
 
+# ==================================================================================================
+# IDEI ȘI STRATEGII (analytics/ideas.py, data/ucits.py). Propunerea: claude/propunere_tab_idei_2026-11-14.md.
+# Decizii Daniel (14.11.2026): totul deodată, risc 1% pe idee, jurnal în foaia nouă `Idei_jurnal`.
+# ==================================================================================================
+IDEAS_ETF_SYMBOLS = tuple(dict.fromkeys(
+    [s for s, _ in ideas_calc.ASSET_CLASSES] + list(ideas_calc.US_SECTORS) + list(ideas_calc.EU_SECTORS)
+    + [s for s, _, _ in ideas_calc.REGIONS] + ["USDRON=X", "EURRON=X", "GBPRON=X", "AOR", "ACWI"]
+    + ucits_symbols([s for s, _ in ideas_calc.ASSET_CLASSES] + list(ideas_calc.US_SECTORS))))
+IDEAS_HELP = {
+    "capital": "Valoarea portofoliului pe care o folosești ca referință. Cantitatea propusă = 1% din capital ÷ "
+               "(prețul de intrare − stopul), convertit în lei la cursul de piață; plafon: poziția ≤ 25% din capital. "
+               "Cu 0, fișele arată doar stopul.",
+    "risk": "Pierderea maximă acceptată pe o idee dacă stopul e atins: 1% din capital (decizia ta, 14.11.2026). "
+            "Golurile de preț peste stop (după rezultate, peste weekend) pot depăși acest procent.",
+    "growth": "Indicele Chicago Fed al activității naționale, media pe 3 luni (FRED CFNAIMA3): 85 de serii lunare. "
+              "Peste 0 = economia SUA crește peste trend; sub −0,70 a însoțit istoric recesiunile. "
+              "Între −0,10 și +0,10: „la graniță”, fără cadran (prag netestat). Publicat cu ~3 săptămâni întârziere.",
+    "inflation": "Inflația de bază SUA (FRED CPILFESL, fără alimente și energie): ritmul pe ultimele 3 luni anualizat, "
+                 "(CPI_t / CPI_t−3)^4 − 1, minus ritmul pe 12 luni, CPI_t / CPI_t−12 − 1. Pozitiv = inflația "
+                 "accelerează. Sub ±0,25 pp: „la graniță” (prag netestat).",
+    "stress": "VIX ÷ VIX3M: frica pe 30 de zile față de cea pe 3 luni. Peste 1 = structură inversată (panică pe termen "
+              "scurt). Un episod începe la prima zi ≥ 1 după cel puțin 20 de ședințe sub 1. Randamentul ulterior e al "
+              "SPY (cu dividende), pe 3 și 6 luni calendaristice; comparat cu media tuturor zilelor din aceeași perioadă.",
+}
+
+
+def _pct_txt(x, decimals=1, sign=True):
+    """Fracție → „+12,3%” (format românesc); lipsă → „N/A”."""
+    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+        return "N/A"
+    return (("+" if sign and x > 0 else "") + format_ro(x * 100, decimals)) + "%"
+
+
+def _months_txt(n):
+    return "N/A" if n is None else ("1 lună" if n == 1 else f"{n} luni")
+
+
+def _days_txt(n):
+    return "azi" if n == 0 else "mâine" if n == 1 else f"peste {n} zile"
+
+
+def _ideas_fetch_error(what, exc):
+    logger.warning("Idei și strategii, %s: %s", what, exc)
+    return f"{what}: date indisponibile acum ({type(exc).__name__})"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_ideas_prices(symbols, period="3y"):
+    """Close / High / Low AJUSTATE (dividende incluse) pentru simbolurile date (tuplu), într-o singură cerere Yahoo.
+    dict câmp → DataFrame (index fără fus orar). Fără nicio închidere → excepție (nu intră în cache)."""
+    syms = list(symbols)
+    _yf_limiter.wait_if_needed()
+    data = yf.download(syms, period=period, progress=False, auto_adjust=True, group_by="column")
+    out = {f: _naive_index(field_frame(data, f, syms)) for f in ("Close", "High", "Low")}
+    if out["Close"].empty:
+        raise ValueError("Yahoo: nicio închidere pentru simbolurile cerute")
+    return out
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_stress_history():
+    """^VIX, ^VIX3M și SPY (ajustat) pe tot istoricul Yahoo (VIX3M din 2007). Fără date → excepție."""
+    syms = ["^VIX", "^VIX3M", "SPY"]
+    _yf_limiter.wait_if_needed()
+    closes = _naive_index(close_frame(yf.download(syms, period="max", progress=False, auto_adjust=True), syms))
+    if closes is None or closes.empty:
+        raise ValueError("Yahoo: VIX / VIX3M / SPY fără date")
+    return closes
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_stress_stats():
+    """Statistica episoadelor de stres (analytics/ideas.stress_episodes) pe istoricul din `get_stress_history`,
+    în cache o zi: calculul parcurge ~4.500 de zile și nu trebuie refăcut la fiecare clic. Eroarea urcă (fără cache)."""
+    sh = get_stress_history()
+    return ideas_calc.stress_episodes(sh.get("^VIX"), sh.get("^VIX3M"), sh.get("SPY"))
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _etf_trailing_pe(sym):
+    """P/E-ul pe ultimele 12 luni raportat de Yahoo pentru un ETF (media ponderată a deținerilor) sau None."""
+    _yf_limiter.wait_if_needed()
+    return num(yf.Ticker(sym).info or {}, "trailingPE")
+
+
+@st.cache_data(ttl=43200, show_spinner=False, max_entries=200)
+def get_ideas_stock_detail(symbol):
+    """Datele unei acțiuni preselectate (cache 12 h): nume, sector, monedă, ultimul și următorul anunț de rezultate,
+    surpriza, revizuirea estimării EPS pe 90 de zile, Altman (zona), Piotroski, datorie netă / EBITDA.
+    Din situațiile financiare, cu aceleași funcții ca în Analiză Companie. Valorile lipsă sunt None."""
+    t = yf.Ticker(symbol)
+    info = _safe_info(t)
+    errors = []
+    try:
+        ed = t.get_earnings_dates(limit=8)
+    except Exception as exc:  # yfinance: rețea, HTTP, format; metoda lipsește la unele versiuni
+        logger.warning("idei, rezultate %s: %s", symbol, exc)
+        ed = None
+        errors.append("datele anunțurilor de rezultate")
+    try:
+        et = t.eps_trend
+    except Exception as exc:  # yfinance: rețea, HTTP, format
+        logger.warning("idei, eps_trend %s: %s", symbol, exc)
+        et = None
+        errors.append("tendința estimărilor EPS")
+    today = pd.Timestamp(now_ro().date())
+    ann, surprise, nxt = ideas_calc.last_announcement(ed, today)
+    rev, rev_period = ideas_calc.eps_revision(et)
+    fin = get_financial_statements(symbol)
+    financial = fund.is_financial_issuer(info.get("sector"), symbol)
+    altman = calculate_altman_z(info, symbol, fin)
+    pio = fund.piotroski(fin.get("income"), fin.get("balance"), fin.get("cashflow"), financial=financial)
+    lev = fund.leverage_ratios(fin.get("income"), fin.get("balance"), fin.get("q_income"), fin.get("q_balance"))
+    return {"name": info.get("shortName") or info.get("longName") or symbol, "sector": info.get("sector"),
+            "currency": info.get("currency"), "quote_type": info.get("quoteType"),
+            "ann_date": ann, "surprise": surprise, "next_date": nxt, "revision": rev, "rev_period": rev_period,
+            "altman_zone": altman["zone"], "altman_value": altman["value"], "altman_variant": altman["variant"],
+            "pio_passed": pio["passed"], "pio_evaluable": pio["evaluable"],
+            "nd_ebitda": lev["net_debt_to_ebitda"], "financial": bool(financial),
+            "errors": errors + [f"situația {e}" for e in fin.get("errors", [])], "at": now_ro()}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_ideas_journal_values():
+    """Conținutul brut al foii `Idei_jurnal`; None dacă foaia nu există încă sau nu poate fi citită."""
+    ws = connect_to_gsheets(ideas_calc.JOURNAL_SHEET)
+    if ws is None:
+        return None
+    try:
+        return ws.get_all_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
+    except gspread.exceptions.GSpreadException as e:
+        logger.warning(f"foaia {ideas_calc.JOURNAL_SHEET} nu a putut fi citită: {e}")
+        return None
+
+
+def save_idea_to_journal(idea):
+    """Scrie ideea în `Idei_jurnal` (o dată pe zi pentru același simbol și aceeași strategie). Foaia se creează la
+    prima scriere, cu antetul JOURNAL_COLUMNS (aprobat de Daniel, 14.11.2026). Întoarce (ok, mesaj)."""
+    today = now_ro().date()
+    strat = ideas_calc.strategy_name(idea["strategy"])
+    if idea.get("entry") is None or idea.get("stop") is None:
+        return False, "Fără preț de intrare sau fără stop, ideea nu se poate salva."
+    values = load_ideas_journal_values()
+    df, _ = ideas_calc.parse_journal(values, portfolio_sheet.cell_number)
+    if ideas_calc.already_logged(df, today, idea["symbol"], strat):
+        return False, f"{idea['symbol']} ({strat}) e deja în jurnal azi."
+    row = ideas_calc.journal_row(today, idea["symbol"], idea.get("exec_symbol"), strat, idea["entry"], idea["stop"],
+                                 ideas_calc.STRATEGIES[idea["strategy"]]["horizon"], idea.get("benchmark"),
+                                 idea.get("signals", ""))
+    try:
+        ws = connect_to_gsheets(ideas_calc.JOURNAL_SHEET)
+        if ws is None:
+            book = _get_spreadsheet()
+            if book is None:
+                return False, "portofoliu_db nu e accesibil; ideea nu a fost salvată."
+            ws = book.add_worksheet(title=ideas_calc.JOURNAL_SHEET, rows=1000, cols=len(ideas_calc.JOURNAL_COLUMNS))
+            ws.append_row(ideas_calc.JOURNAL_COLUMNS, value_input_option="RAW")
+        ws.append_row(row, value_input_option="RAW")
+    except (gspread.exceptions.GSpreadException, requests.RequestException, AttributeError) as exc:
+        logger.warning("Idei_jurnal, scriere eșuată pentru %s: %s", idea["symbol"], exc)
+        return False, "Scrierea în Idei_jurnal a eșuat; ideea nu a fost salvată."
+    load_ideas_journal_values.clear()   # doar cache-ul jurnalului
+    return True, (f"Salvată în {ideas_calc.JOURNAL_SHEET}: {idea['symbol']}, {strat}, intrare "
+                  f"{price_ro(idea['entry'])}, stop {price_ro(idea['stop'])}, orizont "
+                  f"{ideas_calc.STRATEGIES[idea['strategy']]['horizon']} zile.")
+
+
+def _ideas_last(px, sym):
+    try:
+        s = px["Close"][sym].dropna()
+    except (KeyError, TypeError):
+        return None
+    return float(s.iloc[-1]) if len(s) else None
+
+
+def _ideas_close(px, sym):
+    try:
+        return px["Close"][sym].dropna()
+    except (KeyError, TypeError):
+        return pd.Series(dtype=float)
+
+
+def ideas_atr_stop(px, sym):
+    """Stopul de referință: 2,5 × ATR (Wilder, 14) sub închidere, mobil (analytics/technical.atr_trailing_stop)."""
+    try:
+        df = pd.DataFrame({"High": px["High"][sym], "Low": px["Low"][sym], "Close": px["Close"][sym]}).dropna()
+    except (KeyError, TypeError):
+        return None
+    if len(df) < 30:
+        return None
+    v = atr_trailing_stop(df, window=14, multiplier=ideas_calc.ATR_MULTIPLIER)["ATR_Stop"].iloc[-1]
+    return float(v) if pd.notna(v) and v > 0 else None
+
+
+def ideas_cash(currency):
+    """(randamentul numerarului pe 12 luni, sursa) — USD: FRED DGS3MO; EUR: rata BCE la depozite (DFR). Proxy."""
+    try:
+        if currency == "USD":
+            return ideas_calc.cash_return_12m(_fred_rate_series("DGS3MO", 500)), "titluri SUA la 3 luni (FRED DGS3MO)"
+        ser = _ecb_rate_series("FM/B.U2.EUR.4F.KR.DFR.LEV", 600).copy()
+        ser.index = pd.to_datetime(ser.index, errors="coerce")
+        return ideas_calc.cash_return_12m(ser[ser.index.notna()]), "rata BCE la depozite (DFR)"
+    except Exception as exc:  # FRED / BCE: rețea, HTTP, serie goală
+        return None, _ideas_fetch_error(f"numerar {currency}", exc)
+
+
+def ideas_quadrant():
+    """(cadranul, mesaj de eroare sau None) din FRED CFNAIMA3 și CPILFESL."""
+    series, msgs = {}, []
+    for code in ("CFNAIMA3", "CPILFESL"):
+        try:
+            series[code] = _fred_rate_series(code, 1500)
+        except Exception as exc:  # FRED: rețea, cod inexistent, serie goală
+            series[code] = None
+            msgs.append(_ideas_fetch_error(f"FRED {code}", exc))
+    return ideas_calc.growth_inflation_quadrant(series["CFNAIMA3"], series["CPILFESL"]), "; ".join(msgs) or None
+
+
+def ideas_events(today):
+    """(publicările cu impact mare în următoarele 14 zile, mesaj) din calendarul FRED + Fed."""
+    cal_data, cal_msg = get_fred_calendar(today)
+    if cal_data is None:
+        rows = [{"date": d, "weekday": fred_cal.WEEKDAYS_RO[d.weekday()], "in_days": (d - today).days,
+                 "label": fred_cal.FOMC_LABEL, "key": "fomc"} for d in fred_cal.fomc_in_window(today)]
+        return rows, f"calendarul FRED indisponibil ({cal_msg}); doar FOMC din calendarul Fed"
+    rows, _ = fred_cal.upcoming(cal_data, today)
+    return ideas_calc.high_impact_events(rows), None
+
+
+def ideas_holdings():
+    """Simbolurile din foaia `Portofoliu` (litere mari); mulțime goală dacă foaia nu se poate citi."""
+    df = load_portfolio()
+    if df is None or df.empty or "Symbol" not in df.columns:
+        return set()
+    return set(df["Symbol"].astype(str).str.upper())
+
+
+def render_idea(idea, ctx):
+    """Fișa unei idei, într-un expander: teza, pașii (fundamental și tehnic separat), execuția, invalidarea,
+    dimensionarea, evenimentele, baza și butonul de jurnal."""
+    strat = ideas_calc.STRATEGIES[idea["strategy"]]
+    badge = {"aliniat": " · aliniat cu cadranul", "contra": " · contra cadranului"}.get(idea.get("alignment"), "")
+    held = " · deții deja" if idea.get("held") else ""
+    with st.expander(f"{idea['symbol']} — {idea['name']} · {strat['name']}{badge}{held}"):
+        st.markdown(f"**Teza.** {idea['thesis']}")
+        for label, text in idea["steps"]:
+            st.markdown(f"- **{label}:** {text}")
+        entry, stop = idea.get("entry"), idea.get("stop")
+        stop_pct = (stop / entry - 1) if (entry and stop) else None
+        # Execuție
+        ex_sym, ex_desc = idea.get("exec_symbol"), idea.get("exec_desc", "")
+        check = idea.get("exec_check")
+        chk_txt = ""
+        if check is not None:
+            if check.get("corr") is None:
+                chk_txt = f" Verificare: Yahoo fără destule date comune ({check.get('n', 0)} săptămâni)."
+            else:
+                chk_txt = (f" Verificare: corelația randamentelor săptămânale cu {idea['symbol']} pe 12 luni "
+                           f"{format_ro(check['corr'], 2)} ({check['n']} săptămâni)"
+                           + ("." if check["ok"] else " — sub 0,80: verifică indicele la emitent."))
+        st.markdown(f"- **Execuție:** {ex_sym or 'N/A'} — {ex_desc}.{chk_txt}")
+        # Invalidare
+        st.markdown(f"- **Invalidare:** {strat['exit']}. Stop de referință (2,5 × ATR): {price_ro(stop)} "
+                    f"({_pct_txt(stop_pct)} față de {price_ro(entry)}).")
+        # Dimensionare: pe instrumentul cumpărabil, cu aceeași distanță procentuală până la stop
+        capital = ctx["capital"]
+        ex_price, ex_cur = idea.get("exec_price"), idea.get("exec_currency")
+        if not capital:
+            size_txt = "introdu capitalul de referință sus pentru cantitate."
+        elif ex_price is None or stop_pct is None:
+            size_txt = "N/A (lipsește prețul instrumentului sau stopul)."
+        else:
+            fx = 1.0 if ex_cur == "RON" else (ctx["fx"].get("GBP") / 100 if ex_cur == "GBp" and ctx["fx"].get("GBP")
+                                              else ctx["fx"].get(ex_cur))
+            sz = ideas_calc.position_size(capital, ex_price, ex_price * (1 + stop_pct), fx)
+            if sz["qty"] is None:
+                size_txt = f"N/A ({sz['reason']})."
+            else:
+                size_txt = (f"{sz['qty']} × {ex_sym} la {price_ro(ex_price)} {ex_cur} ≈ {format_ro(sz['value_ron'], 0)} lei "
+                            f"({_pct_txt(sz['weight'], 1, sign=False)} din capital); pierdere la stop ≈ "
+                            f"{format_ro(sz['risk_ron'], 0)} lei" + (" (plafonat la 25% din capital)." if sz["capped"] else "."))
+        st.markdown(f"- **Dimensionare (risc 1%):** {size_txt}")
+        # Evenimente
+        ev = list(ctx["events_txt"])
+        ed = idea.get("earnings_days")
+        if ed is not None and 0 <= ed <= ideas_calc.EARNINGS_SOON_DAYS:
+            ev.insert(0, f"⚠️ rezultate trimestriale peste {ed} zile: prețul poate sări peste stop")
+        st.markdown(f"- **Evenimente (14 zile):** {'; '.join(ev) if ev else 'nimic cu impact mare'}.")
+        for title, link in idea.get("news", []):
+            st.markdown(f"  - [{title}]({link})" if link else f"  - {title}")
+        base = "Testat în aplicație" if idea["strategy"] == "bvb" else ideas_calc.UNTESTED.capitalize()
+        st.caption(f"Baza: {strat['evidence']}. {base}. Orizont: {strat['horizon']} de zile; benchmark în jurnal: "
+                   f"{idea.get('benchmark') or 'N/A'}.")
+        if st.button("📓 Salvează în jurnal", key=f"idea_save_{idea['strategy']}_{idea['symbol']}"):
+            ok, msg = save_idea_to_journal(idea)
+            (st.success if ok else st.warning)(msg)
+
+
+def _ideas_exec(px, sym):
+    """(simbol cumpărabil, descriere, preț, valută, verificarea corelației) pentru un ETF semnal."""
+    ex_sym, ex_desc = ucits_for(sym)
+    if ex_sym is None:
+        return None, ex_desc, None, None, None
+    check = None if ex_sym == sym else ideas_calc.tracking_check(_ideas_close(px, sym), _ideas_close(px, ex_sym))
+    return ex_sym, ex_desc, _ideas_last(px, ex_sym), ucits_currency(ex_sym), check
+
+
+def _ideas_etf_idea(px, ctx, strategy, sym, name, thesis, steps, signals):
+    ex_sym, ex_desc, ex_price, ex_cur, check = _ideas_exec(px, sym)
+    return {"strategy": strategy, "symbol": sym, "name": name, "thesis": thesis, "steps": steps,
+            "entry": _ideas_last(px, sym), "stop": ideas_atr_stop(px, sym), "exec_symbol": ex_sym,
+            "exec_desc": ex_desc, "exec_price": ex_price, "exec_currency": ex_cur, "exec_check": check,
+            "alignment": ideas_calc.alignment(sym, ctx["quad"]["key"]),
+            "held": bool({sym, ex_sym} & ctx["holdings"]),
+            "benchmark": ideas_calc.STRATEGIES[strategy]["benchmark"], "signals": signals}
+
+
+def _align_txt(sym, quad):
+    a = ideas_calc.alignment(sym, quad["key"])
+    if a is None:
+        return "fără cadran (date lipsă sau la graniță)"
+    return {"aliniat": f"aliniat cu {quad['key']} ({quad['label']})", "contra": f"contra cadranului {quad['key']}",
+            "neutru": f"neutru față de {quad['key']}"}[a]
+
+
+def render_ideas_regime(quad, quad_msg, events, ev_msg, ctx):
+    st.subheader("🧭 Cadranul creștere × inflație (SUA)")
+    c1, c2 = st.columns(2)
+    c1.metric("Creștere: CFNAI-MA3", format_ro(quad["growth"], 2), help=IDEAS_HELP["growth"])
+    c2.metric("Accelerarea inflației de bază", "N/A" if quad["accel"] is None else f"{format_ro(quad['accel'], 2)} pp",
+              help=IDEAS_HELP["inflation"])
+    dates = (f"CFNAI: {quad['growth_date']:%m.%Y}" if quad["growth_date"] is not None else "CFNAI: N/A") + "; " + \
+            (f"CPI de bază: {quad['inflation_date']:%m.%Y} (3 luni anualizat {_pct_txt(quad['ann3'], 2)}, "
+             f"12 luni {_pct_txt(quad['yoy'], 2)})" if quad["inflation_date"] is not None else "CPI de bază: N/A")
+    if quad["key"]:
+        st.markdown(f"**{quad['key']} — {quad['label']}** (de {_months_txt(quad['months'])}). Pe acest cadran, {quad['text']}.")
+    else:
+        st.markdown("**Fără cadran:** cel puțin o axă lipsește sau e la graniță; ideile nu primesc etichetă de aliniere.")
+    st.caption(f"Ultimele date: {dates}. Înclinarea pe cadrane e o medie istorică (Ilmanen 2011; Neville et al. 2021), "
+               "orientativă și netestată în aplicație; 2022 (acțiuni și obligațiuni în scădere simultan) arată limitele."
+               + (f" {quad_msg}." if quad_msg else ""))
+
+    st.subheader("🌡️ Episoade de stres (VIX / VIX3M)")
+    try:
+        st_res = get_stress_stats()
+    except Exception as exc:  # yfinance: rețea, HTTP, date lipsă
+        st.info(_ideas_fetch_error("istoricul VIX", exc))
+        st_res = None
+    if st_res and st_res["ratio"] is not None:
+        state = "STRUCTURĂ INVERSATĂ (stres)" if st_res["in_stress"] else "normal (contango)"
+        st.metric("VIX ÷ VIX3M acum", format_ro(st_res["ratio"], 2), state, delta_color="off", help=IDEAS_HELP["stress"])
+        rows = []
+        for months, s in st_res["stats"].items():
+            rows.append({"Orizont": f"{months} luni", "Episoade (N)": s["n"],
+                         "SPY după episod, medie": _pct_txt(s["mean"]), "Pozitive": _pct_txt(s["pos"], 0, sign=False),
+                         "SPY toate zilele, medie": _pct_txt(s["base_mean"]),
+                         "Toate zilele, pozitive": _pct_txt(s["base_pos"], 0, sign=False)})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+        last = st_res["last_episode"]
+        st.caption((f"Ultimul episod: {last:%d.%m.%Y}. " if last is not None else "") +
+                   ("Statistică descriptivă, în eșantion, fără costuri." if st_res["enough"] else
+                    f"Eșantion mic (N = {st_res['n']} < {ideas_calc.STRESS_MIN_N}): fără verdict."))
+
+    st.subheader("🌍 Regimul piețelor")
+    try:
+        mk_closes = get_market_closes()
+    except Exception as exc:  # yfinance
+        mk_closes = None
+        st.info(_ideas_fetch_error("indicii", exc))
+    if mk_closes is not None:
+        rows = []
+        for _key, name, sym, _cur, _note in markets_calc.MARKETS:
+            r = markets_calc.market_regime(mk_closes[sym] if sym in mk_closes.columns else None)
+            rows.append({"Piață": name, "Trend (din 3)": "N/A" if r["trend_n"] is None else f"{r['trend_n']}/3",
+                         "Momentum 12-1": _pct_txt(r["momentum"]), "Față de maximul pe 52 săpt.": _pct_txt(r["from_high"])})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+        st.caption("Trend: preț > SMA 50, preț > SMA 200, SMA 50 > SMA 200. Verdictul macro complet (credit, VIX, "
+                   "dolar, sectoare, curbă, sentiment): secțiunea Piață globală.")
+
+    st.subheader("📅 Evenimente cu impact mare (14 zile)")
+    if events:
+        for r in events:
+            st.markdown(f"- {r['weekday']} {r['date']:%d.%m} ({_days_txt(r['in_days'])}): {r['label']}")
+    else:
+        st.markdown("Nicio publicare FOMC / CPI / NFP / PCE în următoarele 14 zile.")
+    if ev_msg:
+        st.caption(ev_msg)
+
+
+def render_ideas_etf(px, px_err, ctx):
+    quad = ctx["quad"]
+    if px is None:
+        st.warning(px_err or "Prețurile ETF indisponibile.")
+        return
+    cash_usd, cash_usd_src = ctx["cash"]["USD"]
+    cash_eur, cash_eur_src = ctx["cash"]["EUR"]
+    st.caption(f"Numerar pe 12 luni (proxy, media randamentelor): USD {_pct_txt(cash_usd, 2, sign=False)} "
+               f"({cash_usd_src}); EUR {_pct_txt(cash_eur, 2, sign=False)} ({cash_eur_src}). Prețuri ajustate cu "
+               "dividendele; semnalul se calculează pe ETF-ul din SUA, execuția pe echivalentul UCITS.")
+
+    # A. Trend pe clase de active
+    st.subheader("A. Trend pe clase de active")
+    rows, trend_ideas = [], []
+    for sym, name in ideas_calc.ASSET_CLASSES:
+        t = ideas_calc.trend_signal(_ideas_close(px, sym), cash_usd)
+        rows.append({"Clasa": name, "Simbol": sym, "Stare": t["state"] or "N/A", "12 luni": _pct_txt(t["r12"]),
+                     "Peste media pe 10 luni": "N/A" if t["above_sma10m"] is None else
+                     (f"da, de {_months_txt(t['months_above'])}" if t["above_sma10m"] else "nu"),
+                     "Cadran": _align_txt(sym, quad), "UCITS": ucits_for(sym)[0] or "—"})
+        if t["state"] == "ÎN TREND":
+            thesis = (f"{name} e în trend: {_pct_txt(t['r12'])} pe 12 luni, peste numerar ({_pct_txt(cash_usd, 2, sign=False)}), "
+                      f"și peste media închiderilor lunare pe 10 luni de {_months_txt(t['months_above'])}.")
+            steps = [("Fundamental", "nu se aplică (clasă de active); evaluarea piețelor: tabul ETF-uri, C"),
+                     ("Tehnic", f"închidere {price_ro(t['last'])} față de media pe 10 luni {price_ro(t['sma10m'])}; "
+                                f"12 luni {_pct_txt(t['r12'])}"),
+                     ("Regim", _align_txt(sym, quad))]
+            sig = f"trend: 12l {_pct_txt(t['r12'])} vs numerar {_pct_txt(cash_usd, 2, sign=False)}; peste SMA10l {_months_txt(t['months_above'])}; {quad['key'] or 'fără cadran'}"
+            trend_ideas.append(_ideas_etf_idea(px, ctx, "trend", sym, name, thesis, steps, sig))
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+    st.caption("ÎN TREND: randament pe 12 luni > numerar ȘI închiderea > media ultimelor 10 închideri lunare. "
+               "IEȘIT: ambele false. MIXT: una din două. Regula reduce scăderile mari, nu crește neapărat randamentul.")
+    for idea in sorted(trend_ideas, key=lambda i: {"aliniat": 0, "neutru": 1, None: 1, "contra": 2}[i["alignment"]]):
+        render_idea(idea, ctx)
+
+    # B. Rotația sectoarelor
+    for title, universe, cash, strategy in (("B. Rotația sectoarelor SUA (momentum dublu)", ideas_calc.US_SECTORS, cash_usd, "sector_us"),
+                                            ("B. Rotația sectoarelor Europa (STOXX 600)", ideas_calc.EU_SECTORS, cash_eur, "sector_eu")):
+        st.subheader(title)
+        tab = ideas_calc.dual_momentum_table({s: _ideas_close(px, s) for s in universe}, cash)
+        view = pd.DataFrame({
+            "Loc": [("N/A" if pd.isna(r) else f"{int(r)}") for r in tab["rank"]],
+            "Sector": [universe[s] for s in tab["symbol"]], "Simbol": tab["symbol"],
+            "Momentum 12-1": [_pct_txt(x) for x in tab["mom"]], "12 luni": [_pct_txt(x) for x in tab["r12"]],
+            "Peste SMA 200": ["N/A" if x is None else ("da" if x else "nu") for x in tab["above200"]],
+            "Bate numerarul": ["N/A" if x is None else ("da" if x else "nu") for x in tab["beats_cash"]],
+            "Idee": ["✅" if x else "" for x in tab["selected"]]})
+        st.dataframe(view, hide_index=True, width='stretch')
+        missing = [s for s, m in zip(tab["symbol"], tab["mom"]) if m is None]
+        if missing:
+            st.caption("Fără istoric suficient la Yahoo (simbol de verificat): " + ", ".join(missing) + ".")
+        sel = tab[tab["selected"]]
+        if sel.empty:
+            st.info("Niciun sector nu trece filtrul absolut: momentumul dublu indică numerar sau obligațiuni scurte.")
+        for _, r in sel.iterrows():
+            sym = r["symbol"]
+            thesis = (f"{universe[sym]} e pe locul {int(r['rank'])} după momentum 12-1 ({_pct_txt(r['mom'])}) și trece "
+                      f"filtrul absolut: peste SMA 200 și {_pct_txt(r['r12'])} pe 12 luni, peste numerar.")
+            steps = [("Fundamental", "nu se aplică (ETF sectorial)"),
+                     ("Tehnic", f"momentum 12-1 {_pct_txt(r['mom'])}; 12 luni {_pct_txt(r['r12'])}; peste SMA 200"),
+                     ("Regim", _align_txt(sym, quad))]
+            sig = f"loc {int(r['rank'])}; mom12-1 {_pct_txt(r['mom'])}; 12l {_pct_txt(r['r12'])}; {quad['key'] or 'fără cadran'}"
+            render_idea(_ideas_etf_idea(px, ctx, strategy, sym, universe[sym], thesis, steps, sig), ctx)
+    st.caption("EU: simbolurile sectoarelor STOXX 600 nu au fost verificate din mediul de dezvoltare; cele fără date "
+               "apar mai sus. Execuție directă (sunt UCITS, în EUR).")
+
+    # C. Regiuni
+    st.subheader("C. Regiuni (în USD; ordinea e aceeași în lei)")
+    reg_closes = {}
+    for sym, _name, cur in ideas_calc.REGIONS:
+        c = _ideas_close(px, sym)
+        reg_closes[sym] = ideas_calc.to_usd(c, _ideas_close(px, "USDRON=X")) if cur == "RON" else c
+    tab = ideas_calc.dual_momentum_table(reg_closes, cash_usd, top=1)
+    names = {s: n for s, n, _ in ideas_calc.REGIONS}
+    pes = {}
+    for sym in tab["symbol"]:
+        if sym.endswith(".RO"):
+            pes[sym] = None
+            continue
+        try:
+            pes[sym] = _etf_trailing_pe(sym)
+        except Exception as exc:  # yfinance: rețea, HTTP
+            logger.warning("idei, P/E %s: %s", sym, exc)
+            pes[sym] = None
+    st.dataframe(pd.DataFrame({
+        "Loc": [("N/A" if pd.isna(r) else f"{int(r)}") for r in tab["rank"]],
+        "Regiune": [names[s] for s in tab["symbol"]], "Simbol": tab["symbol"],
+        "Momentum 12-1": [_pct_txt(x) for x in tab["mom"]], "12 luni": [_pct_txt(x) for x in tab["r12"]],
+        "Filtru absolut": ["N/A" if x is None else ("trece" if x else "nu trece") for x in tab["passes"]],
+        "E/P (1 ÷ P/E Yahoo)": [_pct_txt(1 / pes[s], 1, sign=False) if pes.get(s) else "N/A" for s in tab["symbol"]],
+        "Idee": ["✅" if x else "" for x in tab["selected"]]}), hide_index=True, width='stretch')
+    st.caption("E/P: randamentul profiturilor (P/E-ul ponderat al deținerilor, raportat de Yahoo) — informativ, nu intră "
+               "în clasament; mare = piață mai ieftină. România: TVBETETF convertit în USD cu USDRON.")
+    for _, r in tab[tab["selected"]].iterrows():
+        sym = r["symbol"]
+        ep = _pct_txt(1 / pes[sym], 1, sign=False) if pes.get(sym) else "N/A"
+        thesis = (f"{names[sym]} are cel mai mare momentum 12-1 dintre regiuni ({_pct_txt(r['mom'])}, în USD) și trece "
+                  "filtrul absolut.")
+        steps = [("Fundamental", f"E/P {ep} (informativ)"),
+                 ("Tehnic", f"momentum 12-1 {_pct_txt(r['mom'])}; 12 luni {_pct_txt(r['r12'])}"),
+                 ("Regim", _align_txt(sym, quad))]
+        render_idea(_ideas_etf_idea(px, ctx, "region", sym, names[sym], thesis, steps,
+                                    f"regiune loc 1; mom12-1 {_pct_txt(r['mom'])}; E/P {ep}"), ctx)
+
+    with st.expander("Echivalentele UCITS: verificarea automată"):
+        rows = []
+        for sym in [s for s, _ in ideas_calc.ASSET_CLASSES] + list(ideas_calc.US_SECTORS):
+            ex_sym, ex_desc, ex_price, ex_cur, check = _ideas_exec(px, sym)
+            rows.append({"Semnal": sym, "UCITS": ex_sym or "—", "Descriere": ex_desc,
+                         "Ultimul preț": price_ro(ex_price), "Corelație săpt. 12 luni":
+                         "N/A" if not check or check["corr"] is None else format_ro(check["corr"], 2),
+                         "Stare": "—" if ex_sym is None else ("fără date Yahoo" if ex_price is None else
+                                  ("de verificat" if not check or not check["ok"] else "consistent"))})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+        st.caption("Simbolurile UCITS au fost alese fără acces la Yahoo din mediul de dezvoltare. „consistent”: Yahoo are "
+                   "date și corelația săptămânală cu ETF-ul semnal ≥ 0,80. Verifică ISIN-ul la broker înainte de ordin.")
+
+
+def render_ideas_stocks(ctx):
+    st.caption("Pas 1 (o descărcare): preț > SMA 200 și momentum 12-1 > 0, primele "
+               f"{ideas_calc.PREFILTER_US} din SUA și {ideas_calc.PREFILTER_EU} din Europa după momentum (universurile din "
+               "tools/univers_urmarit_*.txt). Pas 2: filtrul de calitate și cei trei catalizatori; idee = cel puțin 2 "
+               "catalizatori și nicio excludere de calitate. ~5 cereri Yahoo pe acțiune, cache 12 ore.")
+    c1, c2 = st.columns(2)
+    if c1.button("🔎 Scanează acțiunile", key="ideas_scan_stocks_btn", type="primary"):
+        st.session_state["ideas_scan_stocks"] = True
+    if c2.button("🔄 Recalculează (golește cache-ul acțiunilor)", key="ideas_scan_stocks_reset"):
+        get_ideas_stock_detail.clear()
+        st.session_state["ideas_scan_stocks"] = True
+    if not st.session_state.get("ideas_scan_stocks"):
+        return
+    us, eu = universes.symbols("us"), universes.symbols("eu")
+    try:
+        with st.spinner("Descarc prețurile universului (SUA + Europa)..."):
+            px = get_ideas_prices(tuple(us + eu + ["SPY", "EXSA.DE"]), "2y")
+    except Exception as exc:  # yfinance
+        st.warning(_ideas_fetch_error("prețurile acțiunilor", exc))
+        return
+    closes = px["Close"]
+    pre = pd.concat([ideas_calc.stock_prefilter(closes[[s for s in us if s in closes.columns]], ideas_calc.PREFILTER_US).assign(piata="SUA"),
+                     ideas_calc.stock_prefilter(closes[[s for s in eu if s in closes.columns]], ideas_calc.PREFILTER_EU).assign(piata="Europa")],
+                    ignore_index=True)
+    if pre.empty:
+        st.info("Nicio acțiune din universuri nu trece preselecția (preț > SMA 200 și momentum 12-1 > 0).")
+        return
+    today = pd.Timestamp(now_ro().date())
+    rows, found = [], []
+    prog = st.progress(0.0, text="Analizez candidații...")
+    for i, r in pre.iterrows():
+        sym = r["symbol"]
+        prog.progress((i + 1) / len(pre), text=f"Analizez {sym} ({i + 1}/{len(pre)})")
+        try:
+            d = get_ideas_stock_detail(sym)
+        except Exception as exc:  # yfinance: rețea, HTTP, format
+            logger.warning("idei, detalii %s: %s", sym, exc)
+            rows.append({"Simbol": sym, "Piață": r["piata"], "Nume": "N/A", "Momentum 12-1": _pct_txt(r["mom"]),
+                         "Față de maxim": _pct_txt(r["from_high"]), "Catalizatori": "N/A", "Calitate": "N/A",
+                         "Idee": "date indisponibile"})
+            continue
+        bench_sym = "SPY" if r["piata"] == "SUA" else "EXSA.DE"
+        reaction = ideas_calc.earnings_reaction(_ideas_close(px, sym), _ideas_close(px, bench_sym), d["ann_date"])
+        checks = [ideas_calc.pead_catalyst(d["surprise"], reaction, d["ann_date"], today),
+                  ideas_calc.revision_catalyst(d["revision"], d["rev_period"]),
+                  ideas_calc.high_catalyst(r["from_high"])]
+        cat = ideas_calc.catalyst_summary(checks)
+        qual = ideas_calc.quality_filter(d["altman_zone"], d["pio_passed"], d["pio_evaluable"], d["nd_ebitda"], d["financial"])
+        is_idea = cat["is_idea"] and not qual["excluded"]
+        rows.append({"Simbol": sym, "Piață": r["piata"], "Nume": d["name"], "Momentum 12-1": _pct_txt(r["mom"]),
+                     "Față de maxim": _pct_txt(r["from_high"]),
+                     "Catalizatori": f"{cat['passed']} din {cat['evaluable']} evaluabili",
+                     "Calitate": ("exclus: " + ", ".join(c["name"] for c in qual["checks"] if c["passed"] is False))
+                                 if qual["excluded"] else "trece",
+                     "Idee": "✅" if is_idea else ""})
+        if not is_idea:
+            continue
+        close = _ideas_close(px, sym)
+        score = technical_subscore(close)
+        m_lab, _, m_note = moment_label(score, False)
+        rsi_last = rsi_wilder(close).iloc[-1] if len(close) > 30 else None
+        fmt = lambda c: f"{'✅' if c['passed'] else '❌' if c['passed'] is False else '➖'} {c['name']}: {c['detail']}"
+        steps = [("Fundamental (filtru de calitate)", "; ".join(fmt(c) for c in qual["checks"])),
+                 ("Catalizatori", "; ".join(fmt(c) for c in checks)),
+                 ("Tehnic", f"momentum 12-1 {_pct_txt(r['mom'])}; peste SMA 200; moment {score_ro(score)} ({m_lab}); "
+                            f"RSI 14 {rsi_description(rsi_last)} (descriptiv)"),
+                 ("Regim", f"sector {d['sector'] or 'N/A'}; cadran {ctx['quad']['key'] or 'N/A'}")]
+        thesis = (f"{d['name']} trece {cat['passed']} din 3 catalizatori ("
+                  + ", ".join(c["name"].lower() for c in checks if c["passed"]) + ") și nu e exclusă de filtrul de calitate.")
+        news = []
+        for n in get_company_news_rss(sym, names=(d["name"],), limit=3):
+            news.append((html.escape(plain_text(n.get("title"))).replace("[", "(").replace("]", ")"), safe_link(n.get("link"))))
+        found.append({"strategy": "stock", "symbol": sym, "name": d["name"], "thesis": thesis, "steps": steps,
+                      "entry": _ideas_last(px, sym), "stop": ideas_atr_stop(px, sym), "exec_symbol": sym,
+                      "exec_desc": "acțiunea direct (XTB / IBKR)", "exec_price": _ideas_last(px, sym),
+                      "exec_currency": d["currency"], "exec_check": None, "alignment": None,
+                      "held": sym in ctx["holdings"], "benchmark": bench_sym,
+                      "earnings_days": ideas_calc.earnings_in_days(d["next_date"], today), "news": news,
+                      "signals": " | ".join(c["detail"] for c in checks if c["passed"])})
+    prog.empty()
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+    if not found:
+        st.info("Niciun candidat nu are cel puțin 2 catalizatori fără excludere de calitate.")
+    for idea in found:
+        render_idea(idea, ctx)
+
+
+def render_ideas_bvb(ctx):
+    st.caption("Singura parte cu bază testată în aplicație: treapta fundamentală (fișierele „Analiză companii”) × "
+               "momentul (trend + momentum 12-1, prag ≥ 80). " + bvb_calc.TEST_NOTE)
+    if st.button("🇷🇴 Calculează ideile BVB", key="ideas_bvb_btn", type="primary"):
+        st.session_state["ideas_bvb"] = True
+    if not st.session_state.get("ideas_bvb"):
+        return
+    files, err = list_company_files()
+    if err:
+        st.info(err)
+        return
+    with st.spinner("Citesc fișierele din „Analiză companii” (prima dată durează până la ~30 de secunde)..."):
+        data = build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+        prices = get_bvb_file_prices(tuple(sorted(data["companii"])))
+        cs = cross_section({t: current_indicators(df, prices.get(t)) for t, df in data["companii"].items()})
+    if cs.empty or "treapta" not in cs.columns:
+        st.info("Prea puține companii cu date pentru scorul transversal.")
+        return
+    syms = tuple(sorted(f"{t}.RO" for t in cs.index))
+    try:
+        px = get_ideas_prices(syms, "2y")
+    except Exception as exc:  # yfinance
+        st.warning(_ideas_fetch_error("prețurile BVB", exc))
+        px = None
+    rows, found = [], []
+    for tk in cs.index:
+        sym = f"{tk}.RO"
+        close = _ideas_close(px, sym) if px is not None else pd.Series(dtype=float)
+        moment = technical_subscore(close) if len(close) else None
+        tier = cs.loc[tk, "treapta"]
+        label, _color, hist_txt = bvb_calc.final_verdict(tier, moment)
+        band = bvb_calc.moment_band(moment)
+        rows.append({"Simbol": tk, "Scor fundamental": score_ro(cs.loc[tk, "scor"], 0) if pd.notna(cs.loc[tk, "scor"]) else "N/A",
+                     "Treaptă": {2.0: "FAVORABIL", 1.0: "NEUTRU", 0.0: "NEFAVORABIL"}.get(tier, "N/A"),
+                     "Moment": score_ro(moment), "Combinația": label, "Istoric": hist_txt})
+        if pd.notna(tier) and int(tier) == 2 and band == "high":
+            m, p, n = bvb_calc.TWO_STEP[(2, "high")][2]
+            thesis = (f"Treapta fundamentală de sus (scor {score_ro(cs.loc[tk, 'scor'], 0)}/100, percentile față de "
+                      f"{int(cs.loc[tk, 'n_comparate'])} companii) și moment {score_ro(moment)} ≥ 80. Istoric, combinația: "
+                      f"{_pct_txt(m)} față de media BVB la 6 luni, {_pct_txt(p, 0, sign=False)} cazuri pozitive (N = {n}).")
+            steps = [("Fundamental", f"scor {score_ro(cs.loc[tk, 'scor'], 0)}/100, treapta FAVORABIL (prag testat)"),
+                     ("Tehnic", f"moment {score_ro(moment)} (FAVORABIL, prag testat ≥ 80)"),
+                     ("Regim", "BVB: verdictul macro e pe SUA; vezi regimul BET în tabul Regim")]
+            found.append({"strategy": "bvb", "symbol": sym, "name": tk, "thesis": thesis, "steps": steps,
+                          "entry": _ideas_last(px, sym) if px is not None else None,
+                          "stop": ideas_atr_stop(px, sym) if px is not None else None, "exec_symbol": sym,
+                          "exec_desc": "acțiunea direct (Tradeville), RON",
+                          "exec_price": _ideas_last(px, sym) if px is not None else None, "exec_currency": "RON",
+                          "exec_check": None, "alignment": None, "held": sym in ctx["holdings"],
+                          "benchmark": "TVBETETF.RO", "signals": f"scor {score_ro(cs.loc[tk, 'scor'], 0)}; moment {score_ro(moment)}"})
+    n_cmp = int(cs["n_comparate"].max()) if "n_comparate" in cs.columns and cs["n_comparate"].notna().any() else 0
+    if cs["treapta"].isna().all():
+        st.caption(f"Treptele cer cel puțin 6 companii cu scor; acum au scor {n_cmp}. Fără treaptă, combinația e "
+                   "„DATE INSUFICIENTE”.")
+    order = {"CANDIDAT, MOMENT FAVORABIL": 0}
+    st.dataframe(pd.DataFrame(rows).sort_values("Combinația", key=lambda s: s.map(lambda x: order.get(x, 1))),
+                 hide_index=True, width='stretch')
+    if not found:
+        st.info("Niciun emitent nu are acum combinația „CANDIDAT, MOMENT FAVORABIL”.")
+    for idea in found:
+        render_idea(idea, ctx)
+
+
+def render_ideas_journal(today):
+    values = load_ideas_journal_values()
+    if values is None:
+        st.info(f"Foaia {ideas_calc.JOURNAL_SHEET} nu există încă: se creează la prima idee salvată (butonul din fișă).")
+        return
+    df, problems = ideas_calc.parse_journal(values, portfolio_sheet.cell_number)
+    for p in problems:
+        st.caption(p)
+    if df.empty:
+        st.info("Jurnalul e gol.")
+        return
+    syms = tuple(sorted(set(df["Symbol"]) | {b for b in df["Benchmark"] if b}))
+    try:
+        px = get_ideas_prices(syms, "5y")
+    except Exception as exc:  # yfinance
+        st.warning(_ideas_fetch_error("prețurile din jurnal", exc))
+        return
+    res = []
+    for _, r in df.iterrows():
+        e = ideas_calc.evaluate_entry(_ideas_close(px, r["Symbol"]), r["Date"], r["Entry"], r["Stop"], r["Horizon"],
+                                      pd.Timestamp(today), _ideas_close(px, r["Benchmark"]) if r["Benchmark"] else None)
+        res.append({**r.to_dict(), **e})
+    res = pd.DataFrame(res)
+    st.dataframe(pd.DataFrame({
+        "Data": res["Date"].dt.strftime("%d.%m.%Y"), "Simbol": res["Symbol"], "Strategie": res["Strategie"],
+        "Intrare": [price_ro(x) for x in res["Entry"]], "Stare": res["status"].fillna("N/A"),
+        "Ieșire": [x.strftime("%d.%m.%Y") if pd.notna(x) else "N/A" for x in res["exit_date"]],
+        "Randament": [_pct_txt(x) for x in res["ret"]], "Benchmark": res["Benchmark"],
+        "Exces": [_pct_txt(x) for x in res["excess"]]}), hide_index=True, width='stretch')
+    summ = ideas_calc.journal_summary(res)
+    st.markdown("**Pe strategie (doar ideile închise)**")
+    st.dataframe(pd.DataFrame({
+        "Strategie": summ["Strategie"], "Închise": summ["Închise"], "Deschise": summ["Deschise"],
+        "Randament mediu": [_pct_txt(x) for x in summ["Randament mediu"]],
+        "Exces mediu": [_pct_txt(x) for x in summ["Exces mediu"]],
+        "Pozitive": [_pct_txt(x, 0, sign=False) for x in summ["Pozitive"]],
+        "Verdict": ["eșantion mic (< 20), fără verdict" if s else "—" for s in summ["small"]]}),
+        hide_index=True, width='stretch')
+    st.caption("Ieșire: prima închidere la sau sub stopul de la intrare, altfel la orizont; până atunci, poziția e "
+               "„deschisă” și evaluată la ultima închidere. Prețuri ajustate cu dividendele (intrarea și stopul se "
+               "rescalează). Fără costuri și fără efectul valutar.")
+
+
+def render_ideas_page():
+    st.title("💡 Idei și strategii")
+    st.caption("Idei generate de reguli cu bază în literatura de specialitate, pe datele de azi. Pragurile sunt "
+               "netestate în aplicație (excepție: BVB). Fiecare idee își arată datele, regula, stopul și limita; "
+               "nu sunt îndemnuri de cumpărare.")
+    today = now_ro().date()
+    c1, c2 = st.columns([3, 1])
+    capital = c1.number_input("Capitalul de referință pentru dimensionare (lei)", min_value=0.0, value=0.0,
+                              step=1000.0, key="ideas_capital", help=IDEAS_HELP["capital"])
+    c2.metric("Risc pe idee", "1%", help=IDEAS_HELP["risk"])
+    with st.spinner("Calculez regimul și semnalele..."):
+        quad, quad_msg = ideas_quadrant()
+        try:
+            px, px_err = get_ideas_prices(IDEAS_ETF_SYMBOLS, "3y"), None
+        except Exception as exc:  # yfinance
+            px, px_err = None, _ideas_fetch_error("prețurile ETF", exc)
+        try:
+            fx = dict(get_fx_live())
+        except Exception as exc:  # yfinance
+            logger.warning("idei, curs live: %s", exc)
+            fx = {}
+        for code in ("USD", "EUR", "GBP"):   # rezervă: ultima închidere zilnică Yahoo (aceeași descărcare ca ETF-urile)
+            if not fx.get(code) and px is not None:
+                fx[code] = _ideas_last(px, f"{code}RON=X")
+        events, ev_msg = ideas_events(today)
+        ctx = {"capital": capital or None, "fx": fx, "quad": quad, "holdings": ideas_holdings(),
+               "cash": {"USD": ideas_cash("USD"), "EUR": ideas_cash("EUR")},
+               "events_txt": [f"{r['label']} {r['date']:%d.%m}" for r in events]}
+    t_reg, t_etf, t_stk, t_bvb, t_jur = st.tabs([":material/explore: Regim", ":material/stacked_line_chart: ETF-uri",
+                                                 ":material/business: Acțiuni", "🇷🇴 BVB", ":material/book: Jurnal"])
+    with t_reg:
+        render_ideas_regime(quad, quad_msg, events, ev_msg, ctx)
+    with t_etf:
+        render_ideas_etf(px, px_err, ctx)
+    with t_stk:
+        render_ideas_stocks(ctx)
+    with t_bvb:
+        render_ideas_bvb(ctx)
+    with t_jur:
+        render_ideas_journal(today)
+
+
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
@@ -3678,6 +4424,7 @@ def main():
         "6. Rezumatul Zilei": ":material/today: Rezumatul zilei",
         "7. Scanner Volum": ":material/radar: Scanner volum",
         "8. Watchlist": ":material/visibility: Watchlist",
+        "10. Idei și Strategii": ":material/lightbulb: Idei și strategii",
         "9. Glosar Economic": ":material/menu_book: Glosar economic",
     }
     sectiune = st.sidebar.radio("Mergi la:", list(_MENU_LABEL), format_func=_MENU_LABEL.get)
@@ -8148,6 +8895,9 @@ def main():
 
         elif not df_wl.attrs.get("problems"):
             st.info("Nu ai nicio acțiune în Watchlist. Folosește formularul de sus.")
+
+    elif sectiune == "10. Idei și Strategii":
+        render_ideas_page()
 
     elif sectiune == "9. Glosar Economic":
         glosar.render(st)
