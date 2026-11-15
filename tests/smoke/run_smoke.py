@@ -296,7 +296,7 @@ def fake_fred(code, source, start, end):
         return pd.DataFrame({code: [FRED_DAILY[code] + 0.001 * i for i in range(len(didx))]}, index=didx)
     idx = pd.date_range(end=TODAY - pd.offsets.MonthBegin(2), periods=16, freq="MS")
     base = {"CPIAUCSL": 320.0, "CPILFESL": 325.0, "PCEPILFE": 125.0, "UNRATE": 4.2, "FEDFUNDS": 4.3,
-            "PAYEMS": 159000.0, "ADPCHGS": 134000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
+            "PAYEMS": 159000.0, "ADPMNUSNERSA": 132971000.0, "JTSJOL": 7400.0, "RSAFS": 720000.0,
             "INDPRO": 103.0, "HOUST": 1350.0, "UMCSENT": 62.0, "IRLTLT01DEM156N": 3.1, "AAA": 5.4, "GS10": 4.5, "CFNAIMA3": 0.25}[code]
     step = 0.0025 if code not in ("UNRATE", "FEDFUNDS", "IRLTLT01DEM156N", "AAA", "GS10", "CFNAIMA3") else 0.0
     return pd.DataFrame({code: [base * (1 + step) ** i for i in range(len(idx))]}, index=idx)

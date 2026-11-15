@@ -3617,7 +3617,7 @@ def get_fred_macro_data():
         'PCEPILFE': 'Core PCE (indice, favorita FED)',
         'UNRATE': 'Rata Șomajului (%)',
         'PAYEMS': 'Nonfarm Payrolls (NFP Oficial)',
-        'ADPCHGS': 'ADP Private Payrolls',
+        macro_calc.FRED_ADP: 'ADP Private Payrolls',
         'JTSJOL': 'JOLTS (Job Openings)',
         'FEDFUNDS': 'Dobânda Cheie FED (%)',
         'RSAFS': 'Vânzări de Retail (Consum)',
@@ -3632,13 +3632,13 @@ def get_fred_macro_data():
     for code, name in indicators.items():
         try:
             df_item = web.DataReader(code, 'fred', start, end)
-            col_data = df_item[code].dropna()
+            col_data = macro_calc.fred_in_thousands(code, df_item[code].dropna())  # ADP: persoane → mii
             
             if len(col_data) >= 2:
                 val_curr = col_data.iloc[-1]
                 val_prev = col_data.iloc[-2]
                 
-                if code in ['PAYEMS', 'ADPCHGS', 'JTSJOL']:
+                if code in ['PAYEMS', macro_calc.FRED_ADP, 'JTSJOL']:
                     change = val_curr - val_prev
                     trend = f"{ro(change):+.0f}K"
                 elif code in ['UNRATE', 'FEDFUNDS', 'UMCSENT']:
@@ -8052,13 +8052,15 @@ def main():
                             elif '-' in val: return f'color: {DF_DOWN}; font-weight: bold'
                         return ''
                     
+                    # Format românesc cu punct la mii; numărătorii (NFP, ADP, JOLTS, retail, locuințe) fără zecimale.
+                    # Valorile rămân numerice dedesubt (Styler), deci sortarea pe coloană rămâne corectă.
+                    val_cols = ['Valoare Curentă', 'Lună Precedentă']
+                    count_rows = df_macro.index[df_macro['_simbol'].map(macro_calc.fred_decimals) == 0]
                     st.dataframe(
                         df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)', 'Evoluție (An/An)']].style
                         .map(color_macro_trend, subset=['Evoluție (MoM)'])
-                        .format({
-                            'Valoare Curentă': ro_spec('.2f'),
-                            'Lună Precedentă': ro_spec('.2f')
-                        }),
+                        .format(ro_spec(',.2f'), subset=val_cols)
+                        .format(ro_spec(',.0f'), subset=pd.IndexSlice[count_rows, val_cols]),
                         width='stretch', hide_index=True
                     )
                     st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = față de luna precedentă. An/An = față de aceeași lună a anului trecut; pentru indicii de prețuri, aceasta este rata inflației.")
@@ -8075,7 +8077,7 @@ def main():
                             
                             st.markdown(f"""
                             <div style="background:{bg_col}; padding:15px; border-radius:10px; border-left: 4px solid {b_col}; margin-bottom: 10px; font-size:14px; line-height:1.5;">
-                                {insight}
+                                {md_bold_html(insight)}
                             </div>
                             """, unsafe_allow_html=True)
                     else:
