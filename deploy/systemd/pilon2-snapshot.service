@@ -1,0 +1,18 @@
+# Jobul lunar Pilon II pe serverul lui Daniel. Copie în /etc/systemd/system/ (vezi deploy/README.md).
+# Rulează codul din checkout-ul main al aplicației, cu mediul separat din ~/apps/pilon2/.venv (pdfplumber).
+[Unit]
+Description=Pilon II: rapoartele Anexa 12 ale fondurilor de pensii -> Pilon2_detineri
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=svd
+Group=svd
+WorkingDirectory=/home/svd/apps/terminal-investitii
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/svd/apps/pilon2/.venv/bin/python -m tools.pilon2.run --data-dir /home/svd/apps/pilon2 --secrets /home/svd/apps/terminal-investitii/.streamlit/secrets.toml --luni 6
+TimeoutStartSec=45min
+MemoryMax=1G
+Nice=10
+NoNewPrivileges=true
