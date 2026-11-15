@@ -1,2 +1,5 @@
-# Mediul separat al jobului Pilon II de pe server (~/apps/pilon2/.venv). NU intră în requirements.txt al aplicației.
+# Mediul separat al jobului Pilon II de pe server (~/apps/pilon2/.venv), creat cu ACELAȘI Python ca aplicația:
+#   ~/apps/terminal-investitii/.venv/bin/python -m venv ~/apps/pilon2/.venv
+# NU intră în requirements.txt al aplicației. Versiunile comune sunt cele din requirements.txt al aplicației.
 pdfplumber==0.11.10
+requests==2.34.2
