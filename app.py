@@ -4709,7 +4709,9 @@ def load_pilon2():
 def _pilon2_metrics(cp, shares_out):
     """Rândul de carduri comun (Analiză companie și pagina Fonduri de pensii). Întoarce rândul de totaluri."""
     tot = p2_calc.totals(cp)
-    last = tot.iloc[-1]
+    # luna raportată de cele mai multe fonduri: ultima dată poate avea un singur fond (decalaje diferite)
+    ref = p2_calc.reference_date(cp)
+    last = tot[tot["Date"] == ref].iloc[-1] if ref is not None else tot.iloc[-1]
     pct = (last["Acțiuni"] / shares_out * 100) if (shares_out and pd.notna(last["Acțiuni"])) else None
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Deținere Pilon II", f"{ro_spec(',.0f')(last['Acțiuni'])} acț.", help=PILON2_HELP["detinere"])

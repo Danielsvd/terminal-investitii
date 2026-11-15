@@ -97,3 +97,11 @@ def test_empty_inputs():
     assert p2.fund_color("NN") == "#3987e5" and p2.fund_color("Altul") == p2.OTHER_COLOR
     tot = p2.fund_equity_totals(_df()).set_index(["Fond", "Date"])
     assert tot.loc[("NN", pd.Timestamp("2026-05-31")), "Valoare"] == 24000 + 400 + 999
+
+
+def test_reference_date_prefers_month_reported_by_most_funds():
+    df = _df()
+    extra = {**df.iloc[2].to_dict(), "Date": pd.Timestamp("2026-08-31")}     # doar NN a publicat august
+    panel = p2.build_panel(pd.DataFrame(df.to_dict("records") + [extra]))
+    assert p2.reference_date(panel) == pd.Timestamp("2026-07-31")
+    assert p2.reference_date(p2.company_panel(panel, "TLV.RO")) == pd.Timestamp("2026-07-31")
