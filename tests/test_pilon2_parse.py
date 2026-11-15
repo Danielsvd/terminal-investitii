@@ -217,3 +217,15 @@ def test_summary_and_cli(tmp_path, capsys):
     _make_pdf(pdf, ["fara continut util"])
     assert main([str(pdf)]) == 1          # raport fără cod de fond / dată / acțiuni → cod 1
     assert "Probleme:" in capsys.readouterr().out
+
+
+def test_published_date_variants():
+    from tools.pilon2.parse import parse_published_date as pub
+    assert pub(["Număr ieșire: 1226411/11.07.2025"]) == date(2025, 7, 11)
+    assert pub(["Numar iesire 1238802/29.08.2024"]) == date(2024, 8, 29)
+    assert pub(["Numar intern: 1223275/30.07.2024"]) == date(2024, 7, 30)
+    assert pub(["Nr. înregistrare: 50290/27.04.2023"]) == date(2023, 4, 27)
+    assert pub(["Cod depozitar: DEP-RO-374199    Nr. Inregistare: 1180237/28.07.2023"]) == date(2023, 7, 28)
+    assert pub(["Nr. Inreg.: 1183975/29.04.2024"]) == date(2024, 4, 29)
+    assert pub(["1307878/12.12.2025"]) == date(2025, 12, 12)
+    assert pub(["la data de: 31.08.2025"]) is None

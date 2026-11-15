@@ -42,7 +42,8 @@ _TOTAL = re.compile(rf"^total\s+activ\w*\s*:?\s*(?P<value>{_NUM})")
 _DATE = r"(\d{1,2})([./-])(\d{1,2})\2(\d{4})"
 _REPORT_DATE = re.compile(rf"la\s+data\s+de\s*:?\s*{_DATE}")
 _ONLY_DATE = re.compile(rf"^{_DATE}$")
-_PUBLISHED = re.compile(rf"(?:numar|nr\.?)\s*(?:iesire|inreg\w*|intern)\s*:?\s*\d+\s*/\s*{_DATE}")
+_PUBLISHED = re.compile(rf"(?:numar|nr\.?)\s*(?:iesire|inreg\w*\.?|intern)\s*:?\s*\d+\s*/\s*{_DATE}")
+_PUBLISHED_BARE = re.compile(rf"^\d{{6,8}}\s*/\s*{_DATE}$")      # Metropolitan 08.2025: „1307878/12.12.2025”
 _FUND_CODE = re.compile(r"\bFP2-\d+\b")
 _NOISE = re.compile(r"\d{5,}|\d[./-]\d{1,2}[./-]\d{2,4}|:|\bfp\d-\d+")   # coduri, date, „Etichetă:” — nu sunt nume
 
@@ -123,7 +124,8 @@ def parse_report_date(lines):
 def parse_published_date(lines):
     """Data numărului de ieșire / înregistrare (Metropolitan: „Număr ieșire: 1226411/11.07.2025”), dacă există."""
     for x in lines[:80]:
-        m = _PUBLISHED.search(normalize(x))
+        t = normalize(x)
+        m = _PUBLISHED.search(t) or _PUBLISHED_BARE.match(t)
         if m:
             return _to_date(*m.groups())
     return None
