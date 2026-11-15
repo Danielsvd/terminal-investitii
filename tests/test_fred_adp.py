@@ -41,3 +41,18 @@ def test_adp_missing_is_reported_not_zero():
     out = interpret_fred(_df([("PAYEMS", 159_250.0, 250.0)]))
     assert not any("DIVERGENȚĂ PRIVAT-STAT" in b for b in out)
     assert any("Fără date" in b and "ADP" in b for b in out)
+
+
+def test_fred_decimals_counts_vs_indices():
+    from analytics.macro import fred_decimals
+    for code in ("PAYEMS", FRED_ADP, "JTSJOL", "RSAFS", "HOUST"):
+        assert fred_decimals(code) == 0
+    for code in ("CPILFESL", "PCEPILFE", "UNRATE", "FEDFUNDS", "INDPRO", "UMCSENT"):
+        assert fred_decimals(code) == 2
+
+
+def test_barometer_formatting_ro():
+    from data.helpers import ro_spec, md_bold_html
+    assert ro_spec(",.0f")(159293.0) == "159.293"
+    assert ro_spec(",.2f")(339.9) == "339,90"
+    assert md_bold_html("🔥 **INFLAȚIE REZISTENTĂ:** prețuri „lipicioase”") == "🔥 <b>INFLAȚIE REZISTENTĂ:</b> prețuri „lipicioase”"

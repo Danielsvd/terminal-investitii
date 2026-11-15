@@ -8052,13 +8052,15 @@ def main():
                             elif '-' in val: return f'color: {DF_DOWN}; font-weight: bold'
                         return ''
                     
+                    # Format românesc cu punct la mii; numărătorii (NFP, ADP, JOLTS, retail, locuințe) fără zecimale.
+                    # Valorile rămân numerice dedesubt (Styler), deci sortarea pe coloană rămâne corectă.
+                    val_cols = ['Valoare Curentă', 'Lună Precedentă']
+                    count_rows = df_macro.index[df_macro['_simbol'].map(macro_calc.fred_decimals) == 0]
                     st.dataframe(
                         df_macro[['Indicator', 'Valoare Curentă', 'Lună Precedentă', 'Evoluție (MoM)', 'Evoluție (An/An)']].style
                         .map(color_macro_trend, subset=['Evoluție (MoM)'])
-                        .format({
-                            'Valoare Curentă': ro_spec('.2f'),
-                            'Lună Precedentă': ro_spec('.2f')
-                        }),
+                        .format(ro_spec(',.2f'), subset=val_cols)
+                        .format(ro_spec(',.0f'), subset=pd.IndexSlice[count_rows, val_cols]),
                         width='stretch', hide_index=True
                     )
                     st.caption("Sursa: Federal Reserve Economic Data (FRED). MoM = față de luna precedentă. An/An = față de aceeași lună a anului trecut; pentru indicii de prețuri, aceasta este rata inflației.")
@@ -8075,7 +8077,7 @@ def main():
                             
                             st.markdown(f"""
                             <div style="background:{bg_col}; padding:15px; border-radius:10px; border-left: 4px solid {b_col}; margin-bottom: 10px; font-size:14px; line-height:1.5;">
-                                {insight}
+                                {md_bold_html(insight)}
                             </div>
                             """, unsafe_allow_html=True)
                     else:

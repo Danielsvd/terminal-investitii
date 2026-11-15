@@ -11,6 +11,16 @@ FRED_ADP = "ADPMNUSNERSA"
 FRED_PERSONS_TO_THOUSANDS = frozenset({FRED_ADP})
 
 
+# Serii FRED care sunt numărători (mii de persoane, mii de locuințe, milioane USD): afișate fără zecimale.
+# Celelalte (indici de prețuri, producție, rate în %, sentiment) rămân cu 2 zecimale.
+FRED_COUNT_CODES = frozenset({"PAYEMS", FRED_ADP, "JTSJOL", "RSAFS", "HOUST"})
+
+
+def fred_decimals(code):
+    """Zecimalele afișate pentru valoarea unei serii FRED: 0 la numărători, 2 în rest."""
+    return 0 if code in FRED_COUNT_CODES else 2
+
+
 def fred_in_thousands(code, series):
     """Seria FRED în unitatea folosită de aplicație: persoane → mii pentru codurile din FRED_PERSONS_TO_THOUSANDS.
 
