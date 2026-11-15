@@ -1,0 +1,2 @@
+# Mediul separat al jobului Pilon II de pe server (~/apps/pilon2/.venv). NU intră în requirements.txt al aplicației.
+pdfplumber==0.11.10
