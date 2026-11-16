@@ -261,8 +261,15 @@ def test_join_split_value():
                       "ROTLVAACNOR1 1,058,918,959.06 2.08",
                       "381,221,274.00 3.90%",
                       "d. Acţiuni 2,373,226,297.13 21.5553%",
-                      "b. Participații la fonduri de investiții private de capital 9 3,187,550.03 0.8464%"):
+                      "Ministerul Finantelor Publice RO1631DBN055 117,233,612.80 1.65%",
+                      "a. Titluri de stat cu scadenta mai mica de 1 an - 0.00%"):
         assert join_split_value(unchanged) == unchanged
+    # antete rupte (Aripi 2025, BCR 2024): totalul real e cel lipit
+    assert join_split_value("d. Actiuni 5 ,178,640,378.75 32.39%") == "d. Actiuni 5,178,640,378.75 32.39%"
+    assert join_split_value("b. Participații la fonduri de investiții private de capital 9 3,187,550.03 0.8464%") == \
+        "b. Participații la fonduri de investiții private de capital 93,187,550.03 0.8464%"
+    assert join_split_value("2. Valori mobiliare tranzactionate, din care: 2 2,498,274,971.79 94.62%") == \
+        "2. Valori mobiliare tranzactionate, din care: 22,498,274,971.79 94.62%"
 
 
 def test_bcr_2024_split_digits_sum_matches_header():
@@ -277,3 +284,22 @@ def test_bcr_2024_split_digits_sum_matches_header():
     assert next(r for r in eq if r["ISIN"] == "DE0005552004")["Valoare_RON"] == 4732557.70
     assert check(rep) == []
     assert next(r for r in rep.rows if r["ISIN"] == "LU0380865021")["Clasa"] == "opcvm"
+
+
+def test_aripi_2025_split_equity_header():
+    """Aripi, 30.06.2025: antetul „d. Actiuni 5 ,178,…” rupt; după lipire, totalul se citește și suma se verifică."""
+    lines = ["Cod fond FP2-49", "Structura portofoliului de investitii la data de 30/06/2025",
+             "2. Valori mobiliare tranzactionate, din care: 1 0,000,000,000.00 90.00%",
+             "c. Obligatiuni corporative tranzactionate 900,000,000.00 9.00%",
+             "Banca Comerciala Romana RO1AQREPLMW7 9 00,000,000.00 9.00%",
+             "d. Actiuni 1 ,000,000,000.00 10.00%",
+             "Axa SA FR0000120628 129,367,929.67 1.29%",
+             "Banca Transilvania SA ROTLVAACNOR1 7 44,043,444.56 7.44%",
+             "Basf Se DE000BASF111 1 26,588,625.77 1.27%",
+             "Page 2 of 3",
+             "e. Obligatiuni BERD, BEI, BM - 0.00%"]
+    rep = parse_lines(lines)
+    assert rep.fund_code == "FP2-49" and rep.report_date == date(2025, 6, 30)
+    assert rep.equity_header_total == 1000000000.00
+    assert [r["ISIN"] for r in rep.equities()] == ["FR0000120628", "ROTLVAACNOR1", "DE000BASF111"]
+    assert check(rep) == []

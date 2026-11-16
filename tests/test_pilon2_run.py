@@ -13,14 +13,15 @@ def _rep(lines):
     return parse_lines(lines.splitlines())
 
 
-REP = _rep("""Cod fond de pensii: FP2-54
+REP_TEXT = """Cod fond de pensii: FP2-54
 la data de: 31.07.2026
 2. Valori mobiliare tranzactionate, din care: 3,500.00 35.000%
 d) Actiuni 3,500.00 35.000%
 Banca Transilvania SA ROTLVAACNOR1 2,450.00 24.500%
 OMV Petrom SA ROSNPPACNOR9 1,000.00 10.000%
 OMV Petrom SA ROSNPPACNOR9 50.00 0.500%
-""")
+"""
+REP = _rep(REP_TEXT)
 
 
 def test_derive_quantity():
@@ -40,6 +41,14 @@ def test_report_problems_date_and_code_mismatch():
     assert run.report_problems(REP, date(2026, 7, 31), "FP2-54") == []
     probs = run.report_problems(REP, date(2026, 6, 30), "FP2-31")
     assert any("data din raport" in p for p in probs) and any("alt fond" in p for p in probs)
+    # raport fără cod (NN din arhivă, Aripi 2026): primește codul sursei; data se verifică în continuare
+    no_code = _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", ""))
+    assert no_code.fund_code is None
+    assert run.report_problems(no_code, date(2026, 7, 31), "FP2-54") == [] and no_code.fund_code == "FP2-54"
+    no_code2 = _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", ""))
+    assert any("data din raport" in p for p in run.report_problems(no_code2, date(2026, 6, 30), "FP2-54"))
+    assert any("codul fondului" in p for p in run.report_problems(
+        _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", "")), date(2026, 7, 31), None))
 
 
 def test_choose_symbol_and_map_row():
