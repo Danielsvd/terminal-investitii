@@ -28,5 +28,6 @@ doar pe server și nu intră niciodată în repo.
 - Programare: `systemd/pilon2-snapshot.timer`, pe 5 și pe 20 ale lunii. Un raport cu probleme nu se scrie (apare
   „RESPINS” în jurnal). Jurnal: `journalctl -u pilon2-snapshot -n 80 --no-pager`.
 - Timerul se instalează doar după ce codul e în `main` (rulează din checkout-ul aplicației).
-- NN publică pe pagină doar raportul curent. Citirea arhivei `.zip` e oprită (16.11.2026: arhiva luată conținea
-  alt fond); se pornește din `surse.json` cu `{"nn": {"arhiva_zip": true}}` după ce se găsește arhiva corectă.
+- NN publică pe pagină doar raportul curent; lunile vechi se scot din arhiva `.zip` a fondului Pilon II
+  („…fond pensii private 2021 - 2026.zip”; pagina are și arhivele NN Activ/Optim, excluse prin `filtru_zip`).
+  Arhiva se păstrează în `pdf/nn/_arhiva.zip` + `_arhiva.url` și se descarcă din nou cel mult o dată la 30 de zile.

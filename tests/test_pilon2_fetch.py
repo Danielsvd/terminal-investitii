@@ -222,7 +222,7 @@ def test_fetch_all_takes_missing_months_from_zip_and_caches_it(tmp_path):
                   FakeResp(200, content=b"%PDF iulie"),
               NN_ZIP_URL: FakeResp(200, ctype="application/zip", content=z)}
     s = FakeSession(routes)
-    src = {"nn": dict(fetch.SOURCES["nn"], arhiva_zip=True)}       # oprită implicit din 16.11.2026
+    src = {"nn": dict(fetch.SOURCES["nn"], filtru_pdf=None, filtru_zip=None)}
     res = fetch.fetch_all(tmp_path, 3, session=s, sources=src, today=date(2026, 8, 15), pause=0)
     assert [(d, new) for d, _p, new in res["nn"]] == [(date(2026, 7, 31), True), (date(2026, 6, 30), False)]
     assert fetch.archive_path(tmp_path, "nn", date(2026, 7, 31)).read_bytes() == b"%PDF iulie"   # de pe pagină
@@ -284,6 +284,44 @@ def test_metropolitan_page_fallback_names():
     assert [d for _u, _t, d in links] == [date(2025, 5, 31)]
 
 
-def test_nn_zip_off_and_only_aripi_accepts_missing_code():
-    assert fetch.SOURCES["nn"]["arhiva_zip"] is False
+def test_only_aripi_accepts_missing_code():
     assert [k for k, v in fetch.SOURCES.items() if v.get("cod_lipsa_ok")] == ["aripi"]
+
+
+# Legăturile reale de pe nn.ro/rapoarte-financiare (diagnostic de pe server, 16.11.2026), în ordinea din pagină.
+NN_REAL_HTML = """
+<a href="/sites/default/files/2026-11/Arhiva%20Structura%20detaliata%20a%20portofoliului%20de%20investitii%20fond%20NN%20Activ%202021%20-%202026.ZIP">Arhiva Structura detaliata a portofoliului de investitii fond NN Activ 2021 - 2026</a>
+<a href="/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_NN%20ACTIV.pdf">Structura detaliata a portofoliului de investitii fond NN Activ curenta (2026)</a>
+<a href="/sites/default/files/2026-11/Arhiva%20Structura%20detaliata%20a%20portofoliului%20de%20investitii%20fond%20NN%20Optim%202021%20-%202026.ZIP">Arhiva Structura detaliata a portofoliului de investitii fond NN Optim 2021 - 2026</a>
+<a href="/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_NN%20OPTIM.pdf">Structura detaliata a portofoliului de investitii fond NN Optim curenta (2026)</a>
+<a href="/sites/default/files/2026-11/Arhiva%20Structura%20detaliata%20a%20portofoliului%20de%20investitii%20fond%20pensii%20private%202021%20-%202026.zip">Arhiva Structura detaliata a portofoliului de investitii fond pensii private 2021 - 2026</a>
+<a href="/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_FPAP%20NN.pdf">Structura detaliata a portofoliului de investitii fond pensii private curenta (2026)</a>
+<a href="/sites/default/files/2022-07/Arhiva%20Structura%20portofoliului%20de%20investitii%20a%20fondului%20de%20pensii%20private%202017%20-%202022.zip">Arhiva Structura portofoliului de investitii a fondului de pensii private 2017 - 2022</a>
+"""
+
+
+def test_nn_filters_pick_pilon2_fund_not_pilon3():
+    src = fetch.SOURCES["nn"]
+    assert src["arhiva_zip"] is True
+    assert fetch.zip_links(NN_REAL_HTML, NN_PAGE, src["filtru_zip"]) == [
+        "https://www.nn.ro/sites/default/files/2026-11/Arhiva%20Structura%20detaliata%20a%20portofoliului%20de%20"
+        "investitii%20fond%20pensii%20private%202021%20-%202026.zip"]
+    assert fetch.zip_links(NN_REAL_HTML, NN_PAGE)[0].endswith("NN%20Activ%202021%20-%202026.ZIP")   # fără filtru: greșit
+    s = FakeSession({NN_PAGE: FakeResp(200, ctype="text/html", text=NN_REAL_HTML)})
+    assert fetch.discover("nn", src, [date(2026, 7, 31)], s, pause=0) == [
+        (date(2026, 7, 31), "https://www.nn.ro/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_FPAP%20NN.pdf")]
+
+
+def test_fetch_zip_cache_without_url_file_is_refetched(tmp_path):
+    """Arhiva din cache fără `_arhiva.url` (cea greșită, NN Activ, din 16.11.2026) se descarcă din nou."""
+    cache = tmp_path / "pdf" / "nn" / "_arhiva.zip"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(_zip_bytes({"Iunie 2026.pdf": b"%PDF activ"}))
+    good = ("https://www.nn.ro/sites/default/files/2026-11/Arhiva%20Structura%20detaliata%20a%20portofoliului%20de%20"
+            "investitii%20fond%20pensii%20private%202021%20-%202026.zip")
+    s = FakeSession({NN_PAGE: FakeResp(200, ctype="text/html", text=NN_REAL_HTML),
+                     good: FakeResp(200, ctype="application/zip", content=_zip_bytes({"Iunie 2026.pdf": b"%PDF p2"}))})
+    assert fetch.fetch_zip(s, fetch.SOURCES["nn"], tmp_path, "nn") == cache
+    assert ("GET", good) in s.calls and (cache.parent / "_arhiva.url").read_text() == good
+    s2 = FakeSession({})
+    assert fetch.fetch_zip(s2, fetch.SOURCES["nn"], tmp_path, "nn") == cache and s2.calls == []
