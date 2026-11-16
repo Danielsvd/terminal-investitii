@@ -37,7 +37,13 @@ SEARCH_PAUSE_S = 1.0
 # --- Funcții pure ---------------------------------------------------------------------------------
 
 def report_problems(rep, archive_date, expected_code):
-    """Problemele raportului, inclusiv potrivirea cu fișierul din arhivă și cu fondul așteptat."""
+    """Problemele raportului, inclusiv potrivirea cu fișierul din arhivă și cu fondul așteptat.
+
+    Un raport fără cod de fond (NN din arhiva .zip, Aripi din 12.2025) primește codul așteptat al sursei: fișierul
+    vine de pe site-ul fondului, iar data și suma acțiunilor se verifică în continuare. Un cod diferit rămâne problemă.
+    """
+    if rep.fund_code is None and expected_code:
+        rep.fund_code = expected_code
     problems = parse.check(rep)
     if rep.report_date and rep.report_date != archive_date:
         problems.append(f"data din raport {rep.report_date} ≠ data fișierului {archive_date}")

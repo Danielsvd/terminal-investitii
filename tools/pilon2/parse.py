@@ -7,8 +7,9 @@ pondere în activul total. Diferă doar așezarea în pagină:
   - numerele pe rândul de jos: „Hidroelectrica SA RO4Q0Z5RO1B6” / „381,221,274.00 3.90%”
   - doar ISIN (Aripi, din 31.03.2026): „RO4Q0Z5RO1B6 381,221,274.00 3.90%”
   - ponderea fără „%” (NN):   „... 1,058,918,959.06 2.08”
-  - prima cifră a valorii despărțită de rest (BCR, 2024): „Hidroelectrica SA RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%”,
-    „DHL Group DE0005552004 4 ,732,557.70 0.0430%” — se lipește la loc înainte de citire (`join_split_value`).
+  - prima cifră a valorii despărțită de rest (BCR 2024, Aripi): „Hidroelectrica SA RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%”,
+    „DHL Group DE0005552004 4 ,732,557.70 0.0430%”, „d. Actiuni 5 ,178,640,378.75 32.39%” — se lipește la loc
+    înainte de citire (`join_split_value`), și în rândurile cu ISIN, și în antetele secțiunilor.
 
 Rapoartele NU conțin numărul de acțiuni; cantitatea se derivă în altă parte (valoare / preț).
 
@@ -20,14 +21,15 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 
-# Codurile ASF ale fondurilor, văzute în rapoarte (15–16.11.2026). Cele lipsă (AZT, Aripi) se adaugă
-# după primul raport citit; până atunci fondul apare cu codul brut.
+# Codurile ASF ale fondurilor, văzute în rapoarte (15–16.11.2026). Cel lipsă (AZT) se adaugă după primul raport
+# citit; până atunci fondul apare cu codul brut.
 FUND_CODES = {
     "FP2-31": "NN",
     "FP2-54": "Vital",
     "FP2-83": "BT Pilon 2",
     "FP2-96": "Metropolitan Life",
     "FP2-123": "BCR",
+    "FP2-49": "Aripi",
 }
 
 EQUITY = "actiuni"
@@ -47,10 +49,10 @@ _REPORT_DATE = re.compile(rf"la\s+data\s+de\s*:?\s*{_DATE}")
 _ONLY_DATE = re.compile(rf"^{_DATE}$")
 _PUBLISHED = re.compile(rf"(?:numar|nr\.?)\s*(?:iesire|inreg\w*\.?|intern)\s*:?\s*\d+\s*/\s*{_DATE}")
 _PUBLISHED_BARE = re.compile(rf"^\d{{6,8}}\s*/\s*{_DATE}$")      # Metropolitan 08.2025: „1307878/12.12.2025”
-# Valoare ruptă de pdfplumber: 1–3 cifre, spațiu, restul valorii (cu zecimale), apoi ponderea. Se lipește doar după
-# un ISIN sau pe un rând care are numai numere, unde trei numere la rând nu au alt sens.
-_SPLIT_AFTER_ISIN = re.compile(rf"(\b{_ISIN}\s+)(\d{{1,3}}) (,?\d[\d,]*\.\d+)(\s+{_NUM}\s*%?\s*)$")
-_SPLIT_NUM_ONLY = re.compile(rf"^(\d{{1,3}}) (,?\d[\d,]*\.\d+)(\s+{_NUM}\s*%?\s*)$")
+# Valoare ruptă de pdfplumber: 1–3 cifre izolate, spațiu, restul valorii (cu zecimale), apoi ponderea, la capătul
+# rândului. Trei numere la rând nu au alt sens în raport (un rând are cel mult valoare + pondere). Dacă totuși un
+# titlu de secțiune s-ar termina cu un număr, totalul lipit greșit nu trece de verificarea sumei → raport respins.
+_SPLIT_VALUE = re.compile(rf"(^|\s)(\d{{1,3}}) (,?\d[\d,]*\.\d+)(\s+{_NUM}\s*%?\s*)$")
 _FUND_CODE = re.compile(r"\bFP2-\d+\b")
 _NOISE = re.compile(r"\d{5,}|\d[./-]\d{1,2}[./-]\d{2,4}|:|\bfp\d-\d+")   # coduri, date, „Etichetă:” — nu sunt nume
 
@@ -89,13 +91,13 @@ def parse_amount(text):
 
 
 def join_split_value(line):
-    """Lipește prima cifră a valorii, despărțită de rest de extragerea textului (BCR, rapoartele din 2024).
+    """Lipește prima cifră a valorii, despărțită de rest de extragerea textului (BCR 2024, Aripi).
 
-    „... RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%” → „... RO4Q0Z5RO1B6 344,525,072.00 3.1292%”.
+    „... RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%” → „... RO4Q0Z5RO1B6 344,525,072.00 3.1292%”;
+    „d. Actiuni 5 ,178,640,378.75 32.39%” → „d. Actiuni 5,178,640,378.75 32.39%”.
     Un rând normal (ISIN, valoare, pondere) nu se schimbă.
     """
-    s = _SPLIT_AFTER_ISIN.sub(r"\1\2\3\4", line)
-    return _SPLIT_NUM_ONLY.sub(r"\1\2\3", s)
+    return _SPLIT_VALUE.sub(r"\1\2\3\4", line)
 
 
 def isin_checksum_ok(isin):

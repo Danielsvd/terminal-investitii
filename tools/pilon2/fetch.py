@@ -71,7 +71,7 @@ SOURCES = {
                      for name in _ML_NAMES],
     },
     "aripi": {
-        "fond": "Aripi", "cod": None, "tip": "sablon",
+        "fond": "Aripi", "cod": "FP2-49", "tip": "sablon",
         "sabloane": [_GEN + "{Y}{m}{d}_pII_inv_det.pdf"],
         "pagina": "https://www.generali.ro/pensii/pensii-obligatorii/acte-si-rapoarte/date-financiare-fondul-aripi/",
     },
