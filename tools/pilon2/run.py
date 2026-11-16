@@ -31,6 +31,7 @@ from tools.pilon2 import fetch, parse  # noqa: E402
 SPREADSHEET_NAME = "portofoliu_db"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 MAX_PRICE_LAG_DAYS = 7
+PRICE_DECIMALS = 4          # prețurile BVB au cel mult 4 zecimale (ex. 0,8699 lei)
 SEARCH_PAUSE_S = 1.0
 
 
@@ -99,7 +100,9 @@ def price_on_or_before(close, symbol, d, max_lag_days=MAX_PRICE_LAG_DAYS):
     s = s[(s.index.date <= d) & (s.index.date >= d - timedelta(days=max_lag_days))]
     if s.empty:
         return None, None
-    v = float(s.iloc[-1])
+    # Yahoo dă închiderile BVB cu zgomot de virgulă mobilă (36.900002 în loc de 36.90). La 62 mil. de acțiuni,
+    # 0,000002 lei mută câtul cu ~3 acțiuni; prețurile BVB au cel mult 4 zecimale, deci se rotunjesc la 4.
+    v = round(float(s.iloc[-1]), PRICE_DECIMALS)
     return (v, s.index[-1].date()) if v > 0 else (None, None)
 
 
