@@ -156,3 +156,22 @@ def test_main_proba_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "open_spreadsheet", lambda _s: pytest.fail("--proba nu deschide foile"))
     assert run.main(["--data-dir", str(tmp_path), "--proba"]) == 0
     assert parse.EQUITY == "actiuni"
+
+
+def test_main_same_report_twice_in_one_run_written_once(tmp_path, monkeypatch):
+    """NN, 16.11.2026: același raport ajuns de două ori în aceeași rulare → rândurile se scriu o dată."""
+    a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    a.write_bytes(b"%PDF")
+    b.write_bytes(b"%PDF")
+    monkeypatch.setattr(run.fetch, "fetch_all", lambda *x, **k: {
+        "vital": [(date(2026, 7, 31), a, True), (date(2026, 7, 31), b, True)]})
+    monkeypatch.setattr(run.parse, "parse_pdf", lambda path: REP)
+    sheet = FakeSheet()
+    monkeypatch.setattr(run, "open_spreadsheet", lambda _s: sheet)
+    monkeypatch.setattr(run, "ensure_worksheet", lambda sh, title, header: sh.ws[title])
+    monkeypatch.setattr(run, "yahoo_symbol", lambda isin: "")
+    monkeypatch.setattr(run, "download_closes", lambda syms, dates: _close())
+    monkeypatch.setattr(run, "SEARCH_PAUSE_S", 0)
+    assert run.main(["--data-dir", str(tmp_path), "--fond", "vital"]) == 0
+    rows = sheet.ws["Pilon2_detineri"].appended
+    assert len(rows) == len({(r[0], r[1], r[2]) for r in rows}) == 2

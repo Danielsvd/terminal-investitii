@@ -256,6 +256,7 @@ def main(argv=None):
     for _key, fund_name, rep, published in good:
         for row in build_rows(fund_name, rep, isin_map, close, published):
             if (row[0], row[1], row[2]) not in have:
+                have.add((row[0], row[1], row[2]))       # și fără dubluri în aceeași rulare
                 rows.append(row)
     if rows:
         ws_hold.append_rows(rows, value_input_option="RAW")

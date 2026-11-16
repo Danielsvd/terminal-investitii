@@ -140,6 +140,17 @@ def test_discover_page_without_matching_reports_says_so(capsys):
     assert "pagina nu are rapoarte" in capsys.readouterr().err
 
 
+def test_discover_page_one_link_per_month():
+    """NN, 16.11.2026: același raport apare în mai multe taburi → o singură descărcare pe lună."""
+    page = "https://nn.ro/r"
+    html = ('<a href="/a/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf">Structura</a>'
+            '<a href="/b/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf">Structura</a>'
+            '<a href="/c/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf">Structura</a>')
+    s = FakeSession({page: FakeResp(200, ctype="text/html", text=html)})
+    assert fetch.discover("nn", {"tip": "pagina", "pagina": page}, [date(2026, 7, 31)], s, pause=0) == [
+        (date(2026, 7, 31), "https://nn.ro/a/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf")]
+
+
 def test_sources_aripi_nn_bcr_16_11():
     assert fetch.candidate_urls(fetch.SOURCES["aripi"], date(2024, 2, 29)) == [
         "https://www.generali.ro/wp-content/uploads/pension-documents/pensii/pensii-obligatorii/"

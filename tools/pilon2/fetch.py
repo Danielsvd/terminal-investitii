@@ -243,7 +243,11 @@ def discover(key, source, dates, session, pause=PAUSE_S):
         print(f"  ! {key}: pagina {page}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return found
     wanted = set(dates)
-    on_page = [(d, url) for url, _text, d in pdf_links(r.text, page) if d is not None and d in wanted]
+    on_page, seen = [], set()
+    for url, _text, d in pdf_links(r.text, page):
+        if d is not None and d in wanted and d not in seen:   # o singură legătură pe lună (NN o pune în mai multe taburi)
+            seen.add(d)
+            on_page.append((d, url))
     if not on_page:
         print(f"  {key}: pagina nu are rapoarte pentru lunile căutate ({page})", file=sys.stderr)
     return sorted(set(found + on_page), reverse=True)
