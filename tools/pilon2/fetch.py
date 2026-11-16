@@ -83,10 +83,11 @@ SOURCES = {
         "sabloane": [_GEN + "{Y}{m}{d}_pII_inv_det.pdf"],
         "pagina": "https://www.generali.ro/pensii/pensii-obligatorii/acte-si-rapoarte/date-financiare-fondul-aripi/",
     },
-    # NN: pagina are doar raportul curent. Arhiva .zip luată de pe pagină (16.11.2026) conținea ALT fond (~1,2 mld.
-    # lei, fără cod) → oprită până se identifică arhiva fondului Pilon II (`"arhiva_zip": true` în surse.json).
+    # NN: pagina are rapoarte pentru 3 fonduri (NN Activ, NN Optim — Pilon III — și Pilon II). Filtrele aleg
+    # fondul Pilon II: raportul curent „…31.07.2026_FPAP NN.pdf”, arhiva „…fond pensii private 2021 - 2026.zip”.
+    # 16.11.2026: fără filtru se luase arhiva NN Activ (~1,2 mld. lei).
     "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": "https://www.nn.ro/rapoarte-financiare",
-           "arhiva_zip": False},
+           "arhiva_zip": True, "filtru_pdf": "fpap", "filtru_zip": "fond pensii private"},
     # AZT: formular GET cu anul și luna; raportul e „…/VIITORUL/2026/7/Structura_portofoliu_investitii/
     # AZT_Viitorul_Tau_31072026.pdf” (văzut pe 16.11.2026).
     "azt": {"fond": "AZT Viitorul Tău", "cod": "FP2-20", "tip": "pagina_lunara",
@@ -213,8 +214,18 @@ def pdf_links(html, base_url):
     return out
 
 
-def zip_links(html, base_url):
-    """Legăturile spre arhive .zip cu rapoarte de structură (NN: „Arhiva Structura detaliata … 2021 - 2026.zip”)."""
+def _link_matches(url, text, must_contain):
+    """True dacă legătura (adresă + text, litere mici, %20 → spațiu) conține `must_contain` (sau nu e cerut nimic)."""
+    if not must_contain:
+        return True
+    return str(must_contain).lower() in (url + " " + text).lower().replace("%20", " ")
+
+
+def zip_links(html, base_url, must_contain=None):
+    """Legăturile spre arhive .zip cu rapoarte de structură (NN: „Arhiva Structura detaliata … 2021 - 2026.zip”).
+
+    Pagina NN are arhive pentru 3 fonduri (NN Activ, NN Optim — Pilon III — și fondul Pilon II); `must_contain`
+    alege fondul (NN Pilon II: „fond pensii private”)."""
     p = _LinkParser()
     p.feed(html or "")
     out = []
@@ -223,7 +234,8 @@ def zip_links(html, base_url):
             continue
         url = urljoin(base_url, href.strip())
         low = (url + " " + text).lower().replace("%20", " ")
-        if ".zip" in low and "arhiva" in low and "structura" in low and url not in out:
+        if (".zip" in low and "arhiva" in low and "structura" in low and url not in out
+                and _link_matches(url, text, must_contain)):
             out.append(url)
     return out
 
@@ -268,14 +280,15 @@ def extract_from_zip(zip_path, dates, data_dir, key):
 def fetch_zip(session, source, data_dir, key, now=None):
     """Arhiva .zip a fondului, din cache (pdf/<cheie>/_arhiva.zip) dacă e mai nouă de ZIP_MAX_AGE_DAYS; altfel de pe pagină."""
     cache = Path(data_dir) / "pdf" / key / "_arhiva.zip"
+    url_file = cache.with_name("_arhiva.url")       # adresa arhivei din cache; fără ea, cache-ul nu e de încredere
     now = time.time() if now is None else now
-    if cache.is_file() and now - cache.stat().st_mtime < ZIP_MAX_AGE_DAYS * 86400:
+    if cache.is_file() and url_file.is_file() and now - cache.stat().st_mtime < ZIP_MAX_AGE_DAYS * 86400:
         return cache
     page = source.get("pagina")
     try:
         r = session.get(page, timeout=TIMEOUT_S)
         r.raise_for_status()
-        links = zip_links(r.text, page)
+        links = zip_links(r.text, page, source.get("filtru_zip"))
         if not links:
             print(f"  {key}: pagina nu are arhivă .zip cu rapoarte", file=sys.stderr)
             return cache if cache.is_file() else None
@@ -291,6 +304,7 @@ def fetch_zip(session, source, data_dir, key, now=None):
             print(f"  ! {key}: {links[0]}: răspunsul nu e o arhivă .zip", file=sys.stderr)
             return cache if cache.is_file() else None
         tmp.replace(cache)
+        url_file.write_text(links[0], encoding="utf-8")
         return cache
     except Exception as exc:  # rețea: se raportează, restul rulării continuă
         print(f"  ! {key}: arhiva .zip: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -355,7 +369,9 @@ def discover(key, source, dates, session, pause=PAUSE_S):
         return found
     wanted = set(dates)
     on_page, seen = [], set()
-    for url, _text, d in pdf_links(r.text, page):
+    for url, text, d in pdf_links(r.text, page):
+        if not _link_matches(url, text, source.get("filtru_pdf")):
+            continue
         if d is not None and d in wanted and d not in seen:   # o singură legătură pe lună (NN o pune în mai multe taburi)
             seen.add(d)
             on_page.append((d, url))
