@@ -4870,6 +4870,9 @@ def _pilon2_market(panel, df):
     ref = p2_calc.reference_date(panel)
     n_funds = panel[panel["Date"] == ref]["Fond"].nunique()
     st.caption(f"Luna de referință: {ref:%m.%Y} ({n_funds} fonduri cu raport). Flux = Δ acțiuni × prețul de la data raportului.")
+    no_prev = p2_calc.funds_without_previous(panel, ref)
+    if no_prev:
+        st.caption("Fără raport anterior (incluse în „Deținere”, nu și în flux): " + ", ".join(no_prev) + ".")
     m = p2_calc.market_flows(panel, ref)
     m = m.assign(Symbol=m["Symbol"].str[:-3]).rename(columns={
         "Symbol": "Simbol", "Flux_RON": "Flux net (lei)", "dQ": "Δ acțiuni", "Valoare": "Deținere (lei)"})

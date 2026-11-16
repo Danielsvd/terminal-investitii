@@ -231,9 +231,12 @@ def reference_date(panel, lookback=3):
 
 
 def market_flows(panel, when=None):
-    """Fluxurile nete pe simbol la o dată (toate fondurile cu raport atunci): Flux_RON, dQ, cumpărători, vânzători."""
+    """Fluxurile nete pe simbol la o dată: Flux_RON, dQ, cumpărători, vânzători, din fondurile care au și raportul
+    anterior; Valoare = deținerea TUTUROR fondurilor cu raport la acea dată (17.11.2026: înainte excludea fondurile
+    fără raport anterior, deci arăta mai puțin decât cardul)."""
     when = when if when is not None else reference_date(panel)
-    p = panel[(panel["Date"] == when) & panel["dQ"].notna()]
+    at = panel[panel["Date"] == when]
+    p = at[at["dQ"].notna()]
     if p.empty:
         return pd.DataFrame(columns=["Symbol", "Flux_RON", "dQ", "Cumpărători", "Vânzători", "Valoare"])
     g = p.groupby("Symbol")
@@ -242,9 +245,19 @@ def market_flows(panel, when=None):
         "dQ": g["dQ"].sum(min_count=1),
         "Cumpărători": g["dQ"].apply(lambda s: int((s > 0).sum())),
         "Vânzători": g["dQ"].apply(lambda s: int((s < 0).sum())),
-        "Valoare": g["Valoare"].sum(min_count=1),
+        "Valoare": at.groupby("Symbol")["Valoare"].sum(min_count=1),
     }).reset_index()
     return out.sort_values("Flux_RON", ascending=False, na_position="last").reset_index(drop=True)
+
+
+def funds_without_previous(panel, when=None):
+    """Fondurile cu raport la `when` care nu au raport anterior (fluxurile lor nu se pot calcula)."""
+    when = when if when is not None else reference_date(panel)
+    at = panel[panel["Date"] == when]
+    if at.empty:
+        return []
+    prev = panel[panel["Date"] < when].groupby("Fond").size()
+    return sorted(f for f in at["Fond"].unique() if f not in prev.index)
 
 
 def flow_heatmap(panel, months=12, top=25):

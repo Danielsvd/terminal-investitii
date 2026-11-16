@@ -148,3 +148,18 @@ def test_rebase_quantities_bonus_shares_not_a_buy():
     assert panel[(panel["Symbol"] == "TLV.RO") & (panel["Date"] == "2026-07-31")]["dQ"].iloc[0] == 0
     same, kept_all = p2.rebase_quantities(df, None)
     assert same.equals(df) and kept_all == ["TLV.RO", "XYZ.RO"]
+
+
+def test_market_value_includes_funds_without_previous_report():
+    """NN, 16.11.2026: fondul fără raport anterior nu intră în flux, dar intră în „Deținere” (ca în card)."""
+    df = _df()
+    extra = df.iloc[[0]].copy()
+    for col, val in (("Date", pd.Timestamp("2026-07-31")), ("Fond", "Aripi"), ("Valoare_RON", 2600.0),
+                     ("Cantitate_derivata", 100.0), ("Pret_folosit", 26.0)):
+        extra[col] = [val]
+    panel = p2.build_panel(pd.concat([df, extra], ignore_index=True))
+    tlv = p2.market_flows(panel).set_index("Symbol").loc["TLV.RO"]
+    assert tlv.Valoare == 31200 + 5200 + 2600                       # toate fondurile cu raport la 31.07
+    assert (tlv.Flux_RON, tlv.dQ, tlv["Cumpărători"], tlv["Vânzători"]) == (-2600, -100, 0, 1)   # fără Aripi
+    assert p2.funds_without_previous(panel) == ["Aripi"]
+    assert p2.funds_without_previous(p2.build_panel(df)) == []
