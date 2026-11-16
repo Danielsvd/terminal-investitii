@@ -44,9 +44,14 @@ def test_report_problems_date_and_code_mismatch():
     # raport fără cod (NN din arhivă, Aripi 2026): primește codul sursei; data se verifică în continuare
     no_code = _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", ""))
     assert no_code.fund_code is None
-    assert run.report_problems(no_code, date(2026, 7, 31), "FP2-54") == [] and no_code.fund_code == "FP2-54"
+    assert run.report_problems(no_code, date(2026, 7, 31), "FP2-54", code_missing_ok=True) == []
+    assert no_code.fund_code == "FP2-54"
     no_code2 = _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", ""))
-    assert any("data din raport" in p for p in run.report_problems(no_code2, date(2026, 6, 30), "FP2-54"))
+    assert any("data din raport" in p for p in run.report_problems(no_code2, date(2026, 6, 30), "FP2-54", True))
+    # fără marcajul sursei (NN, 16.11.2026: arhiva .zip avea alt fond, fără cod) → respins
+    no_code3 = _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", ""))
+    assert any("codul fondului" in p for p in run.report_problems(no_code3, date(2026, 7, 31), "FP2-54"))
+    assert no_code3.fund_code is None
     assert any("codul fondului" in p for p in run.report_problems(
         _rep(REP_TEXT.replace("Cod fond de pensii: FP2-54\n", "")), date(2026, 7, 31), None))
 

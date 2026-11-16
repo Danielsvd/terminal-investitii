@@ -37,13 +37,15 @@ SEARCH_PAUSE_S = 1.0
 
 # --- Funcții pure ---------------------------------------------------------------------------------
 
-def report_problems(rep, archive_date, expected_code):
+def report_problems(rep, archive_date, expected_code, code_missing_ok=False):
     """Problemele raportului, inclusiv potrivirea cu fișierul din arhivă și cu fondul așteptat.
 
-    Un raport fără cod de fond (NN din arhiva .zip, Aripi din 12.2025) primește codul așteptat al sursei: fișierul
-    vine de pe site-ul fondului, iar data și suma acțiunilor se verifică în continuare. Un cod diferit rămâne problemă.
+    Un raport fără cod de fond primește codul sursei DOAR dacă sursa e marcată `cod_lipsa_ok` (Aripi din 12.2025:
+    verificat pe 16.11.2026 că e același fond — activ ~18,3 mld. lei la 11.2025 cu cod, ~19,0 mld. la 12.2025 fără
+    cod, aceleași dețineri). Altfel lipsa codului rămâne problemă: arhiva .zip NN conținea alt fond (~1,2 mld. lei,
+    față de ~82 mld. ale fondului Pilon II NN) și a trecut doar pentru că nu avea cod.
     """
-    if rep.fund_code is None and expected_code:
+    if rep.fund_code is None and expected_code and code_missing_ok:
         rep.fund_code = expected_code
     problems = parse.check(rep)
     if rep.report_date and rep.report_date != archive_date:
@@ -217,7 +219,7 @@ def main(argv=None):
                 print(f"{key} {d}: PDF necitibil ({type(exc).__name__}: {exc})")
                 failed += 1
                 continue
-            problems = report_problems(rep, d, src.get("cod"))
+            problems = report_problems(rep, d, src.get("cod"), bool(src.get("cod_lipsa_ok")))
             if problems:
                 failed += 1
                 print(f"{key} {d}: RESPINS — " + "; ".join(problems))
