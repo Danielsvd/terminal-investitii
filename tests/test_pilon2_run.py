@@ -184,3 +184,18 @@ def test_main_same_report_twice_in_one_run_written_once(tmp_path, monkeypatch):
     assert run.main(["--data-dir", str(tmp_path), "--fond", "vital"]) == 0
     rows = sheet.ws["Pilon2_detineri"].appended
     assert len(rows) == len({(r[0], r[1], r[2]) for r in rows}) == 2
+
+
+def test_price_rounded_to_bvb_ticks_gives_integer_quantities():
+    """16.11.2026, foaia reală: TLV.RO la 31.07.2026, prețul Yahoo 36.900002 → cantități cu abateri de până la 0,46.
+    Valorile (rotunjite la leu) din rapoartele AZT, Aripi, BCR, Metropolitan, NN, Vital se împart exact la 36,90."""
+    idx = pd.to_datetime(["2026-07-30", "2026-07-31"])
+    close = pd.DataFrame({"TLV.RO": [36.5, 36.900002]}, index=idx)
+    price, day = run.price_on_or_before(close, "TLV.RO", date(2026, 7, 31))
+    assert price == 36.9 and day == date(2026, 7, 31)
+    expected = {2291057753.0: 62088286, 1125317935.0: 30496421, 662525847.0: 17954630,
+                1702237738.0: 46131104, 4050795728.0: 109777662, 1019671132.0: 27633364}
+    for value, qty in expected.items():
+        q, dev = run.derive_quantity(value, price)
+        assert q == qty and abs(dev) < 0.02
+    assert run.price_on_or_before(pd.DataFrame({"X.RO": [0.86990003]}, index=idx[1:]), "X.RO", date(2026, 7, 31))[0] == 0.8699
