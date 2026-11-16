@@ -204,3 +204,69 @@ def test_price_rounded_to_bvb_ticks_gives_integer_quantities():
         q, dev = run.derive_quantity(value, price)
         assert q == qty and abs(dev) < 0.02
     assert run.price_on_or_before(pd.DataFrame({"X.RO": [0.86990003]}, index=idx[1:]), "X.RO", date(2026, 7, 31))[0] == 0.8699
+
+
+def test_summary_message_and_telegram_config(tmp_path, capsys):
+    msg = run.summary_message(date(2026, 12, 5), [("vital", date(2026, 8, 31)), ("bt", date(2026, 8, 31))],
+                              ["aripi 31.08.2026: nicio acțiune găsită"], 40, 1, 2, ["XS0000000000"])
+    assert msg.splitlines() == [
+        "Pilon II — rulare 05.12.2026",
+        "Rapoarte noi: 2 — vital 31.08.2026, bt 31.08.2026",
+        "RESPINSE: 1",
+        "  aripi 31.08.2026: nicio acțiune găsită",
+        "Pilon2_detineri: 40 rânduri noi (1 acțiuni BVB fără preț)",
+        "ISIN_map: 2 ISIN-uri noi, fără simbol: XS0000000000"]
+    assert "niciunul" in run.summary_message(date(2026, 12, 5), [], [], 0, 0, 0, [])
+    assert len(run.summary_message(date(2026, 12, 5), [], [f"r{i} " + "x" * 80 for i in range(100)], 0, 0, 0, [])) \
+        <= run.TELEGRAM_MAX
+    assert run.load_telegram(tmp_path) is None                                       # fără fișier: nicio notificare
+    (tmp_path / run.TELEGRAM_FILE).write_text('{"token": "T"}')
+    assert run.load_telegram(tmp_path) is None
+    (tmp_path / run.TELEGRAM_FILE).write_text('{"token": "123:ABC", "chat_id": 42}')
+    assert run.load_telegram(tmp_path) == {"token": "123:ABC", "chat_id": "42"}
+
+
+def test_send_telegram_never_raises_and_never_prints_token(capsys):
+    cfg = {"token": "123:SECRET", "chat_id": "42"}
+    calls = []
+
+    class R:
+        def __init__(self, code):
+            self.status_code = code
+
+    assert run.send_telegram(cfg, "x", post=lambda url, **k: calls.append((url, k)) or R(200)) is True
+    assert calls[0][0] == "https://api.telegram.org/bot123:SECRET/sendMessage" and calls[0][1]["data"]["chat_id"] == "42"
+    assert run.send_telegram(cfg, "x", post=lambda url, **k: R(401)) is False
+
+    def boom(url, **k):
+        raise ConnectionError(f"failed for {url}")
+    assert run.send_telegram(cfg, "x", post=boom) is False
+    assert run.send_telegram(None, "x", post=boom) is False
+    assert "SECRET" not in capsys.readouterr().err
+
+
+def test_main_sends_summary_but_not_on_proba(tmp_path, monkeypatch):
+    pdf = tmp_path / "r.pdf"
+    pdf.write_bytes(b"%PDF")
+    (tmp_path / run.TELEGRAM_FILE).write_text('{"token": "1:A", "chat_id": "7"}')
+    monkeypatch.setattr(run.fetch, "fetch_all", lambda *a, **k: {"vital": [(date(2026, 7, 31), pdf, True)]})
+    monkeypatch.setattr(run.parse, "parse_pdf", lambda path: REP)
+    sheet = FakeSheet()
+    monkeypatch.setattr(run, "open_spreadsheet", lambda _s: sheet)
+    monkeypatch.setattr(run, "ensure_worksheet", lambda sh, title, header: sh.ws[title])
+    monkeypatch.setattr(run, "yahoo_symbol", lambda isin: "")
+    monkeypatch.setattr(run, "download_closes", lambda syms, dates: _close())
+    monkeypatch.setattr(run, "SEARCH_PAUSE_S", 0)
+    sent = []
+    monkeypatch.setattr(run, "send_telegram", lambda cfg, text, post=None: sent.append((cfg, text)) or True)
+    assert run.main(["--data-dir", str(tmp_path), "--proba"]) == 0
+    assert all(cfg is None for cfg, _t in sent)                                       # la probă: fără Telegram
+    sent.clear()
+    assert run.main(["--data-dir", str(tmp_path), "--fond", "vital"]) == 0
+    assert sent and sent[-1][0] == {"token": "1:A", "chat_id": "7"}
+    assert "Rapoarte noi: 1 — vital 31.07.2026" in sent[-1][1] and "Pilon2_detineri: 2 rânduri noi" in sent[-1][1]
+    monkeypatch.setattr(run.fetch, "fetch_all", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("rețea")))
+    sent.clear()
+    with pytest.raises(RuntimeError):
+        run.main(["--data-dir", str(tmp_path)])
+    assert "EROARE RuntimeError: rețea" in sent[-1][1]

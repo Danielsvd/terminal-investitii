@@ -12,6 +12,10 @@ Rulează pe server, din rădăcina repo-ului, cu mediul separat (vezi `tools/pil
 
 Reguli: o valoare lipsă rămâne goală (niciodată 0); un raport cu probleme nu se scrie deloc (se raportează);
 la BVB cantitatea se derivă doar cu preț găsit în cel mult 7 zile înainte de data raportului.
+
+Notificare Telegram (opțională): dacă există `<data-dir>/telegram.json` cu {"token": "...", "chat_id": "..."}, după
+fiecare rulare care scrie (nu și la --proba) se trimite un rezumat; la o eroare neprevăzută, mesajul de eroare.
+Fișierul stă doar pe server (nu în repo); o notificare eșuată nu oprește jobul.
 """
 import argparse
 import sys
@@ -36,6 +40,64 @@ SEARCH_PAUSE_S = 1.0
 
 
 # --- Funcții pure ---------------------------------------------------------------------------------
+
+TELEGRAM_FILE = "telegram.json"
+TELEGRAM_MAX = 3500          # sub limita Telegram de 4096 caractere
+
+
+def summary_message(today, new_reports, rejected, rows_written, rows_no_price, new_isins, unresolved):
+    """Rezumatul unei rulări, pentru Telegram (text simplu)."""
+    lines = [f"Pilon II — rulare {today:%d.%m.%Y}"]
+    if new_reports:
+        lines.append(f"Rapoarte noi: {len(new_reports)} — " + ", ".join(f"{k} {d:%d.%m.%Y}" for k, d in new_reports))
+    else:
+        lines.append("Rapoarte noi: niciunul")
+    if rejected:
+        lines.append(f"RESPINSE: {len(rejected)}")
+        lines.extend(f"  {r}" for r in rejected)
+    lines.append(f"Pilon2_detineri: {rows_written} rânduri noi ({rows_no_price} acțiuni BVB fără preț)")
+    if new_isins:
+        lines.append(f"ISIN_map: {new_isins} ISIN-uri noi" + (f", fără simbol: {', '.join(unresolved)}" if unresolved else ""))
+    text = "\n".join(lines)
+    return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX - 20] + "\n… (trunchiat)"
+
+
+def load_telegram(data_dir):
+    """{"token", "chat_id"} din `<data-dir>/telegram.json`, sau None dacă fișierul lipsește ori e incomplet."""
+    import json
+
+    f = Path(data_dir) / TELEGRAM_FILE
+    if not f.is_file():
+        return None
+    try:
+        cfg = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"  ! {TELEGRAM_FILE}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+    if not cfg.get("token") or not cfg.get("chat_id"):
+        print(f"  ! {TELEGRAM_FILE}: lipsesc token sau chat_id", file=sys.stderr)
+        return None
+    return {"token": str(cfg["token"]), "chat_id": str(cfg["chat_id"])}
+
+
+def send_telegram(cfg, text, post=None):
+    """Trimite mesajul; True dacă Telegram a răspuns ok. Erorile se tipăresc, nu opresc jobul."""
+    if not cfg:
+        return False
+    if post is None:
+        import requests
+        post = requests.post
+    try:
+        r = post(f"https://api.telegram.org/bot{cfg['token']}/sendMessage",
+                 data={"chat_id": cfg["chat_id"], "text": text, "disable_web_page_preview": "true"}, timeout=20)
+        ok = getattr(r, "status_code", 0) == 200
+        if not ok:
+            print(f"  ! Telegram: HTTP {getattr(r, 'status_code', '?')}", file=sys.stderr)
+        return ok
+    except Exception as exc:  # rețea: notificarea e opțională
+        print(f"  ! Telegram: {type(exc).__name__}", file=sys.stderr)    # fără mesajul excepției: poate conține tokenul
+        return False
+
 
 def report_problems(rep, archive_date, expected_code, code_missing_ok=False):
     """Problemele raportului, inclusiv potrivirea cu fișierul din arhivă și cu fondul așteptat.
@@ -205,11 +267,21 @@ def main(argv=None):
     p.add_argument("--proba", action="store_true", help="descarcă și citește, fără să scrie în foi")
     args = p.parse_args(argv)
     data_dir = Path(args.data_dir).expanduser()
+    tg = None if args.proba else load_telegram(data_dir)
+    try:
+        return _run(args, data_dir, tg)
+    except Exception as exc:
+        send_telegram(tg, f"Pilon II — rulare {date.today():%d.%m.%Y}: EROARE {type(exc).__name__}: {str(exc)[:300]}\n"
+                          "Detalii: journalctl -u pilon2-snapshot -n 80 --no-pager")
+        raise
+
+
+def _run(args, data_dir, tg):
     keys = [k.strip() for k in args.fond.split(",") if k.strip()] or None
     sources = fetch.load_sources(data_dir / "surse.json")
 
     archive = fetch.fetch_all(data_dir, args.luni, keys, sources=sources)
-    good, failed = [], 0
+    good, failed, rejected, new_reports = [], 0, [], []
     for key, items in archive.items():
         src = sources[key]
         for d, path, is_new in items:
@@ -218,16 +290,20 @@ def main(argv=None):
             except Exception as exc:  # PDF stricat / necitibil: se raportează, restul continuă
                 print(f"{key} {d}: PDF necitibil ({type(exc).__name__}: {exc})")
                 failed += 1
+                rejected.append(f"{key} {d:%d.%m.%Y}: PDF necitibil")
                 continue
             problems = report_problems(rep, d, src.get("cod"), bool(src.get("cod_lipsa_ok")))
             if problems:
                 failed += 1
                 print(f"{key} {d}: RESPINS — " + "; ".join(problems))
+                rejected.append(f"{key} {d:%d.%m.%Y}: {problems[0]}")
                 continue
             if not src.get("cod"):
                 print(f"{key} {d}: codul fondului din raport = {rep.fund_code} (de trecut în SOURCES)")
             published = rep.published_date or (date.today() if is_new and not args.istoric else None)
             good.append((key, src["fond"], rep, published))
+            if is_new:
+                new_reports.append((key, d))
             print(f"{key} {d}: OK, {len(rep.equities())} rânduri de acțiuni")
 
     if args.proba:
@@ -235,6 +311,7 @@ def main(argv=None):
         return 1 if failed else 0
     if not good:
         print(f"Niciun raport de scris ({failed} respinse).")
+        send_telegram(tg, summary_message(date.today(), new_reports, rejected, 0, 0, 0, []))
         return 1 if failed else 0
 
     sh = open_spreadsheet(args.secrets)
@@ -246,7 +323,7 @@ def main(argv=None):
     for _k, _f, rep, _p in good:
         for isin, rec in equity_by_isin(rep).items():
             names.setdefault(isin, rec["Denumire"])
-    new_map_rows = []
+    new_map_rows, unresolved = [], []
     for isin in sorted(set(names) - set(isin_map)):
         sym = yahoo_symbol(isin)
         time.sleep(SEARCH_PAUSE_S)
@@ -274,6 +351,8 @@ def main(argv=None):
     no_qty = sum(1 for r in rows if r[3].endswith(".RO") and r[8] == "")
     print(f"{HOLDINGS_SHEET}: {len(rows)} rânduri noi ({no_qty} acțiuni BVB fără preț → fără cantitate); "
           f"{failed} rapoarte respinse.")
+    send_telegram(tg, summary_message(date.today(), new_reports, rejected, len(rows), no_qty, len(new_map_rows),
+                                      unresolved))
     return 1 if failed else 0
 
 
