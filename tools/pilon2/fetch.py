@@ -21,6 +21,7 @@ import json
 import re
 import sys
 import time
+import zipfile
 from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
@@ -28,6 +29,8 @@ from urllib.parse import urljoin
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) terminal-investitii/pilon2 (uz personal)"
 TIMEOUT_S = 30
+ZIP_TIMEOUT_S = 180
+ZIP_MAX_AGE_DAYS = 30  # arhiva .zip (NN, ~33 MB) se descarcă din nou cel mult o dată pe lună
 PAUSE_S = 0.4          # pauză între cereri către același site
 
 _ML = "https://www.metropolitanlife.ro/content/dam/metlifecom/ro/PDFs/"
@@ -72,8 +75,9 @@ SOURCES = {
         "sabloane": [_GEN + "{Y}{m}{d}_pII_inv_det.pdf"],
         "pagina": "https://www.generali.ro/pensii/pensii-obligatorii/acte-si-rapoarte/date-financiare-fondul-aripi/",
     },
-    # NN: pagina are doar raportul curent (istoricul e într-o arhivă .zip, necitită încă).
-    "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": "https://www.nn.ro/rapoarte-financiare"},
+    # NN: pagina are doar raportul curent; istoricul e într-o arhivă .zip („Iulie 2026.pdf” …), legată de pe pagină.
+    "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": "https://www.nn.ro/rapoarte-financiare",
+           "arhiva_zip": True},
     # AZT: pagina fondului Viitorul Tău (p_fond=VIITORUL); neverificată pe date reale.
     "azt": {"fond": "AZT Viitorul Tău", "cod": None, "tip": "pagina",
             "pagina": "https://www.aztpensii.ro:7777/employer/prc_rap_web_new_49?p_fond=VIITORUL"},
@@ -188,6 +192,90 @@ def pdf_links(html, base_url):
     return out
 
 
+def zip_links(html, base_url):
+    """Legăturile spre arhive .zip cu rapoarte de structură (NN: „Arhiva Structura detaliata … 2021 - 2026.zip”)."""
+    p = _LinkParser()
+    p.feed(html or "")
+    out = []
+    for href, text in p.links:
+        if not href:
+            continue
+        url = urljoin(base_url, href.strip())
+        low = (url + " " + text).lower().replace("%20", " ")
+        if ".zip" in low and "arhiva" in low and "structura" in low and url not in out:
+            out.append(url)
+    return out
+
+
+def zip_members_by_date(names):
+    """{data: numele fișierului} pentru PDF-urile dintr-o arhivă; data din nume („Iulie 2026.pdf”). Primul câștigă."""
+    out = {}
+    for n in names:
+        if not n.lower().endswith(".pdf"):
+            continue
+        d = date_from_text(Path(n).name)
+        if d is not None and d not in out:
+            out[d] = n
+    return out
+
+
+def extract_from_zip(zip_path, dates, data_dir, key):
+    """Scoate din arhivă rapoartele pentru `dates` în pdf/<cheie>/<data>.pdf. Întoarce [(data, cale)]."""
+    got = []
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            members = zip_members_by_date(z.namelist())
+            for d in dates:
+                name = members.get(d)
+                if not name:
+                    continue
+                data = z.read(name)
+                if not data.startswith(b"%PDF"):
+                    print(f"  ! {key}: {name} din arhivă nu e PDF", file=sys.stderr)
+                    continue
+                dest = archive_path(data_dir, key, d)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.with_suffix(".part")
+                tmp.write_bytes(data)
+                tmp.replace(dest)
+                got.append((d, dest))
+    except (zipfile.BadZipFile, OSError) as exc:
+        print(f"  ! {key}: arhiva {zip_path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return got
+
+
+def fetch_zip(session, source, data_dir, key, now=None):
+    """Arhiva .zip a fondului, din cache (pdf/<cheie>/_arhiva.zip) dacă e mai nouă de ZIP_MAX_AGE_DAYS; altfel de pe pagină."""
+    cache = Path(data_dir) / "pdf" / key / "_arhiva.zip"
+    now = time.time() if now is None else now
+    if cache.is_file() and now - cache.stat().st_mtime < ZIP_MAX_AGE_DAYS * 86400:
+        return cache
+    page = source.get("pagina")
+    try:
+        r = session.get(page, timeout=TIMEOUT_S)
+        r.raise_for_status()
+        links = zip_links(r.text, page)
+        if not links:
+            print(f"  {key}: pagina nu are arhivă .zip cu rapoarte", file=sys.stderr)
+            return cache if cache.is_file() else None
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".part")
+        with session.get(links[0], timeout=ZIP_TIMEOUT_S, stream=True) as z:
+            z.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in z.iter_content(1 << 20):
+                    f.write(chunk)
+        if not zipfile.is_zipfile(tmp):
+            tmp.unlink(missing_ok=True)
+            print(f"  ! {key}: {links[0]}: răspunsul nu e o arhivă .zip", file=sys.stderr)
+            return cache if cache.is_file() else None
+        tmp.replace(cache)
+        return cache
+    except Exception as exc:  # rețea: se raportează, restul rulării continuă
+        print(f"  ! {key}: arhiva .zip: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return cache if cache.is_file() else None
+
+
 def make_session():
     import requests
 
@@ -297,6 +385,13 @@ def fetch_all(data_dir, months, keys=None, session=None, sources=None, today=Non
             dest = archive_path(data_dir, key, d)
             if download(session, url, dest):
                 got.append((d, dest, True))
+        found = {d for d, *_x in got}
+        rest = [d for d in todo if d not in found]
+        if rest and src.get("arhiva_zip") and src.get("pagina"):
+            zip_path = fetch_zip(session, src, data_dir, key)
+            if zip_path:
+                # din arhivă = rapoarte vechi: data publicării nu e cunoscută → „nou” = False
+                got.extend((d, path, False) for d, path in extract_from_zip(zip_path, rest, data_dir, key))
         result[key] = sorted(got, reverse=True)
     return result
 

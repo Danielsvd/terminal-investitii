@@ -183,3 +183,68 @@ def test_fetch_all_skips_archived_and_uses_override(tmp_path):
     res = fetch.fetch_all(tmp_path, 2, keys=["vital"], session=s, today=date(2026, 11, 15), pause=0)
     assert [(d, new) for d, _p, new in res["vital"]] == [(date(2026, 10, 31), True), (date(2026, 9, 30), False)]
     assert not any("20260930" in u for _m, u in s.calls)        # cel arhivat nu se mai cere
+
+
+def _zip_bytes(members):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+NN_PAGE = "https://www.nn.ro/rapoarte-financiare"
+NN_HTML = (
+    '<a href="/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_FPAP%20NN.pdf">Structura curenta</a>'
+    '<a href="/sites/default/files/2026-11/Arhiva%20Structura%20detaliata%20a%20portofoliului%202021%20-%202026.zip">'
+    'Arhiva Structura detaliata a portofoliului de investitii fond pensii private 2021 - 2026</a>'
+    '<a href="/sites/default/files/2026-11/Arhiva%20situatiilor%20valorilor%20activului%20net.zip">Arhiva VAN</a>')
+NN_ZIP_URL = ("https://www.nn.ro/sites/default/files/2026-11/"
+              "Arhiva%20Structura%20detaliata%20a%20portofoliului%202021%20-%202026.zip")
+
+
+def test_zip_links_and_member_dates():
+    assert fetch.zip_links(NN_HTML, NN_PAGE) == [NN_ZIP_URL]            # arhiva VAN nu e luată
+    names = ["Iulie 2026.pdf", "Februarie 2023 FPAP NN.pdf", "Iunie 2019.pdf", "readme.txt", "dir/Mai 2026.pdf"]
+    assert fetch.zip_members_by_date(names) == {
+        date(2026, 7, 31): "Iulie 2026.pdf", date(2023, 2, 28): "Februarie 2023 FPAP NN.pdf",
+        date(2019, 6, 30): "Iunie 2019.pdf", date(2026, 5, 31): "dir/Mai 2026.pdf"}
+
+
+def test_fetch_all_takes_missing_months_from_zip_and_caches_it(tmp_path):
+    """NN: luna curentă de pe pagină, restul din arhiva .zip; arhiva nu se descarcă din nou la a doua rulare."""
+    z = _zip_bytes({"Iulie 2026.pdf": b"%PDF iulie din zip", "Iunie 2026.pdf": b"%PDF iunie",
+                    "Mai 2026.pdf": b"<html>stricat</html>"})
+    routes = {NN_PAGE: FakeResp(200, ctype="text/html", text=NN_HTML),
+              "https://www.nn.ro/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_FPAP%20NN.pdf":
+                  FakeResp(200, content=b"%PDF iulie"),
+              NN_ZIP_URL: FakeResp(200, ctype="application/zip", content=z)}
+    s = FakeSession(routes)
+    src = {"nn": dict(fetch.SOURCES["nn"])}
+    res = fetch.fetch_all(tmp_path, 3, session=s, sources=src, today=date(2026, 8, 15), pause=0)
+    assert [(d, new) for d, _p, new in res["nn"]] == [(date(2026, 7, 31), True), (date(2026, 6, 30), False)]
+    assert fetch.archive_path(tmp_path, "nn", date(2026, 7, 31)).read_bytes() == b"%PDF iulie"   # de pe pagină
+    assert fetch.archive_path(tmp_path, "nn", date(2026, 6, 30)).read_bytes() == b"%PDF iunie"   # din arhivă
+    assert not fetch.archive_path(tmp_path, "nn", date(2026, 5, 31)).exists()                  # nu e PDF
+    assert ("GET", NN_ZIP_URL) in s.calls
+    s2 = FakeSession(routes)
+    fetch.fetch_all(tmp_path, 3, session=s2, sources=src, today=date(2026, 8, 15), pause=0)
+    assert ("GET", NN_ZIP_URL) not in s2.calls                                                  # din cache
+
+
+def test_fetch_zip_refreshes_old_cache_and_keeps_it_when_download_fails(tmp_path):
+    cache = tmp_path / "pdf" / "nn" / "_arhiva.zip"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(_zip_bytes({"Iunie 2026.pdf": b"%PDF"}))
+    old = cache.stat().st_mtime + (fetch.ZIP_MAX_AGE_DAYS + 1) * 86400
+    s = FakeSession({NN_PAGE: FakeResp(200, ctype="text/html", text=NN_HTML),
+                     NN_ZIP_URL: FakeResp(200, ctype="text/html", content=b"<html>eroare</html>")})
+    assert fetch.fetch_zip(s, fetch.SOURCES["nn"], tmp_path, "nn", now=old) == cache          # cea veche rămâne
+    assert ("GET", NN_ZIP_URL) in s.calls and zipfile_ok(cache)
+
+
+def zipfile_ok(path):
+    import zipfile
+    return zipfile.is_zipfile(path)
