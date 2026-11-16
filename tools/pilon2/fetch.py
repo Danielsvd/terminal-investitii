@@ -79,13 +79,14 @@ SOURCES = {
                   "raportare-privind-situatia-detaliata-a-investitiilor/",
     },
     "aripi": {
-        "fond": "Aripi", "cod": "FP2-49", "tip": "sablon",
+        "fond": "Aripi", "cod": "FP2-49", "tip": "sablon", "cod_lipsa_ok": True,   # rapoartele din 12.2025 n-au cod
         "sabloane": [_GEN + "{Y}{m}{d}_pII_inv_det.pdf"],
         "pagina": "https://www.generali.ro/pensii/pensii-obligatorii/acte-si-rapoarte/date-financiare-fondul-aripi/",
     },
-    # NN: pagina are doar raportul curent; istoricul e într-o arhivă .zip („Iulie 2026.pdf” …), legată de pe pagină.
+    # NN: pagina are doar raportul curent. Arhiva .zip luată de pe pagină (16.11.2026) conținea ALT fond (~1,2 mld.
+    # lei, fără cod) → oprită până se identifică arhiva fondului Pilon II (`"arhiva_zip": true` în surse.json).
     "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": "https://www.nn.ro/rapoarte-financiare",
-           "arhiva_zip": True},
+           "arhiva_zip": False},
     # AZT: formular GET cu anul și luna; raportul e „…/VIITORUL/2026/7/Structura_portofoliu_investitii/
     # AZT_Viitorul_Tau_31072026.pdf” (văzut pe 16.11.2026).
     "azt": {"fond": "AZT Viitorul Tău", "cod": "FP2-20", "tip": "pagina_lunara",

@@ -222,7 +222,7 @@ def test_fetch_all_takes_missing_months_from_zip_and_caches_it(tmp_path):
                   FakeResp(200, content=b"%PDF iulie"),
               NN_ZIP_URL: FakeResp(200, ctype="application/zip", content=z)}
     s = FakeSession(routes)
-    src = {"nn": dict(fetch.SOURCES["nn"])}
+    src = {"nn": dict(fetch.SOURCES["nn"], arhiva_zip=True)}       # oprită implicit din 16.11.2026
     res = fetch.fetch_all(tmp_path, 3, session=s, sources=src, today=date(2026, 8, 15), pause=0)
     assert [(d, new) for d, _p, new in res["nn"]] == [(date(2026, 7, 31), True), (date(2026, 6, 30), False)]
     assert fetch.archive_path(tmp_path, "nn", date(2026, 7, 31)).read_bytes() == b"%PDF iulie"   # de pe pagină
@@ -282,3 +282,8 @@ def test_metropolitan_page_fallback_names():
             'Situatia detaliata a portofoliului de investitii la data de 31.05.2025</a>')
     links = fetch.pdf_links(html, fetch.SOURCES["metropolitan"]["pagina"])
     assert [d for _u, _t, d in links] == [date(2025, 5, 31)]
+
+
+def test_nn_zip_off_and_only_aripi_accepts_missing_code():
+    assert fetch.SOURCES["nn"]["arhiva_zip"] is False
+    assert [k for k, v in fetch.SOURCES.items() if v.get("cod_lipsa_ok")] == ["aripi"]
