@@ -21,8 +21,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 
-# Codurile ASF ale fondurilor, văzute în rapoarte (15–16.11.2026). Cel lipsă (AZT) se adaugă după primul raport
-# citit; până atunci fondul apare cu codul brut.
+# Codurile ASF ale fondurilor, văzute în rapoarte (15–16.11.2026), toate cele 7.
 FUND_CODES = {
     "FP2-31": "NN",
     "FP2-54": "Vital",
@@ -30,9 +29,11 @@ FUND_CODES = {
     "FP2-96": "Metropolitan Life",
     "FP2-123": "BCR",
     "FP2-49": "Aripi",
+    "FP2-20": "AZT Viitorul Tău",
 }
 
 EQUITY = "actiuni"
+MISSING_CODE = "codul fondului (FP2-…) lipsește"   # jobul îl completează din sursă (run.report_problems)
 SUM_TOLERANCE = 0.005          # suma rândurilor de acțiuni vs totalul secțiunii: abatere admisă 0,5%
 
 _NUM = r"-?\d[\d,.]*"
@@ -167,7 +168,7 @@ def classify(major, major_title, sub_title):
         return "private_equity"
     if major in (1, 2) and "titluri de stat" in st:
         return "titluri_stat"
-    if major == 2 and "actiun" in st:
+    if major == 2 and "actiun" in st and "majorar" not in st:   # „g. Actiuni aferente majorarilor” (Aripi) nu
         return EQUITY
     if major == 2 and "obligatiuni corporative" in st:
         return "obligatiuni_corporative"
@@ -239,6 +240,11 @@ def parse_lines(lines):
             continue
         m = _MAJOR.match(s)
         if m:
+            if not m["value"] and major is not None and int(m["major"]) < major:
+                # titlu-fantomă (Aripi din 12.2025: „1. Instrumente ale pietei monetare” repetat, fără valoare, sus pe
+                # pagina 2, peste „d. Actiuni”); secțiunile merg doar înainte, deci nu schimbă secțiunea curentă
+                pending_name, pending_row = [], None
+                continue
             major, major_title, sub_title = int(m["major"]), normalize(m["title"]), ""
             if m["value"]:
                 rep.section_totals[(major, None)] = parse_amount(m["value"])
@@ -249,8 +255,9 @@ def parse_lines(lines):
             sub_title = normalize(m["title"])
             if m["value"]:
                 rep.section_totals[(major, m["letter"])] = parse_amount(m["value"])
-                if classify(major, major_title, sub_title) == EQUITY:
-                    rep.equity_header_total = parse_amount(m["value"])
+                total = parse_amount(m["value"])
+                if classify(major, major_title, sub_title) == EQUITY and total is not None:
+                    rep.equity_header_total = total
             pending_name, pending_row = [], None
             continue
         if any(k in t for k in _NOT_A_NAME) or _NOISE.search(t):
@@ -269,7 +276,7 @@ def check(rep):
     """Probleme de calitate; lista goală = raport citit complet."""
     problems = []
     if rep.fund_code is None:
-        problems.append("codul fondului (FP2-…) lipsește")
+        problems.append(MISSING_CODE)
     if rep.report_date is None:
         problems.append("data raportului lipsește")
     eq = rep.equities()
@@ -293,19 +300,34 @@ def check(rep):
     return problems
 
 
-def pdf_lines(path):
+# Toleranța pe verticală la gruparea literelor în rânduri. 3 merge la toate fondurile; la Aripi (din 12.2025) două
+# rânduri sunt suprapuse la 0,7 pt distanță („1. Instrumente…” peste „d. Actiuni”) și se despart doar cu 0,5.
+Y_TOLERANCE = 3
+Y_TOLERANCE_STRICT = 0.5
+
+
+def pdf_lines(path, y_tolerance=Y_TOLERANCE):
     """Textul PDF-ului, rând cu rând (toate paginile)."""
     import pdfplumber
 
     out = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            out.extend((page.extract_text(x_tolerance=1.5, y_tolerance=3) or "").splitlines())
+            out.extend((page.extract_text(x_tolerance=1.5, y_tolerance=y_tolerance) or "").splitlines())
     return out
 
 
 def parse_pdf(path):
-    return parse_lines(pdf_lines(path))
+    """Raportul citit. Dacă citirea obișnuită are probleme, se încearcă și cea cu rânduri strict separate și se
+    păstrează aceea doar dacă trece toate verificările (altfel rămâne prima, cu problemele ei)."""
+    def content_problems(r):           # codul lipsă nu ține de așezarea textului; îl completează jobul din sursă
+        return [x for x in check(r) if x != MISSING_CODE]
+
+    rep = parse_lines(pdf_lines(path))
+    if not content_problems(rep):
+        return rep
+    strict = parse_lines(pdf_lines(path, y_tolerance=Y_TOLERANCE_STRICT))
+    return strict if not content_problems(strict) else rep
 
 
 def summary(rep):

@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 
+from tools.pilon2 import parse
 from tools.pilon2.parse import (EQUITY, check, isin_checksum_ok, join_split_value, normalize, parse_amount,
                                 parse_lines, parse_report_date)
 
@@ -303,3 +304,60 @@ def test_aripi_2025_split_equity_header():
     assert rep.equity_header_total == 1000000000.00
     assert [r["ISIN"] for r in rep.equities()] == ["FR0000120628", "ROTLVAACNOR1", "DE000BASF111"]
     assert check(rep) == []
+
+
+def test_aripi_ghost_section_title_and_capital_increase_section():
+    """Aripi 2026 (texte sintetice): titlul-fantomă „1. Instrumente…” fără valoare, sus pe pagina 2, nu mută secțiunea;
+    „g. Actiuni aferente majorarilor … -” nu șterge totalul secțiunii de acțiuni și nu e acțiune."""
+    lines = ["Structura portofoliului de investitii la data de 31/07/2026",
+             "2. Valori mobiliare tranzactionate, din care: 1,000.00 100.00%",
+             "c. Obligatiuni corporative tranzactionate 400.00 40.00%",
+             "RO1AQREPLMW7 400.00 40.00%",
+             "Page 1 of 2",
+             "1. Instrumente ale pietei monetare, din care:",
+             "d. Actiuni 600.00 60.00%",
+             "ROTLVAACNOR1 350.00 35.00%",
+             "ROSNGNACNOR3 250.00 25.00%",
+             "g. Actiuni aferente majorarilor de capital social - 0.00%",
+             "h. Drepturi de preferinta - 0.00%",
+             "3. OPCVM ETF - 0.00%"]
+    rep = parse_lines(lines)
+    assert [r["ISIN"] for r in rep.equities()] == ["ROTLVAACNOR1", "ROSNGNACNOR3"]
+    assert rep.equity_header_total == 600.0
+    assert check(rep) == [parse.MISSING_CODE]                      # codul îl completează jobul din sursă
+    from tools.pilon2.parse import classify
+    assert classify(2, "valori mobiliare", "actiuni aferente majorarilor de capital social") != EQUITY
+
+
+def test_parse_pdf_falls_back_to_strict_lines_for_overlapping_rows(tmp_path):
+    """Două rânduri suprapuse la 0,7 pt (Aripi din 12.2025): citirea obișnuită le amestecă, cea strictă le desparte."""
+    pytest.importorskip("pdfplumber")
+    canvas_mod = pytest.importorskip("reportlab.pdfgen.canvas")
+    from reportlab.lib.pagesizes import A4
+
+    from tools.pilon2.parse import parse_pdf
+
+    path = tmp_path / "aripi.pdf"
+    c = canvas_mod.Canvas(str(path), pagesize=A4)
+    c.setFont("Helvetica", 6)
+    y = 800
+    for text in ("Structura portofoliului de investitii la data de 31/07/2026",
+                 "2. Valori mobiliare tranzactionate, din care: 1,000.00 100.00%"):
+        c.drawString(40, y, text)
+        y -= 12
+    c.showPage()
+    c.setFont("Helvetica", 6)
+    y = 800
+    c.drawString(40, y, "1. Instrumente ale pietei monetare, din care:")      # fantoma
+    c.drawString(40, y - 0.72, "d. Actiuni")
+    c.drawString(300, y - 1.2, "1,000.00 100.00%")
+    y -= 12
+    for text in ("ROTLVAACNOR1 600.00 60.00%", "ROSNGNACNOR3 400.00 40.00%", "h. Drepturi de preferinta - 0.00%"):
+        c.drawString(40, y, text)
+        y -= 12
+    c.save()
+    loose = parse_lines(parse.pdf_lines(path))
+    assert not loose.equities()                                    # citirea obișnuită ratează secțiunea
+    rep = parse_pdf(path)
+    assert [r["ISIN"] for r in rep.equities()] == ["ROTLVAACNOR1", "ROSNGNACNOR3"]
+    assert rep.equity_header_total == 1000.0 and check(rep) == [parse.MISSING_CODE]
