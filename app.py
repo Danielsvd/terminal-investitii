@@ -4673,7 +4673,8 @@ PILON2_HELP = {
                  "neajustat din ultima ședință ≤ data raportului.\n\n**Atenție:** proxy; fondurile raportează la date "
                  "diferite, deci totalul cuprinde doar fondurile cu raport la acea dată."),
     "capital": ("**Ce e:** ce parte din companie e la fondurile Pilon II.\n\n**Calcul:** deținerea totală / numărul de "
-                "acțiuni al companiei (Yahoo, `sharesOutstanding`).\n\n**Atenție:** la BVB numărul de acțiuni de la Yahoo "
+                "acțiuni al companiei (Yahoo: `sharesOutstanding`; dacă lipsește, `impliedSharesOutstanding`, apoi "
+                "capitalizare / preț, marcat proxy).\n\n**Atenție:** la BVB numărul de acțiuni de la Yahoo "
                 "poate lipsi sau fi vechi → „N/A”. O pondere mare = free-float real mic și risc de vânzare masivă dacă "
                 "se schimbă legislația Pilonului II."),
     "delta": ("**Ce e:** câte acțiuni au cumpărat (+) sau vândut (−) net fondurile față de raportul anterior al fiecăruia.\n\n"
@@ -4741,7 +4742,10 @@ def render_pilon2_card(real_sym, info):
         st.caption(f"{sym[:-3]} nu apare în rapoartele fondurilor Pilon II din foaie "
                    "(sau ISIN-ul nu are încă simbol în ISIN_map).")
         return
-    _pilon2_metrics(cp, num(info, "sharesOutstanding"))
+    shares_out, src = p2_calc.shares_outstanding(info)
+    _pilon2_metrics(cp, shares_out)
+    if src and src != "sharesOutstanding":
+        st.caption(f"Numărul de acțiuni pentru „% din capital”: Yahoo, {src}.")
     st.caption("Tabelul pe fonduri, graficele și fluxurile pe piață: meniul „Fonduri de pensii”.")
 
 
@@ -4754,8 +4758,10 @@ def _pilon2_company(panel, df):
                        format_func=lambda s: f"{s[:-3]} — {names.get(s) or ''}".rstrip(" —"))
     cp = p2_calc.company_panel(panel, sym)
     hist, info, _earn, _real = get_stock_data(sym)
-    shares_out = num(info or {}, "sharesOutstanding")
+    shares_out, shares_src = p2_calc.shares_outstanding(info)
     tot = _pilon2_metrics(cp, shares_out)
+    if shares_src and shares_src != "sharesOutstanding":
+        st.caption(f"Numărul de acțiuni pentru „% din capital”: Yahoo, {shares_src}.")
 
     adv = None
     if hist is not None and not hist.empty and "Volume" in hist.columns:
@@ -4776,7 +4782,7 @@ def _pilon2_company(panel, df):
             "Data raport": lambda d: f"{d:%d.%m.%Y}", "Acțiuni": ro_spec(",.0f"), "% din capital": ro_spec(".2f", "%"),
             "Valoare (lei)": ro_spec(",.0f"), "Pondere în fond (%)": ro_spec(".2f", "%"),
             "Δ față de raportul anterior": ro_spec("+,.0f"), "Δ 3 luni": ro_spec("+,.0f"), "Δ 12 luni": ro_spec("+,.0f"),
-        }), hide_index=True, width='stretch', column_config={
+        }, na_rep="N/A"), hide_index=True, width='stretch', column_config={
             "Etichetă": st.column_config.Column(help="Față de raportul anterior al fondului: nou / intrare / neschimbat / "
                                                      "ieșire / ieșit complet."),
             "Data raport": st.column_config.Column(help="Data ultimului raport al fondului (fondurile publică la date diferite)."),
@@ -4836,14 +4842,14 @@ def _pilon2_market(panel, df):
         if buys.empty:
             st.caption("Nicio cumpărare netă.")
         else:
-            st.dataframe(buys.style.format(fmt), hide_index=True, width='stretch')
+            st.dataframe(buys.style.format(fmt, na_rep="N/A"), hide_index=True, width='stretch')
     with c2:
         st.markdown("**Cele mai mari vânzări nete**")
         sells = m[m["Flux net (lei)"] < 0].sort_values("Flux net (lei)").head(10)
         if sells.empty:
             st.caption("Nicio vânzare netă.")
         else:
-            st.dataframe(sells.style.format(fmt), hide_index=True, width='stretch')
+            st.dataframe(sells.style.format(fmt, na_rep="N/A"), hide_index=True, width='stretch')
 
     hm = p2_calc.flow_heatmap(panel, months=12, top=25)
     if not hm.empty:
