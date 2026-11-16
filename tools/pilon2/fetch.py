@@ -87,7 +87,7 @@ SOURCES = {
            "arhiva_zip": True},
     # AZT: formular GET cu anul și luna; raportul e „…/VIITORUL/2026/7/Structura_portofoliu_investitii/
     # AZT_Viitorul_Tau_31072026.pdf” (văzut pe 16.11.2026).
-    "azt": {"fond": "AZT Viitorul Tău", "cod": None, "tip": "pagina_lunara",
+    "azt": {"fond": "AZT Viitorul Tău", "cod": "FP2-20", "tip": "pagina_lunara",
             "pagina": "https://www.aztpensii.ro:7777/employer/prc_rap_web_new_49?p_fond=VIITORUL&p_an={Y}&p_luna={mi}"},
 }
 
