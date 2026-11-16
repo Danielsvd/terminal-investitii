@@ -7,6 +7,8 @@ pondere în activul total. Diferă doar așezarea în pagină:
   - numerele pe rândul de jos: „Hidroelectrica SA RO4Q0Z5RO1B6” / „381,221,274.00 3.90%”
   - doar ISIN (Aripi, din 31.03.2026): „RO4Q0Z5RO1B6 381,221,274.00 3.90%”
   - ponderea fără „%” (NN):   „... 1,058,918,959.06 2.08”
+  - prima cifră a valorii despărțită de rest (BCR, 2024): „Hidroelectrica SA RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%”,
+    „DHL Group DE0005552004 4 ,732,557.70 0.0430%” — se lipește la loc înainte de citire (`join_split_value`).
 
 Rapoartele NU conțin numărul de acțiuni; cantitatea se derivă în altă parte (valoare / preț).
 
@@ -44,6 +46,10 @@ _REPORT_DATE = re.compile(rf"la\s+data\s+de\s*:?\s*{_DATE}")
 _ONLY_DATE = re.compile(rf"^{_DATE}$")
 _PUBLISHED = re.compile(rf"(?:numar|nr\.?)\s*(?:iesire|inreg\w*\.?|intern)\s*:?\s*\d+\s*/\s*{_DATE}")
 _PUBLISHED_BARE = re.compile(rf"^\d{{6,8}}\s*/\s*{_DATE}$")      # Metropolitan 08.2025: „1307878/12.12.2025”
+# Valoare ruptă de pdfplumber: 1–3 cifre, spațiu, restul valorii (cu zecimale), apoi ponderea. Se lipește doar după
+# un ISIN sau pe un rând care are numai numere, unde trei numere la rând nu au alt sens.
+_SPLIT_AFTER_ISIN = re.compile(rf"(\b{_ISIN}\s+)(\d{{1,3}}) (,?\d[\d,]*\.\d+)(\s+{_NUM}\s*%?\s*)$")
+_SPLIT_NUM_ONLY = re.compile(rf"^(\d{{1,3}}) (,?\d[\d,]*\.\d+)(\s+{_NUM}\s*%?\s*)$")
 _FUND_CODE = re.compile(r"\bFP2-\d+\b")
 _NOISE = re.compile(r"\d{5,}|\d[./-]\d{1,2}[./-]\d{2,4}|:|\bfp\d-\d+")   # coduri, date, „Etichetă:” — nu sunt nume
 
@@ -79,6 +85,16 @@ def parse_amount(text):
     except ValueError:
         return None
     return -v if neg else v
+
+
+def join_split_value(line):
+    """Lipește prima cifră a valorii, despărțită de rest de extragerea textului (BCR, rapoartele din 2024).
+
+    „... RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%” → „... RO4Q0Z5RO1B6 344,525,072.00 3.1292%”.
+    Un rând normal (ISIN, valoare, pondere) nu se schimbă.
+    """
+    s = _SPLIT_AFTER_ISIN.sub(r"\1\2\3\4", line)
+    return _SPLIT_NUM_ONLY.sub(r"\1\2\3", s)
 
 
 def isin_checksum_ok(isin):
@@ -193,7 +209,7 @@ def parse_lines(lines):
         })
 
     for raw in lines:
-        s = str(raw or "").strip()
+        s = join_split_value(str(raw or "").strip())
         if not s:
             continue
         m = _ROW.match(s)

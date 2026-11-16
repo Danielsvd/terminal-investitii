@@ -3,8 +3,8 @@ from datetime import date
 
 import pytest
 
-from tools.pilon2.parse import (EQUITY, check, isin_checksum_ok, normalize, parse_amount, parse_lines,
-                                parse_report_date)
+from tools.pilon2.parse import (EQUITY, check, isin_checksum_ok, join_split_value, normalize, parse_amount,
+                                parse_lines, parse_report_date)
 
 
 def test_parse_amount_formats():
@@ -229,3 +229,51 @@ def test_published_date_variants():
     assert pub(["Nr. Inreg.: 1183975/29.04.2024"]) == date(2024, 4, 29)
     assert pub(["1307878/12.12.2025"]) == date(2025, 12, 12)
     assert pub(["la data de: 31.08.2025"]) is None
+
+
+
+# Rapoartele BCR din 2024 (16.11.2026): pdfplumber desparte prima cifră a valorii. Așezarea e cea reală
+# (31.12.2024); valorile sunt sintetice. Suma rândurilor = 1,000,000,000.00 = totalul din antet.
+BCR_2024_EQUITY = [
+    "d. Acţiuni 1,000,000,000.00 10.0000%",
+    "Banca Transilvania SA ROTLVAACNOR1 400,000,000.00 4.0000%",
+    "Hidroelectrica SA RO4Q0Z5RO1B6 3 00,000,000.00 3.0000%",
+    "Digi Communications NV NL0012294474 9 9,000,000.00 0.9900%",
+    "Romgaz SA ROSNGNACNOR3 150,000,000.00 1.5000%",
+    "Sphera Franchise Group SA ROSFGPACNOR4 2 0,996,300.00 0.2100%",
+    "DHL Group DE0005552004 4 ,732,557.70 0.0473%",
+    "Conpet SA ROCOTEACNOR7 25,271,142.30 0.2527%",
+    "e. Obligatiuni BERD, BEI, BM - 0.0000%",
+    "f. Alte obligatiuni emise de organisme straine neguvernamentale (investment grade) 2 0,000,000.00 0.2000%",
+    "Black Sea Trade and Development Bank XS2337703966 2 0,000,000.00 0.2000%",
+    "2/3",
+    "3. OPCVM 50,000,000.00 0.5000%",
+    "Xtrackers Euro Stoxx 50 UCITS ETF 1C / Xtrackers LU0380865021 5 0,000,000.00 0.5000%",
+]
+
+
+def test_join_split_value():
+    assert join_split_value("Hidroelectrica SA RO4Q0Z5RO1B6 3 44,525,072.00 3.1292%") == \
+        "Hidroelectrica SA RO4Q0Z5RO1B6 344,525,072.00 3.1292%"
+    assert join_split_value("DHL Group DE0005552004 4 ,732,557.70 0.0430%") == "DHL Group DE0005552004 4,732,557.70 0.0430%"
+    assert join_split_value("3 44,525,072.00 3.1292%") == "344,525,072.00 3.1292%"
+    for unchanged in ("Banca Transilvania SA ROTLVAACNOR1 449,105,094.00 4.0791%",
+                      "ROTLVAACNOR1 1,058,918,959.06 2.08",
+                      "381,221,274.00 3.90%",
+                      "d. Acţiuni 2,373,226,297.13 21.5553%",
+                      "b. Participații la fonduri de investiții private de capital 9 3,187,550.03 0.8464%"):
+        assert join_split_value(unchanged) == unchanged
+
+
+def test_bcr_2024_split_digits_sum_matches_header():
+    lines = ["Cod fond de pensii: FP2-123", "la data de: 31.12.2024",
+             "2. Valori mobiliare admise la tranzacționare 9,000,000,000.00 90.0000%"] + BCR_2024_EQUITY
+    rep = parse_lines(lines)
+    eq = rep.equities()
+    assert [r["ISIN"] for r in eq][:3] == ["ROTLVAACNOR1", "RO4Q0Z5RO1B6", "NL0012294474"] and len(eq) == 7
+    assert round(sum(r["Valoare_RON"] for r in eq), 2) == 1000000000.00 == rep.equity_header_total
+    hidro = next(r for r in eq if r["ISIN"] == "RO4Q0Z5RO1B6")
+    assert hidro["Valoare_RON"] == 300000000.00 and hidro["Pondere"] == 3.0
+    assert next(r for r in eq if r["ISIN"] == "DE0005552004")["Valoare_RON"] == 4732557.70
+    assert check(rep) == []
+    assert next(r for r in rep.rows if r["ISIN"] == "LU0380865021")["Clasa"] == "opcvm"
