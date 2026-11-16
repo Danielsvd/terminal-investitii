@@ -115,6 +115,55 @@ def test_discover_page_source_and_missing_page():
     assert fetch.discover("nn", {"tip": "pagina", "pagina": None}, [date(2026, 7, 31)], s, pause=0) == []
 
 
+def test_discover_template_then_page_for_missing_months(capsys):
+    """BCR, 16.11.2026: șablonul găsește iulie, nu și mai; luna lipsă se ia de pe pagina de listare."""
+    page = "https://bcr.ro/rapoarte"
+    html = ('<a href="https://cdn/r/la_data_de_31.05.2026.pdf?forceDownload=1">Structura detaliată 31.05.2026</a>'
+            '<a href="https://cdn/r/la_data_de_31.07.2026.pdf?forceDownload=1">Structura detaliată 31.07.2026</a>')
+    s = FakeSession({"https://cdn/t/31.07.2026.pdf": FakeResp(200),
+                     page: FakeResp(200, ctype="text/html", text=html)})
+    src = {"tip": "sablon", "sabloane": ["https://cdn/t/{d}.{m}.{Y}.pdf"], "pagina": page}
+    found = fetch.discover("bcr", src, [date(2026, 7, 31), date(2026, 6, 30), date(2026, 5, 31)], s, pause=0)
+    assert found == [(date(2026, 7, 31), "https://cdn/t/31.07.2026.pdf"),
+                     (date(2026, 5, 31), "https://cdn/r/la_data_de_31.05.2026.pdf?forceDownload=1")]
+    assert ("GET", page) in s.calls
+    # toate lunile găsite prin șablon → pagina nu se mai cere
+    s2 = FakeSession({"https://cdn/t/31.07.2026.pdf": FakeResp(200)})
+    assert fetch.discover("bcr", src, [date(2026, 7, 31)], s2, pause=0) == [(date(2026, 7, 31), "https://cdn/t/31.07.2026.pdf")]
+    assert ("GET", page) not in s2.calls
+
+
+def test_discover_page_without_matching_reports_says_so(capsys):
+    page = "https://azt.ro/rap"
+    s = FakeSession({page: FakeResp(200, ctype="text/html", text='<a href="/x/Raportari_contabile.pdf">contabil</a>')})
+    assert fetch.discover("azt", {"tip": "pagina", "pagina": page}, [date(2026, 7, 31)], s, pause=0) == []
+    assert "pagina nu are rapoarte" in capsys.readouterr().err
+
+
+def test_discover_page_one_link_per_month():
+    """NN, 16.11.2026: același raport apare în mai multe taburi → o singură descărcare pe lună."""
+    page = "https://nn.ro/r"
+    html = ('<a href="/a/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf">Structura</a>'
+            '<a href="/b/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf">Structura</a>'
+            '<a href="/c/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf">Structura</a>')
+    s = FakeSession({page: FakeResp(200, ctype="text/html", text=html)})
+    assert fetch.discover("nn", {"tip": "pagina", "pagina": page}, [date(2026, 7, 31)], s, pause=0) == [
+        (date(2026, 7, 31), "https://nn.ro/a/Str.%20Inv.%2031.07.2026_FPAP%20NN.pdf")]
+
+
+def test_sources_aripi_nn_bcr_16_11():
+    assert fetch.candidate_urls(fetch.SOURCES["aripi"], date(2024, 2, 29)) == [
+        "https://www.generali.ro/wp-content/uploads/pension-documents/pensii/pensii-obligatorii/"
+        "acte-si-rapoarte/date-financiare-fondul-aripi/20240229_pII_inv_det.pdf"]
+    assert fetch.SOURCES["bcr"]["cod"] == "FP2-123"
+    assert fetch.SOURCES["nn"]["pagina"] == "https://www.nn.ro/rapoarte-financiare"
+    # legătura curentă NN (16.11.2026): data vine din numele fișierului, nu din „(2026)” din text
+    html = ('<a href="https://www.nn.ro/sites/default/files/2026-11/Str.%20Inv.%20Raport%20Anual%2031.07.2026_FPAP%20NN.pdf">'
+            'Structura detaliata a portofoliului de investitii fond pensii private curenta (2026)</a>'
+            '<a href="https://www.nn.ro/sites/default/files/2026-11/Arhiva%20Structura%20detaliata.zip">Arhiva</a>')
+    assert [d for _u, _t, d in fetch.pdf_links(html, "https://www.nn.ro/rapoarte-financiare")] == [date(2026, 7, 31)]
+
+
 def test_download_rejects_non_pdf_and_writes_pdf(tmp_path):
     s = FakeSession({"https://a/ok.pdf": FakeResp(200, content=b"%PDF-1.7 ..."),
                      "https://a/html.pdf": FakeResp(200, content=b"<html>eroare</html>")})
