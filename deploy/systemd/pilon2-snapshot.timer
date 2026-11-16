@@ -1,0 +1,11 @@
+# De două ori pe lună (rapoartele apar cu ~3,5 luni întârziere, la date diferite pe fond).
+[Unit]
+Description=Pilon II: pe 5 si pe 20 ale lunii, 07:43 ora Bucurestiului
+
+[Timer]
+OnCalendar=*-*-05,20 07:43 Europe/Bucharest
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

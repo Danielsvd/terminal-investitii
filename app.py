@@ -63,6 +63,8 @@ from data import iv_history
 from data import broker_import
 from analytics import ideas as ideas_calc
 from analytics import bvb_fundamental as bvb_calc
+from analytics import pilon2 as p2_calc
+from data import pilon2 as pilon2_data
 from data.ucits import ucits_for, ucits_symbols, ucits_currency
 from analytics import events as events_calc
 from data import entities as entities_data
@@ -4657,6 +4659,294 @@ def render_event_radar():
                    "mișcării (revenire, Chan 2003). Anormal = față de benchmarkul pieței, pe prețuri ajustate.")
 
 
+# --- FONDURI DE PENSII PILON II (foaia Pilon2_detineri, scrisă de jobul de pe server) ---
+
+PILON2_NOTE = ("Sursa: rapoartele ASF „Anexa 12” (structura detaliată a portofoliului) ale celor 7 fonduri Pilon II, "
+               "publicate lunar cu **~3,5 luni întârziere**: descriu ce au făcut fondurile atunci, nu acum. "
+               "Numărul de acțiuni nu apare în rapoarte: e **derivat** (valoare / prețul de închidere de la data "
+               "raportului, din seria Yahoo de azi, ajustată pentru acțiunile gratuite, deci în unitățile de azi) — proxy. "
+               "Fluxul în lei = Δ acțiuni × prețul de la data raportului (fără efectul de preț). "
+               "Informativ și **netestat**: nu e semnal de moment.")
+
+PILON2_HELP = {
+    "detinere": ("**Ce e:** câte acțiuni dețin împreună fondurile Pilon II care au raportat la data afișată.\n\n"
+                 "**Calcul:** suma pe fonduri a cantității derivate = valoarea din raport / prețul de închidere "
+                 "neajustat din ultima ședință ≤ data raportului.\n\n**Atenție:** proxy; fondurile raportează la date "
+                 "diferite, deci totalul cuprinde doar fondurile cu raport la acea dată."),
+    "capital": ("**Ce e:** ce parte din companie e la fondurile Pilon II.\n\n**Calcul:** deținerea totală / numărul de "
+                "acțiuni al companiei (Yahoo: `sharesOutstanding`; dacă lipsește, `impliedSharesOutstanding`, apoi "
+                "capitalizare / preț, marcat proxy).\n\n**Atenție:** la BVB numărul de acțiuni de la Yahoo "
+                "poate lipsi sau fi vechi → „N/A”. O pondere mare = free-float real mic și risc de vânzare masivă dacă "
+                "se schimbă legislația Pilonului II."),
+    "delta": ("**Ce e:** câte acțiuni au cumpărat (+) sau vândut (−) net fondurile față de raportul anterior al fiecăruia.\n\n"
+              "**Calcul:** Σ (cantitatea acum − cantitatea la raportul anterior al fondului); în lei: × prețul de la data "
+              "raportului.\n\n**Atenție:** descrie o lună de acum ~3,5 luni."),
+    "fonduri": ("**Ce e:** câte dintre fondurile care au raportat la data afișată dețin acțiunea.\n\n"
+                "**Calcul:** fondurile cu cantitate > 0 / fondurile cu raport la acea dată."),
+    "cost": ("**Ce e:** prețul mediu la care au cumpărat net fondurile în ultimele 12 luni (proxy).\n\n"
+             "**Calcul:** Σ(acțiuni cumpărate × prețul de la data raportului) / Σ acțiuni cumpărate, pe fonduri și luni.\n\n"
+             "**Atenție:** prețul de sfârșit de lună, nu prețul real al tranzacțiilor; sub 20 de observații e doar orientativ."),
+    "lichidare": ("**Ce e:** câte ședințe ar dura vânzarea întregii dețineri Pilon II la volumul mediu zilnic (proxy de risc).\n\n"
+                  "**Calcul:** deținerea totală / volumul mediu zilnic din ultimele 3 luni (Yahoo).\n\n"
+                  "**Atenție:** volumele BVB din Yahoo au goluri; rezultatul e un ordin de mărime."),
+}
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_pilon2():
+    """Foaia `Pilon2_detineri` → (DataFrame, probleme, eroare sau None). Doar citire."""
+    empty = pilon2_data.parse_holdings([])[0]
+    try:
+        ws = connect_to_gsheets(pilon2_data.HOLDINGS_SHEET)
+        if ws is None:
+            return empty, [], ("Foaia Pilon2_detineri nu există încă: o creează jobul de pe server la prima rulare "
+                               "(deploy/README.md, „Jobul Pilon II”).")
+        df, problems = pilon2_data.parse_holdings(ws.get_all_values())
+        return df, problems, None
+    except Exception as e:  # rețea / Sheets: mesaj în interfață, aplicația continuă
+        logger.warning(f"Pilon2_detineri nu a putut fi citită: {e}")
+        return empty, [], f"Foaia Pilon2_detineri nu a putut fi citită: {e}"
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def pilon2_closes(symbols, start):
+    """Închiderile zilnice ale simbolurilor BVB din foaie, de la `start` (auto_adjust=False; Yahoo ajustează totuși
+    pentru acțiunile gratuite). Întoarce (DataFrame sau None, eroare sau None)."""
+    try:
+        raw = yf.download(list(symbols), start=start, auto_adjust=False, progress=False, threads=False)
+        close = close_frame(raw, list(symbols))
+        if close is not None and not close.empty and getattr(close.index, "tz", None) is not None:
+            close.index = close.index.tz_localize(None)
+        return close, None
+    except Exception as e:  # rețea / Yahoo: cantitățile rămân cele din foaie, cu notă în interfață
+        logger.warning(f"Pilon II: prețurile pentru recalcularea cantităților nu au venit: {e}")
+        return None, str(e)
+
+
+def pilon2_holdings():
+    """Foaia Pilon II cu cantitățile BVB recalculate la prețurile de azi. Întoarce (df, probleme, eroare, notă)."""
+    df, problems, err = load_pilon2()
+    if err or df.empty:
+        return df, problems, err, None
+    bvb = df[df["Symbol"].fillna("").str.endswith(".RO")]
+    if bvb.empty:
+        return df, problems, err, None
+    start = (bvb["Date"].min() - pd.Timedelta(days=p2_calc.MAX_PRICE_LAG_DAYS + 3)).strftime("%Y-%m-%d")
+    close, cerr = pilon2_closes(tuple(sorted(bvb["Symbol"].unique())), start)
+    out, kept = p2_calc.rebase_quantities(df, close)
+    if cerr or close is None or close.empty:
+        note = "Prețurile Yahoo nu au venit: cantitățile sunt cele scrise în foaie (unități de la data scrierii)."
+    elif kept:
+        note = ("Cantități recalculate la prețurile de azi, cu excepția: " + ", ".join(k[:-3] for k in kept)
+                + " (fără date Yahoo; valorile din foaie).")
+    else:
+        note = None
+    return out, problems, err, note
+
+
+def _pilon2_metrics(cp, shares_out):
+    """Rândul de carduri comun (Analiză companie și pagina Fonduri de pensii). Întoarce rândul de totaluri."""
+    tot = p2_calc.totals(cp)
+    # luna raportată de cele mai multe fonduri: ultima dată poate avea un singur fond (decalaje diferite)
+    ref = p2_calc.reference_date(cp)
+    last = tot[tot["Date"] == ref].iloc[-1] if ref is not None else tot.iloc[-1]
+    pct = (last["Acțiuni"] / shares_out * 100) if (shares_out and pd.notna(last["Acțiuni"])) else None
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Deținere Pilon II", f"{ro_spec(',.0f')(last['Acțiuni'])} acț.", help=PILON2_HELP["detinere"])
+    c2.metric("% din capital", ro_spec(".2f", "%")(pct), help=PILON2_HELP["capital"])
+    dq_txt = ro_spec("+,.0f")(last["dQ"])
+    flux_txt = ro_spec("+,.0f", " lei")(last["Flux_RON"])
+    c3.metric("Δ față de raportul anterior", f"{dq_txt} acț.", flux_txt if flux_txt != "N/A" else None,
+              delta_color="normal" if flux_txt != "N/A" else "off", help=PILON2_HELP["delta"])
+    c4.metric("Fonduri care dețin", f"{int(last['Fonduri care dețin'])} din {int(last['Fonduri raportate'])}",
+              help=PILON2_HELP["fonduri"])
+    st.caption(f"Raportul din {last['Date']:%d.%m.%Y} (publicat cu ~3,5 luni întârziere). Cantități derivate (proxy).")
+    return tot
+
+
+def render_pilon2_card(real_sym, info):
+    """Card scurt în Analiză companie, doar pentru .RO. Detaliile sunt în pagina „Fonduri de pensii”."""
+    sym = str(real_sym).upper()
+    if not sym.endswith(".RO"):
+        return
+    st.subheader("🏦 Fonduri de pensii Pilon II")
+    df, _problems, err, note = pilon2_holdings()
+    if err:
+        st.caption(err)
+        return
+    if note:
+        st.caption(note)
+    cp = p2_calc.company_panel(p2_calc.build_panel(df), sym)
+    if cp.empty:
+        st.caption(f"{sym[:-3]} nu apare în rapoartele fondurilor Pilon II din foaie "
+                   "(sau ISIN-ul nu are încă simbol în ISIN_map).")
+        return
+    shares_out, src = p2_calc.shares_outstanding(info)
+    _pilon2_metrics(cp, shares_out)
+    if src and src != "sharesOutstanding":
+        st.caption(f"Numărul de acțiuni pentru „% din capital”: Yahoo, {src}.")
+    st.caption("Tabelul pe fonduri, graficele și fluxurile pe piață: meniul „Fonduri de pensii”.")
+
+
+def _pilon2_company(panel, df):
+    last_date = p2_calc.reference_date(panel)
+    size = (panel[panel["Date"] == last_date].groupby("Symbol")["Valoare"].sum().sort_values(ascending=False))
+    syms = list(size.index) + sorted(set(panel["Symbol"]) - set(size.index))
+    names = (df.dropna(subset=["Symbol"]).drop_duplicates("Symbol", keep="last").set_index("Symbol")["Denumire"].to_dict())
+    sym = st.selectbox("Companie (BVB), în ordinea valorii deținute", syms, key="p2_sym",
+                       format_func=lambda s: f"{s[:-3]} — {names.get(s) or ''}".rstrip(" —"))
+    cp = p2_calc.company_panel(panel, sym)
+    hist, info, _earn, _real = get_stock_data(sym)
+    shares_out, shares_src = p2_calc.shares_outstanding(info)
+    tot = _pilon2_metrics(cp, shares_out)
+    if shares_src and shares_src != "sharesOutstanding":
+        st.caption(f"Numărul de acțiuni pentru „% din capital”: Yahoo, {shares_src}.")
+
+    adv = None
+    if hist is not None and not hist.empty and "Volume" in hist.columns:
+        vol = slice_window(hist["Volume"], "3L").replace(0, np.nan).dropna()
+        adv = float(vol.mean()) if len(vol) else None
+    cost, n_cost = p2_calc.implied_cost(cp, since=tot["Date"].max() - pd.DateOffset(months=12))
+    dtl = p2_calc.days_to_liquidate(tot["Acțiuni"].iloc[-1], adv)
+    c1, c2, _c3 = st.columns(3)
+    c1.metric("Preț mediu implicit al cumpărărilor (12 luni)",
+              ro_spec(",.2f", " lei")(cost) + (f" · {n_cost} obs." if n_cost else ""), help=PILON2_HELP["cost"])
+    c2.metric("Zile de lichidare", ro_spec(",.0f")(dtl), help=PILON2_HELP["lichidare"])
+    if n_cost and n_cost < p2_calc.MIN_OBS:
+        st.caption(f"Prețul mediu implicit are doar {n_cost} observații (sub {p2_calc.MIN_OBS}): orientativ, fără verdict.")
+
+    table = p2_calc.fund_table(cp, shares_out)
+    if not table.empty:
+        st.dataframe(table.style.format({
+            "Data raport": lambda d: f"{d:%d.%m.%Y}", "Acțiuni": ro_spec(",.0f"), "% din capital": ro_spec(".2f", "%"),
+            "Valoare (lei)": ro_spec(",.0f"), "Pondere în fond (%)": ro_spec(".2f", "%"),
+            "Δ față de raportul anterior": ro_spec("+,.0f"), "Δ 3 luni": ro_spec("+,.0f"), "Δ 12 luni": ro_spec("+,.0f"),
+        }, na_rep="N/A"), hide_index=True, width='stretch', column_config={
+            "Etichetă": st.column_config.Column(help="Față de raportul anterior al fondului: nou / intrare / neschimbat / "
+                                                     "ieșire / ieșit complet."),
+            "Data raport": st.column_config.Column(help="Data ultimului raport al fondului (fondurile publică la date diferite)."),
+        })
+
+    # Deținerea pe fonduri (bare stivuite, culoarea urmează fondul)
+    fig = go.Figure()
+    for fond in sorted(cp["Fond"].unique(), key=p2_calc.fund_sort_key):
+        g = cp[cp["Fond"] == fond].sort_values("Date")
+        fig.add_trace(go.Bar(x=g["Date"], y=g["Cantitate"], name=fond, marker_color=p2_calc.fund_color(fond),
+                             marker_line_width=0, hovertemplate="%{x|%m.%Y}<br>" + fond + ": %{y:,.0f} acț.<extra></extra>"))
+    fig.update_layout(barmode="stack", height=380, title="Acțiuni deținute, pe fonduri (cantități derivate)",
+                      template="plotly_dark", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117', bargap=0.25,
+                      legend=dict(orientation="h", y=-0.15), margin=dict(t=50, b=10))
+    plot_ro(fig, width='stretch')
+
+    # Fluxul net lunar (bare) și prețul de la data raportului (grafic separat, fără a doua axă)
+    flows = tot.dropna(subset=["Flux_RON"])
+    price = cp.groupby("Date")["Pret_data"].max().dropna()
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.62, 0.38],
+                        subplot_titles=("Flux net al fondurilor (lei, Δ acțiuni × prețul de la data raportului)",
+                                        "Prețul de închidere la data raportului (lei)"))
+    fig.add_trace(go.Bar(x=flows["Date"], y=flows["Flux_RON"], name="Flux net", showlegend=False,
+                         marker_color=[DF_UP if v >= 0 else DF_DOWN for v in flows["Flux_RON"]], marker_line_width=0,
+                         hovertemplate="%{x|%m.%Y}: %{y:+,.0f} lei<extra></extra>"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=price.index, y=price.values, mode="lines+markers", name="Preț", showlegend=False,
+                             line=dict(width=2, color="#C9D1D9"), marker=dict(size=8),
+                             hovertemplate="%{x|%d.%m.%Y}: %{y:,.2f} lei<extra></extra>"), row=2, col=1)
+    fig.update_layout(height=480, template="plotly_dark", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+                      margin=dict(t=50, b=10), bargap=0.3)
+    plot_ro(fig, width='stretch')
+
+    if shares_out:
+        pct = tot.dropna(subset=["Acțiuni"])
+        fig = go.Figure(go.Scatter(x=pct["Date"], y=pct["Acțiuni"] / shares_out * 100, mode="lines+markers",
+                                   line=dict(width=2, color=p2_calc.FUND_COLORS["NN"]), marker=dict(size=8),
+                                   hovertemplate="%{x|%m.%Y}: %{y:.2f}% din capital<extra></extra>"))
+        fig.update_layout(height=300, title="Partea din capital la fondurile Pilon II (%)", template="plotly_dark",
+                          paper_bgcolor='#0E1117', plot_bgcolor='#0E1117', margin=dict(t=50, b=10))
+        plot_ro(fig, width='stretch')
+    st.caption("Totalul unei luni cuprinde doar fondurile care au raport pentru acea lună; o lună în care lipsește "
+               "un fond mare arată o scădere falsă. Coloana „Data raport” din tabel arată ultimul raport al fiecăruia.")
+
+
+def _pilon2_market(panel, df):
+    ref = p2_calc.reference_date(panel)
+    n_funds = panel[panel["Date"] == ref]["Fond"].nunique()
+    st.caption(f"Luna de referință: {ref:%m.%Y} ({n_funds} fonduri cu raport). Flux = Δ acțiuni × prețul de la data raportului.")
+    no_prev = p2_calc.funds_without_previous(panel, ref)
+    if no_prev:
+        st.caption("Fără raport anterior (incluse în „Deținere”, nu și în flux): " + ", ".join(no_prev) + ".")
+    m = p2_calc.market_flows(panel, ref)
+    m = m.assign(Symbol=m["Symbol"].str[:-3]).rename(columns={
+        "Symbol": "Simbol", "Flux_RON": "Flux net (lei)", "dQ": "Δ acțiuni", "Valoare": "Deținere (lei)"})
+    fmt = {"Flux net (lei)": ro_spec("+,.0f"), "Δ acțiuni": ro_spec("+,.0f"), "Deținere (lei)": ro_spec(",.0f")}
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Cele mai mari cumpărări nete**")
+        buys = m[m["Flux net (lei)"] > 0].head(10)
+        if buys.empty:
+            st.caption("Nicio cumpărare netă.")
+        else:
+            st.dataframe(buys.style.format(fmt, na_rep="N/A"), hide_index=True, width='stretch')
+    with c2:
+        st.markdown("**Cele mai mari vânzări nete**")
+        sells = m[m["Flux net (lei)"] < 0].sort_values("Flux net (lei)").head(10)
+        if sells.empty:
+            st.caption("Nicio vânzare netă.")
+        else:
+            st.dataframe(sells.style.format(fmt, na_rep="N/A"), hide_index=True, width='stretch')
+
+    hm = p2_calc.flow_heatmap(panel, months=12, top=25)
+    if not hm.empty:
+        z = hm.to_numpy(dtype=float)
+        zmax = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else 1.0
+        fig = go.Figure(go.Heatmap(
+            z=z, x=[f"{d:%m.%Y}" for d in hm.columns], y=[s[:-3] for s in hm.index], zmid=0, zmin=-zmax, zmax=zmax,
+            colorscale=[[0, DF_DOWN], [0.5, "#6E7681"], [1, DF_UP]], xgap=2, ygap=2,
+            colorbar=dict(title="lei"), hovertemplate="%{y} · %{x}: %{z:+,.0f} lei<extra></extra>"))
+        fig.update_layout(height=max(360, 22 * len(hm)), title="Flux net lunar pe emitent (cele mai mari 25 de dețineri)",
+                          template="plotly_dark", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+                          margin=dict(t=50, b=10), yaxis=dict(autorange="reversed"))
+        plot_ro(fig, width='stretch')
+        st.caption("Celulă goală = fluxul nu se poate calcula (lipsește prețul sau raportul anterior al unui fond).")
+
+    eq = p2_calc.fund_equity_totals(df)
+    if not eq.empty:
+        fig = go.Figure()
+        for fond in sorted(eq["Fond"].unique(), key=p2_calc.fund_sort_key):
+            g = eq[eq["Fond"] == fond].sort_values("Date")
+            fig.add_trace(go.Scatter(x=g["Date"], y=g["Valoare"], name=fond, mode="lines+markers",
+                                     line=dict(width=2, color=p2_calc.fund_color(fond)), marker=dict(size=8),
+                                     hovertemplate="%{x|%m.%Y}<br>" + fond + ": %{y:,.0f} lei<extra></extra>"))
+        fig.update_layout(height=380, title="Valoarea acțiunilor din portofoliul fiecărui fond (RO + străine, lei)",
+                          template="plotly_dark", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+                          legend=dict(orientation="h", y=-0.15), margin=dict(t=50, b=10))
+        plot_ro(fig, width='stretch')
+
+
+def render_pilon2_page():
+    st.title("🏦 Fonduri de pensii Pilon II")
+    st.caption(PILON2_NOTE)
+    c_reload, _ = st.columns([1, 3])
+    if c_reload.button("🔄 Recitește foaia", key="p2_reload"):
+        load_pilon2.clear()
+        st.rerun()
+    df, problems, err, note = pilon2_holdings()
+    if err:
+        st.info(err)
+        return
+    if note:
+        st.caption(note)
+    for p in problems:
+        st.warning(p)
+    panel = p2_calc.build_panel(df)
+    if panel.empty:
+        st.info("Foaia nu are încă rânduri BVB cu simbol (ISIN_map). Rulează jobul de pe server.")
+        return
+    tab_co, tab_mk = st.tabs([":material/domain: Pe companie", ":material/public: Pe piață"])
+    with tab_co:
+        _pilon2_company(panel, df)
+    with tab_mk:
+        _pilon2_market(panel, df)
+
+
 # --- MAIN APP ---
 def main():
     st.sidebar.title("Navigare")
@@ -4665,6 +4955,7 @@ def main():
     _MENU_LABEL = {
         "1. Agregator Știri": ":material/newspaper: Știri",
         "2. Analiză Companie": ":material/query_stats: Analiză companie",
+        "11. Fonduri de Pensii": ":material/savings: Fonduri de pensii",
         "3. Portofoliu": ":material/account_balance_wallet: Portofoliu",
         "4. Piață Globală": ":material/public: Piață globală",
         "5. Import Date": ":material/upload_file: Import date",
@@ -4914,6 +5205,8 @@ def main():
 
             # 2b. Decizie BVB în doi pași (doar .RO cu fișier în „Analiză companii”)
             bvb_decision = render_bvb_decision(real_sym, hist)
+            # 2b'. Deținerile fondurilor de pensii Pilon II (doar .RO; informativ, netestat)
+            render_pilon2_card(real_sym, info)
             # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
             global_decision = render_global_decision(real_sym, info, hist, risk_stats)
             # „Verdict final” refolosește exact acest rezultat (nu recalculează)
@@ -9148,6 +9441,9 @@ def main():
 
     elif sectiune == "10. Idei și Strategii":
         render_ideas_page()
+
+    elif sectiune == "11. Fonduri de Pensii":
+        render_pilon2_page()
 
     elif sectiune == "9. Glosar Economic":
         glosar.render(st)

@@ -280,6 +280,22 @@ def fake_download(tickers, period=None, start=None, group_by="column", **k):
     return out
 
 
+def expected_pilon2_tlv():
+    """Deținerea și Δ TLV din foaia falsă, recalculate cu fake_download ca în app.pilon2_holdings (calcul independent
+    de interfață: aceleași funcții pure, aceeași cerere de prețuri)."""
+    from analytics import pilon2 as p2x
+    from data.helpers import close_frame as cf, ro_spec as rs
+    from data.pilon2 import parse_holdings
+    hdf, _ = parse_holdings(SHEETS["Pilon2_detineri"])
+    bvb = hdf[hdf["Symbol"].fillna("").str.endswith(".RO")]
+    syms = sorted(bvb["Symbol"].unique())
+    start = (bvb["Date"].min() - pd.Timedelta(days=p2x.MAX_PRICE_LAG_DAYS + 3)).strftime("%Y-%m-%d")
+    reb, _kept = p2x.rebase_quantities(hdf, cf(fake_download(syms, start=start), syms))
+    tot = p2x.totals(p2x.company_panel(p2x.build_panel(reb), "TLV.RO"))
+    last = tot[tot["Date"] == p2x.reference_date(p2x.company_panel(p2x.build_panel(reb), "TLV.RO"))].iloc[-1]
+    return f"{rs(',.0f')(last['Acțiuni'])} acț.", f"{rs('+,.0f')(last['dQ'])} acț."
+
+
 class FakeTickers:
     def __init__(self, symbols, *a, **k):
         if isinstance(symbols, str):
@@ -366,6 +382,19 @@ SHEETS = {
     "IV_istoric": [["Date", "Symbol", "IV_ATM"]] + [
         [(__import__("datetime").date.today() - __import__("datetime").timedelta(days=40 - i)).isoformat(), "AAPL", (20 + i) / 100]
         for i in range(25)],
+    # deținerile Pilon II (jobul de pe server): TLV la 2 fonduri, SNP vândut de NN, un rând fără preț, o acțiune străină
+    "Pilon2_detineri": [
+        ["Date", "Fond", "ISIN", "Symbol", "Denumire", "Clasa", "Valoare_RON", "Pondere", "Cantitate_derivata",
+         "Pret_folosit", "Abatere_intreg", "Data_publicare"],
+        ["2026-05-31", "NN", "ROTLVAACNOR1", "TLV.RO", "Banca Transilvania SA", "actiuni", "24000", "1,2", "1000", "24", "0", ""],
+        ["2026-06-30", "NN", "ROTLVAACNOR1", "TLV.RO", "Banca Transilvania SA", "actiuni", "30000", "1,4", "1200", "25", "0", ""],
+        ["2026-05-31", "NN", "ROSNPPACNOR9", "SNP.RO", "OMV Petrom SA", "actiuni", "400", "0,02", "500", "0,8", "0", ""],
+        ["2026-05-31", "NN", "DE0007164600", "SAP.DE", "SAP SE", "actiuni", "999", "0,05", "", "", "", ""],
+        ["2026-06-30", "NN", "DE0007164600", "SAP.DE", "SAP SE", "actiuni", "999", "0,05", "", "", "", ""],
+        ["2026-06-30", "Vital", "ROTLVAACNOR1", "TLV.RO", "Banca Transilvania SA", "actiuni", "7500", "0,9", "300", "25", "0", "2026-10-14"],
+        ["2026-05-31", "Vital", "ROSNPPACNOR9", "SNP.RO", "OMV Petrom SA", "actiuni", "80", "0,01", "100", "0,8", "0", ""],
+        ["2026-06-30", "Vital", "ROSNPPACNOR9", "SNP.RO", "OMV Petrom SA", "actiuni", "82", "0,01", "", "", "", ""],
+    ],
     "GLOBAL": [["Industrie", "Companii", "Capitalizare", "Preț actiune", "P/E", "ROE", "Recomandare"],
                ["Tech", "AAPL", "2.500.000.000.000 $", "180,5 $", "28,1", "35,2%", "Buy"],
                ["", "SAP", "200.000.000.000€", "150,5€", "#DIV/0!", "-%", "Ține"]],
@@ -782,6 +811,17 @@ def main():
             assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
         if sym in ("SAP.DE", "SNP.RO"):
             master_matches_top(sym)
+        if sym == "TLV.RO":     # cardul Pilon II: cantitățile recalculate cu prețurile (false) de azi, ca în aplicație
+            assert any("Fonduri de pensii Pilon II" in str(h.value) for h in at.subheader), "lipsește cardul Pilon II"
+            p2m = {m.label: m for m in at.metric}
+            exp_q, exp_dq = expected_pilon2_tlv()
+            assert p2m["Deținere Pilon II"].value == exp_q, (p2m["Deținere Pilon II"].value, exp_q)
+            assert p2m["Δ față de raportul anterior"].value == exp_dq, (p2m["Δ față de raportul anterior"].value, exp_dq)
+            assert p2m["Fonduri care dețin"].value == "2 din 2" and "Calcul:" in p2m["Deținere Pilon II"].proto.help
+            print("Pilon II TLV.RO:", p2m["Deținere Pilon II"].value, p2m["Δ față de raportul anterior"].value,
+                  p2m["Δ față de raportul anterior"].delta)
+        if sym == "SAP.DE":
+            assert not any("Fonduri de pensii Pilon II" in str(h.value) for h in at.subheader), "cardul Pilon II doar la .RO"
         if sym == "SNP.RO":
             assert any("Decizie BVB" in str(h.value) for h in at.subheader), "lipsește secțiunea Decizie BVB"
             at.button(key="bvb_files_reload").click().run()
@@ -1171,6 +1211,15 @@ def main():
     check(at, "10. Idei (radar, a doua scanare)")
     assert len([r for name, r in APPENDED if name == "Evenimente_jurnal"]) == n_before, "Radar: rânduri duble în jurnal"
     print(f"Radar: {radar[0]}; rânduri în Evenimente_jurnal: {n_before - 1}")
+
+    radio().set_value("11. Fonduri de Pensii").run()
+    check(at, "11. Fonduri de pensii")
+    assert [t.label for t in at.tabs][:2] == [":material/domain: Pe companie", ":material/public: Pe piață"], [t.label for t in at.tabs]
+    ft = next((d.value for d in at.dataframe if "Etichetă" in getattr(d.value, "columns", [])), None)
+    assert ft is not None and list(ft["Fond"]) == ["NN", "Vital"] and list(ft["Etichetă"]) == ["intrare", "nou"], ft
+    mk = next((d.value for d in at.dataframe if "Flux net (lei)" in getattr(d.value, "columns", [])), None)
+    assert mk is not None and list(mk["Simbol"]) == ["TLV"], mk
+    print("Pilon II, tabel pe fonduri:", ft[["Fond", "Acțiuni", "Etichetă"]].to_dict("records"))
 
     radio().set_value("9. Glosar Economic").run()
     check(at, "9. Glosar Economic")

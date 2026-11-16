@@ -1,0 +1,360 @@
+"""Jobul Pilon II: rapoartele noi → foile `Pilon2_detineri` și `ISIN_map`.
+
+Pași: (1) descarcă rapoartele lipsă din arhivă (`fetch.py`); (2) le citește (`parse.py`) și le respinge pe cele
+cu probleme (suma acțiunilor ≠ totalul secțiunii, data din raport ≠ data fișierului, alt cod de fond);
+(3) caută simbolul Yahoo al ISIN-urilor noi și le trece în `ISIN_map`; (4) derivă numărul de acțiuni la BVB din
+valoare / prețul de închidere neajustat de la data raportului; (5) adaugă doar rândurile care lipsesc.
+
+Rulează pe server, din rădăcina repo-ului, cu mediul separat (vezi `tools/pilon2/requirements.txt`):
+    ~/apps/pilon2/.venv/bin/python -m tools.pilon2.run --data-dir ~/apps/pilon2 --proba          # nu scrie
+    ~/apps/pilon2/.venv/bin/python -m tools.pilon2.run --data-dir ~/apps/pilon2 --luni 30 --istoric
+    ~/apps/pilon2/.venv/bin/python -m tools.pilon2.run --data-dir ~/apps/pilon2                  # lunar
+
+Reguli: o valoare lipsă rămâne goală (niciodată 0); un raport cu probleme nu se scrie deloc (se raportează);
+la BVB cantitatea se derivă doar cu preț găsit în cel mult 7 zile înainte de data raportului.
+
+Notificare Telegram (opțională): dacă există `<data-dir>/telegram.json` cu {"token": "...", "chat_id": "..."}, după
+fiecare rulare care scrie (nu și la --proba) se trimite un rezumat; la o eroare neprevăzută, mesajul de eroare.
+Fișierul stă doar pe server (nu în repo); o notificare eșuată nu oprește jobul.
+"""
+import argparse
+import sys
+import time
+import tomllib
+from datetime import date, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from data.pilon2 import (HOLDINGS_COLUMNS, HOLDINGS_SHEET, MAP_COLUMNS, MAP_SHEET,  # noqa: E402
+                         parse_isin_map)
+from tools.pilon2 import fetch, parse  # noqa: E402
+
+SPREADSHEET_NAME = "portofoliu_db"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+MAX_PRICE_LAG_DAYS = 7
+PRICE_DECIMALS = 4          # prețurile BVB au cel mult 4 zecimale (ex. 0,8699 lei)
+SEARCH_PAUSE_S = 1.0
+
+
+# --- Funcții pure ---------------------------------------------------------------------------------
+
+TELEGRAM_FILE = "telegram.json"
+TELEGRAM_MAX = 3500          # sub limita Telegram de 4096 caractere
+
+
+def summary_message(today, new_reports, rejected, rows_written, rows_no_price, new_isins, unresolved):
+    """Rezumatul unei rulări, pentru Telegram (text simplu)."""
+    lines = [f"Pilon II — rulare {today:%d.%m.%Y}"]
+    if new_reports:
+        lines.append(f"Rapoarte noi: {len(new_reports)} — " + ", ".join(f"{k} {d:%d.%m.%Y}" for k, d in new_reports))
+    else:
+        lines.append("Rapoarte noi: niciunul")
+    if rejected:
+        lines.append(f"RESPINSE: {len(rejected)}")
+        lines.extend(f"  {r}" for r in rejected)
+    lines.append(f"Pilon2_detineri: {rows_written} rânduri noi ({rows_no_price} acțiuni BVB fără preț)")
+    if new_isins:
+        lines.append(f"ISIN_map: {new_isins} ISIN-uri noi" + (f", fără simbol: {', '.join(unresolved)}" if unresolved else ""))
+    text = "\n".join(lines)
+    return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX - 20] + "\n… (trunchiat)"
+
+
+def load_telegram(data_dir):
+    """{"token", "chat_id"} din `<data-dir>/telegram.json`, sau None dacă fișierul lipsește ori e incomplet."""
+    import json
+
+    f = Path(data_dir) / TELEGRAM_FILE
+    if not f.is_file():
+        return None
+    try:
+        cfg = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"  ! {TELEGRAM_FILE}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+    if not cfg.get("token") or not cfg.get("chat_id"):
+        print(f"  ! {TELEGRAM_FILE}: lipsesc token sau chat_id", file=sys.stderr)
+        return None
+    return {"token": str(cfg["token"]), "chat_id": str(cfg["chat_id"])}
+
+
+def send_telegram(cfg, text, post=None):
+    """Trimite mesajul; True dacă Telegram a răspuns ok. Erorile se tipăresc, nu opresc jobul."""
+    if not cfg:
+        return False
+    if post is None:
+        import requests
+        post = requests.post
+    try:
+        r = post(f"https://api.telegram.org/bot{cfg['token']}/sendMessage",
+                 data={"chat_id": cfg["chat_id"], "text": text, "disable_web_page_preview": "true"}, timeout=20)
+        ok = getattr(r, "status_code", 0) == 200
+        if not ok:
+            print(f"  ! Telegram: HTTP {getattr(r, 'status_code', '?')}", file=sys.stderr)
+        return ok
+    except Exception as exc:  # rețea: notificarea e opțională
+        print(f"  ! Telegram: {type(exc).__name__}", file=sys.stderr)    # fără mesajul excepției: poate conține tokenul
+        return False
+
+
+def report_problems(rep, archive_date, expected_code, code_missing_ok=False):
+    """Problemele raportului, inclusiv potrivirea cu fișierul din arhivă și cu fondul așteptat.
+
+    Un raport fără cod de fond primește codul sursei DOAR dacă sursa e marcată `cod_lipsa_ok` (Aripi din 12.2025:
+    verificat pe 16.11.2026 că e același fond — activ ~18,3 mld. lei la 11.2025 cu cod, ~19,0 mld. la 12.2025 fără
+    cod, aceleași dețineri). Altfel lipsa codului rămâne problemă: arhiva .zip NN conținea alt fond (~1,2 mld. lei,
+    față de ~82 mld. ale fondului Pilon II NN) și a trecut doar pentru că nu avea cod.
+    """
+    if rep.fund_code is None and expected_code and code_missing_ok:
+        rep.fund_code = expected_code
+    problems = parse.check(rep)
+    if rep.report_date and rep.report_date != archive_date:
+        problems.append(f"data din raport {rep.report_date} ≠ data fișierului {archive_date}")
+    if expected_code and rep.fund_code and rep.fund_code != expected_code:
+        problems.append(f"codul fondului {rep.fund_code} ≠ {expected_code} (alt fond?)")
+    return problems
+
+
+def equity_by_isin(rep):
+    """Acțiunile raportului, însumate pe ISIN (un ISIN apare o dată): {ISIN: {Denumire, Valoare_RON, Pondere}}."""
+    out = {}
+    for r in rep.equities():
+        cur = out.setdefault(r["ISIN"], {"Denumire": r["Denumire"], "Valoare_RON": None, "Pondere": None})
+        if not cur["Denumire"] and r["Denumire"]:
+            cur["Denumire"] = r["Denumire"]
+        for k in ("Valoare_RON", "Pondere"):
+            if r[k] is not None:
+                cur[k] = (cur[k] or 0.0) + r[k]
+    return out
+
+
+def derive_quantity(value, price):
+    """(cantitate rotunjită, abaterea câtului de la un întreg) sau (None, None) dacă lipsește ceva."""
+    if value is None or price is None or not price > 0 or value < 0:
+        return None, None
+    q = value / price
+    n = round(q)
+    return int(n), round(q - n, 4)
+
+
+def choose_symbol(quotes):
+    """Simbolul Yahoo pentru un ISIN, din rezultatele căutării: întâi o cotație .RO, apoi prima acțiune."""
+    quotes = [q for q in (quotes or []) if q.get("symbol")]
+    for q in quotes:
+        if str(q["symbol"]).upper().endswith(".RO"):
+            return str(q["symbol"]).upper()
+    for q in quotes:
+        if str(q.get("quoteType", "")).upper() in ("EQUITY", ""):
+            return str(q["symbol"]).upper()
+    return ""
+
+
+def map_row(isin, symbol, name):
+    piata = "BVB" if symbol.endswith(".RO") else ("extern" if symbol else "")
+    return [isin, symbol, name, piata, "yahoo" if symbol else "negasit"]
+
+
+def price_on_or_before(close, symbol, d, max_lag_days=MAX_PRICE_LAG_DAYS):
+    """Închiderea din ultima ședință ≤ d, cel mult `max_lag_days` în urmă; altfel None."""
+    if close is None or symbol not in getattr(close, "columns", []):
+        return None, None
+    s = close[symbol].dropna()
+    s = s[(s.index.date <= d) & (s.index.date >= d - timedelta(days=max_lag_days))]
+    if s.empty:
+        return None, None
+    # Yahoo dă închiderile BVB cu zgomot de virgulă mobilă (36.900002 în loc de 36.90). La 62 mil. de acțiuni,
+    # 0,000002 lei mută câtul cu ~3 acțiuni; prețurile BVB au cel mult 4 zecimale, deci se rotunjesc la 4.
+    v = round(float(s.iloc[-1]), PRICE_DECIMALS)
+    return (v, s.index[-1].date()) if v > 0 else (None, None)
+
+
+def build_rows(fund_name, rep, isin_map, close, published):
+    """Rândurile pentru `Pilon2_detineri` (ordinea din HOLDINGS_COLUMNS), doar acțiuni."""
+    rows = []
+    d = rep.report_date
+    for isin, rec in sorted(equity_by_isin(rep).items()):
+        m = isin_map.get(isin, {})
+        sym = m.get("Symbol", "")
+        price = qty = dev = None
+        if sym.endswith(".RO"):
+            price, _ = price_on_or_before(close, sym, d)
+            qty, dev = derive_quantity(rec["Valoare_RON"], price)
+        rows.append([d.isoformat(), fund_name, isin, sym, rec["Denumire"] or m.get("Denumire", ""), parse.EQUITY,
+                     _cell(rec["Valoare_RON"]), _cell(rec["Pondere"]), _cell(qty), _cell(price), _cell(dev),
+                     published.isoformat() if published else ""])
+    return rows
+
+
+def _cell(v):
+    return "" if v is None else v
+
+
+def existing_keys(values):
+    """Cheile (Date, Fond, ISIN) deja în foaie, din rândurile ei (antet + rânduri)."""
+    if not values:
+        return set()
+    header = [str(h).strip() for h in values[0]]
+    try:
+        i_d, i_f, i_i = header.index("Date"), header.index("Fond"), header.index("ISIN")
+    except ValueError:
+        return set()
+    return {(str(r[i_d]).strip(), str(r[i_f]).strip(), str(r[i_i]).strip().upper())
+            for r in values[1:] if len(r) > max(i_d, i_f, i_i)}
+
+
+# --- Rețea și foi ---------------------------------------------------------------------------------
+
+def open_spreadsheet(secrets_path):
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    with open(secrets_path, "rb") as f:
+        info = tomllib.load(f)["gcp_service_account"]
+    creds = Credentials.from_service_account_info(dict(info), scopes=SCOPES)
+    return gspread.authorize(creds).open(SPREADSHEET_NAME)
+
+
+def ensure_worksheet(sh, title, header):
+    """Foaia `title` (creată cu antetul dat dacă lipsește — aprobat de Daniel, 15.11.2026)."""
+    import gspread
+
+    try:
+        return sh.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=1000, cols=len(header))
+        ws.append_row(header, value_input_option="RAW")
+        print(f"Foaie nouă creată: {title}")
+        return ws
+
+
+def yahoo_symbol(isin):
+    import yfinance as yf
+
+    try:
+        return choose_symbol(yf.Search(isin, max_results=8).quotes)
+    except Exception as exc:  # căutarea Yahoo e neoficială: eșecul lasă ISIN-ul nerezolvat, nu oprește jobul
+        print(f"  ! căutare Yahoo {isin}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return ""
+
+
+def download_closes(symbols, dates):
+    """Închideri neajustate (auto_adjust=False: fondurile evaluează la prețul de închidere al zilei)."""
+    import yfinance as yf
+
+    from data.helpers import close_frame
+
+    if not symbols or not dates:
+        return None
+    start = min(dates) - timedelta(days=MAX_PRICE_LAG_DAYS + 3)
+    end = max(dates) + timedelta(days=1)
+    data = yf.download(sorted(symbols), start=start.isoformat(), end=end.isoformat(), auto_adjust=False,
+                       progress=False, threads=False)
+    close = close_frame(data, sorted(symbols))
+    if close is not None and not close.empty and getattr(close.index, "tz", None) is not None:
+        close.index = close.index.tz_localize(None)
+    return close
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--data-dir", required=True, help="folderul dedicat (ex. ~/apps/pilon2)")
+    p.add_argument("--secrets", default=str(ROOT / ".streamlit" / "secrets.toml"))
+    p.add_argument("--luni", type=int, default=6, help="câte sfârșituri de lună, înapoi de azi")
+    p.add_argument("--fond", default="", help="doar aceste chei (vital,bt,bcr,metropolitan,nn,azt,aripi)")
+    p.add_argument("--istoric", action="store_true", help="completare retroactivă: Data_publicare rămâne goală")
+    p.add_argument("--proba", action="store_true", help="descarcă și citește, fără să scrie în foi")
+    args = p.parse_args(argv)
+    data_dir = Path(args.data_dir).expanduser()
+    tg = None if args.proba else load_telegram(data_dir)
+    try:
+        return _run(args, data_dir, tg)
+    except Exception as exc:
+        send_telegram(tg, f"Pilon II — rulare {date.today():%d.%m.%Y}: EROARE {type(exc).__name__}: {str(exc)[:300]}\n"
+                          "Detalii: journalctl -u pilon2-snapshot -n 80 --no-pager")
+        raise
+
+
+def _run(args, data_dir, tg):
+    keys = [k.strip() for k in args.fond.split(",") if k.strip()] or None
+    sources = fetch.load_sources(data_dir / "surse.json")
+
+    archive = fetch.fetch_all(data_dir, args.luni, keys, sources=sources)
+    good, failed, rejected, new_reports = [], 0, [], []
+    for key, items in archive.items():
+        src = sources[key]
+        for d, path, is_new in items:
+            try:
+                rep = parse.parse_pdf(path)
+            except Exception as exc:  # PDF stricat / necitibil: se raportează, restul continuă
+                print(f"{key} {d}: PDF necitibil ({type(exc).__name__}: {exc})")
+                failed += 1
+                rejected.append(f"{key} {d:%d.%m.%Y}: PDF necitibil")
+                continue
+            problems = report_problems(rep, d, src.get("cod"), bool(src.get("cod_lipsa_ok")))
+            if problems:
+                failed += 1
+                print(f"{key} {d}: RESPINS — " + "; ".join(problems))
+                rejected.append(f"{key} {d:%d.%m.%Y}: {problems[0]}")
+                continue
+            if not src.get("cod"):
+                print(f"{key} {d}: codul fondului din raport = {rep.fund_code} (de trecut în SOURCES)")
+            published = rep.published_date or (date.today() if is_new and not args.istoric else None)
+            good.append((key, src["fond"], rep, published))
+            if is_new:
+                new_reports.append((key, d))
+            print(f"{key} {d}: OK, {len(rep.equities())} rânduri de acțiuni")
+
+    if args.proba:
+        print(f"Probă: {len(good)} rapoarte bune, {failed} respinse. Nimic scris.")
+        return 1 if failed else 0
+    if not good:
+        print(f"Niciun raport de scris ({failed} respinse).")
+        send_telegram(tg, summary_message(date.today(), new_reports, rejected, 0, 0, 0, []))
+        return 1 if failed else 0
+
+    sh = open_spreadsheet(args.secrets)
+    ws_map = ensure_worksheet(sh, MAP_SHEET, MAP_COLUMNS)
+    ws_hold = ensure_worksheet(sh, HOLDINGS_SHEET, HOLDINGS_COLUMNS)
+    isin_map = parse_isin_map(ws_map.get_all_values())
+
+    names = {}
+    for _k, _f, rep, _p in good:
+        for isin, rec in equity_by_isin(rep).items():
+            names.setdefault(isin, rec["Denumire"])
+    new_map_rows, unresolved = [], []
+    for isin in sorted(set(names) - set(isin_map)):
+        sym = yahoo_symbol(isin)
+        time.sleep(SEARCH_PAUSE_S)
+        row = map_row(isin, sym, names[isin])
+        new_map_rows.append(row)
+        isin_map[isin] = dict(zip(MAP_COLUMNS[1:], row[1:]))
+    if new_map_rows:
+        ws_map.append_rows(new_map_rows, value_input_option="RAW")
+        unresolved = [r[0] for r in new_map_rows if not r[1]]
+        print(f"ISIN_map: {len(new_map_rows)} ISIN-uri noi ({len(unresolved)} fără simbol: {', '.join(unresolved[:10])})")
+
+    bvb = {m["Symbol"] for m in isin_map.values() if m.get("Symbol", "").endswith(".RO")}
+    dates = sorted({rep.report_date for _k, _f, rep, _p in good})
+    close = download_closes(bvb, dates)
+
+    have = existing_keys(ws_hold.get_all_values())
+    rows = []
+    for _key, fund_name, rep, published in good:
+        for row in build_rows(fund_name, rep, isin_map, close, published):
+            if (row[0], row[1], row[2]) not in have:
+                have.add((row[0], row[1], row[2]))       # și fără dubluri în aceeași rulare
+                rows.append(row)
+    if rows:
+        ws_hold.append_rows(rows, value_input_option="RAW")
+    no_qty = sum(1 for r in rows if r[3].endswith(".RO") and r[8] == "")
+    print(f"{HOLDINGS_SHEET}: {len(rows)} rânduri noi ({no_qty} acțiuni BVB fără preț → fără cantitate); "
+          f"{failed} rapoarte respinse.")
+    send_telegram(tg, summary_message(date.today(), new_reports, rejected, len(rows), no_qty, len(new_map_rows),
+                                      unresolved))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
