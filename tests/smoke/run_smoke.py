@@ -280,6 +280,22 @@ def fake_download(tickers, period=None, start=None, group_by="column", **k):
     return out
 
 
+def expected_pilon2_tlv():
+    """Deținerea și Δ TLV din foaia falsă, recalculate cu fake_download ca în app.pilon2_holdings (calcul independent
+    de interfață: aceleași funcții pure, aceeași cerere de prețuri)."""
+    from analytics import pilon2 as p2x
+    from data.helpers import close_frame as cf, ro_spec as rs
+    from data.pilon2 import parse_holdings
+    hdf, _ = parse_holdings(SHEETS["Pilon2_detineri"])
+    bvb = hdf[hdf["Symbol"].fillna("").str.endswith(".RO")]
+    syms = sorted(bvb["Symbol"].unique())
+    start = (bvb["Date"].min() - pd.Timedelta(days=p2x.MAX_PRICE_LAG_DAYS + 3)).strftime("%Y-%m-%d")
+    reb, _kept = p2x.rebase_quantities(hdf, cf(fake_download(syms, start=start), syms))
+    tot = p2x.totals(p2x.company_panel(p2x.build_panel(reb), "TLV.RO"))
+    last = tot[tot["Date"] == p2x.reference_date(p2x.company_panel(p2x.build_panel(reb), "TLV.RO"))].iloc[-1]
+    return f"{rs(',.0f')(last['Acțiuni'])} acț.", f"{rs('+,.0f')(last['dQ'])} acț."
+
+
 class FakeTickers:
     def __init__(self, symbols, *a, **k):
         if isinstance(symbols, str):
@@ -795,11 +811,12 @@ def main():
             assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
         if sym in ("SAP.DE", "SNP.RO"):
             master_matches_top(sym)
-        if sym == "TLV.RO":     # cardul Pilon II: 1.000+200 (NN) + 300 (Vital) la 30.06; flux 200×25 + 300×25 lei
+        if sym == "TLV.RO":     # cardul Pilon II: cantitățile recalculate cu prețurile (false) de azi, ca în aplicație
             assert any("Fonduri de pensii Pilon II" in str(h.value) for h in at.subheader), "lipsește cardul Pilon II"
             p2m = {m.label: m for m in at.metric}
-            assert p2m["Deținere Pilon II"].value == "1.500 acț.", p2m["Deținere Pilon II"].value
-            assert p2m["Δ față de raportul anterior"].value == "+500 acț.", p2m["Δ față de raportul anterior"].value
+            exp_q, exp_dq = expected_pilon2_tlv()
+            assert p2m["Deținere Pilon II"].value == exp_q, (p2m["Deținere Pilon II"].value, exp_q)
+            assert p2m["Δ față de raportul anterior"].value == exp_dq, (p2m["Δ față de raportul anterior"].value, exp_dq)
             assert p2m["Fonduri care dețin"].value == "2 din 2" and "Calcul:" in p2m["Deținere Pilon II"].proto.help
             print("Pilon II TLV.RO:", p2m["Deținere Pilon II"].value, p2m["Δ față de raportul anterior"].value,
                   p2m["Δ față de raportul anterior"].delta)

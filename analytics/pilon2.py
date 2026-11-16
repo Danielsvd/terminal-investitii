@@ -23,6 +23,49 @@ OTHER_COLOR = "#8B949E"
 MIN_OBS = 20            # sub ~20 de observații: fără verdict (regula proiectului)
 
 
+PRICE_DECIMALS = 4          # prețurile BVB au cel mult 4 zecimale (Yahoo dă 36.900002)
+MAX_PRICE_LAG_DAYS = 7      # ultima ședință ≤ data raportului, cel mult 7 zile în urmă (ca jobul)
+
+
+def rebase_quantities(df, close, max_lag_days=MAX_PRICE_LAG_DAYS):
+    """Cantitățile BVB recalculate cu seria de prețuri de azi: Cantitate = Valoare / închiderea ≤ data raportului.
+
+    De ce: jobul scrie cantitatea o singură dată, cu prețul Yahoo din ziua rulării. Yahoo ajustează retroactiv prețul
+    după acțiunile gratuite (TLV: 19,97 lei la 31.05.2024), deci rândurile scrise înainte și după o emisiune ar fi în
+    unități diferite, iar acțiunile gratuite ar apărea drept „cumpărare”. Recalculate la citire, toate rândurile sunt
+    în unitățile de azi. Presupunere: seria Yahoo e ajustată consecvent pentru emisiune (neverificat pentru fiecare
+    emitent); o emisiune pe care Yahoo n-o ajustează rămâne vizibilă ca flux.
+
+    Un simbol care lipsește cu totul din `close` își păstrează valorile din foaie (raportat în listă). Un simbol
+    prezent, dar fără preț în fereastra de 7 zile la o dată, primește NaN la acea dată (lipsă ≠ 0).
+    Întoarce (df nou, simbolurile păstrate din foaie)."""
+    out = df.copy()
+    if out.empty or close is None or getattr(close, "empty", True):
+        syms = sorted(out.loc[out["Symbol"].fillna("").str.endswith(".RO"), "Symbol"].unique()) if not out.empty else []
+        return out, syms
+    kept = []
+    is_bvb = out["Symbol"].fillna("").str.endswith(".RO")
+    for sym, idx in out[is_bvb].groupby("Symbol").groups.items():
+        s = close[sym].dropna() if sym in close.columns else pd.Series(dtype=float)
+        s = s[s > 0]
+        if s.empty:
+            kept.append(sym)
+            continue
+        s = s.sort_index()
+        for i in idx:
+            d = pd.Timestamp(out.at[i, "Date"])
+            w = s[(s.index <= d) & (s.index >= d - pd.Timedelta(days=max_lag_days))]
+            v = out.at[i, "Valoare_RON"]
+            if w.empty or pd.isna(v):
+                out.at[i, "Cantitate_derivata"], out.at[i, "Pret_folosit"], out.at[i, "Abatere_intreg"] = np.nan, np.nan, np.nan
+                continue
+            px = round(float(w.iloc[-1]), PRICE_DECIMALS)
+            q = float(v) / px
+            n = round(q)
+            out.at[i, "Cantitate_derivata"], out.at[i, "Pret_folosit"], out.at[i, "Abatere_intreg"] = float(n), px, round(q - n, 4)
+    return out, sorted(kept)
+
+
 def _pos(info, key):
     try:
         v = float((info or {}).get(key))
