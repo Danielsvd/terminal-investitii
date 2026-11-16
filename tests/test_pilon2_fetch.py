@@ -248,3 +248,37 @@ def test_fetch_zip_refreshes_old_cache_and_keeps_it_when_download_fails(tmp_path
 def zipfile_ok(path):
     import zipfile
     return zipfile.is_zipfile(path)
+
+
+def test_date_from_text_ddmmyyyy_azt():
+    assert fetch.date_from_text("AZT_Viitorul_Tau_31072026.pdf") == date(2026, 7, 31)
+    assert fetch.date_from_text("Raportare_semestriala_AZT_Viitorul_30062026.pdf") == date(2026, 6, 30)
+    assert fetch.date_from_text("20260731_pII_inv_det.pdf") == date(2026, 7, 31)          # aaaallzz rămâne primul
+    assert fetch.date_from_text("x_99999999.pdf") is None
+
+
+def test_discover_monthly_pages_azt():
+    base = "https://azt/rap?p_fond=VIITORUL&p_an={Y}&p_luna={mi}"
+    jul = "https://azt/rap?p_fond=VIITORUL&p_an=2026&p_luna=7"
+    jun = "https://azt/rap?p_fond=VIITORUL&p_an=2026&p_luna=6"
+    html_jul = ('<a href="/f/VIITORUL/2026/7/31/vuan_vt_31.07.2026.pdf">vuan</a>'
+                '<a href="/f/VIITORUL/2026/7/Numar_participanti/Structura_participanti_AZT_Viitorul_Tau_Iulie.pdf">x</a>'
+                '<a href="/f/VIITORUL/2026/7/Structura_portofoliu_investitii/AZT_Viitorul_Tau_31072026.pdf">s</a>'
+                '<a href="/f/VIITORUL/2026/trim_2/Rata_de_rentabilitate/Rata_rentab_30.06.2026.pdf">r</a>')
+    s = FakeSession({jul: FakeResp(200, ctype="text/html", text=html_jul),
+                     jun: FakeResp(200, ctype="text/html", text="<p>nimic</p>")})
+    src = {"tip": "pagina_lunara", "pagina": base}
+    assert fetch.discover("azt", src, [date(2026, 7, 31), date(2026, 6, 30)], s, pause=0) == [
+        (date(2026, 7, 31), "https://azt/f/VIITORUL/2026/7/Structura_portofoliu_investitii/AZT_Viitorul_Tau_31072026.pdf")]
+    assert fetch.SOURCES["azt"]["tip"] == "pagina_lunara"
+    assert fetch.SOURCES["azt"]["pagina"].format(**fetch._fill(date(2026, 7, 31))).endswith("p_an=2026&p_luna=7")
+
+
+def test_metropolitan_page_fallback_names():
+    """Metropolitan, 16.11.2026: lunile cu „_31_05_2025” lipsesc din șabloane și se iau de pe pagină."""
+    assert fetch.SOURCES["metropolitan"]["pagina"].startswith("https://www.metropolitanlife.ro/pensie-pilon-2/")
+    html = ('<a href="https://www.metropolitanlife.ro/content/dam/metlifecom/ro/PDFs/'
+            'situatia_detaliata_a_portofoliului_de_investitii_la_data_de_31_05_2025.pdf">'
+            'Situatia detaliata a portofoliului de investitii la data de 31.05.2025</a>')
+    links = fetch.pdf_links(html, fetch.SOURCES["metropolitan"]["pagina"])
+    assert [d for _u, _t, d in links] == [date(2025, 5, 31)]

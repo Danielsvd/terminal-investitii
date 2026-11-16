@@ -4,8 +4,10 @@ Două feluri de surse:
   - „sablon”: fondul pune rapoartele la adrese previzibile, cu data în nume (Vital, BT, BCR, Metropolitan, Aripi).
     Pentru fiecare sfârșit de lună se încearcă șabloanele, în ordine, până răspunde un PDF. Dacă fondul are și
     o pagină de listare, lunile negăsite prin șablon se caută apoi pe pagină.
-  - „pagina”: fondul are o pagină cu legături (NN, AZT). Se citesc legăturile spre PDF, iar data se ia
+  - „pagina”: fondul are o pagină cu legături (NN). Se citesc legăturile spre PDF, iar data se ia
     din textul sau numele legăturii. Adresa paginii se poate suprascrie în `surse.json`.
+  - „pagina_lunara”: pagina arată o singură lună, aleasă din adresă (AZT: `p_an`, `p_luna`); se cere câte o
+    pagină pe lună și se ia legătura de structură cu data acelei luni.
 
 Adresele implicite sunt în `SOURCES`; se pot suprascrie fără cod, într-un fișier JSON
 (`<data-dir>/surse.json`, aceeași structură, doar cheile care se schimbă).
@@ -55,6 +57,8 @@ SOURCES = {
         "fond": "BT Pilon 2", "cod": "FP2-83", "tip": "sablon",
         "sabloane": [_BT + "FPAP%20structura%20detaliata%20a%20portofoliului%20la%20{d}.{m}.{Y}.pdf",
                      _BT + "FPAP_structura%20detaliata%20a%20portofoliului%20la%20{d}.{m}.{Y}.pdf"],
+        # pagina de rezervă pentru rapoartele vechi, cu alt nume (16.11.2026: neverificată, nu se deschide de aici)
+        "pagina": "https://btpensianoastra.ro/evolutie-fond-pensia-pilon-II/raportari-financiare",
     },
     "bcr": {
         "fond": "BCR", "cod": "FP2-123", "tip": "sablon",
@@ -69,6 +73,9 @@ SOURCES = {
         "sabloane": [base + name for base in (_ML, _ML + "Informatiifinanciare/",
                                               _ML + "Informatiifinanciare/Raportare-lunara/")
                      for name in _ML_NAMES],
+        # rezervă pentru lunile cu alt nume („…_31_05_2025.pdf”, „…_28_02_2025.pdf”, „…_31_12_2024.pdf”)
+        "pagina": "https://www.metropolitanlife.ro/pensie-pilon-2/informatii-si-materiale/informatii-financiare/"
+                  "raportare-privind-situatia-detaliata-a-investitiilor/",
     },
     "aripi": {
         "fond": "Aripi", "cod": "FP2-49", "tip": "sablon",
@@ -78,9 +85,10 @@ SOURCES = {
     # NN: pagina are doar raportul curent; istoricul e într-o arhivă .zip („Iulie 2026.pdf” …), legată de pe pagină.
     "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": "https://www.nn.ro/rapoarte-financiare",
            "arhiva_zip": True},
-    # AZT: pagina fondului Viitorul Tău (p_fond=VIITORUL); neverificată pe date reale.
-    "azt": {"fond": "AZT Viitorul Tău", "cod": None, "tip": "pagina",
-            "pagina": "https://www.aztpensii.ro:7777/employer/prc_rap_web_new_49?p_fond=VIITORUL"},
+    # AZT: formular GET cu anul și luna; raportul e „…/VIITORUL/2026/7/Structura_portofoliu_investitii/
+    # AZT_Viitorul_Tau_31072026.pdf” (văzut pe 16.11.2026).
+    "azt": {"fond": "AZT Viitorul Tău", "cod": None, "tip": "pagina_lunara",
+            "pagina": "https://www.aztpensii.ro:7777/employer/prc_rap_web_new_49?p_fond=VIITORUL&p_an={Y}&p_luna={mi}"},
 }
 
 # Legături care par rapoarte de structură detaliată (după adresă sau text, normalizate).
@@ -121,14 +129,19 @@ def month_ends(last, count):
 
 def candidate_urls(source, d):
     """Adresele de încercat pentru raportul de la data `d` (sfârșit de lună)."""
-    fill = {"Y": f"{d.year:04d}", "m": f"{d.month:02d}", "d": f"{d.day:02d}"}
-    return [t.format(**fill) for t in source.get("sabloane") or []]
+    return [t.format(**_fill(d)) for t in source.get("sabloane") or []]
+
+
+def _fill(d):
+    """Câmpurile unei adrese: {Y} an, {m} lună cu zero, {d} zi cu zero, {mi} lună fără zero (AZT: p_luna=7)."""
+    return {"Y": f"{d.year:04d}", "m": f"{d.month:02d}", "d": f"{d.day:02d}", "mi": str(d.month)}
 
 
 def date_from_text(text):
     """Data raportului din textul sau numele unei legături; None dacă nu se poate deduce.
 
-    Recunoaște: 31.07.2026, 31-07-2026, 31_07_2026, 20260731, „Mai 2025”, „jun_2026”, „_052022” (NN, vechi).
+    Recunoaște: 31.07.2026, 31-07-2026, 31_07_2026, 20260731, 31072026 (AZT), „Mai 2025”, „jun_2026”,
+    „_052022” (NN, vechi).
     O lună fără zi înseamnă sfârșitul lunii (rapoartele sunt la sfârșit de lună).
     """
     t = str(text or "").lower()
@@ -142,6 +155,12 @@ def date_from_text(text):
     if m:
         try:
             return date(int(m[1]), int(m[2]), int(m[3]))
+        except ValueError:
+            pass
+    m = re.search(r"(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)", t)        # zzllaaaa (AZT); după aaaallzz
+    if m:
+        try:
+            return date(int(m[3]), int(m[2]), int(m[1]))
         except ValueError:
             pass
     for m in re.finditer(r"([a-z]+)[\s_-]+(20\d{2})(?!\d)", t):
@@ -308,6 +327,8 @@ def discover(key, source, dates, session, pause=PAUSE_S):
     La sursele „sablon” cu pagină de listare, lunile negăsite prin șablon se caută pe pagină.
     """
     found = []
+    if source.get("tip") == "pagina_lunara":
+        return _discover_monthly_pages(key, source, dates, session, pause)
     if source.get("tip") == "sablon":
         for d in dates:
             for url in candidate_urls(source, d):
@@ -339,6 +360,26 @@ def discover(key, source, dates, session, pause=PAUSE_S):
     if not on_page:
         print(f"  {key}: pagina nu are rapoarte pentru lunile căutate ({page})", file=sys.stderr)
     return sorted(set(found + on_page), reverse=True)
+
+
+def _discover_monthly_pages(key, source, dates, session, pause):
+    """O pagină pe lună (AZT): prima legătură de structură cu data lunii cerute."""
+    found = []
+    for d in dates:
+        page = source["pagina"].format(**_fill(d))
+        time.sleep(pause)
+        try:
+            r = session.get(page, timeout=TIMEOUT_S)
+            r.raise_for_status()
+        except Exception as exc:  # rețea: luna lipsește, restul continuă
+            print(f"  ! {key}: pagina {page}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        url = next((u for u, _t, ld in pdf_links(r.text, page) if ld == d), None)
+        if url:
+            found.append((d, url))
+    if dates and not found:
+        print(f"  {key}: nicio pagină lunară nu are raportul de structură ({source['pagina']})", file=sys.stderr)
+    return found
 
 
 def archive_path(data_dir, key, d):
