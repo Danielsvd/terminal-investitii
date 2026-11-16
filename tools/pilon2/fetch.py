@@ -57,8 +57,9 @@ SOURCES = {
         "fond": "BT Pilon 2", "cod": "FP2-83", "tip": "sablon",
         "sabloane": [_BT + "FPAP%20structura%20detaliata%20a%20portofoliului%20la%20{d}.{m}.{Y}.pdf",
                      _BT + "FPAP_structura%20detaliata%20a%20portofoliului%20la%20{d}.{m}.{Y}.pdf"],
-        # pagina de rezervă pentru rapoartele vechi, cu alt nume (16.11.2026: neverificată, nu se deschide de aici)
-        "pagina": "https://btpensianoastra.ro/evolutie-fond-pensia-pilon-II/raportari-financiare",
+        # pagina de rezervă pentru rapoartele vechi, cu alt nume. „raportari-financiare” are doar situațiile
+        # semestriale (16.11.2026); rapoartele de structură sunt sub „situatia-investitiilor” (neverificată încă).
+        "pagina": "https://btpensianoastra.ro/evolutie-fond-pensia-pilon-II/situatia-investitiilor",
     },
     "bcr": {
         "fond": "BCR", "cod": "FP2-123", "tip": "sablon",
@@ -378,7 +379,8 @@ def _discover_monthly_pages(key, source, dates, session, pause):
         if url:
             found.append((d, url))
     if dates and not found:
-        print(f"  {key}: nicio pagină lunară nu are raportul de structură ({source['pagina']})", file=sys.stderr)
+        print(f"  {key}: paginile lunare nu au raportul de structură pentru lunile căutate ({source['pagina']})",
+              file=sys.stderr)
     return found
 
 
