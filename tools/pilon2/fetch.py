@@ -1,10 +1,11 @@
 """Găsirea și descărcarea rapoartelor „Anexa 12” ale fondurilor Pilon II.
 
 Două feluri de surse:
-  - „sablon”: fondul pune rapoartele la adrese previzibile, cu data în nume (Vital, BT, BCR, Metropolitan).
-    Pentru fiecare sfârșit de lună se încearcă șabloanele, în ordine, până răspunde un PDF.
-  - „pagina”: fondul are o pagină cu legături (NN, AZT, Aripi). Se citesc legăturile spre PDF, iar data se ia
-    din textul sau numele legăturii. Adresa paginii se completează în `surse.json` când e cunoscută.
+  - „sablon”: fondul pune rapoartele la adrese previzibile, cu data în nume (Vital, BT, BCR, Metropolitan, Aripi).
+    Pentru fiecare sfârșit de lună se încearcă șabloanele, în ordine, până răspunde un PDF. Dacă fondul are și
+    o pagină de listare, lunile negăsite prin șablon se caută apoi pe pagină.
+  - „pagina”: fondul are o pagină cu legături (NN, AZT). Se citesc legăturile spre PDF, iar data se ia
+    din textul sau numele legăturii. Adresa paginii se poate suprascrie în `surse.json`.
 
 Adresele implicite sunt în `SOURCES`; se pot suprascrie fără cod, într-un fișier JSON
 (`<data-dir>/surse.json`, aceeași structură, doar cheile care se schimbă).
@@ -36,6 +37,8 @@ _ML_NAMES = (
     "Situatia_detaliata_a_portofoliului_de_investitii_la_data_de_{d}.{m}.{Y}.pdf",
     "situatia-detaliata-a-portofoliului-de-investitii-la-data-de-{d}-{m}-{Y}.pdf",
 )
+_GEN = ("https://www.generali.ro/wp-content/uploads/pension-documents/pensii/pensii-obligatorii/"
+        "acte-si-rapoarte/date-financiare-fondul-aripi/")
 _BT = ("https://btpensianoastra.ro/storage/app/media/Pilonul%20II/"
        "Structura%20detaliata%20a%20portofoliului%20de%20investitii/{Y}/")
 
@@ -51,7 +54,7 @@ SOURCES = {
                      _BT + "FPAP_structura%20detaliata%20a%20portofoliului%20la%20{d}.{m}.{Y}.pdf"],
     },
     "bcr": {
-        "fond": "BCR", "cod": None, "tip": "sablon",
+        "fond": "BCR", "cod": "FP2-123", "tip": "sablon",
         "sabloane": ["https://cdn.erstegroup.com/content/dam/ro/bcr/www_pensiibcr_ro/utile/rapoarte-p2/"
                      "structura-detaliata-a-portofoliului-de-investitii/{Y}/"
                      "Situatia_detaliata_a_portofoliului_de_investitii_FPAP_BCR_la_data_de_{d}.{m}.{Y}.pdf"],
@@ -64,11 +67,16 @@ SOURCES = {
                                               _ML + "Informatiifinanciare/Raportare-lunara/")
                      for name in _ML_NAMES],
     },
-    # Pagini de listare încă necunoscute / neverificate: se completează în surse.json.
-    "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": None},
+    "aripi": {
+        "fond": "Aripi", "cod": None, "tip": "sablon",
+        "sabloane": [_GEN + "{Y}{m}{d}_pII_inv_det.pdf"],
+        "pagina": "https://www.generali.ro/pensii/pensii-obligatorii/acte-si-rapoarte/date-financiare-fondul-aripi/",
+    },
+    # NN: pagina are doar raportul curent (istoricul e într-o arhivă .zip, necitită încă).
+    "nn": {"fond": "NN", "cod": "FP2-31", "tip": "pagina", "pagina": "https://www.nn.ro/rapoarte-financiare"},
+    # AZT: pagina fondului Viitorul Tău (p_fond=VIITORUL); neverificată pe date reale.
     "azt": {"fond": "AZT Viitorul Tău", "cod": None, "tip": "pagina",
-            "pagina": "https://www.aztpensii.ro:7777/employer/prc_rap_web_new_49"},
-    "aripi": {"fond": "Aripi", "cod": None, "tip": "pagina", "pagina": None},
+            "pagina": "https://www.aztpensii.ro:7777/employer/prc_rap_web_new_49?p_fond=VIITORUL"},
 }
 
 # Legături care par rapoarte de structură detaliată (după adresă sau text, normalizate).
@@ -207,7 +215,10 @@ def probe(session, url):
 
 
 def discover(key, source, dates, session, pause=PAUSE_S):
-    """Rapoartele găsite pentru fond: listă de (data indicată, url). Datele lipsă nu apar."""
+    """Rapoartele găsite pentru fond: listă de (data indicată, url). Datele lipsă nu apar.
+
+    La sursele „sablon” cu pagină de listare, lunile negăsite prin șablon se caută pe pagină.
+    """
     found = []
     if source.get("tip") == "sablon":
         for d in dates:
@@ -216,8 +227,11 @@ def discover(key, source, dates, session, pause=PAUSE_S):
                 if probe(session, url):
                     found.append((d, url))
                     break
-        if found or not source.get("pagina"):
+        got = {d for d, _u in found}
+        missing = [d for d in dates if d not in got]
+        if not missing or not source.get("pagina"):
             return found
+        dates = missing
     page = source.get("pagina")
     if not page:
         print(f"  {key}: pagina cu rapoarte nu e configurată (surse.json)", file=sys.stderr)
@@ -229,10 +243,10 @@ def discover(key, source, dates, session, pause=PAUSE_S):
         print(f"  ! {key}: pagina {page}: {type(exc).__name__}: {exc}", file=sys.stderr)
         return found
     wanted = set(dates)
-    for url, _text, d in pdf_links(r.text, page):
-        if d is not None and d in wanted:
-            found.append((d, url))
-    return sorted(set(found), reverse=True)
+    on_page = [(d, url) for url, _text, d in pdf_links(r.text, page) if d is not None and d in wanted]
+    if not on_page:
+        print(f"  {key}: pagina nu are rapoarte pentru lunile căutate ({page})", file=sys.stderr)
+    return sorted(set(found + on_page), reverse=True)
 
 
 def archive_path(data_dir, key, d):

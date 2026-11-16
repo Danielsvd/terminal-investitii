@@ -18,13 +18,14 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 
-# Codurile ASF ale fondurilor, văzute în rapoarte (15.11.2026). Cele lipsă (AZT, BCR, Aripi) se adaugă
+# Codurile ASF ale fondurilor, văzute în rapoarte (15–16.11.2026). Cele lipsă (AZT, Aripi) se adaugă
 # după primul raport citit; până atunci fondul apare cu codul brut.
 FUND_CODES = {
     "FP2-31": "NN",
     "FP2-54": "Vital",
     "FP2-83": "BT Pilon 2",
     "FP2-96": "Metropolitan Life",
+    "FP2-123": "BCR",
 }
 
 EQUITY = "actiuni"
