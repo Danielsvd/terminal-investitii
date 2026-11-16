@@ -119,3 +119,32 @@ def test_shares_outstanding_fallbacks():
     for bad in (None, {}, {"sharesOutstanding": 0}, {"sharesOutstanding": "N/A"}, {"marketCap": 46e9},
                 {"sharesOutstanding": float("nan")}):
         assert p2.shares_outstanding(bad) == (None, None)
+
+
+def _hold(rows):
+    return pd.DataFrame(rows, columns=["Date", "Fond", "Symbol", "Valoare_RON", "Cantitate_derivata", "Pret_folosit",
+                                       "Abatere_intreg"]).assign(Date=lambda d: pd.to_datetime(d["Date"]), Pondere=1.0)
+
+
+def test_rebase_quantities_bonus_shares_not_a_buy():
+    """Emisiune de acțiuni gratuite 1:1 între iunie și iulie (sintetic). În foaie, iunie a fost scris înainte de
+    emisiune (100 acț. la 40 lei), iulie după (200 acț. la 20 lei) → Δ fals +100. Cu seria de azi (iunie ajustat la 20),
+    iunie devine 200 → Δ 0. Un simbol fără date Yahoo își păstrează valorile; o dată fără preț în 7 zile → NaN."""
+    df = _hold([["2026-06-30", "Vital", "TLV.RO", 4000.0, 100.0, 40.0, 0.0],
+                ["2026-07-31", "Vital", "TLV.RO", 4000.0, 200.0, 20.0, 0.0],
+                ["2026-07-31", "Vital", "XYZ.RO", 990.0, 99.0, 10.0, 0.0],
+                ["2026-07-31", "Vital", "SAP.DE", 500.0, np.nan, np.nan, np.nan],
+                ["2026-05-31", "Vital", "TLV.RO", 3000.0, 75.0, 40.0, 0.0]])
+    close = pd.DataFrame({"TLV.RO": [20.0000004, 20.0, np.nan]},
+                         index=pd.to_datetime(["2026-06-30", "2026-07-31", "2026-05-29"]))
+    out, kept = p2.rebase_quantities(df, close)
+    tlv = out[out["Symbol"] == "TLV.RO"].set_index("Date")
+    assert tlv.loc["2026-06-30", "Cantitate_derivata"] == 200 and tlv.loc["2026-06-30", "Pret_folosit"] == 20.0
+    assert tlv.loc["2026-07-31", "Cantitate_derivata"] == 200
+    assert np.isnan(tlv.loc["2026-05-31", "Cantitate_derivata"])              # fără preț în 7 zile → NaN, nu 0
+    assert kept == ["XYZ.RO"] and out.loc[2, "Cantitate_derivata"] == 99.0
+    assert np.isnan(out.loc[3, "Cantitate_derivata"])                          # străinele nu se ating
+    panel = p2.build_panel(out[out["Date"] >= "2026-06-01"])
+    assert panel[(panel["Symbol"] == "TLV.RO") & (panel["Date"] == "2026-07-31")]["dQ"].iloc[0] == 0
+    same, kept_all = p2.rebase_quantities(df, None)
+    assert same.equals(df) and kept_all == ["TLV.RO", "XYZ.RO"]

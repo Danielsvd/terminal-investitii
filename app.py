@@ -4664,7 +4664,8 @@ def render_event_radar():
 PILON2_NOTE = ("Sursa: rapoartele ASF „Anexa 12” (structura detaliată a portofoliului) ale celor 7 fonduri Pilon II, "
                "publicate lunar cu **~3,5 luni întârziere**: descriu ce au făcut fondurile atunci, nu acum. "
                "Numărul de acțiuni nu apare în rapoarte: e **derivat** (valoare / prețul de închidere de la data "
-               "raportului) — proxy. Fluxul în lei = Δ acțiuni × prețul de la data raportului (fără efectul de preț). "
+               "raportului, din seria Yahoo de azi, ajustată pentru acțiunile gratuite, deci în unitățile de azi) — proxy. "
+               "Fluxul în lei = Δ acțiuni × prețul de la data raportului (fără efectul de preț). "
                "Informativ și **netestat**: nu e semnal de moment.")
 
 PILON2_HELP = {
@@ -4707,6 +4708,42 @@ def load_pilon2():
         return empty, [], f"Foaia Pilon2_detineri nu a putut fi citită: {e}"
 
 
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def pilon2_closes(symbols, start):
+    """Închiderile zilnice ale simbolurilor BVB din foaie, de la `start` (auto_adjust=False; Yahoo ajustează totuși
+    pentru acțiunile gratuite). Întoarce (DataFrame sau None, eroare sau None)."""
+    try:
+        raw = yf.download(list(symbols), start=start, auto_adjust=False, progress=False, threads=False)
+        close = close_frame(raw, list(symbols))
+        if close is not None and not close.empty and getattr(close.index, "tz", None) is not None:
+            close.index = close.index.tz_localize(None)
+        return close, None
+    except Exception as e:  # rețea / Yahoo: cantitățile rămân cele din foaie, cu notă în interfață
+        logger.warning(f"Pilon II: prețurile pentru recalcularea cantităților nu au venit: {e}")
+        return None, str(e)
+
+
+def pilon2_holdings():
+    """Foaia Pilon II cu cantitățile BVB recalculate la prețurile de azi. Întoarce (df, probleme, eroare, notă)."""
+    df, problems, err = load_pilon2()
+    if err or df.empty:
+        return df, problems, err, None
+    bvb = df[df["Symbol"].fillna("").str.endswith(".RO")]
+    if bvb.empty:
+        return df, problems, err, None
+    start = (bvb["Date"].min() - pd.Timedelta(days=p2_calc.MAX_PRICE_LAG_DAYS + 3)).strftime("%Y-%m-%d")
+    close, cerr = pilon2_closes(tuple(sorted(bvb["Symbol"].unique())), start)
+    out, kept = p2_calc.rebase_quantities(df, close)
+    if cerr or close is None or close.empty:
+        note = "Prețurile Yahoo nu au venit: cantitățile sunt cele scrise în foaie (unități de la data scrierii)."
+    elif kept:
+        note = ("Cantități recalculate la prețurile de azi, cu excepția: " + ", ".join(k[:-3] for k in kept)
+                + " (fără date Yahoo; valorile din foaie).")
+    else:
+        note = None
+    return out, problems, err, note
+
+
 def _pilon2_metrics(cp, shares_out):
     """Rândul de carduri comun (Analiză companie și pagina Fonduri de pensii). Întoarce rândul de totaluri."""
     tot = p2_calc.totals(cp)
@@ -4733,10 +4770,12 @@ def render_pilon2_card(real_sym, info):
     if not sym.endswith(".RO"):
         return
     st.subheader("🏦 Fonduri de pensii Pilon II")
-    df, _problems, err = load_pilon2()
+    df, _problems, err, note = pilon2_holdings()
     if err:
         st.caption(err)
         return
+    if note:
+        st.caption(note)
     cp = p2_calc.company_panel(p2_calc.build_panel(df), sym)
     if cp.empty:
         st.caption(f"{sym[:-3]} nu apare în rapoartele fondurilor Pilon II din foaie "
@@ -4886,10 +4925,12 @@ def render_pilon2_page():
     if c_reload.button("🔄 Recitește foaia", key="p2_reload"):
         load_pilon2.clear()
         st.rerun()
-    df, problems, err = load_pilon2()
+    df, problems, err, note = pilon2_holdings()
     if err:
         st.info(err)
         return
+    if note:
+        st.caption(note)
     for p in problems:
         st.warning(p)
     panel = p2_calc.build_panel(df)
