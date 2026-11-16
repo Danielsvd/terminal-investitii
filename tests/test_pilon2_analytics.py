@@ -105,3 +105,17 @@ def test_reference_date_prefers_month_reported_by_most_funds():
     panel = p2.build_panel(pd.DataFrame(df.to_dict("records") + [extra]))
     assert p2.reference_date(panel) == pd.Timestamp("2026-07-31")
     assert p2.reference_date(p2.company_panel(panel, "TLV.RO")) == pd.Timestamp("2026-07-31")
+
+
+def test_shares_outstanding_fallbacks():
+    """TLV, 16.11.2026: Yahoo a trimis o dată `sharesOutstanding`, altă dată nu → „% din capital” N/A."""
+    assert p2.shares_outstanding({"sharesOutstanding": 1_246_600_000}) == (1_246_600_000.0, "sharesOutstanding")
+    assert p2.shares_outstanding({"sharesOutstanding": None, "impliedSharesOutstanding": 1.2e9}) == \
+        (1.2e9, "impliedSharesOutstanding")
+    v, src = p2.shares_outstanding({"marketCap": 46_000_000_000, "currentPrice": 36.9})
+    assert round(v) == 1_246_612_466 and "proxy" in src
+    v, _ = p2.shares_outstanding({"marketCap": 46e9, "currentPrice": None, "regularMarketPrice": 36.9})
+    assert round(v) == 1_246_612_466
+    for bad in (None, {}, {"sharesOutstanding": 0}, {"sharesOutstanding": "N/A"}, {"marketCap": 46e9},
+                {"sharesOutstanding": float("nan")}):
+        assert p2.shares_outstanding(bad) == (None, None)

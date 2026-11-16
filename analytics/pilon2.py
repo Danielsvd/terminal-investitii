@@ -23,6 +23,30 @@ OTHER_COLOR = "#8B949E"
 MIN_OBS = 20            # sub ~20 de observații: fără verdict (regula proiectului)
 
 
+def _pos(info, key):
+    try:
+        v = float((info or {}).get(key))
+    except (TypeError, ValueError):
+        return None
+    return v if np.isfinite(v) and v > 0 else None
+
+
+def shares_outstanding(info):
+    """(număr de acțiuni, sursa) din `info` Yahoo; (None, None) dacă lipsește.
+
+    Ordinea: `sharesOutstanding`, `impliedSharesOutstanding`, apoi capitalizare / preț (proxy). La BVB, Yahoo trimite
+    uneori `info` fără `sharesOutstanding` (16.11.2026, TLV: 23,59% la o încărcare, N/A la următoarea)."""
+    for key in ("sharesOutstanding", "impliedSharesOutstanding"):
+        v = _pos(info, key)
+        if v:
+            return v, key
+    cap = _pos(info, "marketCap")
+    px = _pos(info, "currentPrice") or _pos(info, "regularMarketPrice")
+    if cap and px:
+        return cap / px, "capitalizare / preț (proxy)"
+    return None, None
+
+
 def fund_color(name):
     return FUND_COLORS.get(name, OTHER_COLOR)
 
