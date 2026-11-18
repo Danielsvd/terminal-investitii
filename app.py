@@ -51,6 +51,7 @@ from analytics import briefing as briefing_calc
 from analytics import day_notes
 from analytics import portfolio_day as pday_calc
 from analytics import scanner as scanner_calc
+from analytics.earnings import earnings_table
 from analytics import watchlist as watchlist_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
@@ -1906,6 +1907,12 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
         port_ret = port_perf.iloc[-1]
         bench_ret = bench_perf.iloc[-1]
         alpha = port_ret - bench_ret 
+        if not (np.isfinite(port_ret) and np.isfinite(bench_ret)):
+            # Curba care pornește de la 0 sau date lipsă ar afișa „+nan%”: mai bine N/A explicit.
+            logger.warning("benchmark %s: randament nedefinit (portofoliu %s, benchmark %s)", bench_ticker, port_ret, bench_ret)
+            st.info(f"Alpha față de {bench_name}: N/A. Randamentul portofoliului sau al benchmark-ului nu poate fi calculat "
+                    "pe fereastra aleasă (curba pornește de la 0 sau lipsesc date).")
+            return
 
         fig = go.Figure()
         
@@ -5593,12 +5600,15 @@ def main():
 
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
-                if earn_df is not None and not earn_df.empty:
+                e_disp, e_has_est = earnings_table(earn_df)
+                if not e_disp.empty:
                     def style_surprise(val):
+                        if val is None or pd.isna(val):
+                            return f'color: {DF_MUTED}'
                         color = DF_UP if val > 0 else DF_DOWN if val < 0 else DF_MUTED
                         return f'color: {color}; font-weight: bold'
-                    e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
-                    e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
+                    if not e_has_est:
+                        st.caption("Fără estimări ale analiștilor la Yahoo pentru acest simbol: se afișează doar EPS-ul raportat; Estimare, Diferență și Surpriză sunt N/A.")
                     st.dataframe(e_disp.style.map(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
                 else: st.info("Date earnings indisponibile.")
             
@@ -6868,7 +6878,8 @@ def main():
             st.info("Nu există acțiuni sau ETF-uri deschise în registrul `Tranzactii` (sau registrul nu a putut fi citit).")
         else:
             st.markdown("### Perioadă Analiză")
-            hist_range = st.select_slider("Perioadă analiză", label_visibility="collapsed", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
+            hist_range = st.select_slider("Perioadă analiză", label_visibility="collapsed", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A", "Max"], value="1A", key="range_slider",
+                                          help="Fereastra pentru grafice și indicatori. Max = tot istoricul disponibil: pentru performanța reală (TWR, alpha, risc), de la prima deținere din registrul `Tranzactii` în moneda tabului; pentru graficul valorii, Monte Carlo și optimizator, istoricul de preț descărcat (cel mult 5 ani), limitat de poziția cu istoricul cel mai scurt.")
             
             tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
             # Registrul, pentru performanța reală pe monedă (citirea foii e în cache)

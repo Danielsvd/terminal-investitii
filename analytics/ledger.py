@@ -788,12 +788,34 @@ def currency_sleeve(ledger, currency, index, market_closes, nominal_classes=NOMI
     return values, inflows, outflows, sources, blockers
 
 
+def _net_post_liquidation_charges(values, inflows, outflows, eps=1e-9):
+    """Mută intrările din zilele fără dețineri (înainte și după) și fără ieșiri în ultima ieșire anterioară,
+    cu semn minus (vânzarea netă de impozit). Fără ieșire anterioară, intrarea se anulează.
+    Întoarce copii (intrări, ieșiri); seriile primite nu se modifică."""
+    fin, fout = inflows.copy(), outflows.copy()
+    prev_value = values.shift(1).fillna(0.0)
+    last_out = None
+    for i in range(len(values)):
+        if fout.iloc[i] > eps:
+            last_out = i
+            continue
+        if (fin.iloc[i] > eps and abs(prev_value.iloc[i]) <= eps and abs(values.iloc[i]) <= eps):
+            if last_out is not None:
+                fout.iloc[last_out] -= fin.iloc[i]
+            fin.iloc[i] = 0.0
+    return fin, fout
+
+
 def twr_in_out(values, inflows, outflows):
     """TWR cu intrările la începutul zilei și ieșirile la sfârșitul ei:
     r_t = (V_t + Ieșiri_t) / (V_{t−1} + Intrări_t) − 1.
 
     Zilele fără valoare (NaN) întrerup lanțul: se calculează doar pe ultimul șir continuu.
     O zi cu numitor 0 (nimic deținut, nimic cumpărat) are randament 0.
+    O intrare într-o zi fără nimic deținut înainte și după și fără ieșiri (impozitul sau comisionul
+    reținut a doua zi după o vânzare totală) nu e capital investit: se scade din ultima ieșire
+    (vânzarea de dinainte), ca vânzarea să conteze net de impozit. Altfel ziua ar ieși −100% și ar
+    anula tot randamentul cumulat de după ea. Fără o ieșire anterioară în lanț, intrarea se ignoră.
     Întoarce (randamente zilnice, serie cumulată, randament total) sau (goale, None) sub două zile.
     """
     values = values.astype(float)
@@ -805,8 +827,9 @@ def twr_in_out(values, inflows, outflows):
     v = values.iloc[start:]
     if len(v) < 2:
         return pd.Series(dtype="float64"), pd.Series(dtype="float64"), None
-    fin = inflows.reindex(v.index).fillna(0.0)
-    fout = outflows.reindex(v.index).fillna(0.0)
+    fin = inflows.reindex(v.index).fillna(0.0).astype(float)
+    fout = outflows.reindex(v.index).fillna(0.0).astype(float)
+    fin, fout = _net_post_liquidation_charges(v, fin, fout)
     base_value = v.shift(1).fillna(0.0) + fin
     r = ((v + fout) / base_value - 1.0).where(base_value > 0)
     r.iloc[0] = 0.0 if not base_value.iloc[0] > 0 else r.iloc[0]

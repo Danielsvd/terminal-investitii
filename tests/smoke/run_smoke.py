@@ -950,7 +950,7 @@ def main():
             assert any("netestat" in str(e.value) for e in list(at.success) + list(at.warning) if "sector" in str(e.value)), \
                 "verdictul pe sectoare nu e marcat netestat"
             print("Detaliu Poziții:",[list(dd.data["Simbol"]) if hasattr(dd, "data") else list(dd["Simbol"]) for dd in detail_dfs])
-            for rng in ("1Z", "1L", "5A"):
+            for rng in ("1Z", "1L", "5A", "Max"):
                 at.select_slider[0].set_value(rng).run()
                 check(at, f"3. Portofoliu interval {rng}")
             assert any("⏱️ Pagina a rulat complet în" in str(c.value) for c in at.caption), "Portofoliu: lipsește timpul paginii"

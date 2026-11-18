@@ -112,6 +112,7 @@ def slice_window(obj, label, default="1A"):
 
     `label` este o cheie din WINDOW_OFFSETS ("1L", "1A", "3 Luni", ...).
     "1Z" întoarce ultimele două ședințe (ziua curentă și cea precedentă).
+    "Max" întoarce toată seria (tot istoricul disponibil), neschimbată.
 
     Tăierea se face pe date, nu pe număr de rânduri: un an înseamnă ~252 de
     ședințe, nu 365 de rânduri.
@@ -120,6 +121,8 @@ def slice_window(obj, label, default="1A"):
         return obj
     if label == "1Z":
         return obj.iloc[-2:]
+    if label == "Max":
+        return obj
     offset = WINDOW_OFFSETS.get(label, WINDOW_OFFSETS[default])
     start = obj.index[-1] - offset
     return obj.loc[obj.index >= start]

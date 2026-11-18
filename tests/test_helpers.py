@@ -326,3 +326,12 @@ def test_score_ro_taie_nu_rotunjeste():
     assert score_ro(2.3) == "2,3"          # 2,3 × 10 = 22,999… în virgulă mobilă: fără round ar ieși „2,2”
     assert score_ro(100) == "100,0"
     assert score_ro(None) == "N/A" and score_ro(float("nan")) == "N/A"
+
+
+def test_slice_window_max_intoarce_toata_seria():
+    s = pd.Series(range(2000), index=pd.bdate_range("2018-01-01", periods=2000), dtype=float)
+    out = slice_window(s, "Max")
+    assert len(out) == 2000 and out.index[0] == s.index[0]
+    assert len(slice_window(s, "5A")) < 2000          # 5A taie, Max nu
+    assert slice_window(pd.Series(dtype=float), "Max").empty
+    assert slice_window(None, "Max") is None
