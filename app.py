@@ -51,6 +51,7 @@ from analytics import briefing as briefing_calc
 from analytics import day_notes
 from analytics import portfolio_day as pday_calc
 from analytics import scanner as scanner_calc
+from analytics.earnings import earnings_table
 from analytics import watchlist as watchlist_calc
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
@@ -5593,12 +5594,15 @@ def main():
 
             with col_an_right:
                 st.markdown("""<div class="fin-card"><h4>🆚 Raportări vs Așteptări</h4></div>""", unsafe_allow_html=True)
-                if earn_df is not None and not earn_df.empty:
+                e_disp, e_has_est = earnings_table(earn_df)
+                if not e_disp.empty:
                     def style_surprise(val):
+                        if val is None or pd.isna(val):
+                            return f'color: {DF_MUTED}'
                         color = DF_UP if val > 0 else DF_DOWN if val < 0 else DF_MUTED
                         return f'color: {color}; font-weight: bold'
-                    e_disp = earn_df[['epsEstimate', 'epsActual', 'epsDifference', 'surprisePercent']].copy()
-                    e_disp.columns = ['Estimare', 'Realizat', 'Diferență', 'Surpriză %']
+                    if not e_has_est:
+                        st.caption("Fără estimări ale analiștilor la Yahoo pentru acest simbol: se afișează doar EPS-ul raportat; Estimare, Diferență și Surpriză sunt N/A.")
                     st.dataframe(e_disp.style.map(style_surprise, subset=['Surpriză %']).format({'Estimare': ro_spec(',.2f'), 'Realizat': ro_spec(',.2f'), 'Diferență': ro_spec(',.2f'), 'Surpriză %': ro_spec('.2%')}), width='stretch')
                 else: st.info("Date earnings indisponibile.")
             
