@@ -78,3 +78,60 @@ def test_beta_corr_weekly():
     res = beta_corr_weekly(asset, bench)
     assert res["beta"] == pytest.approx(2.0, abs=0.1) and res["corr"] > 0.99 and res["n"] >= 52
     assert beta_corr_weekly(asset.iloc[:100], bench.iloc[:100]) is None       # sub 52 de săptămâni
+
+
+# --- Impozitul reținut după o vânzare totală (cazul XTB: 3% a doua zi) ---------------------------------
+
+def test_impozit_dupa_vanzare_totala_se_scade_din_vanzare():
+    # zi 4: vânzare totală 1210; zi 5: impozit 6,3 reținut când nu mai e nimic deținut
+    ledger = pd.concat([LEDGER, _ledger([{"Date": "2026-01-09", "Symbol": "AAA", "Class": "Actiuni SUA",
+                                          "Type": "TAX", "Currency": "USD", "Amount": -6.3}])], ignore_index=True)
+    values, ins, outs, _, _ = currency_sleeve(ledger, "USD", IDX, CLOSES)
+    assert ins.iloc[4] == pytest.approx(6.3)                       # intrarea brută rămâne în date
+    daily, cumulative, total = twr_in_out(values, ins, outs)
+    # zi 4: (1210 − 6,3)/1100 − 1 = 9,4273%; zi 5: 0 (nu −100%)
+    assert daily.iloc[3] == pytest.approx(1203.7 / 1100 - 1)
+    assert daily.iloc[4] == 0.0
+    assert total == pytest.approx(1.1 * (1120 / 1100) * (1203.7 / 1100) - 1)   # 22,57%
+    assert (1.0 + cumulative).min() > 0
+
+
+def test_lantul_continua_dupa_impozit_si_o_cumparare_noua():
+    idx = pd.bdate_range("2026-02-02", periods=6)
+    values = pd.Series([100.0, 110.0, 0.0, 0.0, 50.0, 55.0], index=idx)
+    ins = pd.Series([100.0, 0.0, 0.0, 2.0, 50.0, 0.0], index=idx)
+    outs = pd.Series([0.0, 0.0, 121.0, 0.0, 0.0, 0.0], index=idx)
+    daily, cumulative, total = twr_in_out(values, ins, outs)
+    # zi 3: 119/110 − 1; zi 4: 0; zi 5: 50/50 − 1 = 0; zi 6: 55/50 − 1 = 10%
+    assert daily.round(10).tolist() == [0.0, 0.1, round(119 / 110 - 1, 10), 0.0, 0.0, 0.1]
+    assert total == pytest.approx(1.1 * (119 / 110) * 1.1 - 1)
+    # seriile primite nu se modifică
+    assert ins.iloc[3] == 2.0 and outs.iloc[2] == 121.0
+
+
+def test_intrare_fara_detineri_si_fara_vanzare_anterioara_se_ignora():
+    idx = pd.bdate_range("2026-02-02", periods=4)
+    values = pd.Series([0.0, 0.0, 100.0, 110.0], index=idx)
+    ins = pd.Series([0.0, 5.0, 100.0, 0.0], index=idx)
+    outs = pd.Series(0.0, index=idx)
+    daily, _, total = twr_in_out(values, ins, outs)
+    assert daily.tolist() == [0.0, 0.0, 0.0, pytest.approx(0.1)]
+    assert total == pytest.approx(0.1)
+
+
+def test_cumparare_si_vanzare_in_aceeasi_zi_neschimbate():
+    idx = pd.bdate_range("2026-02-02", periods=2)
+    values = pd.Series([0.0, 0.0], index=idx)
+    ins = pd.Series([0.0, 96.19], index=idx)
+    outs = pd.Series([0.0, 95.91], index=idx)
+    daily, _, _ = twr_in_out(values, ins, outs)
+    assert daily.iloc[1] == pytest.approx(95.91 / 96.19 - 1)
+
+
+def test_impozit_in_ziua_vanzarii_cu_detineri_neschimbat():
+    idx = pd.bdate_range("2026-02-02", periods=2)
+    values = pd.Series([100.0, 0.0], index=idx)
+    ins = pd.Series([100.0, 1.0], index=idx)
+    outs = pd.Series([0.0, 110.0], index=idx)
+    daily, _, _ = twr_in_out(values, ins, outs)
+    assert daily.iloc[1] == pytest.approx(110 / 101 - 1)
