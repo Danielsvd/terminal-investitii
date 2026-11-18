@@ -6872,7 +6872,8 @@ def main():
             st.info("Nu există acțiuni sau ETF-uri deschise în registrul `Tranzactii` (sau registrul nu a putut fi citit).")
         else:
             st.markdown("### Perioadă Analiză")
-            hist_range = st.select_slider("Perioadă analiză", label_visibility="collapsed", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A"], value="1A", key="range_slider")
+            hist_range = st.select_slider("Perioadă analiză", label_visibility="collapsed", options=["1Z", "1S", "1L", "3L", "6L", "1A", "3A", "5A", "Max"], value="1A", key="range_slider",
+                                          help="Fereastra pentru grafice și indicatori. Max = tot istoricul disponibil: pentru performanța reală (TWR, alpha, risc), de la prima deținere din registrul `Tranzactii` în moneda tabului; pentru graficul valorii, Monte Carlo și optimizator, istoricul de preț descărcat (cel mult 5 ani), limitat de poziția cu istoricul cel mai scurt.")
             
             tab_usd, tab_eur, tab_ron = st.tabs(["🇺🇸 Portofoliu USD", "🇪🇺 Portofoliu EUR", "🇷🇴 Portofoliu BVB (RON)"])
             # Registrul, pentru performanța reală pe monedă (citirea foii e în cache)
