@@ -1907,6 +1907,12 @@ def render_benchmark_comparison(portfolio_curve, bench_ticker="SPY", bench_name=
         port_ret = port_perf.iloc[-1]
         bench_ret = bench_perf.iloc[-1]
         alpha = port_ret - bench_ret 
+        if not (np.isfinite(port_ret) and np.isfinite(bench_ret)):
+            # Curba care pornește de la 0 sau date lipsă ar afișa „+nan%”: mai bine N/A explicit.
+            logger.warning("benchmark %s: randament nedefinit (portofoliu %s, benchmark %s)", bench_ticker, port_ret, bench_ret)
+            st.info(f"Alpha față de {bench_name}: N/A. Randamentul portofoliului sau al benchmark-ului nu poate fi calculat "
+                    "pe fereastra aleasă (curba pornește de la 0 sau lipsesc date).")
+            return
 
         fig = go.Figure()
         
