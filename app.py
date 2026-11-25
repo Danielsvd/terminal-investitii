@@ -5271,6 +5271,7 @@ def render_sec_insiders_card(real_sym):
         if not st.button("Încarcă tranzacțiile insiderilor", key=f"ins_load_{sym}"):
             return
         loaded.add(sym)
+        st.rerun()                # redesenează fără buton; datele se încarcă la rularea următoare
     today = now_ro().date()
     with st.spinner("Citesc rapoartele Form 4 de la SEC..."):
         df, n_docs, problems, truncated, err = sec_load_insiders(sym, ua, today.isoformat())
@@ -5288,7 +5289,7 @@ def render_sec_insiders_card(real_sym):
     c4.metric("Grup de cumpărători", "DA" if s["grup"] else "NU",
               f"% din deținere: {_pct(s['pct_din_detinere_P'])}" if s["pct_din_detinere_P"] is not None else None,
               delta_color="off", help=INSIDER_HELP["grup"])
-    st.caption(insiders.describe(s, _usd_small))
+    st.caption(insiders.describe(s, _usd_small).replace("$", "\\$"))   # „$ … $” ar fi citit ca formulă LaTeX
     other = ", ".join(f"{k} ({insiders.CODE_LABELS.get(k, k)}): {v}" for k, v in sorted(s["alte_coduri"].items()))
     notes = [f"{s['start']:%d.%m.%Y} → {s['end']:%d.%m.%Y}", f"{n_docs} rapoarte Form 4",
              f"în afara semnalului: {other}" if other else "",
@@ -5302,8 +5303,8 @@ def render_sec_insiders_card(real_sym):
             st.dataframe(pd.DataFrame({
                 "Data": w["Data_tranz"].dt.strftime("%d.%m.%Y"), "Depus": w["Data_depunere"].dt.strftime("%d.%m.%Y"),
                 "Insider": w["Insider"], "Funcție": w["Functie"], "Cod": w["Cod"], "Tip": w["Tip"],
-                "Plan 10b5-1": w["Plan_10b5_1"], "Acțiuni": w["Actiuni"], "Preț $": w["Pret"],
-                "Valoare $": w["Valoare_USD"], "Deținere după": w["Detinere_dupa"]}).style.format(
+                "Plan 10b5-1": w["Plan_10b5_1"], "Acțiuni": w["Actiuni"].astype(float), "Preț $": w["Pret"].astype(float),
+                "Valoare $": w["Valoare_USD"].astype(float), "Deținere după": w["Detinere_dupa"].astype(float)}).style.format(
                     {"Acțiuni": ro_spec(",.0f"), "Preț $": ro_spec(",.2f"), "Valoare $": ro_spec(",.0f"),
                      "Deținere după": ro_spec(",.0f")}, na_rep="N/A"),
                 hide_index=True, width='stretch',
