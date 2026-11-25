@@ -5180,6 +5180,8 @@ def render_sec_company_card(real_sym):
         st.caption("Rapoartele 13F nu sunt încărcate în această sesiune (prima încărcare durează ~20–60 s).")
         if not st.button("Încarcă fondurile care dețin acțiunea", key="sec_card_load"):
             return
+        sec_snapshot(ua)          # încarcă și marchează sesiunea, apoi redesenează fără buton
+        st.rerun()
     mg, loaded, books, cmap, _unmapped, _cerr = sec_snapshot(ua)
     holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
     sig = sec_view.holdings_signals([sym], cmap, holdings, moves, conc).iloc[0]
@@ -5192,7 +5194,7 @@ def render_sec_company_card(real_sym):
     keys = sec_view.keys_for_symbol(sym, cmap, holdings, moves)
     if sig["Detin"]:
         w = pd.concat([sec_13f.who_holds(holdings[holdings["CIK"].isin(conc)], k) for k in keys], ignore_index=True)
-        mv = moves[moves["CUSIP6"].isin(keys)].groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
+        mv = sec_view.issuer_moves(moves[moves["CUSIP6"].isin(keys)]).groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
         w = w.join(mv, on="CIK")
         st.dataframe(pd.DataFrame({
             "Fond": w["Fond"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"], "Convingere": w["Convingere"],
@@ -5222,6 +5224,8 @@ def render_sec_portfolio_signals():
             st.caption(f"Rapoartele 13F nu sunt încărcate în această sesiune ({len(syms)} acțiuni americane deținute).")
             if not st.button("Încarcă rapoartele 13F", key="sec_pf_load"):
                 return
+            sec_snapshot(ua)
+            st.rerun()
         mg, loaded, books, cmap, _unmapped, _cerr = sec_snapshot(ua)
         holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
         _sec_signal_table(sec_view.holdings_signals(syms, cmap, holdings, moves, conc))
@@ -5452,8 +5456,7 @@ def _sec_who(mg, loaded, books, cmap):
     if w.empty:
         st.info(f"{sym} nu apare în deținerile fondurilor încărcate (sau codul lui CUSIP nu a fost tradus).")
     else:
-        mv = moves[moves["CUSIP6"].isin(keys)].groupby("CIK").agg(Mișcare=("Actiune", "first"),
-                                                                Delta=("Delta_pct", "first"))
+        mv = sec_view.issuer_moves(moves[moves["CUSIP6"].isin(keys)]).groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
         w = w.join(mv, on="CIK")
         n_conc = int((w["Clasa"] == sec_funds.CONCENTRAT).sum())
         st.markdown(f"**{n_conc} administratori concentrați dețin {sym}** (din {len(conc)} urmăriți)")
@@ -5479,6 +5482,8 @@ def _sec_who(mg, loaded, books, cmap):
 
 # --- MAIN APP ---
 def main():
+    # Căutarea (doar în Analiză companie) stă deasupra meniului: locul se rezervă aici, conținutul se scrie în secțiune.
+    search_slot = st.sidebar.container()
     st.sidebar.title("Navigare")
     # Valorile rămân „1. Agregator Știri” etc. (toate condițiile `sectiune == ...` le folosesc);
     # doar eticheta afișată are icon Material și nu mai are număr (DESIGN.md §6, decis 10.11).
@@ -5542,15 +5547,17 @@ def main():
     # 2. ANALIZĂ COMPANIE (VERSIUNE INTEGRALĂ REPARATĂ)
     # ==================================================
     elif sectiune == "2. Analiză Companie":
-        st.sidebar.header("Căutare")
-        sym = st.sidebar.text_input("Simbol (ex: AAPL, TLV):", "AAPL").upper()
-        
-        st.sidebar.markdown("### Indicatori Grafic")
-        show_sma20 = st.sidebar.checkbox("SMA 20", value=True)
-        show_sma50 = st.sidebar.checkbox("SMA 50", value=True)
-        show_sma200 = st.sidebar.checkbox("SMA 200", value=True)
-        show_rsi = st.sidebar.checkbox("RSI 14", value=True)
-        show_macd = st.sidebar.checkbox("MACD", value=True)
+        with search_slot:
+            st.header("Căutare")
+            sym = st.text_input("Simbol (ex: AAPL, TLV):", "AAPL").upper()
+            # Indicatorii graficului, restrânși implicit (se deschid și se închid la click)
+            with st.expander("📈 Indicatori grafic", expanded=False):
+                show_sma20 = st.checkbox("SMA 20", value=True)
+                show_sma50 = st.checkbox("SMA 50", value=True)
+                show_sma200 = st.checkbox("SMA 200", value=True)
+                show_rsi = st.checkbox("RSI 14", value=True)
+                show_macd = st.checkbox("MACD", value=True)
+            st.markdown("---")
 
         # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
         _an_t0 = time.perf_counter()

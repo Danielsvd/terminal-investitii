@@ -142,6 +142,28 @@ def keys_for_symbol(symbol, cmap, holdings=None, moves=None):
     return sorted(keys) if keys else sorted({c[:6] for c in cusips})
 
 
+def issuer_moves(moves):
+    """Mișcările pe (CIK, emitent): clasele de acțiuni (GOOG + GOOGL) se adună înainte de clasificare, ca un fond care a
+    închis o clasă și o păstrează pe cealaltă să nu apară cu „Închisă”. Coloane: CIK, CUSIP6, Actiune, Delta_pct."""
+    cols = ["CIK", "CUSIP6", "Actiune", "Delta_pct"]
+    if moves is None or moves.empty:
+        return pd.DataFrame(columns=cols)
+    g = moves.groupby(["CIK", "CUSIP6"]).agg(prev=("Actiuni_ant", "sum"), curr=("Actiuni", "sum")).reset_index()
+    acts, pcts = [], []
+    for p, c in zip(g["prev"], g["curr"]):
+        if not p:
+            acts.append(sec_13f.ACT_NEW), pcts.append(np.nan)
+        elif not c:
+            acts.append(sec_13f.ACT_CLOSED), pcts.append(-1.0)
+        else:
+            pct = (c - p) / p
+            pcts.append(pct)
+            acts.append(sec_13f.ACT_UP if pct > sec_13f.MOVE_THRESHOLD else
+                        sec_13f.ACT_DOWN if pct < -sec_13f.MOVE_THRESHOLD else sec_13f.ACT_HELD)
+    g["Actiune"], g["Delta_pct"] = acts, pcts
+    return g[cols]
+
+
 SIGNAL_COLUMNS = ["Simbol", "Detin", "Convingere", "Intrari", "Mariri", "Reduceri", "Iesiri", "Fonduri", "Miscari"]
 
 
@@ -151,7 +173,7 @@ def holdings_signals(symbols, cmap, holdings, moves, concentrated):
     concentrate; `holdings` / `moves` = panourile din `holdings_panel` / `moves_panel` (cu `Fond` în holdings)."""
     conc = set(concentrated)
     h = holdings[holdings["CIK"].isin(conc)] if holdings is not None and not holdings.empty else holdings
-    m = moves[moves["CIK"].isin(conc)] if moves is not None and not moves.empty else moves
+    m = issuer_moves(moves[moves["CIK"].isin(conc)]) if moves is not None and not moves.empty else None
     fund_of = {}
     if holdings is not None and not holdings.empty:
         fund_of = dict(zip(holdings["CIK"], holdings["Fond"]))
