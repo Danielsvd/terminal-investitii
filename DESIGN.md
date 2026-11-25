@@ -1,6 +1,6 @@
 # DESIGN.md — Terminal Investiții PRO
 
-Direcția: **Bleumarin + Revolut** (aleasă de Daniel pe 10.11.2026), cu **paleta „Indigo profund”** (schimbată de Daniel pe 10.11, 19:12; PR #169). Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
+Direcția: **„Swiss Bank”** (varianta 7 de pe canvasul de redesign, aleasă de Daniel pe 25.11.2026, **în probă pe test1**): structura Swiss Editorial (plat, colțuri drepte, cifre mari) cu paleta Private Bank (bleumarin de noapte + auriu șampanie; ivoire + cerneală navy). Înlocuiește „Indigo profund” (#169, păstrată mai jos ca istoric). Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
 Baza e Bleumarin: un terminal sobru, cu margini fine și densitate mare pe tabele. Din stilul Revolut se iau doar cifra mare de sus, colțurile mari și cardurile fără margine pe ecranele de sinteză, plus butonul principal complet rotunjit.
 Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #166 (tokenuri light-dark), #167 (banner mobil), #168 (iconuri).
 
@@ -22,7 +22,25 @@ Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #
 
 ## 1. Culoare
 
-### 1.0 Paleta curentă — „Indigo profund” (#169, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
+### 1.0 Paleta curentă — „Swiss Bank” (25.11.2026, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
+
+| Token | Întunecat | Luminos | Rol |
+|---|---|---|---|
+| `bg` | `#0B111C` | `#FBF9F4` | fundalul paginii (fără strălucire) |
+| `surface` / `surface-top` | `#121A28` / idem | `#F2EEE4` / idem | carduri plate (fără gradient) |
+| `surface-2` | `#182232` | `#E9E3D5` | antet de tabel, interiorul unui card |
+| `border` / `border-strong` | `#26324A` / `#34425E` | `#D8D0BE` / `#C4BAA4` | contur de 1px, hover |
+| `text` / `muted` | `#F3EFE4` / `#A7AFBF` | `#0E1626` / `#556074` | text și etichete |
+| `accent` / `accent-text` | `#D9B76E` / `#E3C688` | `#13213A` / `#7C5E16` | accent / linkuri; butonul principal: `#8A6A1F` (întunecat, text alb 5,1:1), `#13213A` (luminos, 16:1) |
+| `up` / `down` / `warn` | `#5FD39A` / `#F08A7E` / `#E9C46A` | `#1C6B45` / `#A6362A` / `#875700` | câștig / pierdere / atenție |
+| `highlight`, `shadow`, `glow` | transparente | transparente | plat: fără umbre și strălucire |
+
+- Colțuri: `baseRadius` și `buttonRadius` = `none`; `CARD_RADIUS` = 0 în `ui/theme.py` (carduri, metrici, expandere, meniu).
+- Font: **Inter Tight** de la Google Fonts prin `theme.font` (rezervă: fontul de sistem). Este prima sursă externă de font (excepție de la §2, aprobată odată cu varianta).
+- Contrast (calculat): text / muted / accent-text / up / down / warn ≥ 4,7 pe bg, surface și surface-2 în ambele moduri.
+- Revenire la „Indigo profund”: revert la PR-ul temei Swiss Bank.
+
+### 1.0b Paleta anterioară — „Indigo profund” (#169, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
 
 | Token | Întunecat | Luminos | Rol |
 |---|---|---|---|
