@@ -99,7 +99,32 @@ def split_check_cusips(moves_panel_df):
     return sorted(set(m.loc[sel, "CUSIP"]))
 
 
-def cusip6_for_symbol(symbol, cmap):
-    """Emitenții (CUSIP6) cu simbolul dat în hartă; GOOG și GOOGL dau același emitent."""
+def cusip6_for_symbol(symbol, cmap, holdings=None):
+    """Cheile de emitent (`sec_13f.issuer_key`) pentru simbolul dat. Cu `holdings`, cheile se iau din panou (corect și
+    pentru ETF-uri, cheiate pe CUSIP complet); fără, din primele 6 caractere. GOOG și GOOGL dau același emitent."""
     s = (symbol or "").strip().upper()
-    return sorted({c[:6] for c, sym in cmap.items() if sym == s})
+    cusips = {c for c, sym in cmap.items() if sym == s}
+    if holdings is not None and not holdings.empty:
+        return sorted(set(holdings.loc[holdings["CUSIP"].isin(cusips), "CUSIP6"]))
+    return sorted({c[:6] for c in cusips})
+
+
+def symbols_by_key(cmap, holdings):
+    """Cheie de emitent → simbolurile ei („GOOG/GOOGL”), din panoul de dețineri."""
+    if holdings is None or holdings.empty:
+        return {}
+    out = {}
+    for c, k in zip(holdings["CUSIP"], holdings["CUSIP6"]):
+        if cmap.get(c):
+            out.setdefault(k, set()).add(cmap[c])
+    return {k: "/".join(sorted(v)) for k, v in out.items()}
+
+
+def stale_periods(periods, max_lag_days=60):
+    """Perioadele rămase în urmă față de cea mai frecventă (raport vechi → CIK greșit sau fond care depune sub alt
+    CIK). Întoarce mulțimea perioadelor vechi."""
+    ps = [p for p in periods if p]
+    if not ps:
+        return set()
+    mode = pd.Series(ps).mode().max()
+    return {p for p in ps if (pd.Timestamp(mode) - pd.Timestamp(p)).days > max_lag_days}

@@ -197,6 +197,33 @@ def test_consensus_share_classes_and_exclusions():
 
 
 def test_who_holds_order_and_conviction():
-    w = s.who_holds(_holdings(), "000001AA1")
+    w = s.who_holds(_holdings(), "000001")
     assert w["Fond"].tolist() == ["F1", "F2", "F3"]
     assert w["Convingere"].tolist() == [True, False, False]      # F2: rang 50, 1%; F3: rang 2000, 0,1%
+
+
+def test_issuer_key_funds_use_full_cusip():
+    assert s.issuer_key("02079K305", "CAP STK CL A") == "02079K"
+    assert s.issuer_key("464286400", "MSCI BRAZIL ETF") == "464286400"       # iShares Inc: fonduri diferite
+    assert s.issuer_key("78462F103", "TR UNIT") == "78462F103"
+    assert s.issuer_key("464287200", "CORE S&P500 ETF") == "464287200"
+
+
+def test_equity_book_etf_rows_not_merged():
+    xml = (b'<informationTable xmlns="x">'
+           + b"".join(f"<infoTable><nameOfIssuer>ISHARES INC</nameOfIssuer><titleOfClass>{t}</titleOfClass>"
+                      f"<cusip>{c}</cusip><value>{v}</value><shrsOrPrnAmt><sshPrnamt>10</sshPrnamt><sshPrnamtType>SH"
+                      f"</sshPrnamtType></shrsOrPrnAmt></infoTable>".encode()
+                      for t, c, v in (("MSCI BRAZIL ETF", "464286400", 300), ("MSCI MEXICO ETF", "464286822", 200)))
+           + b"</informationTable>")
+    book = s.equity_book(s.parse_info_table(xml), 1.0)
+    assert sorted(book["CUSIP6"]) == ["464286400", "464286822"]
+
+
+def test_detect_thousands():
+    info = s.parse_info_table(INFO_XML)                    # prețuri implicite 10 $ la multiplicator 1
+    assert not s.detect_thousands(info, 1.0)
+    small = info.copy()
+    small["Valoare_raportata"] = small["Valoare_raportata"] / 1000    # 0,01 $ / acțiune → raportat în mii
+    assert s.detect_thousands(small, 1.0)
+    assert not s.detect_thousands(small.iloc[:2], 1.0)                # prea puține rânduri: nu decide

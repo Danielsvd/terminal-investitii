@@ -24,13 +24,16 @@ MANAGERS = [
     ("1067983", "Berkshire Hathaway", "Warren Buffett / Greg Abel", "Value", CONCENTRAT, True),
     ("1697748", "ARK Investment Management", "Cathie Wood", "Growth", CONCENTRAT, True),
     ("1709323", "Himalaya Capital Management", "Li Lu", "Deep value", CONCENTRAT, True),
-    ("1336528", "Pershing Square Capital Management", "Bill Ackman", "Activist", CONCENTRAT, False),
+    # Pershing: din 2025 rapoartele 13F se depun de Pershing Square Holdco, L.P. (CIK 2026053); vechiul CIK 1336528
+    # (Capital Management) a raportat ultima dată 31.03.2026 (captura din 25.11.2026).
+    ("2026053", "Pershing Square Holdco", "Bill Ackman", "Activist", CONCENTRAT, True),
     ("1536411", "Duquesne Family Office", "Stanley Druckenmiller", "Macro", CONCENTRAT, True),
     ("1656456", "Appaloosa LP", "David Tepper", "Distressed", CONCENTRAT, True),
     ("1040273", "Third Point", "Dan Loeb", "Activist", CONCENTRAT, False),
     ("1061768", "Baupost Group", "Seth Klarman", "Deep value", CONCENTRAT, False),
     ("1167483", "Tiger Global Management", "Chase Coleman", "Tech growth", CONCENTRAT, False),
-    ("1079114", "Greenlight Capital", "David Einhorn", "Value", CONCENTRAT, False),
+    # Greenlight: CIK 1079114 a raportat ultima dată 31.12.2023; rapoartele curente sunt sub CIK 1489933.
+    ("1489933", "Greenlight Capital", "David Einhorn", "Value", CONCENTRAT, True),
     ("921669", "Icahn Carl C", "Carl Icahn", "Activist", CONCENTRAT, True),
     ("949509", "Oaktree Capital Management", "Howard Marks", "Distressed/Credit", CONCENTRAT, False),
     ("1029160", "Soros Fund Management", "George Soros", "Macro", CONCENTRAT, False),
@@ -68,8 +71,13 @@ def fetch_filing(client, cik, accession, filing_date):
         if (cover.get("entry_total") or 0) > 0:
             return cover, info, [f"{accession}: tabelul de informații nu a fost găsit"]
     problems = [f"{accession}: {p}" for p in sec_13f.validate(cover, info)]
+    mult = sec_13f.value_multiplier(filing_date)
+    if mult == 1.0 and sec_13f.detect_thousands(info, mult):
+        mult = 1000.0
+        cover["unit_note"] = (f"{accession}: valorile sunt raportate în mii de dolari (preț implicit median sub 1 $), "
+                              "deși regula SEC cere dolari din 2023; convertite × 1000")
     info = info.copy()
-    info["Valoare_raportata"] = info["Valoare_raportata"] * sec_13f.value_multiplier(filing_date)
+    info["Valoare_raportata"] = info["Valoare_raportata"] * mult
     return cover, info, problems
 
 
@@ -98,6 +106,7 @@ def load_quarter(client, cik, q):
     tabelul (dolari) și problemele. Un raport de bază invalid lasă tabelul gol (nu se analizează date greșite)."""
     base = q["base"]
     cover, info, problems = fetch_filing(client, cik, base["accession"], base["filing_date"])
+    notes = [cover["unit_note"]] if cover.get("unit_note") else []
     if problems:
         info = pd.DataFrame(columns=sec_13f.INFO_COLUMNS)
     last_filed = base["filing_date"]
@@ -114,11 +123,14 @@ def load_quarter(client, cik, q):
         if kind not in ("RESTATEMENT", "NEW HOLDINGS"):
             problems.append(f"{am['accession']}: amendament fără tip ({kind!r}), ignorat")
             continue
+        if acover.get("unit_note"):
+            notes.append(acover["unit_note"])
         info = sec_13f.apply_amendment(info, ainfo, kind)
         last_filed = am["filing_date"]
     return {
         "period": q["period"], "filing_date": base["filing_date"], "last_filing_date": last_filed,
         "accession": base["accession"], "filer_name": cover.get("filer_name"), "info": info, "problems": problems,
+        "notes": notes,
     }
 
 
