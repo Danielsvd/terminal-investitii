@@ -5103,6 +5103,132 @@ def _usd_big(v):
     return format_ro(v / 1e9, 1, " mld. $") if abs(v) >= 1e9 else format_ro(v / 1e6, 1, " mil. $")
 
 
+def sec_snapshot(ua):
+    """Datele comune ale paginii Fonduri SUA, ale cardului din Analiză companie și ale semnalelor din Portofoliu:
+    (administratori, încărcate, portofolii, hartă CUSIP, coduri netraduse, eroare hartă). Fondurile concentrate se
+    încarcă automat (cache 24 h); cele Larg doar dacă au fost cerute în sesiune. Marchează sesiunea ca încărcată."""
+    mg = sec_funds.managers_frame()
+    larg_loaded = st.session_state.setdefault("sec_larg_loaded", set())
+    to_load = [c for c in mg["CIK"] if mg.set_index("CIK").at[c, "Clasa"] == sec_funds.CONCENTRAT or c in larg_loaded]
+    loaded = {}
+    prog = st.progress(0.0, text="Rapoartele 13F de la SEC…")
+    for i, cik in enumerate(to_load):
+        loaded[cik] = sec_load_manager(cik, ua)
+        prog.progress((i + 1) / len(to_load), text=f"Rapoartele 13F de la SEC… {i + 1}/{len(to_load)}")
+    prog.empty()
+    books = {cik: _sec_books(v[1]) for cik, v in loaded.items()}
+    need = set()
+    for cik, (curr, prev, _o) in books.items():
+        is_larg = cik in larg_loaded
+        for b in (curr, prev):
+            need |= set(b.nsmallest(100, "Rang")["CUSIP"] if is_larg else b["CUSIP"])
+    with st.spinner("Traduc codurile CUSIP în simboluri (OpenFIGI; prima dată poate dura câteva minute)…"):
+        cmap, unmapped, cerr = sec_resolve_cusips(tuple(sorted(need)))
+    st.session_state["sec_loaded"] = True
+    return mg, loaded, books, cmap, unmapped, cerr
+
+
+def _sec_conc_panels(mg, loaded, books, cmap):
+    """(panoul deținerilor tuturor fondurilor încărcate, panoul mișcărilor concentraților — cu split-urile verificate,
+    mulțimea CIK-urilor concentrate)."""
+    holdings = sec_view.holdings_panel({c: b[0] for c, b in books.items()}, mg)
+    moves = sec_view.moves_panel(_sec_conc_moves(mg, loaded, books, cmap))
+    conc = set(mg.loc[mg["Clasa"] == sec_funds.CONCENTRAT, "CIK"]) & set(loaded)
+    return holdings, moves, conc
+
+
+SEC_SIGNAL_HELP = ("**Dețin:** fondurile concentrate urmărite care au acțiunea în ultimul raport 13F (clasele de acțiuni "
+                   "adunate). **Convingere:** câte o au ca poziție de convingere (≥ 3% sau top 10). **Intrări / Măriri / "
+                   "Reduceri / Ieșiri:** mișcările față de trimestrul anterior, pe acțiuni (> ±5%), cu split-urile "
+                   "verificate la creșterile ≥ +50%.\n\n**Limite:** 13F e depus cu până la 45 de zile întârziere, doar "
+                   "pozițiile long din SUA. Context, nu semnal de moment. Netestat.")
+
+
+def _sec_signal_table(sig):
+    st.dataframe(pd.DataFrame({
+        "Simbol": sig["Simbol"], "Dețin": sig["Detin"], "Convingere": sig["Convingere"], "Intrări": sig["Intrari"],
+        "Măriri": sig["Mariri"], "Reduceri": sig["Reduceri"], "Ieșiri": sig["Iesiri"], "Mișcări": sig["Miscari"],
+        "Fonduri": sig["Fonduri"]}), hide_index=True, width='stretch',
+        column_config={"Dețin": st.column_config.NumberColumn(help=SEC_SIGNAL_HELP, format="%d")})
+
+
+def sec_my_us_symbols():
+    """Simbolurile americane deținute acum, din registrul `Tranzactii` (moneda USD, fără sufix de bursă, fără cripto)."""
+    values = load_ledger_values()
+    if values is None:
+        return []
+    ledger_df, _ = ledger_calc.parse_ledger(values)
+    if ledger_df.empty:
+        return []
+    positions, _ = ledger_calc.build_positions(ledger_df)
+    held = positions[(positions["Quantity"] > ledger_calc.QTY_EPS) & positions["Currency"].astype(str).str.upper().eq("USD")]
+    return sorted({str(x).upper() for x in held["Symbol"]
+                   if "." not in str(x) and "=" not in str(x) and not str(x).upper().endswith("-USD")})
+
+
+def render_sec_company_card(real_sym):
+    """Card scurt „Fonduri SUA (13F)” în Analiză companie, doar pentru acțiunile americane (fără sufix de bursă).
+    Datele se încarcă automat dacă au fost deja încărcate în sesiune; altfel la buton (prima încărcare durează)."""
+    sym = str(real_sym).upper()
+    if "." in sym or "=" in sym or "^" in sym or sym.endswith("-USD"):
+        return
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    st.subheader("🏛️ Fonduri SUA (13F)", help=SEC_SIGNAL_HELP)
+    if not st.session_state.get("sec_loaded"):
+        st.caption("Rapoartele 13F nu sunt încărcate în această sesiune (prima încărcare durează ~20–60 s).")
+        if not st.button("Încarcă fondurile care dețin acțiunea", key="sec_card_load"):
+            return
+    mg, loaded, books, cmap, _unmapped, _cerr = sec_snapshot(ua)
+    holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
+    sig = sec_view.holdings_signals([sym], cmap, holdings, moves, conc).iloc[0]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Dețin (concentrați)", f"{sig['Detin']} din {len(conc)}", help=SEC_SIGNAL_HELP)
+    c2.metric("Cu convingere", f"{sig['Convingere']}", help=SEC_HELP["convingere"])
+    c3.metric("Ultimul trimestru", f"+{sig['Intrari']} / ↑{sig['Mariri']} / ↓{sig['Reduceri']} / −{sig['Iesiri']}",
+              help="Intrări (poziții noi) / măriri / reduceri / ieșiri (poziții închise) ale fondurilor concentrate. "
+                   + SEC_HELP["miscari"])
+    keys = sec_view.keys_for_symbol(sym, cmap, holdings, moves)
+    if sig["Detin"]:
+        w = pd.concat([sec_13f.who_holds(holdings[holdings["CIK"].isin(conc)], k) for k in keys], ignore_index=True)
+        mv = moves[moves["CUSIP6"].isin(keys)].groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
+        w = w.join(mv, on="CIK")
+        st.dataframe(pd.DataFrame({
+            "Fond": w["Fond"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"], "Convingere": w["Convingere"],
+            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}).style.format(
+                {"Pondere %": ro_spec(",.2f"), "Δ acțiuni %": ro_spec("+,.1f")}),
+            hide_index=True, width='stretch',
+            column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"])})
+    elif sig["Iesiri"]:
+        st.caption(f"Niciun fond concentrat nu mai deține {sym}; ieșiri în ultimul trimestru: {sig['Miscari']}.")
+    else:
+        st.caption(f"{sym} nu apare în rapoartele fondurilor concentrate urmărite (sau codul CUSIP nu a fost tradus).")
+    periods = sorted({q[0]["period"] for _n, q, _p, _e in loaded.values() if q})
+    st.caption(f"Rapoarte 13F pentru {', '.join(periods[-2:]) if periods else 'N/A'} · detalii: meniul „Fonduri SUA (13F)”.")
+
+
+def render_sec_portfolio_signals():
+    """Expander în Portofoliu: semnalele 13F pe acțiunile americane deținute (fondurile concentrate)."""
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    with st.expander("🏛️ Semnale SEC pe deținerile mele (fonduri SUA, 13F)"):
+        syms = sec_my_us_symbols()
+        if not syms:
+            st.caption("Nicio acțiune americană deschisă în registrul `Tranzactii`.")
+            return
+        if not st.session_state.get("sec_loaded"):
+            st.caption(f"Rapoartele 13F nu sunt încărcate în această sesiune ({len(syms)} acțiuni americane deținute).")
+            if not st.button("Încarcă rapoartele 13F", key="sec_pf_load"):
+                return
+        mg, loaded, books, cmap, _unmapped, _cerr = sec_snapshot(ua)
+        holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
+        _sec_signal_table(sec_view.holdings_signals(syms, cmap, holdings, moves, conc))
+        st.caption(f"Fondurile concentrate urmărite ({len(conc)}); acțiunile americane deschise din registrul `Tranzactii`. "
+                   "Context, nu semnal. Detalii: meniul „Fonduri SUA (13F)”.")
+
+
 def render_sec_funds_page():
     st.title("🏛️ Fonduri SUA (13F)")
     st.caption(SEC_NOTE)
@@ -5116,24 +5242,7 @@ def render_sec_funds_page():
         st.session_state.pop("sec_figi_failed", None)
         st.rerun()
 
-    mg = sec_funds.managers_frame()
-    larg_loaded = st.session_state.setdefault("sec_larg_loaded", set())
-    to_load = [c for c in mg["CIK"] if mg.set_index("CIK").at[c, "Clasa"] == sec_funds.CONCENTRAT or c in larg_loaded]
-    loaded = {}
-    prog = st.progress(0.0, text="Rapoartele 13F de la SEC…")
-    for i, cik in enumerate(to_load):
-        loaded[cik] = sec_load_manager(cik, ua)
-        prog.progress((i + 1) / len(to_load), text=f"Rapoartele 13F de la SEC… {i + 1}/{len(to_load)}")
-    prog.empty()
-
-    books = {cik: _sec_books(v[1]) for cik, v in loaded.items()}
-    need = set()
-    for cik, (curr, prev, _o) in books.items():
-        is_larg = cik in larg_loaded
-        for b in (curr, prev):
-            need |= set(b.nsmallest(100, "Rang")["CUSIP"] if is_larg else b["CUSIP"])
-    with st.spinner("Traduc codurile CUSIP în simboluri (OpenFIGI; prima dată poate dura câteva minute)…"):
-        cmap, unmapped, cerr = sec_resolve_cusips(tuple(sorted(need)))
+    mg, loaded, books, cmap, unmapped, cerr = sec_snapshot(ua)
     if cerr:
         st.warning(cerr)
     if unmapped:
@@ -5335,22 +5444,19 @@ def _sec_consensus(mg, loaded, books, cmap):
 
 def _sec_who(mg, loaded, books, cmap):
     sym = st.text_input("Simbol (SUA)", value="AAPL", key="sec_who_sym").strip().upper()
-    holdings = sec_view.holdings_panel({c: b[0] for c, b in books.items()}, mg)
-    moves = sec_view.moves_panel({c: _sec_moves(b[0], b[1], loaded[c][1], cmap, with_prices=False)[0]
-                                  for c, b in books.items()})
-    c6 = sec_view.cusip6_for_symbol(sym, cmap, holdings)
+    holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
+    keys = sec_view.keys_for_symbol(sym, cmap, holdings, moves)
     if not sym:
         return
-    if not c6:
+    w = pd.concat([sec_13f.who_holds(holdings, k) for k in keys], ignore_index=True) if keys else pd.DataFrame()
+    if w.empty:
         st.info(f"{sym} nu apare în deținerile fondurilor încărcate (sau codul lui CUSIP nu a fost tradus).")
     else:
-        w = pd.concat([sec_13f.who_holds(holdings, c) for c in c6], ignore_index=True)
-        mv = moves[moves["CUSIP6"].isin(c6)].groupby("CIK").agg(Mișcare=("Actiune", "first"),
-                                                              Delta=("Delta_pct", "first"))
+        mv = moves[moves["CUSIP6"].isin(keys)].groupby("CIK").agg(Mișcare=("Actiune", "first"),
+                                                                Delta=("Delta_pct", "first"))
         w = w.join(mv, on="CIK")
         n_conc = int((w["Clasa"] == sec_funds.CONCENTRAT).sum())
-        st.markdown(f"**{n_conc} administratori concentrați dețin {sym}** "
-                    f"(din {int((mg['Clasa'] == sec_funds.CONCENTRAT).sum())} urmăriți)")
+        st.markdown(f"**{n_conc} administratori concentrați dețin {sym}** (din {len(conc)} urmăriți)")
         st.dataframe(pd.DataFrame({
             "Fond": w["Fond"], "Clasa": w["Clasa"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"],
             "Valoare (mil. $)": w["Valoare_USD"] / 1e6, "Acțiuni": w["Actiuni"], "Convingere": w["Convingere"],
@@ -5360,25 +5466,15 @@ def _sec_who(mg, loaded, books, cmap):
             hide_index=True, width='stretch',
             column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"]),
                            "Clasa": st.column_config.TextColumn(help=SEC_HELP["clasa"])})
-        st.caption("Mișcarea nu e ajustată pentru split aici; cifrele exacte sunt în tabul Fond.")
+        st.caption("Mișcarea e doar pentru fondurile concentrate (split-uri verificate la creșterile ≥ +50%).")
 
     with st.expander("Deținerile mele în portofoliile fondurilor concentrate"):
-        pf = load_portfolio()
-        syms = sorted({s for s in pf.get("Symbol", pd.Series(dtype=str)).dropna().astype(str).str.upper()
-                       if "." not in s and "=" not in s and not s.endswith("-USD")})   # fără bursă străină, valute, cripto
-        conc_h = holdings[holdings["Clasa"] == sec_funds.CONCENTRAT]
-        rows = []
-        for s in syms:
-            cc = sec_view.cusip6_for_symbol(s, cmap, holdings)
-            h = conc_h[conc_h["CUSIP6"].isin(cc)]
-            conv = sec_13f.conviction_mask(h) if not h.empty else pd.Series(dtype=bool)
-            rows.append({"Simbol": s, "Dețin (concentrați)": h["CIK"].nunique(), "Cu convingere": int(h.loc[conv, "CIK"].nunique()),
-                         "Fonduri": ", ".join(sorted(set(h["Fond"])))})
-        if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
-            st.caption("Doar simbolurile americane din foaia Portofoliu (fără sufix de bursă).")
+        syms = sec_my_us_symbols()
+        if syms:
+            _sec_signal_table(sec_view.holdings_signals(syms, cmap, holdings, moves, conc))
+            st.caption("Acțiunile americane deschise din registrul `Tranzactii` (moneda USD, fără sufix de bursă).")
         else:
-            st.caption("Foaia Portofoliu nu are simboluri americane sau nu a putut fi citită.")
+            st.caption("Nicio acțiune americană deschisă în registrul `Tranzactii`.")
 
 
 # --- MAIN APP ---
@@ -5642,6 +5738,8 @@ def main():
             bvb_decision = render_bvb_decision(real_sym, hist)
             # 2b'. Deținerile fondurilor de pensii Pilon II (doar .RO; informativ, netestat)
             render_pilon2_card(real_sym, info)
+            # 2b''. Fondurile SUA (13F) care dețin acțiunea (doar SUA; context, netestat)
+            render_sec_company_card(real_sym)
             # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
             global_decision = render_global_decision(real_sym, info, hist, risk_stats)
             # „Verdict final” refolosește exact acest rezultat (nu recalculează)
@@ -7299,6 +7397,7 @@ def main():
         # Toată pagina folosește pozițiile din registrul `Tranzactii` (exporturile brokerilor);
         # foaia Portofoliu nu mai alimentează pagina.
         ledger_positions = render_ledger_results()
+        render_sec_portfolio_signals()
         df_pf = ledger_calc.tab_frame(ledger_positions)
         st.markdown("---")
 

@@ -1295,6 +1295,18 @@ def main():
     at.text_input(key="sec_who_sym").set_value("GOOG").run()
     check(at, "12. Fonduri SUA (cine deține GOOG)")
     print(f"Fonduri SUA: {len(set(SEC_CALLS))} administratori încărcați; harta CUSIP: {len(cmap_rows)} rânduri scrise")
+    with_sig = [d.value for d in at.dataframe if "Ieșiri" in getattr(d.value, "columns", [])]
+    assert with_sig, "Fonduri SUA: lipsește tabelul „Deținerile mele”"
+
+    radio().set_value("2. Analiză Companie").run()          # sesiunea e încărcată → cardul 13F se afișează direct
+    check(at, "2. Companie AAPL (card Fonduri SUA)")
+    assert any("Fonduri SUA (13F)" in str(h.value) for h in at.subheader), "lipsește cardul Fonduri SUA la AAPL"
+    m13 = [m for m in at.metric if m.label == "Dețin (concentrați)"]
+    assert m13 and m13[0].value.endswith("din 14"), [(m.label, m.value) for m in at.metric][-6:]
+    radio().set_value("3. Portofoliu").run()
+    check(at, "3. Portofoliu (semnale SEC)")
+    assert any("Semnale SEC" in str(e.label) for e in at.expander), "lipsește expanderul Semnale SEC în Portofoliu"
+    print(f"Card 13F AAPL: {m13[0].value}")
 
     radio().set_value("9. Glosar Economic").run()
     check(at, "9. Glosar Economic")
