@@ -179,6 +179,29 @@ def file_growth(df, horizons=(3, 5)):
     return out
 
 
+# Etichetele rândurilor „total” la BVB: totalul unui indicator pe acțiune e altă mărime (profitul net, nu EPS-ul).
+FILE_TOTAL_LABEL = {
+    "Cifră de afaceri": "Cifră de afaceri",
+    "EPS (profit net / acțiuni)": "Profit net",
+    "Dividend pe acțiune (profit distribuit / acțiuni)": "Profit distribuit (dividende totale)",
+}
+
+
+def file_growth_table(fg, fmt, horizons=(3, 5)):
+    """Rândurile tabelului A pentru BVB din `file_growth`: întâi totalul (cu eticheta lui proprie), apoi pe acțiune,
+    ca la SUA/UE. `fmt(v)` formatează un CAGR (None → „N/A”). 10 ani: N/A, fișierele acoperă cel mult 5 ani."""
+    rows = []
+    if not fg:
+        return rows
+    for name, by_n in fg["rows"].items():
+        for measure, key, label in (("total", "total", FILE_TOTAL_LABEL.get(name, name)),
+                                    ("pe acțiune", "per_share", name)):
+            rows.append({"Indicator": label, "Măsură": measure,
+                         **{f"{n} ani": fmt(by_n.get(n, {}).get(key)) for n in horizons},
+                         "10 ani": "N/A", "Notă": "" if rows else "10 ani: fișierul acoperă cel mult 5 ani"})
+    return rows
+
+
 # --------------------------------------------------------------------------- dividende Yahoo (SUA/UE)
 
 def dividend_growth(dividends, asof, horizons=HORIZONS, history_start=None):
