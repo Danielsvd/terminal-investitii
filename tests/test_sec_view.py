@@ -1,5 +1,6 @@
 """analytics/sec_view.py: tabelele paginii Fonduri SUA. Valori sintetice."""
 import numpy as np
+import pytest
 import pandas as pd
 
 from analytics import sec_13f, sec_view as v
@@ -94,3 +95,13 @@ def test_holdings_signals():
     assert sig.loc["AAPL", "Fonduri"] == "F1, F2" and "F2: Redusă" in sig.loc["AAPL", "Miscari"]
     assert sig.loc["MSFT", ["Detin", "Iesiri"]].tolist() == [1, 1]          # ieșirea F2 se vede, deși nu mai deține
     assert sig.loc["VG", ["Detin", "Intrari"]].tolist() == [0, 0] and sig.loc["VG", "Fonduri"] == ""
+
+
+def test_issuer_moves_sums_share_classes():
+    m = pd.DataFrame({"CIK": ["1", "1", "2"], "CUSIP6": ["02079K", "02079K", "02079K"],
+                      "Actiuni_ant": [100.0, 50.0, 10.0], "Actiuni": [0.0, 160.0, 0.0]})
+    im = v.issuer_moves(m).set_index("CIK")
+    assert im.loc["1", "Actiune"] == sec_13f.ACT_UP                  # 150 → 160 (+6,7%), nu „Închisă”
+    assert im.loc["1", "Delta_pct"] == pytest.approx(10 / 150)
+    assert im.loc["2", "Actiune"] == sec_13f.ACT_CLOSED
+    assert v.issuer_moves(None).empty
