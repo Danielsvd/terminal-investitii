@@ -261,3 +261,15 @@ def test_premium_css_centreaza_bannerul_macro_pe_telefon():
     assert "@media (max-width: 640px)" in css
     assert ".macro-hero { justify-content: center !important; text-align: center; }" in css
     assert ".macro-hero > div { flex-basis: 100% !important; }" in css
+
+
+def test_swiss_bank_plat_si_colturi_drepte():
+    # Swiss Bank (25.11): carduri plate, fără umbră/strălucire, colțuri din CARD_RADIUS; config cu „none”
+    css = theme.premium_css()
+    assert f"border-radius: {theme.CARD_RADIUS};" in css and "14px" not in css
+    for tok in ("highlight", "shadow", "glow"):
+        assert all(v.endswith("00") and len(v) == 9 for v in theme.TOKENS[tok]), tok
+    assert theme.TOKENS["surface-top"] == theme.TOKENS["surface"]
+    cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
+    assert cfg["baseRadius"] == "none" and cfg["buttonRadius"] == "none"
+    assert cfg["font"].startswith("'Inter Tight':https://fonts.googleapis.com/") and cfg["font"].endswith("sans-serif")
