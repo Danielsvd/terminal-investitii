@@ -373,3 +373,50 @@ def who_holds(holdings, cusip6):
     g["Convingere"] = g["Pondere"].ge(CONVICTION_WEIGHT) | g["Rang"].le(CONVICTION_TOP_N)
     g["_c"] = g["Clasa"].eq("Concentrat")
     return g.sort_values(["_c", "Pondere"], ascending=False).drop(columns="_c").reset_index(drop=True)[cols]
+
+
+# --------------------------------------------------------------------------- prețuri pentru mișcări
+
+def raw_closes(close_adj, splits):
+    """Închiderile în unitățile de la data lor (neajustate pentru split-urile ulterioare).
+
+    Yahoo dă închiderile ajustate pentru split (și cu `auto_adjust=False`): închiderea de la data d e împărțită la
+    produsul split-urilor de după d. Acțiunile din 13F sunt în unitățile de la sfârșitul trimestrului, deci prețul
+    trebuie adus în aceleași unități: brut(d) = ajustat(d) × produsul split-urilor de după d.
+    `splits`: coloana „Stock Splits” din yf.download(actions=True); 0 sau NaN = fără split."""
+    if close_adj is None or close_adj.empty:
+        return close_adj
+    out = close_adj.copy()
+    if splits is None or splits.empty:
+        return out
+    s = splits.reindex(index=out.index, columns=out.columns)
+    s = s.where(s > 0, 1.0).fillna(1.0)
+    after = s.iloc[::-1].cumprod().iloc[::-1].shift(-1).fillna(1.0)   # produsul split-urilor strict după d
+    return out * after
+
+
+def period_inputs(close_adj, splits, prev_period, curr_period, cusip_to_symbol):
+    """Factorii de split și prețurile medii pentru `quarter_moves`, între două perioade 13F.
+
+    split_factor[CUSIP] = produsul split-urilor din (perioada anterioară, perioada curentă].
+    avg_price[CUSIP]    = media închiderilor brute (unitățile de la data lor) din același interval — proxy pentru
+                          prețul tranzacțiilor din trimestru. Lipsă de date → CUSIP-ul lipsește din dicționar (NaN)."""
+    split_factor, avg_price = {}, {}
+    if close_adj is None or close_adj.empty:
+        return split_factor, avg_price
+    lo, hi = pd.Timestamp(prev_period), pd.Timestamp(curr_period)
+    raw = raw_closes(close_adj, splits)
+    win = (raw.index > lo) & (raw.index <= hi)
+    for cusip, sym in cusip_to_symbol.items():
+        if not sym or sym not in raw.columns:
+            continue
+        px = raw.loc[win, sym].dropna()
+        px = px[px > 0]
+        if len(px):
+            avg_price[cusip] = float(px.mean())
+        if splits is not None and not splits.empty and sym in splits.columns:
+            sp = splits.loc[(splits.index > lo) & (splits.index <= hi), sym]
+            sp = sp[sp > 0]
+            if len(sp):
+                split_factor[cusip] = float(sp.prod())
+    return split_factor, avg_price
