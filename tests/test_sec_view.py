@@ -63,3 +63,34 @@ def test_stale_periods():
     ps = ["2026-09-30"] * 5 + ["2026-03-31", "2023-12-31", None, "2026-06-30"]
     assert v.stale_periods(ps) == {"2026-03-31", "2023-12-31", "2026-06-30"}   # și un trimestru în urmă = vechi
     assert v.stale_periods([None]) == set()
+
+
+def test_moves_keep_issuer_key_for_etfs():
+    prev = CURR.copy()
+    prev.loc[0, ["CUSIP", "CUSIP6", "Clasa_titlu"]] = ["464286400", "464286400", "MSCI BRAZIL ETF"]
+    m = sec_13f.quarter_moves(prev, CURR)
+    closed = m[m["Actiune"] == sec_13f.ACT_CLOSED]
+    assert closed["CUSIP6"].tolist() == ["464286400"]          # cheia ETF-ului, nu „464286”
+
+
+def test_holdings_signals():
+    def book(rows):
+        df = pd.DataFrame(rows, columns=["CUSIP", "Emitent", "Actiuni", "Valoare_USD"])
+        df["Clasa_titlu"], df["CUSIP6"] = "COM", df["CUSIP"].str[:6]
+        df["Pondere"] = df["Valoare_USD"] / df["Valoare_USD"].sum()
+        df = df.sort_values("Valoare_USD", ascending=False).reset_index(drop=True)
+        df["Rang"] = range(1, len(df) + 1)
+        return df[sec_13f.BOOK_COLUMNS]
+    # F1: AAPL nouă (convingere); F2: AAPL redusă, MSFT închisă; F3 (Larg): AAPL nouă — exclus
+    p1, c1 = book([("594918104", "MSFT", 10, 100)]), book([("037833100", "APPLE", 10, 900), ("594918104", "MSFT", 10, 100)])
+    p2, c2 = book([("037833100", "APPLE", 100, 50), ("594918104", "MSFT", 5, 950)]), book([("037833100", "APPLE", 50, 25), ("000009ZZ9", "Z", 1, 975)])
+    mg = pd.DataFrame({"CIK": ["1", "2", "3"], "Fond": ["F1", "F2", "F3"], "Clasa": ["Concentrat", "Concentrat", "Larg"]})
+    hold = v.holdings_panel({"1": c1, "2": c2, "3": c1}, mg)
+    mov = v.moves_panel({"1": sec_13f.quarter_moves(p1, c1), "2": sec_13f.quarter_moves(p2, c2),
+                         "3": sec_13f.quarter_moves(p1, c1)})
+    cmap = {"037833100": "AAPL", "594918104": "MSFT"}
+    sig = v.holdings_signals(["AAPL", "MSFT", "VG"], cmap, hold, mov, {"1", "2"}).set_index("Simbol")
+    assert sig.loc["AAPL", ["Detin", "Convingere", "Intrari", "Reduceri"]].tolist() == [2, 2, 1, 1]   # F2: rang 2 ≤ 10
+    assert sig.loc["AAPL", "Fonduri"] == "F1, F2" and "F2: Redusă" in sig.loc["AAPL", "Miscari"]
+    assert sig.loc["MSFT", ["Detin", "Iesiri"]].tolist() == [1, 1]          # ieșirea F2 se vede, deși nu mai deține
+    assert sig.loc["VG", ["Detin", "Intrari"]].tolist() == [0, 0] and sig.loc["VG", "Fonduri"] == ""

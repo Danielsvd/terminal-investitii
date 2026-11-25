@@ -128,3 +128,48 @@ def stale_periods(periods, max_lag_days=60):
         return set()
     mode = pd.Series(ps).mode().max()
     return {p for p in ps if (pd.Timestamp(mode) - pd.Timestamp(p)).days > max_lag_days}
+
+
+def keys_for_symbol(symbol, cmap, holdings=None, moves=None):
+    """Cheile de emitent ale simbolului din deținerile curente și din mișcări (inclusiv pozițiile închise, care nu mai
+    sunt în deținerile curente)."""
+    s = (symbol or "").strip().upper()
+    cusips = {c for c, sym in cmap.items() if sym == s}
+    keys = set()
+    for df in (holdings, moves):
+        if df is not None and not df.empty:
+            keys |= set(df.loc[df["CUSIP"].isin(cusips), "CUSIP6"])
+    return sorted(keys) if keys else sorted({c[:6] for c in cusips})
+
+
+SIGNAL_COLUMNS = ["Simbol", "Detin", "Convingere", "Intrari", "Mariri", "Reduceri", "Iesiri", "Fonduri", "Miscari"]
+
+
+def holdings_signals(symbols, cmap, holdings, moves, concentrated):
+    """Pentru fiecare simbol: câți administratori concentrați îl dețin (și cu convingere) și ce au făcut în ultimul
+    trimestru (intrări = poziții noi, măriri, reduceri, ieșiri = poziții închise). `concentrated` = mulțimea CIK-urilor
+    concentrate; `holdings` / `moves` = panourile din `holdings_panel` / `moves_panel` (cu `Fond` în holdings)."""
+    conc = set(concentrated)
+    h = holdings[holdings["CIK"].isin(conc)] if holdings is not None and not holdings.empty else holdings
+    m = moves[moves["CIK"].isin(conc)] if moves is not None and not moves.empty else moves
+    fund_of = {}
+    if holdings is not None and not holdings.empty:
+        fund_of = dict(zip(holdings["CIK"], holdings["Fond"]))
+    rows = []
+    for sym in symbols:
+        keys = keys_for_symbol(sym, cmap, holdings, moves)
+        hh = h[h["CUSIP6"].isin(keys)] if h is not None and not h.empty else pd.DataFrame(columns=["CIK"])
+        mm = m[m["CUSIP6"].isin(keys)] if m is not None and not m.empty else pd.DataFrame(columns=["CIK", "Actiune"])
+        per = hh.groupby("CIK").agg(Pondere=("Pondere", "sum"), Rang=("Rang", "min")) if not hh.empty else None
+        n_conv = int((per["Pondere"].ge(sec_13f.CONVICTION_WEIGHT) | per["Rang"].le(sec_13f.CONVICTION_TOP_N)).sum()) \
+            if per is not None else 0
+        acts = mm.groupby("CIK")["Actiune"].first() if not mm.empty else pd.Series(dtype=object)
+        cnt = acts.value_counts()
+        rows.append({
+            "Simbol": sym, "Detin": int(hh["CIK"].nunique()), "Convingere": n_conv,
+            "Intrari": int(cnt.get(sec_13f.ACT_NEW, 0)), "Mariri": int(cnt.get(sec_13f.ACT_UP, 0)),
+            "Reduceri": int(cnt.get(sec_13f.ACT_DOWN, 0)), "Iesiri": int(cnt.get(sec_13f.ACT_CLOSED, 0)),
+            "Fonduri": ", ".join(sorted({fund_of.get(c, c) for c in hh["CIK"]})),
+            "Miscari": "; ".join(f"{fund_of.get(c, c)}: {a}" for c, a in acts.items() if a != sec_13f.ACT_HELD),
+        })
+    return pd.DataFrame(rows, columns=SIGNAL_COLUMNS)

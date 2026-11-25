@@ -327,7 +327,8 @@ def quarter_moves(prev, curr, split_factor=None, avg_price=None, threshold=MOVE_
         impact = abs(traded) / total_curr if not np.isnan(traded) and total_curr and total_curr > 0 else np.nan
         src = c if in_c else p
         rows.append({
-            "CUSIP": cusip, "CUSIP6": str(cusip)[:6], "Emitent": src.at[cusip, "Emitent"], "Actiune": action,
+            "CUSIP": cusip, "CUSIP6": src.at[cusip, "CUSIP6"] if "CUSIP6" in src.columns else str(cusip)[:6],
+            "Emitent": src.at[cusip, "Emitent"], "Actiune": action,
             "Actiuni_ant": sh_prev if in_p else 0.0, "Actiuni": sh_curr, "Delta_actiuni": delta, "Delta_pct": pct,
             "Pondere_ant": w_prev, "Pondere": w_curr, "Delta_pp": (w_curr - w_prev) * 100,
             "Pret_mediu": price, "Valoare_tranzactionata": traded, "Impact": impact,
