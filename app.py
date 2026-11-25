@@ -53,6 +53,7 @@ from analytics import portfolio_day as pday_calc
 from analytics import scanner as scanner_calc
 from analytics.earnings import earnings_table
 from analytics import watchlist as watchlist_calc
+from analytics import growth
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -5480,6 +5481,147 @@ def _sec_who(mg, loaded, books, cmap):
             st.caption("Nicio acțiune americană deschisă în registrul `Tranzactii`.")
 
 
+# ==================================================
+# CREȘTERE ȘI SURSA RANDAMENTULUI (CAGR) — decizia lui Daniel, 25.11.2026: A + B + C
+# ==================================================
+GROWTH_HELP = {
+    "card": ("**Ce arată:** cât a crescut afacerea (A), cât a câștigat acționarul (B) și de unde a venit câștigul (C).\n\n"
+             "**CAGR** = (valoarea finală ÷ valoarea inițială)^(1/n) − 1. Un capăt lipsă sau ≤ 0 (pierdere, FCF negativ) "
+             "dă N/A. Informativ: nu intră în scor (momentul e deja în pasul tehnic)."),
+    "a": ("**Pe acțiune** = indicatorul ÷ numărul de acțiuni (diluate la SUA/UE; emise, din fișier, la BVB). Contează "
+          "pentru acționar: diluarea îl scade, răscumpărările îl cresc. **Total** = suma pentru toată compania.\n\n"
+          "Dacă numărul de acțiuni s-a schimbat mult între capete (raport în afara 0,8–1,25: split, acțiuni gratuite, "
+          "majorare), valorile pe acțiune sunt N/A (nu se „corectează”).\n\n"
+          "**Surse:** SUA/UE — situațiile anuale Yahoo (~4 ani → 3 ani); 5 și 10 ani vin după Faza 3 (date SEC). "
+          "Dividendul SUA/UE — plățile Yahoo, pe ani calendaristici încheiați. BVB — fișierele „Analiză companii” "
+          "(foaia anuală): dividend pe acțiune = profit distribuit ÷ acțiuni emise."),
+    "b": ("**Randament total anualizat** = CAGR-ul prețului ajustat pentru dividende și split (dividendele reinvestite), "
+          "pe ani calendaristici până la ultima cotație. **Benchmark** din aceeași piață și valută, tot cu dividende. "
+          "**Diferența** e în puncte procentuale pe an. Randamentul trecut e context, nu semnal."),
+    "c": ("**Identitate:** (1 + randament total) = (1 + creșterea EPS) × (1 + schimbarea P/E) × (1 + contribuția "
+          "dividendului), între cele două date fiscale (prețul de la data situației). Creșterea EPS e partea care se "
+          "poate repeta; schimbarea P/E e re-evaluarea pieței (nu se repetă la nesfârșit). Suma componentelor e o "
+          "aproximare a totalului: diferența se arată."),
+}
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def get_growth_history(symbol):
+    """Istoricul pe 11 ani: Close (ajustat doar pentru split), Adj Close (și pentru dividende), Dividends.
+    Întoarce (DataFrame, eroare sau None)."""
+    if not symbol:
+        return pd.DataFrame(), "fără simbol"
+    try:
+        h = yf.Ticker(symbol).history(period="11y", auto_adjust=False, actions=True)
+    except Exception as e:   # rețea / Yahoo: cardul arată N/A
+        logger.warning(f"istoricul de creștere {symbol}: {e}")
+        return pd.DataFrame(), str(e)
+    if h is None or h.empty or "Close" not in h:
+        return pd.DataFrame(), "Yahoo nu a trimis istoricul"
+    if getattr(h.index, "tz", None) is not None:
+        h.index = h.index.tz_localize(None)
+    if "Adj Close" not in h:
+        return pd.DataFrame(), "Yahoo nu a trimis prețul ajustat pentru dividende"
+    return h, None
+
+
+def _g(v):
+    return _pct(v) if v is not None else "N/A"
+
+
+def render_growth_card(real_sym, info):
+    """Cardul „📈 Creștere și sursa randamentului” (analytics/growth.py)."""
+    sym = str(real_sym).upper()
+    st.subheader("📈 Creștere și sursa randamentului", help=GROWTH_HELP["card"])
+    st.caption("Informativ, nu intră în scor. A: cât a crescut afacerea · B: cât a câștigat acționarul · "
+               "C: de unde a venit câștigul.")
+    hist, herr = get_growth_history(sym)
+    dec_in = None
+
+    # ---------- A. creșterea afacerii
+    rows, period_note = [], ""
+    if sym.endswith(".RO"):
+        files, ferr = list_company_files()
+        data = None if ferr else build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+        fg = growth.file_growth((data or {}).get("companii", {}).get(sym[:-3])) if data else None
+        if fg is None:
+            st.caption(f"{sym[:-3]} nu are fișier în „{COMPANY_FOLDER_NAME}” cu date anuale: creșterea afacerii N/A.")
+        else:
+            for name, by_n in fg["rows"].items():
+                rows.append({"Indicator": name, "Măsură": "pe acțiune",
+                             **{f"{n} ani": _g(by_n.get(n, {}).get("per_share")) for n in (3, 5)}, "10 ani": "—"})
+                rows.append({"Indicator": name, "Măsură": "total",
+                             **{f"{n} ani": _g(by_n.get(n, {}).get("total")) for n in (3, 5)}, "10 ani": "—"})
+            period_note = (f"Fișierul „Analiză companii”, foaia anuală: ultimul an {fg['year_new']}. "
+                           + " ".join(f"{n} ani: {t}." for n, t in fg["notes"].items()))
+            dec_in = (fg.get("eps_new"), fg.get("eps_old"), fg.get("date_new"), fg.get("date_old"))
+    else:
+        fin = get_financial_statements(sym)
+        sg = growth.statement_growth(fin.get("income"), fin.get("cashflow"))
+        if sg is None:
+            st.caption("Situațiile anuale Yahoo nu au două capete utilizabile: creșterea afacerii N/A.")
+        else:
+            for name, r in sg["rows"].items():
+                if name != "EPS diluat":
+                    rows.append({"Indicator": name, "Măsură": "total", "3 ani": _g(r["total"]),
+                                 "5 ani": "după Faza 3", "10 ani": "după Faza 3", "Notă": ""})
+                rows.append({"Indicator": name, "Măsură": "pe acțiune", "3 ani": _g(r["per_share"]),
+                             "5 ani": "după Faza 3", "10 ani": "după Faza 3", "Notă": r["note"]})
+            period_note = (f"Situațiile anuale Yahoo: {sg['date_old']:%d.%m.%Y} → {sg['date_new']:%d.%m.%Y} "
+                           f"({sg['years']} ani fiscali).")
+            dec_in = (sg.get("eps_new"), sg.get("eps_old"), sg["date_new"], sg["date_old"])
+        y_ref, dg = growth.dividend_growth(hist["Dividends"] if "Dividends" in hist else None, now_ro())
+        if y_ref is not None:
+            rows.append({"Indicator": "Dividend pe acțiune (Yahoo)", "Măsură": "pe acțiune",
+                         **{f"{n} ani": _g(dg[n]) for n in (3, 5, 10)}, "Notă": f"ani calendaristici până în {y_ref}"})
+    if rows:
+        st.markdown("**A. Creșterea afacerii (CAGR)**", help=GROWTH_HELP["a"])
+        st.dataframe(pd.DataFrame(rows).reindex(columns=["Indicator", "Măsură", "3 ani", "5 ani", "10 ani", "Notă"])
+                     .fillna(""), hide_index=True, width='stretch')
+        if period_note:
+            st.caption(period_note)
+
+    # ---------- B. randament total față de benchmark
+    st.markdown("**B. Randament total anualizat (prețul + dividendele reinvestite)**", help=GROWTH_HELP["b"])
+    bench_sym, bench_name = growth.tr_benchmark(sym, info.get("currency"))
+    bhist, _berr = get_growth_history(bench_sym) if bench_sym else (pd.DataFrame(), None)
+    if hist.empty:
+        st.caption(f"Istoricul de preț nu a venit ({herr}): randamentul total N/A.")
+    else:
+        brows = []
+        for n in growth.HORIZONS:
+            own = growth.total_return(hist["Adj Close"], n)
+            ben = growth.total_return(bhist["Adj Close"], n, end=own["end"]) if own and not bhist.empty else None
+            diff = (own["cagr"] - ben["cagr"]) * 100 if own and ben and own["cagr"] is not None and ben["cagr"] is not None else None
+            brows.append({"Perioada": f"{n} ani", "Acțiunea": _g(own["cagr"]) if own else "N/A (istoric scurt)",
+                          "Benchmark": _g(ben["cagr"]) if ben else "N/A",
+                          "Diferență (pp/an)": format_ro(diff, 1, " pp") if diff is not None else "N/A",
+                          "Cotații": format_ro(own["n_obs"], 0) if own else "—"})
+        st.dataframe(pd.DataFrame(brows), hide_index=True, width='stretch')
+        st.caption(f"Benchmark: {bench_name or 'N/A (piață fără benchmark de randament total)'}. "
+                   "„Cotații” = zilele cu preț în fereastră; la BVB istoricul Yahoo are goluri.")
+
+    # ---------- C. sursa randamentului
+    st.markdown("**C. De unde a venit randamentul (perioada situațiilor financiare)**", help=GROWTH_HELP["c"])
+    d = None
+    if dec_in and not hist.empty and dec_in[0] is not None and dec_in[2] is not None:
+        d = growth.decompose(hist["Close"], hist["Adj Close"], *dec_in)
+    if d is None:
+        st.caption("N/A: lipsește EPS la un capăt, EPS ≤ 0, numărul de acțiuni s-a schimbat mult sau lipsește prețul "
+                   "de la data situației.")
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Creștere EPS", _g(d["eps"]) + "/an", help=GROWTH_HELP["c"])
+    c2.metric("Schimbarea P/E", _g(d["pe"]) + "/an",
+              f"P/E {format_ro(d['pe_old'], 1)} → {format_ro(d['pe_new'], 1)}", delta_color="off", help=GROWTH_HELP["c"])
+    c3.metric("Dividende", _g(d["div"]) + "/an", help=GROWTH_HELP["c"])
+    c4.metric("Randament total", _g(d["total"]) + "/an", f"suma componentelor {_g(d['eps'] + d['pe'] + d['div'])}",
+              delta_color="off", help=GROWTH_HELP["c"])
+    st.caption(f"{dec_in[3]:%d.%m.%Y} → {dec_in[2]:%d.%m.%Y} ({d['years']} ani). Verificare: (1 + EPS) × (1 + P/E) × "
+               f"(1 + dividend) − 1 = {_g((1 + d['eps']) * (1 + d['pe']) * (1 + d['div']) - 1)} = randamentul total. "
+               "Prețul de la datele situațiilor, nu de azi.")
+
+
 # --- MAIN APP ---
 def main():
     # Căutarea (doar în Analiză companie) stă deasupra meniului: locul se rezervă aici, conținutul se scrie în secțiune.
@@ -5751,6 +5893,9 @@ def main():
             global_decision = render_global_decision(real_sym, info, hist, risk_stats)
             # „Verdict final” refolosește exact acest rezultat (nu recalculează)
             score_decision = bvb_decision or global_decision
+
+            # 2d. Creștere (CAGR) și sursa randamentului (informativ, nu intră în scor)
+            render_growth_card(real_sym, info)
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
