@@ -181,9 +181,10 @@ def file_growth(df, horizons=(3, 5)):
 
 # --------------------------------------------------------------------------- dividende Yahoo (SUA/UE)
 
-def dividend_growth(dividends, asof, horizons=HORIZONS):
+def dividend_growth(dividends, asof, horizons=HORIZONS, history_start=None):
     """CAGR-ul dividendului pe acțiune din plățile Yahoo (ajustate pentru split), pe ani calendaristici încheiați:
-    ultimul an complet față de cu n ani înainte. {n: CAGR sau None}, plus anul de referință. Un an fără plată → None."""
+    ultimul an complet față de cu n ani înainte. {n: CAGR sau None}, plus anul de referință. Un an fără plată → None.
+    `history_start` = prima zi a istoricului descărcat: anii începuți înainte de ea sunt parțiali → None."""
     if dividends is None or len(dividends) == 0:
         return None, {n: None for n in horizons}
     s = pd.Series(dividends).dropna()
@@ -195,7 +196,13 @@ def dividend_growth(dividends, asof, horizons=HORIZONS):
         idx = idx.tz_localize(None)
     by_year = pd.Series(s.values, index=idx).groupby(idx.year).sum()
     y_ref = pd.Timestamp(asof).year - 1
-    return y_ref, {n: cagr(by_year.get(y_ref), by_year.get(y_ref - n), n) for n in horizons}
+    # Un an e complet doar dacă istoricul începe cel târziu la 1 ianuarie al lui (altfel suma e parțială).
+    first_full = pd.Timestamp(history_start).year + (0 if pd.Timestamp(history_start) <= pd.Timestamp(
+        pd.Timestamp(history_start).year, 1, 7) else 1) if history_start is not None else None
+
+    def full(y):
+        return by_year.get(y) if first_full is None or y >= first_full else None
+    return y_ref, {n: cagr(full(y_ref), full(y_ref - n), n) for n in horizons}
 
 
 # --------------------------------------------------------------------------- B. randament total

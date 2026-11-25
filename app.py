@@ -5570,7 +5570,8 @@ def render_growth_card(real_sym, info):
             period_note = (f"Situațiile anuale Yahoo: {sg['date_old']:%d.%m.%Y} → {sg['date_new']:%d.%m.%Y} "
                            f"({sg['years']} ani fiscali).")
             dec_in = (sg.get("eps_new"), sg.get("eps_old"), sg["date_new"], sg["date_old"])
-        y_ref, dg = growth.dividend_growth(hist["Dividends"] if "Dividends" in hist else None, now_ro())
+        y_ref, dg = growth.dividend_growth(hist["Dividends"] if "Dividends" in hist else None, now_ro(),
+                                           history_start=hist.index.min() if not hist.empty else None)
         if y_ref is not None:
             rows.append({"Indicator": "Dividend pe acțiune (Yahoo)", "Măsură": "pe acțiune",
                          **{f"{n} ani": _g(dg[n]) for n in (3, 5, 10)}, "Notă": f"ani calendaristici până în {y_ref}"})
