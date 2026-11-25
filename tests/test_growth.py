@@ -135,3 +135,12 @@ def test_tr_benchmark():
     assert g.tr_benchmark("ASML.AS", "EUR")[0] == "EXSA.DE"
     assert g.tr_benchmark("AAPL", "USD")[0] == "SPY"
     assert g.tr_benchmark("X.L", "GBP") == (None, None)
+
+
+def test_dividend_growth_partial_first_year_is_na():
+    idx = pd.to_datetime(["2015-11-05", "2016-02-05", "2016-05-05", "2016-08-05", "2016-11-05", "2025-02-05"])
+    div = pd.Series([0.13, 0.13, 0.14, 0.14, 0.14, 1.0], index=idx)
+    # istoricul începe pe 25.11.2015: anul 2015 e parțial → N/A; 2016 e complet
+    _y, out = g.dividend_growth(div, "2026-11-25", horizons=(9, 10), history_start="2015-11-25")
+    assert out[10] is None
+    assert out[9] == pytest.approx((1.0 / 0.55) ** (1 / 9) - 1)
