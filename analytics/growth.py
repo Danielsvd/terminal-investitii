@@ -267,6 +267,18 @@ def total_return(adj_close, years, end=None):
             "n_obs": int(((s.index > start) & (s.index <= end)).sum())}
 
 
+def short_history_note(series, years, end=None):
+    """Textul pentru o fereastră de `years` ani pe care istoricul nu o acoperă: „N/A (istoric din MM.AAAA)”;
+    None când istoricul e gol (lipsă de date, nu istoric scurt) sau acoperă fereastra."""
+    s = _naive(series)
+    if s.empty:
+        return None
+    end = pd.Timestamp(end) if end is not None else s.index[-1]
+    if s.index[0] <= end - pd.DateOffset(years=years) + pd.Timedelta(days=PRICE_TOL_DAYS):
+        return None
+    return f"N/A (istoric din {s.index[0]:%m.%Y})"
+
+
 def tr_benchmark(symbol, currency=None):
     """Benchmarkul de randament total (cu dividende) din aceeași piață și valută, sau (None, None).
     S&P 500 prin SPY ajustat; DAX e deja indice de randament total; restul zonei euro prin EXSA.DE (STOXX 600,

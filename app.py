@@ -5591,7 +5591,9 @@ def render_growth_card(real_sym, info):
             ben = growth.total_return(bhist["Adj Close"], n, end=own["end"]) if own and not bhist.empty else None
             diff = (own["cagr"] - ben["cagr"]) * 100 if own and ben and own["cagr"] is not None and ben["cagr"] is not None else None
             brows.append({"Perioada": f"{n} ani", "Acțiunea": _g(own["cagr"]) if own else "N/A (istoric scurt)",
-                          "Benchmark": _g(ben["cagr"]) if ben else "N/A",
+                          "Benchmark": _g(ben["cagr"]) if ben else (
+                              (growth.short_history_note(bhist["Adj Close"], n, end=own["end"]) if own and not bhist.empty
+                               else None) or "N/A"),
                           "Diferență (pp/an)": format_ro(diff, 1, " pp") if diff is not None else "N/A",
                           "Cotații": format_ro(own["n_obs"], 0) if own else "—"})
         st.dataframe(pd.DataFrame(brows), hide_index=True, width='stretch')
