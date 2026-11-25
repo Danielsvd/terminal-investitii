@@ -5151,6 +5151,14 @@ def render_sec_funds_page():
         _sec_who(mg, loaded, books, cmap)
 
 
+def _dash(col, fmt=str):
+    """Coloană text pentru afișare: valorile lipsă (fond nedescărcat) apar ca „—”, nu „None”."""
+    if col is None:
+        return None
+    return pd.Series([fmt(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else "—" for v in col],
+                     index=col.index, dtype=object)
+
+
 def _sec_overview(mg, loaded, books, cmap):
     rows, warn = [], []
     for _, m in mg.iterrows():
@@ -5173,18 +5181,19 @@ def _sec_overview(mg, loaded, books, cmap):
     stale = sec_view.stale_periods(df["Perioada"].tolist())
     for f, p in zip(df["Fond"], df["Perioada"]):
         if p in stale:
-            warn.append(f"{f}: ultimul raport e pentru {p}, rămas în urmă față de ceilalți — fondul poate depune sub "
-                        "alt CIK; verifică pe EDGAR.")
+            warn.append(f"{f}: ultimul raport e pentru {p}, rămas în urmă față de ceilalți — fondul nu a depus încă "
+                        "raportul nou (depunere întârziată) sau depune sub alt CIK; verifică pe EDGAR.")
     view = pd.DataFrame({
         "Fond": df["Fond"], "Administrator": df["Administrator"], "Stil": df["Stil"],
         "Clasa": [c if not isinstance(a, str) or a == c else f"{c} (auto: {a})"
                   for c, a in zip(df["Clasa"], df.get("Clasa_auto", pd.Series([None] * len(df))))],
-        "Perioada": df["Perioada"], "Depus": df.get("Depus"), "Decalaj (zile)": df.get("Decalaj_zile"),
-        "Poziții": df["Pozitii"], "Valoare": df["Valoare_USD"].map(_usd_big),
+        "Perioada": _dash(df["Perioada"]), "Depus": _dash(df.get("Depus")),
+        "Decalaj (zile)": _dash(df.get("Decalaj_zile"), lambda v: format_ro(v, 0)),
+        "Poziții": _dash(df["Pozitii"], lambda v: format_ro(v, 0)), "Valoare": df["Valoare_USD"].map(_usd_big),
         "Top deținere": [f"{t} ({_pct(p)})" if pd.notna(p) else t for t, p in zip(df["Top"], df["Top_pondere"])],
     })
     st.dataframe(view, hide_index=True, width='stretch',
-                 column_config={"Poziții": st.column_config.NumberColumn(help=SEC_HELP["pozitii"], format="%d"),
+                 column_config={"Poziții": st.column_config.TextColumn(help=SEC_HELP["pozitii"]),
                                 "Clasa": st.column_config.TextColumn(help=SEC_HELP["clasa"]),
                                 "Perioada": st.column_config.TextColumn(help=SEC_HELP["perioada"]),
                                 "Valoare": st.column_config.TextColumn(help=SEC_HELP["valoare"]),

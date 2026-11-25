@@ -22,7 +22,8 @@ CONCENTRAT, LARG = "Concentrat", "Larg"
 # CIK, fondul (cum apare la SEC), administratorul, stilul, clasa implicită, verificat pe EDGAR (25.11.2026)
 MANAGERS = [
     ("1067983", "Berkshire Hathaway", "Warren Buffett / Greg Abel", "Value", CONCENTRAT, True),
-    ("1697748", "ARK Investment Management", "Cathie Wood", "Growth", CONCENTRAT, True),
+    # ARK și Soros: „Larg” prin decizia lui Daniel (25.11.2026) — 181, respectiv 234 de poziții, primele 10 sub 50%.
+    ("1697748", "ARK Investment Management", "Cathie Wood", "Growth", LARG, True),
     ("1709323", "Himalaya Capital Management", "Li Lu", "Deep value", CONCENTRAT, True),
     # Pershing: din 2025 rapoartele 13F se depun de Pershing Square Holdco, L.P. (CIK 2026053); vechiul CIK 1336528
     # (Capital Management) a raportat ultima dată 31.03.2026 (captura din 25.11.2026).
@@ -32,11 +33,12 @@ MANAGERS = [
     ("1040273", "Third Point", "Dan Loeb", "Activist", CONCENTRAT, False),
     ("1061768", "Baupost Group", "Seth Klarman", "Deep value", CONCENTRAT, False),
     ("1167483", "Tiger Global Management", "Chase Coleman", "Tech growth", CONCENTRAT, False),
-    # Greenlight: CIK 1079114 a raportat ultima dată 31.12.2023; rapoartele curente sunt sub CIK 1489933.
-    ("1489933", "Greenlight Capital", "David Einhorn", "Value", CONCENTRAT, True),
+    # Greenlight: CIK 1079114 a raportat ultima dată 31.12.2023; rapoartele curente se depun de entitatea de
+    # administrare DME Capital Management, LP (CIK 1489933) — confirmat pe test1, 25.11.2026: 3,6 mld. $, 45 poziții.
+    ("1489933", "Greenlight Capital (DME Capital Management)", "David Einhorn", "Value", CONCENTRAT, True),
     ("921669", "Icahn Carl C", "Carl Icahn", "Activist", CONCENTRAT, True),
     ("949509", "Oaktree Capital Management", "Howard Marks", "Distressed/Credit", CONCENTRAT, False),
-    ("1029160", "Soros Fund Management", "George Soros", "Macro", CONCENTRAT, False),
+    ("1029160", "Soros Fund Management", "George Soros", "Macro", LARG, True),
     ("1135730", "Coatue Management", "Philippe Laffont", "Tech growth", CONCENTRAT, True),
     ("1569205", "Fundsmith LLP", "Terry Smith", "Quality growth", CONCENTRAT, True),
     ("1389507", "Discovery Capital Management", "Rob Citrone", "Macro/Event", CONCENTRAT, True),
