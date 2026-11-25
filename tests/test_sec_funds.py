@@ -20,7 +20,9 @@ def test_managers_unique_and_classes():
         "Bridgewater Associates", "Citadel Advisors", "Renaissance Technologies", "Point72 Asset Management"}
     assert m.loc[m["Fond"] == "Discovery Capital Management", "CIK"].item() == "1389507"
     assert m.loc[m["Fond"] == "Pershing Square Holdco", "CIK"].item() == "2026053"
-    assert m.loc[m["Fond"] == "Greenlight Capital", "CIK"].item() == "1489933"
+    gl = m.loc[m["CIK"] == "1489933", "Fond"].item()
+    from analytics.sec_view import name_matches
+    assert name_matches(gl, "DME Capital Management, LP") and name_matches(gl, "GREENLIGHT CAPITAL INC")
 
 
 # --------------------------------------------------------------------------- încărcare EDGAR (client fals)

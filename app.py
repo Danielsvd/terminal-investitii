@@ -5173,8 +5173,8 @@ def _sec_overview(mg, loaded, books, cmap):
     stale = sec_view.stale_periods(df["Perioada"].tolist())
     for f, p in zip(df["Fond"], df["Perioada"]):
         if p in stale:
-            warn.append(f"{f}: ultimul raport e pentru {p}, rămas în urmă față de ceilalți — fondul poate depune sub "
-                        "alt CIK; verifică pe EDGAR.")
+            warn.append(f"{f}: ultimul raport e pentru {p}, rămas în urmă față de ceilalți — fondul nu a depus încă "
+                        "raportul nou (depunere întârziată) sau depune sub alt CIK; verifică pe EDGAR.")
     view = pd.DataFrame({
         "Fond": df["Fond"], "Administrator": df["Administrator"], "Stil": df["Stil"],
         "Clasa": [c if not isinstance(a, str) or a == c else f"{c} (auto: {a})"

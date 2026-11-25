@@ -32,8 +32,9 @@ MANAGERS = [
     ("1040273", "Third Point", "Dan Loeb", "Activist", CONCENTRAT, False),
     ("1061768", "Baupost Group", "Seth Klarman", "Deep value", CONCENTRAT, False),
     ("1167483", "Tiger Global Management", "Chase Coleman", "Tech growth", CONCENTRAT, False),
-    # Greenlight: CIK 1079114 a raportat ultima dată 31.12.2023; rapoartele curente sunt sub CIK 1489933.
-    ("1489933", "Greenlight Capital", "David Einhorn", "Value", CONCENTRAT, True),
+    # Greenlight: CIK 1079114 a raportat ultima dată 31.12.2023; rapoartele curente se depun de entitatea de
+    # administrare DME Capital Management, LP (CIK 1489933) — confirmat pe test1, 25.11.2026: 3,6 mld. $, 45 poziții.
+    ("1489933", "Greenlight Capital (DME Capital Management)", "David Einhorn", "Value", CONCENTRAT, True),
     ("921669", "Icahn Carl C", "Carl Icahn", "Activist", CONCENTRAT, True),
     ("949509", "Oaktree Capital Management", "Howard Marks", "Distressed/Credit", CONCENTRAT, False),
     ("1029160", "Soros Fund Management", "George Soros", "Macro", CONCENTRAT, False),
