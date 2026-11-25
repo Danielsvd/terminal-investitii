@@ -5547,11 +5547,7 @@ def render_growth_card(real_sym, info):
         if fg is None:
             st.caption(f"{sym[:-3]} nu are fișier în „{COMPANY_FOLDER_NAME}” cu date anuale: creșterea afacerii N/A.")
         else:
-            for name, by_n in fg["rows"].items():
-                rows.append({"Indicator": name, "Măsură": "pe acțiune",
-                             **{f"{n} ani": _g(by_n.get(n, {}).get("per_share")) for n in (3, 5)}, "10 ani": "—"})
-                rows.append({"Indicator": name, "Măsură": "total",
-                             **{f"{n} ani": _g(by_n.get(n, {}).get("total")) for n in (3, 5)}, "10 ani": "—"})
+            rows.extend(growth.file_growth_table(fg, _g))
             period_note = (f"Fișierul „Analiză companii”, foaia anuală: ultimul an {fg['year_new']}. "
                            + " ".join(f"{n} ani: {t}." for n, t in fg["notes"].items()))
             dec_in = (fg.get("eps_new"), fg.get("eps_old"), fg.get("date_new"), fg.get("date_old"))

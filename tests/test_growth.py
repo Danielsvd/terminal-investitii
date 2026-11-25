@@ -144,3 +144,15 @@ def test_dividend_growth_partial_first_year_is_na():
     _y, out = g.dividend_growth(div, "2026-11-25", horizons=(9, 10), history_start="2015-11-25")
     assert out[10] is None
     assert out[9] == pytest.approx((1.0 / 0.55) ** (1 / 9) - 1)
+
+
+def test_file_growth_table_labels_and_order():
+    rows = g.file_growth_table(g.file_growth(_files()), lambda v: "N/A" if v is None else f"{v * 100:.1f}%")
+    assert [(r["Indicator"], r["Măsură"]) for r in rows] == [
+        ("Cifră de afaceri", "total"), ("Cifră de afaceri", "pe acțiune"),
+        ("Profit net", "total"), ("EPS (profit net / acțiuni)", "pe acțiune"),
+        ("Profit distribuit (dividende totale)", "total"),
+        ("Dividend pe acțiune (profit distribuit / acțiuni)", "pe acțiune")]
+    assert rows[0]["5 ani"] == "10.0%" and rows[2]["3 ani"] == f"{((146.41 / 110) ** (1 / 3) - 1) * 100:.1f}%"
+    assert all(r["10 ani"] == "N/A" for r in rows) and rows[0]["Notă"] and not rows[1]["Notă"]
+    assert g.file_growth_table(None, str) == []
