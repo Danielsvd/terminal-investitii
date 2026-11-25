@@ -15,33 +15,34 @@ Funcții pure, fără `st.*`, cu teste în tests/test_theme.py. Singura legătur
 """
 import re
 
-# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Swiss Bank”, aleasă pe 25.11)
+# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Nordic Frost”, aleasă pe 25.11)
 TOKENS = {
-    "bg": ("#FBF9F4", "#0B111C"),
-    "surface": ("#F2EEE4", "#121A28"),
-    "surface-top": ("#F2EEE4", "#121A28"),      # = surface: cardurile Swiss Bank sunt plate, fără gradient
-    "surface-2": ("#E9E3D5", "#182232"),
-    "border": ("#D8D0BE", "#26324A"),
-    "border-strong": ("#C4BAA4", "#34425E"),
-    "text": ("#0E1626", "#F3EFE4"),
-    "muted": ("#556074", "#A7AFBF"),
-    "accent": ("#13213A", "#D9B76E"),          # luminos: cerneală navy; întunecat: auriu șampanie
-    "accent-text": ("#7C5E16", "#E3C688"),     # auriul închis pe ivoire, auriul deschis pe navy
-    "up": ("#1C6B45", "#5FD39A"),
-    "down": ("#A6362A", "#F08A7E"),
-    "warn": ("#875700", "#E9C46A"),
+    "bg": ("#EDF2F7", "#0E1620"),
+    "surface": ("#FFFFFF", "#16212D"),
+    "surface-top": ("#FFFFFF", "#1A2734"),      # capătul de sus al gradientului fin de pe carduri
+    "surface-2": ("#F2F6FA", "#1D2A38"),
+    "border": ("#D9E2EB", "#273647"),
+    "border-strong": ("#C3D0DC", "#34485C"),
+    "text": ("#0F1E2C", "#E8EEF4"),
+    "muted": ("#526477", "#9DAEC0"),
+    "accent": ("#1F6F99", "#7CC4E8"),          # albastru fiord / albastru-gheață
+    "accent-text": ("#1A6489", "#9AD3F0"),
+    "up": ("#0B7A55", "#6EE7B7"),
+    "down": ("#B42318", "#FCA5A5"),
+    "warn": ("#8F5B00", "#FCD34D"),
     # textul de pe un fundal plin colorat (verdict, GEX): alb pe culorile închise din modul luminos,
-    # navy de noapte pe culorile luminoase din modul întunecat
-    "on-fill": ("#FFFFFF", "#0B111C"),
-    # adâncime: Swiss Bank e plat — fără linie luminoasă, umbră sau strălucire (transparente, păstrate ca tokenuri
-    # ca restul CSS-ului să rămână valid; hex cu 8 cifre nu e atins de themed_html)
-    "highlight": ("#FFFFFF00", "#FFFFFF00"),
-    "shadow": ("#00000000", "#00000000"),
-    "glow": ("#00000000", "#00000000"),
+    # ardezie închisă pe culorile luminoase din modul întunecat
+    "on-fill": ("#FFFFFF", "#0E1620"),
+    # adâncime: linia luminoasă de pe muchia de sus, umbra moale de sub card, strălucirea rece din capul paginii
+    # (hex cu 8 cifre = culoare + transparență; nu sunt atinse de themed_html)
+    "highlight": ("#FFFFFFE6", "#FFFFFF0D"),
+    "shadow": ("#0F1E2C14", "#02081266"),
+    "glow": ("#1F6F990D", "#7CC4E812"),
 }
 
-# Colțurile cardurilor, metricilor, expanderelor și ale meniului (Swiss Bank: drepte)
-CARD_RADIUS = "0px"
+# Colțurile cardurilor, metricilor și expanderelor (Nordic Frost: moi) și ale opțiunilor din meniul lateral
+CARD_RADIUS = "18px"
+NAV_RADIUS = "12px"
 
 # Paleta veche (GitHub dark) → token. Culorile care nu sunt aici rămân neschimbate.
 LEGACY = {
@@ -74,7 +75,7 @@ DF_UP = "#3A8854"
 DF_DOWN = "#E82C2C"
 DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
-DF_HIGHLIGHT_BG = "rgba(217, 183, 110, 0.18)"  # rândul evidențiat (compania analizată, mediana): auriu translucid
+DF_HIGHLIGHT_BG = "rgba(124, 196, 232, 0.18)"  # rândul evidențiat (compania analizată, mediana): gheață translucidă
 
 def df_colors(mode):
     """(câștig, pierdere, neutru) pentru tabele, după modul temei (`st.context.theme.type`).
@@ -133,7 +134,7 @@ _CARD_SHADOW = "inset 0 1px 0 var(--tk-highlight), 0 1px 2px var(--tk-shadow), 0
 def premium_css():
     """Tratamentul „premium” al suprafețelor (DESIGN.md §4): gradient fin pe carduri, contur de 1px,
     linie luminoasă sus, umbră moale, colțuri `CARD_RADIUS` și o strălucire discretă în capul paginii
-    (în Swiss Bank gradientul, umbra și strălucirea au tokenuri transparente, deci cardurile sunt plate).
+    (valorile în TOKENS: highlight, shadow, glow).
     Se injectează DUPĂ CSS-ul vechi din app.py, ca să-l înlocuiască la aceeași specificitate."""
     card = ("background: linear-gradient(180deg, var(--tk-surface-top) 0%, var(--tk-surface) 100%);"
             f" border: 1px solid var(--tk-border); border-radius: {CARD_RADIUS};"
@@ -174,7 +175,7 @@ def premium_css():
         # radio-ul cu react-aria: grupul = stRadioGroup, opțiunea = <label data-testid="stRadioOption"> cu data-selected
         f' {_NAV} [data-testid="stRadioGroup"] {{ align-items: stretch; gap: 4px; }}'
         f' {_NAV} [data-testid="stRadioOption"] {{ width: 100%; min-height: 44px; display: flex; align-items: center;'
-        f" box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; border-radius: {CARD_RADIUS};"
+        f" box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; border-radius: {NAV_RADIUS};"
         " transition: background-color .15s, border-color .15s; }"
         f' {_NAV} [data-testid="stRadioOption"]:hover {{ background: var(--tk-surface-2); }}'
         f' {_NAV} [data-testid="stRadioOption"][data-selected] {{'
