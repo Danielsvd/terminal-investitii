@@ -17,7 +17,8 @@ def test_managers_unique_and_classes():
     m = sf.managers_frame()
     assert m["CIK"].is_unique and len(m) == 20
     assert set(m.loc[m["Clasa"] == sf.LARG, "Fond"]) == {
-        "Bridgewater Associates", "Citadel Advisors", "Renaissance Technologies", "Point72 Asset Management"}
+        "Bridgewater Associates", "Citadel Advisors", "Renaissance Technologies", "Point72 Asset Management",
+        "ARK Investment Management", "Soros Fund Management"}
     assert m.loc[m["Fond"] == "Discovery Capital Management", "CIK"].item() == "1389507"
     assert m.loc[m["Fond"] == "Pershing Square Holdco", "CIK"].item() == "2026053"
     gl = m.loc[m["CIK"] == "1489933", "Fond"].item()
