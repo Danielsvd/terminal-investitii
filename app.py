@@ -67,8 +67,8 @@ from analytics import ideas as ideas_calc
 from analytics import bvb_fundamental as bvb_calc
 from analytics import pilon2 as p2_calc
 from data import pilon2 as pilon2_data
-from analytics import sec_13f, sec_view
-from data import sec_edgar, sec_funds, cusip_map
+from analytics import sec_13f, sec_view, insiders
+from data import sec_edgar, sec_funds, cusip_map, sec_insiders
 from data.ucits import ucits_for, ucits_symbols, ucits_currency
 from analytics import events as events_calc
 from data import entities as entities_data
@@ -5211,6 +5211,105 @@ def render_sec_company_card(real_sym):
     st.caption(f"Rapoarte 13F pentru {', '.join(periods[-2:]) if periods else 'N/A'} · detalii: meniul „Fonduri SUA (13F)”.")
 
 
+INSIDER_HELP = {
+    "card": ("Tranzacțiile insiderilor (directori, ofițeri, acționari > 10%) din formularele SEC Form 4, depuse în "
+             "2 zile lucrătoare. Fereastra: ultimele 90 de zile, după data tranzacției.\n\n"
+             "**În semnal intră doar** cumpărările pe piață (cod P) și vânzările (cod S). Vânzările cu bifa 10b5-1 "
+             "(sau cu nota „10b5-1”) sunt **prin plan**, stabilite dinainte, deci aproape fără informație. "
+             "Exercitările (M), impozitele reținute (F), acordările (A) și cadourile (G) apar în tabel, nu în semnal.\n\n"
+             "Un 4/A înlocuiește raportul inițial al aceluiași insider pentru aceeași dată (proxy). "
+             "**Netestat:** context, nu verdict. Literatura: cumpărările pe piață, mai ales în grup, au avut putere "
+             "de predicție; vânzările mult mai puțin."),
+    "p": ("Cumpărări pe piață (cod P) în 90 de zile: numărul de tranzacții, câți insideri distincți (un raport "
+          "depus în comun = un insider) și valoarea = acțiuni × prețul raportat. Tranzacțiile fără preț nu intră în "
+          "valoare."),
+    "s": ("Vânzări (cod S) fără bifa sau nota 10b5-1: decise de insider la momentul vânzării. Pot avea motive "
+          "personale (impozite, diversificare), deci sunt un semnal mai slab decât cumpărările."),
+    "plan": ("Vânzări prin plan 10b5-1: programate dinainte (ex. aceeași cantitate în fiecare săptămână). "
+             "Nu spun nimic despre ce crede insiderul acum."),
+    "grup": ("Grup = cel puțin 3 insideri distincți au cumpărat pe piață în 90 de zile. % din deținere = mediana "
+             "cumpărării raportate la deținerea dinaintea ei (doar cumpărările cu deținere anterioară > 0)."),
+}
+
+
+def _usd_small(v):
+    if v is None or pd.isna(v):
+        return "N/A"
+    return _usd_big(v) if abs(v) >= 1e6 else format_ro(v / 1e3, 0, " mii $")
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def sec_load_insiders(symbol, user_agent, today_iso):
+    """Form 4 pentru simbolul american, depuse în ultimele 95 de zile. Cache 12 h (cheia include ziua).
+    Întoarce (tabel tranzacții, nr. rapoarte, probleme, trunchiat, eroare sau None)."""
+    empty = insiders.transactions_frame([])
+    try:
+        client = sec_client(user_agent)
+        cik = sec_insiders.ticker_cik(client, symbol)
+        if cik is None:
+            return empty, 0, [], False, f"{symbol} nu apare în lista SEC de simboluri"
+        docs, problems, truncated = sec_insiders.load_form4(client, cik, today=pd.Timestamp(today_iso).date())
+    except (sec_edgar.EdgarError, ValueError) as exc:
+        logger.warning("Form 4 %s: %s", symbol, exc)
+        return empty, 0, [], False, str(exc)
+    return insiders.transactions_frame(docs), len(docs), problems, truncated, None
+
+
+def render_sec_insiders_card(real_sym):
+    """Card „Insideri (Form 4, 90 de zile)” în Analiză companie, doar pentru acțiunile americane.
+    Se încarcă la buton (prima dată ~5–15 s); după aceea simbolul rămâne încărcat în sesiune (cache 12 h)."""
+    sym = str(real_sym).upper()
+    if "." in sym or "=" in sym or "^" in sym or sym.endswith("-USD"):
+        return
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    st.subheader("🧑‍💼 Insideri (Form 4, 90 de zile)", help=INSIDER_HELP["card"])
+    loaded = st.session_state.setdefault("ins_loaded", set())
+    if sym not in loaded:
+        st.caption("Tranzacțiile insiderilor nu sunt încărcate pentru acest simbol (~5–15 s).")
+        if not st.button("Încarcă tranzacțiile insiderilor", key=f"ins_load_{sym}"):
+            return
+        loaded.add(sym)
+    today = now_ro().date()
+    with st.spinner("Citesc rapoartele Form 4 de la SEC..."):
+        df, n_docs, problems, truncated, err = sec_load_insiders(sym, ua, today.isoformat())
+    if err:
+        st.caption(f"Form 4 N/A: {err}")
+        return
+    s = insiders.window_summary(df, today)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Cumpărări pe piață (P)", f"{s['nr_P']} · {s['cumparatori']} insideri", _usd_small(s["valoare_P"]),
+              delta_color="off", help=INSIDER_HELP["p"])
+    c2.metric("Vânzări discreționare", f"{s['nr_S_discretionar']}", _usd_small(s["valoare_S_discretionar"]),
+              delta_color="off", help=INSIDER_HELP["s"])
+    c3.metric("Vânzări prin plan 10b5-1", f"{s['nr_S_plan']}", _usd_small(s["valoare_S_plan"]),
+              delta_color="off", help=INSIDER_HELP["plan"])
+    c4.metric("Grup de cumpărători", "DA" if s["grup"] else "NU",
+              f"% din deținere: {_pct(s['pct_din_detinere_P'])}" if s["pct_din_detinere_P"] is not None else None,
+              delta_color="off", help=INSIDER_HELP["grup"])
+    st.caption(insiders.describe(s, _usd_small))
+    other = ", ".join(f"{k} ({insiders.CODE_LABELS.get(k, k)}): {v}" for k, v in sorted(s["alte_coduri"].items()))
+    notes = [f"{s['start']:%d.%m.%Y} → {s['end']:%d.%m.%Y}", f"{n_docs} rapoarte Form 4",
+             f"în afara semnalului: {other}" if other else "",
+             f"tranzacții P/S fără preț: {s['fara_pret']}" if s["fara_pret"] else "",
+             f"{len(problems)} rapoarte nu s-au putut citi" if problems else "",
+             "doar cele mai noi 80 de rapoarte" if truncated else "", "netestat: context, nu verdict"]
+    st.caption(" · ".join(x for x in notes if x))
+    w = df[(df["Data_tranz"] > s["start"]) & (df["Data_tranz"] <= s["end"])] if not df.empty else df
+    if not w.empty:
+        with st.expander(f"Toate tranzacțiile ({len(w)})"):
+            st.dataframe(pd.DataFrame({
+                "Data": w["Data_tranz"].dt.strftime("%d.%m.%Y"), "Depus": w["Data_depunere"].dt.strftime("%d.%m.%Y"),
+                "Insider": w["Insider"], "Funcție": w["Functie"], "Cod": w["Cod"], "Tip": w["Tip"],
+                "Plan 10b5-1": w["Plan_10b5_1"], "Acțiuni": w["Actiuni"], "Preț $": w["Pret"],
+                "Valoare $": w["Valoare_USD"], "Deținere după": w["Detinere_dupa"]}).style.format(
+                    {"Acțiuni": ro_spec(",.0f"), "Preț $": ro_spec(",.2f"), "Valoare $": ro_spec(",.0f"),
+                     "Deținere după": ro_spec(",.0f")}, na_rep="N/A"),
+                hide_index=True, width='stretch',
+                column_config={"Plan 10b5-1": st.column_config.CheckboxColumn(help=INSIDER_HELP["plan"])})
+
+
 def render_sec_portfolio_signals():
     """Expander în Portofoliu: semnalele 13F pe acțiunile americane deținute (fondurile concentrate)."""
     ua = sec_secret("sec_user_agent")
@@ -5888,6 +5987,8 @@ def main():
             render_pilon2_card(real_sym, info)
             # 2b''. Fondurile SUA (13F) care dețin acțiunea (doar SUA; context, netestat)
             render_sec_company_card(real_sym)
+            # 2b-bis. Insiderii (Form 4, 90 de zile; doar SUA; context, netestat)
+            render_sec_insiders_card(real_sym)
             # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
             global_decision = render_global_decision(real_sym, info, hist, risk_stats)
             # „Verdict final” refolosește exact acest rezultat (nu recalculează)
