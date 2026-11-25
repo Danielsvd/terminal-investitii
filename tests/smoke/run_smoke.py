@@ -65,7 +65,7 @@ def _ohlcv(sym, n, tz=None):
 def _n_rows(period=None, start=None):
     if start is not None:
         return max(len(pd.bdate_range(pd.Timestamp(start).tz_localize(None), TODAY)), 2)
-    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "2y": 504, "3y": 756, "5y": 1260}.get(period, 252)
+    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "2y": 504, "3y": 756, "5y": 1260, "11y": 2772}.get(period, 252)
 
 
 RICH_INFO = dict(
@@ -132,6 +132,11 @@ class FakeTicker:
             df = df.assign(Close=4.2)
         if self.ticker == "^IRX":      # titluri SUA 3 luni, în procente
             df = df.assign(Close=3.9)
+        if k.get("auto_adjust") is False and k.get("actions"):   # cardul „Creștere”: preț ajustat + dividende
+            ix = df.index.tz_localize(None).to_series()
+            q = (ix.dt.month.isin([3, 6, 9, 12]) & ~ix.dt.to_period("M").duplicated()).to_numpy()
+            df = df.assign(Dividends=np.where(q, 0.25, 0.0))
+            df["Adj Close"] = df["Close"] * (1.01 ** (np.arange(len(df)) / 252))   # ~1%/an din dividende reinvestite
         df.index.name = "Date"
         return df
 
@@ -859,6 +864,12 @@ def main():
             print(f"EURO.PA E/P: {ep_txt}")
         if sym in ("TLV.RO", "SNP.RO"):
             assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
+        if sym in ("SAP.DE", "SNP.RO", "LOSS"):      # cardul „Creștere și sursa randamentului”
+            assert any("Creștere și sursa randamentului" in str(h.value) for h in at.subheader), f"lipsește cardul Creștere la {sym}"
+            tb = next((d.value for d in at.dataframe if "Diferență (pp/an)" in getattr(d.value, "columns", [])), None)
+            ta = next((d.value for d in at.dataframe if "Măsură" in getattr(d.value, "columns", [])), None)
+            assert tb is not None and list(tb["Perioada"]) == ["3 ani", "5 ani", "10 ani"], tb
+            print(f"Creștere {sym}: B={tb.to_dict('records')[:1]} | A={None if ta is None else ta.head(3).to_dict('records')}")
         if sym in curve_expect:
             assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
         if sym in ("SAP.DE", "SNP.RO"):
