@@ -1,5 +1,7 @@
 # DESIGN.md — Terminal Investiții PRO
 
+> **În probă pe test1 (25.11, seara): „Neon Carbon”** (varianta 5): grafit + lime electric / gri-verzui deschis + cerneală, carduri plate cu colțuri de 24px, meniu 16px, fonturi Inter + Space Grotesk, butonul principal cu text din tokenul `on-accent` (negru pe lime, lime pe cerneală). Valorile sunt în `ui/theme.py` și `.streamlit/config.toml`. Tabelul §1.0 de mai jos rămâne Nordic Frost (#249) până la decizia finală între cele două.
+
 Direcția: **„Nordic Frost”** (varianta 6 de pe canvasul de redesign, aleasă de Daniel pe 25.11.2026 după proba Swiss Bank, **în probă pe test1**): ardezie și albastru-gheață, carduri moi cu umbră fină, mult aer, font Manrope. Înlocuiește „Indigo profund” (#169) și Swiss Bank (#248, respinsă); Indigo e păstrat mai jos ca istoric. Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
 Baza e Bleumarin: un terminal sobru, cu margini fine și densitate mare pe tabele. Din stilul Revolut se iau doar cifra mare de sus, colțurile mari și cardurile fără margine pe ecranele de sinteză, plus butonul principal complet rotunjit.
 Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #166 (tokenuri light-dark), #167 (banner mobil), #168 (iconuri).

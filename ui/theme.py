@@ -15,34 +15,33 @@ Funcții pure, fără `st.*`, cu teste în tests/test_theme.py. Singura legătur
 """
 import re
 
-# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Nordic Frost”, aleasă pe 25.11)
+# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Neon Carbon”, în probă pe 25.11)
 TOKENS = {
-    "bg": ("#EDF2F7", "#0E1620"),
-    "surface": ("#FFFFFF", "#16212D"),
-    "surface-top": ("#FFFFFF", "#1A2734"),      # capătul de sus al gradientului fin de pe carduri
-    "surface-2": ("#F2F6FA", "#1D2A38"),
-    "border": ("#D9E2EB", "#273647"),
-    "border-strong": ("#C3D0DC", "#34485C"),
-    "text": ("#0F1E2C", "#E8EEF4"),
-    "muted": ("#526477", "#9DAEC0"),
-    "accent": ("#1F6F99", "#7CC4E8"),          # albastru fiord / albastru-gheață
-    "accent-text": ("#1A6489", "#9AD3F0"),
-    "up": ("#0B7A55", "#6EE7B7"),
-    "down": ("#B42318", "#FCA5A5"),
-    "warn": ("#8F5B00", "#FCD34D"),
-    # textul de pe un fundal plin colorat (verdict, GEX): alb pe culorile închise din modul luminos,
-    # ardezie închisă pe culorile luminoase din modul întunecat
-    "on-fill": ("#FFFFFF", "#0E1620"),
-    # adâncime: linia luminoasă de pe muchia de sus, umbra moale de sub card, strălucirea rece din capul paginii
-    # (hex cu 8 cifre = culoare + transparență; nu sunt atinse de themed_html)
-    "highlight": ("#FFFFFFE6", "#FFFFFF0D"),
-    "shadow": ("#0F1E2C14", "#02081266"),
-    "glow": ("#1F6F990D", "#7CC4E812"),
+    "bg": ("#EEF1EC", "#0A0C0B"),
+    "surface": ("#FFFFFF", "#151917"),
+    "surface-top": ("#FFFFFF", "#151917"),      # = surface: carduri plate
+    "surface-2": ("#F4F6F2", "#1C211E"),
+    "border": ("#DCE2DA", "#262D29"),
+    "border-strong": ("#C6CFC3", "#343D38"),
+    "text": ("#0F1411", "#F1F5F2"),
+    "muted": ("#566059", "#9AA59D"),
+    "accent": ("#0F1411", "#C6F432"),          # luminos: cerneală; întunecat: lime electric
+    "accent-text": ("#3D5E0B", "#C6F432"),
+    "on-accent": ("#C6F432", "#0A0C0B"),       # textul de pe butonul principal: lime pe cerneală / negru pe lime
+    "up": ("#116B37", "#4ADE80"),
+    "down": ("#C0262D", "#FF6B6B"),
+    "warn": ("#8A5A00", "#FFD166"),
+    # textul de pe un fundal plin colorat (verdict, GEX)
+    "on-fill": ("#FFFFFF", "#0A0C0B"),
+    # plat: fără linie luminoasă, umbră sau strălucire (transparente)
+    "highlight": ("#FFFFFF00", "#FFFFFF00"),
+    "shadow": ("#00000000", "#00000000"),
+    "glow": ("#00000000", "#00000000"),
 }
 
-# Colțurile cardurilor, metricilor și expanderelor (Nordic Frost: moi) și ale opțiunilor din meniul lateral
-CARD_RADIUS = "18px"
-NAV_RADIUS = "12px"
+# Colțurile cardurilor, metricilor și expanderelor (Neon Carbon: foarte rotunjite) și ale opțiunilor din meniu
+CARD_RADIUS = "24px"
+NAV_RADIUS = "16px"
 
 # Paleta veche (GitHub dark) → token. Culorile care nu sunt aici rămân neschimbate.
 LEGACY = {
@@ -75,7 +74,7 @@ DF_UP = "#3A8854"
 DF_DOWN = "#E82C2C"
 DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
-DF_HIGHLIGHT_BG = "rgba(124, 196, 232, 0.18)"  # rândul evidențiat (compania analizată, mediana): gheață translucidă
+DF_HIGHLIGHT_BG = "rgba(198, 244, 50, 0.16)"   # rândul evidențiat (compania analizată, mediana): lime translucid
 
 def df_colors(mode):
     """(câștig, pierdere, neutru) pentru tabele, după modul temei (`st.context.theme.type`).
@@ -173,6 +172,9 @@ def premium_css():
         # meniul lateral: fiecare opțiune e un rând de min. 44px (ținta de atingere pe telefon), text mai mare,
         # fundal la hover și rândul ales evidențiat cu accentul (cerut de Daniel pe 15.11). Streamlit 1.65 desenează
         # radio-ul cu react-aria: grupul = stRadioGroup, opțiunea = <label data-testid="stRadioOption"> cu data-selected
+        # butonul principal: textul din on-accent (Streamlit îl face alb; pe lime nu s-ar citi)
+        ' [data-testid^="stBaseButton-primary"], [data-testid^="stBaseButton-primary"] p {'
+        " color: var(--tk-on-accent) !important; }"
         f' {_NAV} [data-testid="stRadioGroup"] {{ align-items: stretch; gap: 4px; }}'
         f' {_NAV} [data-testid="stRadioOption"] {{ width: 100%; min-height: 44px; display: flex; align-items: center;'
         f" box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; border-radius: {NAV_RADIUS};"

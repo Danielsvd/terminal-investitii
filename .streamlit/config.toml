@@ -1,47 +1,49 @@
 # Tema aplicației: două moduri, comutate din meniul ⋮ → Settings → Theme.
-# Valorile și rolul fiecăreia sunt în DESIGN.md (paleta „Nordic Frost”, aleasă pe 25.11.2026: varianta 6 de pe canvas; înlocuiește Swiss Bank).
+# Valorile și rolul fiecăreia sunt în DESIGN.md (paleta „Neon Carbon”, varianta 5 de pe canvas, în probă pe 25.11.2026 față de Nordic Frost).
 # Aceleași culori sunt în ui/theme.py (TOKENS); testul tests/test_theme.py verifică să coincidă.
 # Aici NU se pun chei sau secrete: acestea stau în .streamlit/secrets.toml (ignorat de git).
 
 [theme]
-# Manrope de la Google Fonts (încărcat de browser); dacă nu vine, rămâne fontul de sistem
-font = "Manrope:https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap, sans-serif"
+# Inter (text) și Space Grotesk (titluri) de la Google Fonts; dacă nu vin, rămâne fontul de sistem
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "'Space Grotesk':https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap, sans-serif"
 baseFontSize = 15
-baseRadius = "10px"
+baseRadius = "12px"
 buttonRadius = "full"
 metricValueFontSize = "26px"
 metricValueFontWeight = 650
 showWidgetBorder = true
 
 [theme.dark]
-# albastru-gheață închis pentru butonul principal (text alb 5,5:1); gheața deschisă e accentul de text și bare
-primaryColor = "#1F6F99"
-backgroundColor = "#0E1620"
-secondaryBackgroundColor = "#16212D"
-textColor = "#E8EEF4"
-borderColor = "#273647"
-linkColor = "#9AD3F0"
-greenColor = "#6EE7B7"
-redColor = "#FCA5A5"
-yellowColor = "#FCD34D"
-blueColor = "#7CC4E8"
-dataframeBorderColor = "#273647"
-dataframeHeaderBackgroundColor = "#1D2A38"
-dataframeHeaderTextColor = "#9DAEC0"
-chartCategoricalColors = ["#7CC4E8", "#F4B26A", "#B4A7F5", "#F49AC1", "#9CCB9A", "#9DAEC0"]
+# lime electric pe butonul principal; textul butonului e închis (ui/theme.py, tokenul on-accent)
+primaryColor = "#C6F432"
+backgroundColor = "#0A0C0B"
+secondaryBackgroundColor = "#151917"
+textColor = "#F1F5F2"
+borderColor = "#262D29"
+linkColor = "#C6F432"
+greenColor = "#4ADE80"
+redColor = "#FF6B6B"
+yellowColor = "#FFD166"
+blueColor = "#7DB7FF"
+dataframeBorderColor = "#262D29"
+dataframeHeaderBackgroundColor = "#1C211E"
+dataframeHeaderTextColor = "#9AA59D"
+chartCategoricalColors = ["#C6F432", "#7DB7FF", "#FFB86B", "#C792EA", "#5EEAD4", "#9AA59D"]
 
 [theme.light]
-primaryColor = "#1F6F99"
-backgroundColor = "#EDF2F7"
+# cerneală pe butonul principal, cu text lime (on-accent)
+primaryColor = "#0F1411"
+backgroundColor = "#EEF1EC"
 secondaryBackgroundColor = "#FFFFFF"
-textColor = "#0F1E2C"
-borderColor = "#D9E2EB"
-linkColor = "#1A6489"
-greenColor = "#0B7A55"
-redColor = "#B42318"
-yellowColor = "#8F5B00"
-blueColor = "#1F6F99"
-dataframeBorderColor = "#D9E2EB"
-dataframeHeaderBackgroundColor = "#F2F6FA"
-dataframeHeaderTextColor = "#526477"
-chartCategoricalColors = ["#1F6F99", "#B45309", "#6D28D9", "#BE185D", "#3F7D3A", "#526477"]
+textColor = "#0F1411"
+borderColor = "#DCE2DA"
+linkColor = "#3D5E0B"
+greenColor = "#116B37"
+redColor = "#C0262D"
+yellowColor = "#8A5A00"
+blueColor = "#1D4ED8"
+dataframeBorderColor = "#DCE2DA"
+dataframeHeaderBackgroundColor = "#F4F6F2"
+dataframeHeaderTextColor = "#566059"
+chartCategoricalColors = ["#3D5E0B", "#1D4ED8", "#B45309", "#7C3AED", "#0F766E", "#566059"]

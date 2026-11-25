@@ -73,12 +73,13 @@ def test_premium_css_tinteste_cardurile_inline_dar_nu_surface_2():
     assert "surface-2)\"]" not in css
 
 
-def test_accentul_principal_cu_text_alb():
+def test_accentul_principal_cu_textul_lui():
     import tomllib as _t
     cfg = _t.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
-    for mode in ("light", "dark"):
-        # butonul principal Streamlit are text alb pe primaryColor
-        assert contrast("#FFFFFF", cfg[mode]["primaryColor"]) >= 4.4, mode
+    for mode, i in (("light", 0), ("dark", 1)):
+        # textul butonului principal vine din on-accent (premium_css), nu e albul implicit Streamlit
+        assert contrast(theme.TOKENS["on-accent"][i], cfg[mode]["primaryColor"]) >= 4.5, mode
+    assert "var(--tk-on-accent)" in theme.premium_css()
 
 
 def test_var_token_necunoscut():
@@ -263,11 +264,10 @@ def test_premium_css_centreaza_bannerul_macro_pe_telefon():
     assert ".macro-hero > div { flex-basis: 100% !important; }" in css
 
 
-def test_nordic_frost_colturi_moi_si_font():
-    # Nordic Frost (25.11): carduri cu colțuri CARD_RADIUS și umbră moale, meniu NAV_RADIUS, font Manrope
+def test_neon_carbon_plat_rotunjit_si_fonturi():
     css = theme.premium_css()
     assert f"border-radius: {theme.CARD_RADIUS};" in css and f"border-radius: {theme.NAV_RADIUS};" in css
-    assert all(not v.endswith("00") for v in theme.TOKENS["shadow"])
+    assert all(v.endswith("00") for v in theme.TOKENS["shadow"])
     cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
-    assert cfg["baseRadius"] == "10px" and cfg["buttonRadius"] == "full"
-    assert cfg["font"].startswith("Manrope:https://fonts.googleapis.com/") and cfg["font"].endswith("sans-serif")
+    assert cfg["font"].startswith("Inter:https://fonts.googleapis.com/")
+    assert cfg["headingFont"].startswith("'Space Grotesk':https://fonts.googleapis.com/")
