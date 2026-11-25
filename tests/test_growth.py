@@ -156,3 +156,12 @@ def test_file_growth_table_labels_and_order():
     assert rows[0]["5 ani"] == "10.0%" and rows[2]["3 ani"] == f"{((146.41 / 110) ** (1 / 3) - 1) * 100:.1f}%"
     assert all(r["10 ani"] == "N/A" for r in rows) and rows[0]["Notă"] and not rows[1]["Notă"]
     assert g.file_growth_table(None, str) == []
+
+
+def test_short_history_note():
+    idx = pd.bdate_range("2024-03-25", "2026-11-25")
+    s = pd.Series(1.0, index=idx)
+    assert g.short_history_note(s, 3) == "N/A (istoric din 03.2024)"
+    assert g.short_history_note(s, 2) is None                       # 2 ani: acoperit
+    assert g.short_history_note(pd.Series(dtype=float), 3) is None  # istoric gol: nu e „istoric scurt”
+    assert g.total_return(s, 3) is None and g.total_return(s, 2) is not None
