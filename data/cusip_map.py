@@ -53,21 +53,36 @@ def pick_listing(data):
 
 def openfigi_lookup(cusips, api_key=None, session=None, sleep=time.sleep):
     """Traduce o listă de CUSIP-uri. Întoarce (dict CUSIP → (simbol, nume)) și lista celor eșuate (fără răspuns,
-    fără listare americană sau eroare de rețea). Un cod negăsit nu primește simbol inventat."""
+    fără listare americană sau eroare de rețea). Un cod negăsit nu primește simbol inventat.
+
+    Codurile care încep cu o literă sunt CINS (emitenți din afara SUA/Canadei, ex. Chubb H1467J104): dacă nu se găsesc
+    ca ID_CUSIP, se reîncearcă o dată ca ID_CINS."""
     cusips = [c for c in dict.fromkeys(str(c).strip().upper() for c in cusips if c) if c]
     if not cusips:
         return {}, []
     session = session or requests.Session()
+    state = {"first": True}
+    found, failed = _lookup(cusips, "ID_CUSIP", api_key, session, sleep, state)
+    cins = [c for c in failed if c[:1].isalpha()]
+    if cins:
+        more, still = _lookup(cins, "ID_CINS", api_key, session, sleep, state)
+        found.update(more)
+        failed = [c for c in failed if c not in more]
+    return found, failed
+
+
+def _lookup(codes, id_type, api_key, session, sleep, state):
     size, pause = batch_limits(api_key)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-OPENFIGI-APIKEY"] = api_key
     found, failed = {}, []
-    for i in range(0, len(cusips), size):
-        chunk = cusips[i:i + size]
-        if i:
+    for i in range(0, len(codes), size):
+        chunk = codes[i:i + size]
+        if not state["first"]:
             sleep(pause)
-        payload = [{"idType": "ID_CUSIP", "idValue": c} for c in chunk]
+        state["first"] = False
+        payload = [{"idType": id_type, "idValue": c} for c in chunk]
         results = None
         for attempt in range(2):
             try:

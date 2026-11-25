@@ -17,6 +17,7 @@ Reguli (propunerea din 25.11.2026, §6):
 Funcții pure: fără Streamlit, fără rețea.
 """
 import logging
+import re
 import xml.etree.ElementTree as ET
 from datetime import date
 
@@ -33,6 +34,11 @@ CONCENTRATED_MAX_POSITIONS = 100        # administrator concentrat: ≤ 100 de p
 CONCENTRATED_TOP10_SHARE = 0.50         # ... sau primele 10 ≥ 50% din valoare
 CONVICTION_BUY_GROWTH = 0.50            # cumpărare de convingere: nouă sau mărită ≥ +50% ...
 CONVICTION_BUY_MIN_WEIGHT = 0.01        # ... cu pondere finală ≥ 1%
+
+# Titluri de fond (ETF, trust, fond închis): emitentul legal (ex. „ISHARES INC”) are zeci de fonduri diferite sub
+# același CUSIP6, deci acestea se cheie pe CUSIP-ul complet, nu pe emitent.
+FUND_TITLE_RE = re.compile(r"\b(ETF|ETN|ETP|FUND|TRUST|INDEX|SPDR|ISHARES|SHS BEN INT|UNIT SER|UNIT)\b")
+THOUSANDS_MEDIAN_PRICE = 1.0            # prețul implicit median < 1 $ → valoarea e raportată în mii (eroare a fondului)
 
 ACT_NEW, ACT_CLOSED, ACT_UP, ACT_DOWN, ACT_HELD = "Nouă", "Închisă", "Mărită", "Redusă", "Păstrată"
 
@@ -209,6 +215,24 @@ def implied_price(info, multiplier):
     return out
 
 
+def issuer_key(cusip, title):
+    """Cheia emitentului pentru consens și „cine deține”: primele 6 caractere ale CUSIP (GOOG + GOOGL = Alphabet),
+    dar CUSIP-ul complet pentru fonduri (ETF/trust), unde același emitent legal acoperă fonduri diferite."""
+    c = str(cusip or "").upper()
+    if FUND_TITLE_RE.search(str(title or "").upper()):
+        return c
+    return c[:6]
+
+
+def detect_thousands(info, multiplier):
+    """Adevărat dacă valorile par raportate în mii de dolari deși data depunerii cere dolari: prețul implicit median
+    (valoare × multiplicator / acțiuni, pe rândurile SH) sub 1 $. Unele fonduri (ex. Baupost, Duquesne, 11.2026) au
+    continuat să raporteze în mii după 03.01.2023; o acțiune listată tipică nu costă sub 1 $."""
+    p = implied_price(info, multiplier).dropna()
+    p = p[p > 0]
+    return bool(len(p) >= 3 and float(p.median()) < THOUSANDS_MEDIAN_PRICE)
+
+
 def equity_book(info, multiplier):
     """Portofoliul pe acțiuni: SH fără opțiuni, agregat pe CUSIP (același titlu poate apărea pe mai multe rânduri,
     pe discreții sau administratori diferiți). Coloane `BOOK_COLUMNS`, sortat după valoare."""
@@ -223,7 +247,7 @@ def equity_book(info, multiplier):
     g["Valoare_USD"] = g["Valoare_raportata"] * multiplier
     total = g["Valoare_USD"].sum(min_count=1)
     g["Pondere"] = g["Valoare_USD"] / total if total and total > 0 else np.nan
-    g["CUSIP6"] = g["CUSIP"].str[:6]
+    g["CUSIP6"] = [issuer_key(c, t) for c, t in zip(g["CUSIP"], g["Clasa_titlu"])]
     g = g.sort_values("Valoare_USD", ascending=False, na_position="last").reset_index(drop=True)
     g["Rang"] = np.arange(1, len(g) + 1)
     return g[BOOK_COLUMNS]
@@ -359,11 +383,11 @@ def consensus(holdings, moves=None):
 
 
 def who_holds(holdings, cusip6):
-    """Cine deține emitentul: concentrații întâi, apoi ceilalți, cu ponderea și rangul în fiecare portofoliu."""
+    """Cine deține emitentul (cheia din `issuer_key`): concentrații întâi, apoi ceilalți, cu ponderea și rangul."""
     cols = ["CIK", "Fond", "Clasa", "Actiuni", "Valoare_USD", "Pondere", "Rang", "Convingere"]
     if holdings is None or holdings.empty:
         return pd.DataFrame(columns=cols)
-    h = holdings[holdings["CUSIP6"].eq(str(cusip6)[:6])]
+    h = holdings[holdings["CUSIP6"].eq(str(cusip6))]
     if h.empty:
         return pd.DataFrame(columns=cols)
     g = h.groupby("CIK").agg(Fond=("Fond", "first"), Clasa=("Clasa", "first"),

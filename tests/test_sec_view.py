@@ -48,3 +48,18 @@ def test_cusip6_for_symbol_merges_classes():
     cmap = {"02079K305": "GOOGL", "02079K107": "GOOG", "037833100": "AAPL"}
     assert v.cusip6_for_symbol("googl", cmap) == ["02079K"]
     assert v.cusip6_for_symbol("MSFT", cmap) == []
+
+
+def test_keys_and_symbols_from_holdings():
+    h = pd.DataFrame({"CUSIP": ["02079K305", "02079K107", "464286400", "464286822"],
+                      "CUSIP6": ["02079K", "02079K", "464286400", "464286822"]})
+    cmap = {"02079K305": "GOOGL", "02079K107": "GOOG", "464286400": "EWZ", "464286822": "EWW"}
+    assert v.cusip6_for_symbol("EWZ", cmap, h) == ["464286400"]
+    assert v.cusip6_for_symbol("GOOG", cmap, h) == ["02079K"]
+    assert v.symbols_by_key(cmap, h) == {"02079K": "GOOG/GOOGL", "464286400": "EWZ", "464286822": "EWW"}
+
+
+def test_stale_periods():
+    ps = ["2026-09-30"] * 5 + ["2026-03-31", "2023-12-31", None, "2026-06-30"]
+    assert v.stale_periods(ps) == {"2026-03-31", "2023-12-31", "2026-06-30"}   # și un trimestru în urmă = vechi
+    assert v.stale_periods([None]) == set()

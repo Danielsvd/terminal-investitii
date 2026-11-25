@@ -19,6 +19,8 @@ def test_managers_unique_and_classes():
     assert set(m.loc[m["Clasa"] == sf.LARG, "Fond"]) == {
         "Bridgewater Associates", "Citadel Advisors", "Renaissance Technologies", "Point72 Asset Management"}
     assert m.loc[m["Fond"] == "Discovery Capital Management", "CIK"].item() == "1389507"
+    assert m.loc[m["Fond"] == "Pershing Square Holdco", "CIK"].item() == "2026053"
+    assert m.loc[m["Fond"] == "Greenlight Capital", "CIK"].item() == "1489933"
 
 
 # --------------------------------------------------------------------------- încărcare EDGAR (client fals)
@@ -197,3 +199,29 @@ def test_period_inputs_split_factor_and_avg():
     assert avg["c1"] == pytest.approx((102 + 52 + 54) / 3)         # (30.06, 30.09], prețuri brute
     assert avg["c2"] == pytest.approx((12 + 14) / 2)               # NaN exclus
     assert "c3" not in avg and "c4" not in avg
+
+
+def test_load_quarter_value_in_thousands_after_2023_is_converted():
+    thousands = INFO_XML.replace(b"<value>600</value>", b"<value>0.6</value>").replace(
+        b"<value>400</value>", b"<value>0.4</value>").replace(b"<value>300</value>", b"<value>0.3</value>").replace(
+        b"<value>200</value>", b"<value>0.2</value>").replace(b"<value>50</value>", b"<value>0.05</value>").replace(
+        b"<value>100</value>", b"<value>0.1</value>")
+    routes = {
+        "/000000000026000009/index.json": _index("primary_doc.xml", "t.xml"),
+        "/000000000026000009/primary_doc.xml": _cover(value=1.65),
+        "/000000000026000009/t.xml": thousands,
+    }
+    q = {"period": "2026-09-30", "base": {"accession": "0000000000-26-000009", "form": "13F-HR",
+                                          "filing_date": "2026-11-14"}, "amendments": []}
+    res = sf.load_quarter(_Client(routes), "123", q)
+    assert res["problems"] == [] and "mii de dolari" in res["notes"][0]
+    assert sec_13f.equity_book(res["info"], 1.0)["Valoare_USD"].sum() == pytest.approx(1500)
+
+
+def test_openfigi_retries_cins_codes():
+    r1 = [{"warning": "No identifier found."}, {"data": [{"ticker": "AAPL", "exchCode": "US"}]}]
+    r2 = [{"data": [{"ticker": "CB", "exchCode": "US", "name": "CHUBB LTD"}]}]
+    sess = _Post([_R(200, r1), _R(200, r2)])
+    found, failed = cm.openfigi_lookup(["H1467J104", "037833100"], api_key="k", session=sess, sleep=lambda x: None)
+    assert found == {"037833100": ("AAPL", None), "H1467J104": ("CB", "CHUBB LTD")} and failed == []
+    assert sess.calls[1][0] == [{"idType": "ID_CINS", "idValue": "H1467J104"}]

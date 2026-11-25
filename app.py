@@ -4971,7 +4971,8 @@ SEC_HELP = {
                 "**Atenție:** fără opțiuni și fără pozițiile din afara SUA."),
     "top": "**Ce e:** cea mai mare poziție și ponderea ei în portofoliul pe acțiuni al fondului.",
     "perioada": ("**Perioada:** sfârșitul trimestrului raportat. **Depus:** data ultimei depuneri (inclusiv amendamente). "
-                 "**Decalaj:** zilele până la raportul de bază (legal: cel mult 45)."),
+                 "**Decalaj:** zilele până la raportul de bază (legal: 45; dacă termenul cade în weekend sau sărbătoare, "
+                 "prima zi lucrătoare)."),
     "clasa": ("**Concentrat:** ≤ 100 de poziții sau primele 10 ≥ 50% din valoare (calculat din raport). "
               "**Larg:** fonduri cantitative / multi-strategie, cu mii de poziții: nu reflectă convingere și sunt excluse "
               "din consens."),
@@ -5167,7 +5168,13 @@ def _sec_overview(mg, loaded, books, cmap):
         if r["Nume_ok"] is False:
             warn.append(f"{m['Fond']}: la CIK {cik} SEC are numele „{name}” — CIK-ul trebuie verificat.")
         warn += [f"{m['Fond']}: {p}" for p in problems + [p for q in quarters for p in q["problems"]]]
+        warn += [f"{m['Fond']}: {p}" for q in quarters for p in q.get("notes", [])]
     df = pd.DataFrame(rows)
+    stale = sec_view.stale_periods(df["Perioada"].tolist())
+    for f, p in zip(df["Fond"], df["Perioada"]):
+        if p in stale:
+            warn.append(f"{f}: ultimul raport e pentru {p}, rămas în urmă față de ceilalți — fondul poate depune sub "
+                        "alt CIK; verifică pe EDGAR.")
     view = pd.DataFrame({
         "Fond": df["Fond"], "Administrator": df["Administrator"], "Stil": df["Stil"],
         "Clasa": [c if not isinstance(a, str) or a == c else f"{c} (auto: {a})"
@@ -5223,7 +5230,7 @@ def _sec_fund(mg, loaded, books, cmap, ua):
     h["Convingere"] = sec_13f.conviction_mask(h)
     st.markdown("**Deținerile pe acțiuni**")
     st.dataframe(pd.DataFrame({
-        "#": h["Rang"], "Simbol": h["Symbol"], "Emitent": h["Emitent"], "Clasă": h["Clasa_titlu"],
+        "#": h["Rang"], "Simbol": h["Symbol"].fillna("—"), "Emitent": h["Emitent"], "Clasă": h["Clasa_titlu"],
         "Pondere %": h["Pondere"] * 100, "Valoare (mil. $)": h["Valoare_USD"] / 1e6, "Acțiuni": h["Actiuni"],
         "Convingere": h["Convingere"]}).style.format({
             "Pondere %": ro_spec(",.2f"), "Valoare (mil. $)": ro_spec(",.1f"), "Acțiuni": ro_spec(",.0f")}),
@@ -5232,7 +5239,7 @@ def _sec_fund(mg, loaded, books, cmap, ua):
     if not opts.empty:
         st.markdown("**Opțiuni în raport** (valoarea acțiunilor din spate, cum a raportat-o fondul; nu intră în ponderi)")
         o = sec_view.with_symbols(opts, cmap)
-        st.dataframe(pd.DataFrame({"Simbol": o["Symbol"], "Emitent": o["Emitent"], "Tip": o["PutCall"],
+        st.dataframe(pd.DataFrame({"Simbol": o["Symbol"].fillna("—"), "Emitent": o["Emitent"], "Tip": o["PutCall"],
                                    "Valoare (mil. $)": o["Valoare_USD"] / 1e6, "Acțiuni": o["Actiuni"]}).style.format(
             {"Valoare (mil. $)": ro_spec(",.1f"), "Acțiuni": ro_spec(",.0f")}), hide_index=True, width='stretch')
 
@@ -5253,7 +5260,7 @@ def _sec_fund(mg, loaded, books, cmap, ua):
         st.caption("Fond „Larg”: fără prețuri și split-uri (prea multe titluri); mișcările nu sunt ajustate pentru split.")
     mv = sec_view.with_symbols(moves, cmap)
     st.dataframe(pd.DataFrame({
-        "Mișcare": mv["Actiune"], "Simbol": mv["Symbol"], "Emitent": mv["Emitent"],
+        "Mișcare": mv["Actiune"], "Simbol": mv["Symbol"].fillna("—"), "Emitent": mv["Emitent"],
         "Acțiuni înainte": mv["Actiuni_ant"], "Acțiuni acum": mv["Actiuni"], "Δ acțiuni %": mv["Delta_pct"] * 100,
         "Pondere înainte %": mv["Pondere_ant"] * 100, "Pondere acum %": mv["Pondere"] * 100, "Δ pp": mv["Delta_pp"],
         "Preț mediu (proxy)": mv["Pret_mediu"], "Valoare tranz. (mil. $, proxy)": mv["Valoare_tranzactionata"] / 1e6,
@@ -5287,13 +5294,6 @@ def _sec_conc_moves(mg, loaded, books, cmap):
     return out
 
 
-def _sec_symbols_by_cusip6(cmap):
-    out = {}
-    for c, s in cmap.items():
-        out.setdefault(c[:6], set()).add(s)
-    return {k: "/".join(sorted(v)) for k, v in out.items()}
-
-
 def _sec_consensus(mg, loaded, books, cmap):
     st.caption("Doar administratorii concentrați. Fondurile au perioade de raportare apropiate, dar nu neapărat identice "
                "(vezi Prezentare).")
@@ -5304,8 +5304,8 @@ def _sec_consensus(mg, loaded, books, cmap):
         return
     moves = sec_view.moves_panel(_sec_conc_moves(mg, loaded, books, cmap))
     cons = sec_13f.consensus(holdings, moves)
-    sym6 = _sec_symbols_by_cusip6(cmap)
-    cons["Simbol"] = cons["CUSIP6"].map(sym6)
+    sym6 = sec_view.symbols_by_key(cmap, holdings)
+    cons["Simbol"] = cons["CUSIP6"].map(sym6).fillna("—")
     cfg = {"Dețin": st.column_config.NumberColumn(help=SEC_HELP["consens"], format="%d"),
            "Convingere": st.column_config.NumberColumn(help=SEC_HELP["consens"], format="%d"),
            "Cumpărări": st.column_config.NumberColumn(help=SEC_HELP["consens"], format="%d")}
@@ -5329,7 +5329,7 @@ def _sec_who(mg, loaded, books, cmap):
     holdings = sec_view.holdings_panel({c: b[0] for c, b in books.items()}, mg)
     moves = sec_view.moves_panel({c: _sec_moves(b[0], b[1], loaded[c][1], cmap, with_prices=False)[0]
                                   for c, b in books.items()})
-    c6 = sec_view.cusip6_for_symbol(sym, cmap)
+    c6 = sec_view.cusip6_for_symbol(sym, cmap, holdings)
     if not sym:
         return
     if not c6:
@@ -5355,11 +5355,12 @@ def _sec_who(mg, loaded, books, cmap):
 
     with st.expander("Deținerile mele în portofoliile fondurilor concentrate"):
         pf = load_portfolio()
-        syms = sorted({s for s in pf.get("Symbol", pd.Series(dtype=str)).dropna().astype(str).str.upper() if "." not in s})
+        syms = sorted({s for s in pf.get("Symbol", pd.Series(dtype=str)).dropna().astype(str).str.upper()
+                       if "." not in s and "=" not in s and not s.endswith("-USD")})   # fără bursă străină, valute, cripto
         conc_h = holdings[holdings["Clasa"] == sec_funds.CONCENTRAT]
         rows = []
         for s in syms:
-            cc = sec_view.cusip6_for_symbol(s, cmap)
+            cc = sec_view.cusip6_for_symbol(s, cmap, holdings)
             h = conc_h[conc_h["CUSIP6"].isin(cc)]
             conv = sec_13f.conviction_mask(h) if not h.empty else pd.Series(dtype=bool)
             rows.append({"Simbol": s, "Dețin (concentrați)": h["CIK"].nunique(), "Cu convingere": int(h.loc[conv, "CIK"].nunique()),
