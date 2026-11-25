@@ -263,13 +263,11 @@ def test_premium_css_centreaza_bannerul_macro_pe_telefon():
     assert ".macro-hero > div { flex-basis: 100% !important; }" in css
 
 
-def test_swiss_bank_plat_si_colturi_drepte():
-    # Swiss Bank (25.11): carduri plate, fără umbră/strălucire, colțuri din CARD_RADIUS; config cu „none”
+def test_nordic_frost_colturi_moi_si_font():
+    # Nordic Frost (25.11): carduri cu colțuri CARD_RADIUS și umbră moale, meniu NAV_RADIUS, font Manrope
     css = theme.premium_css()
-    assert f"border-radius: {theme.CARD_RADIUS};" in css and "14px" not in css
-    for tok in ("highlight", "shadow", "glow"):
-        assert all(v.endswith("00") and len(v) == 9 for v in theme.TOKENS[tok]), tok
-    assert theme.TOKENS["surface-top"] == theme.TOKENS["surface"]
+    assert f"border-radius: {theme.CARD_RADIUS};" in css and f"border-radius: {theme.NAV_RADIUS};" in css
+    assert all(not v.endswith("00") for v in theme.TOKENS["shadow"])
     cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
-    assert cfg["baseRadius"] == "none" and cfg["buttonRadius"] == "none"
-    assert cfg["font"].startswith("'Inter Tight':https://fonts.googleapis.com/") and cfg["font"].endswith("sans-serif")
+    assert cfg["baseRadius"] == "10px" and cfg["buttonRadius"] == "full"
+    assert cfg["font"].startswith("Manrope:https://fonts.googleapis.com/") and cfg["font"].endswith("sans-serif")
