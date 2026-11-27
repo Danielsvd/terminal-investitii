@@ -12,6 +12,8 @@ Ce afișează, pe simbol:
   * controale: etichete în conflict, EPS calculat vs. raportat (> 2%), TTM vs. anual, diferențe față de Yahoo (> 2%);
   * CAGR pe 5 și 10 ani (cifra de afaceri, EPS) — orientativ, de recalculat manual pe câteva simboluri.
 La final: rezumatul acoperirii și al diferențelor. `--detaliu`: tabelul anual complet pentru simbolurile date.
+`--situatii`: (Faza 3c) situațiile în formatul Yahoo construite de adaptorul SEC (`analytics/sec_statements.py`) pe
+ultimii 2 ani fiscali, cu Piotroski, Altman Z'' (fără capitalizare), îndatorarea și marcajele — de comparat cu 10-K-ul.
 """
 import argparse
 import math
@@ -23,6 +25,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from analytics import insiders  # noqa: E402
+from analytics import fundamentals as fund  # noqa: E402
+from analytics import sec_statements as ss  # noqa: E402
 from analytics import xbrl_facts as xf  # noqa: E402
 from analytics.growth import cagr  # noqa: E402
 from data import sec_edgar, sec_insiders, sec_xbrl  # noqa: E402
@@ -41,6 +45,10 @@ def _f(x, unit=1e9, nd=2):
     if x is None or (isinstance(x, float) and math.isnan(x)):
         return "N/A"
     return f"{x / unit:,.{nd}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _n(x, nd):
+    return "N/A" if x is None else f"{x:.{nd}f}".replace(".", ",")
 
 
 def _pct(x):
@@ -99,12 +107,13 @@ def growth(table, col, years):
     return cagr(s[end], s[old[0]], years) if old else None
 
 
-def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
+def probe_symbol(client, symbol, use_yahoo, detail, tickers=None, statements=False):
     if tickers is None:
         cik, cf = sec_xbrl.load_for_symbol(client, symbol)
     else:
         cik = insiders.cik_for_ticker(tickers, symbol)
-        cf = sec_xbrl.load_with_predecessors(client, cik, symbol) if cik is not None else None
+        ind = tuple(xf.CONCEPTS) if statements else None        # etichetele de bilanț doar la cerere
+        cf = sec_xbrl.load_with_predecessors(client, cik, symbol, ind) if cik is not None else None
     if cik is None:
         return {"symbol": symbol, "kind": "fără CIK"}
     kind = xf.filer_kind(cf)
@@ -144,7 +153,42 @@ def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
                   f"(raportat {_f(r['eps_reported'], 1)})  FCF {_f(r['fcf'])}  DPS {_f(r['dps'], 1)}  "
                   f"BVPS {_f(r['bvps'], 1)}  acț. {_f(r['shares_diluted'], 1e6, 0)}  depus {r['filed']}"
                   + (f"  CONFLICT: {', '.join(r['conflicts'])}" if r["conflicts"] else ""))
+    if statements:
+        print_statements(symbol, cf, splits)
     return res
+
+
+def print_statements(symbol, cf, splits):
+    """Situațiile adaptorului SEC → Yahoo pe ultimii 2 ani fiscali și ce calculează funcțiile aplicației pe ele."""
+    st = ss.statements_from_facts(cf, splits=splits)
+    print(f"\n--- {symbol}: situațiile adaptorului SEC → Yahoo (mld. USD; acțiuni în mil.) ---")
+    if st is None:
+        print("  niciun an fiscal")
+        return
+    for name, df in (("cont de profit", st["income"]), ("bilanț", st["balance"]), ("flux de numerar", st["cashflow"])):
+        cols = list(df.columns[:2])
+        print(f"  [{name}] " + " | ".join(str(c.date()) for c in cols))
+        for row in df.index:
+            unit = 1 if row == "Diluted EPS" else (1e6 if "Shares" in row else 1e9)
+            vals = [_f(df.loc[row, c], unit) for c in cols]
+            print(f"    {row:50} " + " | ".join(vals))
+    inc, bal, cfl = st["income"], st["balance"], st["cashflow"]
+    p = fund.piotroski(inc, bal, cfl)
+    print(f"  Piotroski {p['passed']} din {p['evaluable']} (fără ajustarea pentru financiare): "
+          + "; ".join(f"{c['name'].split('.')[0]}={'✓' if c['passed'] else ('✗' if c['passed'] is False else 'N/A')}"
+                      for c in p["criteria"]))
+    az = fund.altman_z(inc, bal)
+    comp = ", ".join(f"{k} {_n(v, 3)}" for k, v in az["components"].items())
+    print(f"  Altman Z'' {_n(az['z2'], 2)} ({comp})")
+    lev = fund.leverage_ratios(inc, bal)
+    d = fund.dcf_inputs(inc, bal, cfl)
+    tax = None if d["tax_rate"] is None else d["tax_rate"] * 100
+    print(f"  datorie totală {_f(d['total_debt'])}, numerar {_f(d['cash'])}, datorie netă {_f(lev['net_debt'])}, "
+          f"EBITDA {_f(lev['ebitda'])}, datorie netă / EBITDA {_n(lev['net_debt_to_ebitda'], 2)}, "
+          f"acoperirea dobânzii {_n(lev['interest_coverage'], 1)}, FCF {_f(d['fcf'])}, rata impozitului {_n(tax, 1)}%")
+    marks = {k: [str(e.year) for e in v] for k, v in st["notes"].items() if v}
+    print("  marcaje: " + ("; ".join(f"{k} {', '.join(v)}" for k, v in marks.items()) if marks else "niciunul"))
+    print(f"  versiuni incrementale (date la care se schimbă situațiile): {len(ss.change_dates(cf))}")
 
 
 def main(argv=None):
@@ -153,6 +197,8 @@ def main(argv=None):
     p.add_argument("--secrets", default=str(ROOT / ".streamlit" / "secrets.toml"))
     p.add_argument("--fara-yahoo", action="store_true", help="fără comparația cu Yahoo")
     p.add_argument("--detaliu", nargs="*", default=[], help="tabelul anual complet pentru aceste simboluri")
+    p.add_argument("--situatii", nargs="*", default=[],
+                   help="(3c) situațiile adaptorului SEC → Yahoo + Piotroski/Altman/îndatorare pentru aceste simboluri")
     p.add_argument("--diagnostic", nargs="*", default=[],
                    help="etichetele găsite în JSON (pe formular), pentru simbolurile fără ani / cu probleme")
     args = p.parse_args(argv)
@@ -169,13 +215,14 @@ def main(argv=None):
                                              watchlist_symbols(sh.worksheet("watchlist").get_all_values(
                                                  value_render_option="UNFORMATTED_VALUE")))
     detail = {s.upper() for s in args.detaliu}
+    statements = {s.upper() for s in args.situatii}
     print(f"Simboluri ({len(symbols)}): {', '.join(symbols)}")
     client = sec_edgar.EdgarClient(ua)
     tickers = client.get_json(sec_insiders.COMPANY_TICKERS_URL)      # o singură dată, nu pe fiecare simbol
     results = []
     for sym in symbols:
         try:
-            r = probe_symbol(client, sym, not args.fara_yahoo, sym in detail, tickers)
+            r = probe_symbol(client, sym, not args.fara_yahoo, sym in detail, tickers, sym in statements)
         except sec_edgar.EdgarError as exc:
             r = {"symbol": sym, "kind": f"EROARE SEC: {exc}"}
         results.append(r)
