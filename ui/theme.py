@@ -77,6 +77,23 @@ DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
 DF_HIGHLIGHT_BG = "rgba(124, 196, 232, 0.18)"  # rândul evidențiat (compania analizată, mediana): albastru translucid, lizibil în ambele moduri
 
+CORR_NEG = "#3987E5"   # corelație negativă (pozițiile se compensează): albastru
+CORR_POS = "#D95926"   # corelație pozitivă (se mișcă împreună): portocaliu
+
+
+def corr_heatmap_colors(mode):
+    """(colorscale, culoarea textului) pentru matricile de corelație (zmin −1, zmax 1).
+    Capetele rămân albastru / portocaliu în ambele moduri; mijlocul (0) e `surface-2` al modului, iar textul
+    din celule e `text` al modului: întunecat pe alb (≥ 4,7:1 pe tot intervalul), alb noaptea.
+    Mod necunoscut: scala veche, cu mijloc gri închis și text alb (lizibilă, dar un bloc închis ziua)."""
+    if mode in ("light", "dark"):
+        i = 0 if mode == "light" else 1
+        mid, txt = TOKENS["surface-2"][i], ("#FFFFFF" if mode == "dark" else TOKENS["text"][0])
+    else:
+        mid, txt = "#383835", "#FFFFFF"
+    return [[0.0, CORR_NEG], [0.5, mid], [1.0, CORR_POS]], txt
+
+
 def df_colors(mode):
     """(câștig, pierdere, neutru) pentru tabele, după modul temei (`st.context.theme.type`).
     Cu mod cunoscut se folosesc tokenurile pline (contrast ≥ 5:1); necunoscut (None) → culorile

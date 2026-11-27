@@ -341,3 +341,22 @@ def test_figura_plotly_valida_dupa_mod():
     fig.update_layout(template="plotly_dark", paper_bgcolor="#0E1117", plot_bgcolor="#0E1117")
     for mode in ("light", "dark", None):
         go.Figure(theme.theme_figure_dict(fig.to_dict(), up=theme.DF_UP, mode=mode))   # nu aruncă
+
+
+def test_corr_heatmap_colors_dupa_mod():
+    for mode, i in (("light", 0), ("dark", 1)):
+        scale, txt = theme.corr_heatmap_colors(mode)
+        assert [p for p, _ in scale] == [0.0, 0.5, 1.0]
+        assert scale[1][1] == theme.TOKENS["surface-2"][i]
+        # textul din celule se citește pe capete și pe mijloc (≥ 3,6:1; ziua ≥ 4,7:1)
+        for _, col in scale:
+            assert contrast(txt, col) >= (4.7 if mode == "light" else 3.6), (mode, col)
+    assert theme.corr_heatmap_colors(None) == ([[0.0, "#3987E5"], [0.5, "#383835"], [1.0, "#D95926"]], "#FFFFFF")
+
+
+def test_app_resturi_tema():
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert src.count("colorscale=CORR_SCALE") == 2 and src.count("textfont=dict(color=CORR_TEXT)") == 2
+    assert "'#383835'" not in src
+    assert "rgba(59, 130, 246, 0.14)" not in src and "ui_theme.DF_HIGHLIGHT_BG" in src
+    assert not re.search(r"font-size: ?(?:[0-9]|1[01])px", src)       # DESIGN §2: niciun text sub 12px
