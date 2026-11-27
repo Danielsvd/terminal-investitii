@@ -578,7 +578,8 @@ def annual_table(cf, asof=None, splits=None):
         filed[e] = max(filed[e] or sb.loc[e, "filed"], sb.loc[e, "filed"])
         used.append(e)
     if used:                                             # data depunerii acțiunilor de bază → split-urile ulterioare
-        frames["shares_diluted"] = pd.concat([frames["shares_diluted"], sb.loc[used]]).sort_index()
+        prev = frames["shares_diluted"]                  # gol (ex. XOM 2014–2025): fără concat (avertisment pandas)
+        frames["shares_diluted"] = (sb.loc[used] if prev.empty else pd.concat([prev, sb.loc[used]])).sort_index()
 
     # profitul atribuibil lipsă: profitul total − partea minoritarilor (o singură etichetă sau suma celor două)
     pl = annual(cf, "profit_loss", asof)
