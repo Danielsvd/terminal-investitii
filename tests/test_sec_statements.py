@@ -198,20 +198,35 @@ def test_point_in_time_si_niciun_an():
 
 # --- incremental -------------------------------------------------------------
 
+# a doua etichetă a plasamentelor: întâi doar la un trimestru (nu schimbă nimic la 31.12), apoi și în coloana
+# comparativă de la 31.12.2023 → ancora de la 31.12.2023 devine `MarketableSecuritiesCurrent` (52 în loc de 50)
+Q_SWITCH = [
+    ("MarketableSecuritiesCurrent", {"end": "2024-03-31", "val": 55.0, "form": "10-Q", "filed": "2024-05-03",
+                                     "accn": "q1"}),
+    ("MarketableSecuritiesCurrent", {"end": "2023-12-31", "val": 52.0, "form": "10-Q", "filed": "2024-08-02",
+                                     "accn": "q2b"}),
+    ("MarketableSecuritiesCurrent", {"end": "2024-06-30", "val": 56.0, "form": "10-Q", "filed": "2024-08-02",
+                                     "accn": "q2b"}),
+]
+
+
 def test_change_dates_doar_10k_si_bilanturile_relevante():
+    # 10-K: 18.02.2022, 17.02.2023, 16.02.2024 (vineri) → luni; 10-Q 03.05.2024 (capitaluri retratate) → luni.
+    # NU: 04.08.2023 (capitaluri la 30.06, venit trimestrial), 03.11.2023 (plasamente la 30.09, aceeași etichetă).
     c = _company(Q_EXTRA)
-    # 10-K: 18.02.2022, 17.02.2023, 16.02.2024 (vineri) → luni; 10-Q: 03.11.2023 (plasamente, etichetă multiplă)
-    # și 03.05.2024 (capitaluri retratate) → luni. NU: 04.08.2023 (capitaluri la 30.06, venit trimestrial).
-    assert ss.change_dates(c) == [D("2022-02-21"), D("2023-02-20"), D("2023-11-06"), D("2024-02-19"),
-                                  D("2024-05-06")]
+    assert ss.change_dates(c) == [D("2022-02-21"), D("2023-02-20"), D("2024-02-19"), D("2024-05-06")]
+    # cu a doua etichetă: 02.08.2024 schimbă ancora de la 31.12.2023 → luni 05.08.2024
+    c = _company(Q_EXTRA + Q_SWITCH)
+    assert ss.change_dates(c) == [D("2022-02-21"), D("2023-02-20"), D("2024-02-19"), D("2024-05-06"),
+                                  D("2024-08-05")]
 
 
 def test_versiunile_incrementale_identice_cu_apelul_direct():
-    c = _company(Q_EXTRA)
+    c = _company(Q_EXTRA + Q_SWITCH)
     splits = pd.Series({T("2024-06-10"): 2.0})
     versions = ss.asof_versions(c, splits=splits)
     dates = pd.date_range("2021-12-15", "2024-12-31", freq="47D").date.tolist() + \
-        [D("2022-02-21"), D("2024-05-03"), D("2024-05-06"), D("2023-11-06")]
+        [D("2022-02-21"), D("2024-05-03"), D("2024-05-06"), D("2023-11-06"), D("2024-08-02"), D("2024-08-05")]
     for d in dates:
         direct = ss.statements_from_facts(c, asof=d, splits=splits)
         inc = ss.version_at(versions, d)
@@ -223,6 +238,9 @@ def test_versiunile_incrementale_identice_cu_apelul_direct():
         assert inc["notes"] == direct["notes"]
     assert ss.version_at(versions, D("2024-05-03"))["balance"].loc["Stockholders Equity", T("2023-12-31")] == 900.0
     assert ss.version_at(versions, D("2024-05-06"))["balance"].loc["Stockholders Equity", T("2023-12-31")] == 910.0
+    row = "Cash Cash Equivalents And Short Term Investments"
+    before, after = ss.version_at(versions, D("2024-08-02")), ss.version_at(versions, D("2024-08-05"))
+    assert before["balance"].loc[row, T("2023-12-31")] == 250.0 and after["balance"].loc[row, T("2023-12-31")] == 252.0
 
 
 # --- legătura cu testul istoric ----------------------------------------------
@@ -259,6 +277,8 @@ def test_slim_implicit_neschimbat_si_cu_toti_indicatorii():
     (1311, "Energy", None),
     (3571, "Technology", None),                # calculatoare (AAPL)
     (3674, "Technology", None),                # semiconductori (NVDA)
+    (3600, "Industrials", None),               # GE (SIC 3600)
+    (3661, "Technology", None),                # echipamente de comunicații
     (2834, "Healthcare", None),
     (3841, "Healthcare", None),
     (5331, "Consumer Defensive", None),        # magazine cu reducere

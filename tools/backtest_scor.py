@@ -49,15 +49,18 @@ def read_symbols(paths):
     return out
 
 
-def download(symbol, start, end, refresh=False):
+def download(symbol, start, end, refresh=False, cache_dir=None):
     """Istoricul zilnic: coloanele adj (ajustat), raw (neajustat), volume. DataFrame gol la eșec.
 
     Un singur apel cu auto_adjust=False dă atât Close (doar split) cât și Adj Close (dividend + split).
+    Atenție: cache-ul e pe simbol, nu pe interval — un fișier descărcat de alt test cu alt `start` se refolosește.
+    `cache_dir` (implicit `CACHE`) separă cache-ul unui test care cere alt interval.
     """
     import yfinance as yf
 
-    CACHE.mkdir(parents=True, exist_ok=True)
-    path = CACHE / f"{symbol.replace('^', '_')}.csv"
+    cache = CACHE if cache_dir is None else Path(cache_dir)
+    cache.mkdir(parents=True, exist_ok=True)
+    path = cache / f"{symbol.replace('^', '_')}.csv"
     if path.exists() and not refresh:
         return pd.read_csv(path, index_col=0, parse_dates=True)
     for attempt in (1, 2):

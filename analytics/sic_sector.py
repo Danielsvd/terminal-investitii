@@ -35,7 +35,9 @@ _RANGES = (
     (3400, 3499, "Industrials"),
     (3570, 3579, "Technology"),
     (3500, 3599, "Industrials"),
+    (3600, 3629, "Industrials"),                # echipamente electrice, motoare (GE, Emerson: SIC 3600)
     (3630, 3639, "Consumer Cyclical"),
+    (3640, 3649, "Industrials"),                # iluminat, instalații electrice
     (3600, 3699, "Technology"),
     (3710, 3716, "Consumer Cyclical"),
     (3700, 3799, "Industrials"),

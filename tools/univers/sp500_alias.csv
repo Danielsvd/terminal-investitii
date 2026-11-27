@@ -1,0 +1,27 @@
+# Simboluri istorice din lista S&P 500 care azi se tranzacționează sub alt simbol (aceeași companie, același CIK).
+# simbol_actual = simbolul pentru Yahoo și pentru lista SEC; cik = gol → se caută după simbol_actual.
+# Se completează după prima rulare (fișierul fara_date_construire.csv). Fiecare pereche trece oricum prin protecția
+# la simboluri refolosite (10-K în perioada de apartenență + istoric Yahoo de dinainte de intrare).
+# [de verificat la prima rulare] toate perechile de mai jos (scrise din memorie, nu verificate pe sec.gov).
+simbol_istoric,simbol_actual,cik,nota
+FB,META,1326801,Facebook → Meta Platforms (2022)
+ANTM,ELV,1156039,Anthem → Elevance Health (2022)
+UTX,RTX,101829,United Technologies → Raytheon Technologies / RTX (2020)
+COG,CTRA,858470,Cabot Oil & Gas → Coterra Energy (2021)
+PKI,RVTY,31791,PerkinElmer → Revvity (2023)
+ABC,COR,1140859,AmerisourceBergen → Cencora (2023)
+FLT,CPAY,1175454,FleetCor → Corpay (2024)
+WLTW,WTW,1140536,Willis Towers Watson (simbol schimbat 2022)
+CTL,LUMN,18926,CenturyLink → Lumen (2020)
+PCLN,BKNG,1075531,Priceline → Booking Holdings (2018)
+KORS,CPRI,1530721,Michael Kors → Capri Holdings (2019)
+HRS,LHX,202058,Harris → L3Harris (2019)
+SYMC,GEN,849399,Symantec → NortonLifeLock → Gen Digital
+TMK,GL,320335,Torchmark → Globe Life (2019)
+RE,EG,1095073,Everest Re → Everest Group (2023)
+BLL,BALL,9389,Ball Corp (simbol schimbat 2022)
+FBHS,FBIN,1519751,Fortune Brands Home & Security → Fortune Brands Innovations (2022)
+ADS,BFH,1101215,Alliance Data → Bread Financial (2022)
+FISV,FI,798354,Fiserv (simbol schimbat 2023)
+DISCA,WBD,1437107,Discovery → Warner Bros. Discovery (2022)
+DISCK,WBD,1437107,Discovery (clasa C) → Warner Bros. Discovery (2022)
