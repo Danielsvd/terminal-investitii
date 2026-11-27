@@ -301,3 +301,36 @@ def test_sic_sector_se_potriveste_cu_regulile_aplicatiei():
     reit, ind = sic_sector(6798)
     assert not fund.is_financial_issuer(reit) and fund.dcf_not_applicable_reason(reit, ind) is not None
     assert fund.altman_variant(sic_sector(2911)[0]) == "Z" and fund.altman_variant(sic_sector(7372)[0]) == "Z''"
+
+
+def _without_debt(interest=True):
+    c = _company()
+    g = c["facts"]["us-gaap"]
+    for tag in ("LongTermDebtCurrent", "LongTermDebtNoncurrent", "LongTermDebt"):
+        del g[tag]
+    if not interest:
+        del g["InterestExpense"]
+    return c
+
+
+def test_datorie_zero_presupusa_fara_etichete_si_fara_dobanzi():
+    st = ss.statements_from_facts(_without_debt(interest=False))
+    y = T("2023-12-31")
+    b = st["balance"]
+    assert b.loc["Total Debt", y] == 0.0 and b.loc["Current Debt", y] == 0.0 and b.loc["Long Term Debt", y] == 0.0
+    assert st["notes"]["debt_zero_assumed"] == [D("2021-12-31"), D("2022-12-31"), D("2023-12-31")]
+    # datoria netă = 0 − (200 + 50) = −250 (numerar net); / EBITDA (profit din exploatare 150 + 50) = −1,25
+    lev = fund.leverage_ratios(st["income"], b)
+    assert lev["net_debt"] == -250.0 and lev["net_debt_to_ebitda"] == -1.25
+    assert fund.dcf_inputs(st["income"], b, st["cashflow"])["net_debt"] == -250.0
+
+
+def test_datorie_ramane_lipsa_cand_dobanzile_arata_datorie():
+    # dobânzi 20 / active 2000 = 1% ≥ 0,1% → probabil datorie cu etichete proprii → nu se presupune 0
+    st = ss.statements_from_facts(_without_debt(interest=True))
+    assert "Total Debt" not in st["balance"].index and st["notes"]["debt_zero_assumed"] == []
+    assert fund.leverage_ratios(st["income"], st["balance"])["net_debt"] is None
+
+
+def test_datorie_zero_nu_se_aplica_cand_exista_etichete():
+    assert ss.statements_from_facts(_company())["notes"]["debt_zero_assumed"] == []

@@ -19,6 +19,8 @@ Definiții (spuse în raportul testului):
     lung) + împrumuturile pe termen scurt etichetate. **[presupunere]** o linie de bilanț neetichetată nu există (orice
     linie de pe fața bilanțului se etichetează în XBRL); etichetele proprii ale companiei NU sunt citite → datoria poate
     fi subestimată la cei care le folosesc. Leasingurile financiare nu sunt incluse (Yahoo le include în „Total Debt”).
+  * Datorie = 0 (marcat `debt_zero_assumed`) doar dacă: bilanț etichetat (active + datorii), nicio etichetă de datorie
+    la data bilanțului și dobânzi lipsă sau < 0,1% din active. Altfel, fără etichete de datorie, datoria e lipsă.
   * Numerar + plasamente pe termen scurt: doar când plasamentele sunt etichetate; altfel doar numerarul.
   * Acțiunile de la data bilanțului: `CommonStockSharesOutstanding`, ajustate cu split-urile de după depunere și
     corectate de scară față de acțiunile diluate (rapoarte vechi în mii).
@@ -45,6 +47,12 @@ SOURCE_INDICATORS = (
     "shares_diluted", "dps", "shares_basic", "eps_basic", "profit_loss", "nci", "nci_redeemable", "nci_nonredeemable",
     "equity", "cash", "debt_lt",
 ) + tuple(xf.STATEMENT_CONCEPTS)
+
+# Datorie = 0 presupusă (decizia lui Daniel, 27.11.2026): bilanț etichetat (active + datorii), NICIO etichetă de
+# datorie la data bilanțului și dobânzi lipsă sau sub 0,1% din active (o datorie reală, cu etichete proprii, ar avea
+# dobânzi). Altfel datoria rămâne lipsă.
+DEBT_ZERO_MAX_INTEREST = 0.001
+DEBT_INDICATORS = ("debt_current", "ltd_current", "st_borrowings", "commercial_paper", "ltd_noncurrent")
 
 INCOME_ROWS = ("Total Revenue", "Net Income", "Net Income Common Stockholders", "Diluted Average Shares",
                "Diluted EPS", "Gross Profit", "Operating Income", "Pretax Income", "Tax Provision",
@@ -105,6 +113,7 @@ def statements_from_facts(cf, asof=None, splits=None):
                 {e for e in ends if e in df.index and bool(df.loc[e, "conflict"])})
 
     notes = {"conflicts": [], "gross_profit_proxy": [], "liabilities_proxy": [], "ebitda_on_operating_income": [],
+             "debt_zero_assumed": [],
              "current_debt_derived": []}
     conflicted = set(e for e in ends if t.loc[e, "conflicts"])
     flows = {}
@@ -190,6 +199,14 @@ def statements_from_facts(cf, asof=None, splits=None):
         if tot is None and debt_lt.get(e) is not None:
             tot = debt_lt[e] + (short or 0.0)
         tot_debt[e] = tot
+        # companie fără datorii: nicio etichetă de datorie, bilanț etichetat, dobânzi neglijabile → 0 (marcat)
+        no_debt_tags = debt_lt.get(e) is None and all(s[k].get(e) is None for k in DEBT_INDICATORS)
+        assets = s["assets"].get(e)
+        intr = interest.get(e)
+        if (no_debt_tags and assets is not None and assets > 0 and liab[e] is not None
+                and (intr is None or intr / assets < DEBT_ZERO_MAX_INTEREST)):
+            cur_debt[e], lt_debt[e], tot_debt[e] = 0.0, 0.0, 0.0
+            notes["debt_zero_assumed"].append(e)
         # acțiunile de la data bilanțului: split-urile de după depunere + scara față de acțiunile diluate (ajustate)
         raw = s["shares_out_bs"].get(e)
         if raw is not None and raw > 0:

@@ -390,7 +390,8 @@ def main(argv=None):
                             eps_growth=(e5 or {}).get("growth"), eps_growth_years=(e5 or {}).get("years"))
                 row["v5_fund_score"] = fundamental_score(inp5)["score"]
             row.update(yahoo=ysym, cik=cik, sic=sub.get("sic"), sector=sector, in_B=in_b, in_C=in_c,
-                       n_conflicts=len(stm["notes"]["conflicts"]))
+                       n_conflicts=len(stm["notes"]["conflicts"]),
+                       debt_zero=fy is not None and pd.Timestamp(fy).date() in stm["notes"]["debt_zero_assumed"])
             for h in HORIZONS:
                 r, tr = bs.forward_return_at(adj, d, h, horizon_limit, data_end)
                 row[f"fwd_{h}m"], row[f"trunc_{h}m"] = r, tr
@@ -417,7 +418,8 @@ def main(argv=None):
     rez.to_csv(out_dir / f"rezumat_{tag}.csv", index=False)
     years.to_csv(out_dir / f"cincimi_pe_ani_{tag}.csv", index=False)
 
-    print(f"\nObservații: {len(df)} | simboluri cu scor: {df['symbol'].nunique()} | fără date: {len(missing)}")
+    print(f"\nObservații: {len(df)} | simboluri cu scor: {df['symbol'].nunique()} | fără date: {len(missing)} | "
+          f"cu datorie = 0 presupusă: {int(df['debt_zero'].sum())} ({df.loc[df['debt_zero'], 'symbol'].nunique()} simboluri)")
     print("\nAcoperirea (medii pe lună):")
     print(cov.to_string(index=False))
     main_rows = rez[rez["scor"].isin(["fund_score", "v5_fund_score", "v3_sector_rank"])
