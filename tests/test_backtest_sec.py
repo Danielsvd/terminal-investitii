@@ -179,6 +179,7 @@ def test_backtest_sec_cap_coada(tmp_path, monkeypatch):
     assert obs["date"].min() == "2014-02-28" and obs["date"].max() == "2019-12-31"
     assert obs["in_B"].all() and obs["in_C"].all() and (obs["sector"] == "Technology").all()
     assert obs["fiscal_year"].iloc[0] == "2013-12-31"
+    assert not obs["debt_zero"].any()                                     # compania sintetică are datorii etichetate
     # cu un singur an fiscal: Piotroski și creșterea nu se pot calcula → un singur pilon → fără scor (ca în aplicație);
     # din februarie 2015 (al doilea 10-K) scorul există
     fs = pd.to_numeric(obs["fund_score"], errors="coerce")
