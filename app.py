@@ -348,9 +348,10 @@ def plot_ro(fig, **kwargs):
     """st.plotly_chart cu separatori românești: punct la mii, virgulă la zecimale („1.234,5”).
     Se aplică axelor, etichetelor și casetelor de hover; nu schimbă datele graficului.
     Culorile scrise pentru fundal închis (fundal #0E1117, grilă #30363D, galben, cyan) trec pe valori
-    vizibile în ambele teme (ui/theme.theme_figure_dict); restul stilului vine din tema Streamlit."""
+    vizibile în ambele teme (ui/theme.theme_figure_dict); cu modul temei cunoscut, liniile vechi (portocaliu,
+    violet, gri deschis, chihlimbar) primesc nuanța modului (PLOT_TOKENS). Restul stilului vine din tema Streamlit."""
     fig.update_layout(separators=",.")
-    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict(), up=DF_UP))
+    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict(), up=DF_UP, mode=_THEME_TYPE))
     return st.plotly_chart(fig, **kwargs)
 
 def format_large_currency(val):
