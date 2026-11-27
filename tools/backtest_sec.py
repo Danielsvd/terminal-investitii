@@ -237,6 +237,7 @@ def main(argv=None):
     ap.add_argument("--faza", choices=tuple(PHASES), required=True)
     ap.add_argument("--descarca", action="store_true", help="descarcă arhivele SEC și lista simbolurilor (o dată)")
     ap.add_argument("--secrets", default=str(ROOT / ".streamlit" / "secrets.toml"), help="pentru User-Agent-ul SEC")
+    ap.add_argument("--user-agent", help="User-Agent SEC (nume + e-mail), în loc de secrets.toml")
     ap.add_argument("--simboluri", nargs="*", help="doar aceste simboluri istorice (probă)")
     ap.add_argument("--out-dir", default=str(CACHE / "sec" / "rezultate"))
     ap.add_argument("--reincarca", action="store_true", help="descarcă din nou prețurile Yahoo")
@@ -252,8 +253,9 @@ def main(argv=None):
 
     from data import sec_bulk
     facts_zip, subs_zip = SEC_DIR / "companyfacts.zip", SEC_DIR / "submissions.zip"
-    ua = None
-    if args.descarca or not facts_zip.exists() or not subs_zip.exists() or not (SEC_DIR / "company_tickers.json").exists():
+    ua = args.user_agent
+    need = args.descarca or not facts_zip.exists() or not subs_zip.exists() or not (SEC_DIR / "company_tickers.json").exists()
+    if need and not ua:
         from tools.sec.run import read_secrets
         ua, _ = read_secrets(args.secrets)
     if args.descarca or not facts_zip.exists():
