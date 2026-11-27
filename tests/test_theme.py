@@ -264,10 +264,13 @@ def test_premium_css_centreaza_bannerul_macro_pe_telefon():
     assert ".macro-hero > div { flex-basis: 100% !important; }" in css
 
 
-def test_neon_carbon_plat_rotunjit_si_fonturi():
+def test_noapte_nordic_zi_neon_fonturi_si_adancime():
+    # 27.11: noaptea Nordic Frost (Manrope, umbră), ziua Neon Carbon (Inter + Space Grotesk, plat)
     css = theme.premium_css()
     assert f"border-radius: {theme.CARD_RADIUS};" in css and f"border-radius: {theme.NAV_RADIUS};" in css
-    assert all(v.endswith("00") for v in theme.TOKENS["shadow"])
+    light_shadow, dark_shadow = theme.TOKENS["shadow"]
+    assert light_shadow.endswith("00") and not dark_shadow.endswith("00")
     cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
-    assert cfg["font"].startswith("Inter:https://fonts.googleapis.com/")
-    assert cfg["headingFont"].startswith("'Space Grotesk':https://fonts.googleapis.com/")
+    assert cfg["dark"]["font"].startswith("Manrope:https://fonts.googleapis.com/")
+    assert cfg["light"]["font"].startswith("Inter:https://fonts.googleapis.com/")
+    assert cfg["light"]["headingFont"].startswith("'Space Grotesk':https://fonts.googleapis.com/")

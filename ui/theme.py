@@ -15,33 +15,34 @@ Funcții pure, fără `st.*`, cu teste în tests/test_theme.py. Singura legătur
 """
 import re
 
-# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Neon Carbon”, în probă pe 25.11)
+# (luminos, întunecat) — luminos = „Neon Carbon”, întunecat = „Nordic Frost” (decizia din 27.11, DESIGN.md §1.0)
 TOKENS = {
-    "bg": ("#EEF1EC", "#0A0C0B"),
-    "surface": ("#FFFFFF", "#151917"),
-    "surface-top": ("#FFFFFF", "#151917"),      # = surface: carduri plate
-    "surface-2": ("#F4F6F2", "#1C211E"),
-    "border": ("#DCE2DA", "#262D29"),
-    "border-strong": ("#C6CFC3", "#343D38"),
-    "text": ("#0F1411", "#F1F5F2"),
-    "muted": ("#566059", "#9AA59D"),
-    "accent": ("#0F1411", "#C6F432"),          # luminos: cerneală; întunecat: lime electric
-    "accent-text": ("#3D5E0B", "#C6F432"),
-    "on-accent": ("#C6F432", "#0A0C0B"),       # textul de pe butonul principal: lime pe cerneală / negru pe lime
-    "up": ("#116B37", "#4ADE80"),
-    "down": ("#C0262D", "#FF6B6B"),
-    "warn": ("#8A5A00", "#FFD166"),
+    "bg": ("#EEF1EC", "#0E1620"),
+    "surface": ("#FFFFFF", "#16212D"),
+    "surface-top": ("#FFFFFF", "#1A2734"),      # ziua plat; noaptea gradient fin de sus în jos
+    "surface-2": ("#F4F6F2", "#1D2A38"),
+    "border": ("#DCE2DA", "#273647"),
+    "border-strong": ("#C6CFC3", "#34485C"),
+    "text": ("#0F1411", "#E8EEF4"),
+    "muted": ("#566059", "#9DAEC0"),
+    "accent": ("#0F1411", "#7CC4E8"),          # ziua: cerneală; noaptea: albastru-gheață
+    "accent-text": ("#3D5E0B", "#9AD3F0"),
+    "on-accent": ("#C6F432", "#FFFFFF"),       # textul butonului principal: lime pe cerneală / alb pe fiord
+    "up": ("#116B37", "#6EE7B7"),
+    "down": ("#C0262D", "#FCA5A5"),
+    "warn": ("#8A5A00", "#FCD34D"),
     # textul de pe un fundal plin colorat (verdict, GEX)
-    "on-fill": ("#FFFFFF", "#0A0C0B"),
-    # plat: fără linie luminoasă, umbră sau strălucire (transparente)
-    "highlight": ("#FFFFFF00", "#FFFFFF00"),
-    "shadow": ("#00000000", "#00000000"),
-    "glow": ("#00000000", "#00000000"),
+    "on-fill": ("#FFFFFF", "#0E1620"),
+    # adâncime: ziua plat (transparente); noaptea linie luminoasă sus, umbră moale, strălucire rece
+    "highlight": ("#FFFFFF00", "#FFFFFF0D"),
+    "shadow": ("#00000000", "#02081266"),
+    "glow": ("#00000000", "#7CC4E812"),
 }
 
-# Colțurile cardurilor, metricilor și expanderelor (Neon Carbon: foarte rotunjite) și ale opțiunilor din meniu
-CARD_RADIUS = "24px"
-NAV_RADIUS = "16px"
+# Colțurile cardurilor, metricilor și expanderelor și ale opțiunilor din meniu: comune celor două moduri
+# (CSS nu poate alege o lungime după mod), la mijloc între Nordic (18/12) și Neon (24/16)
+CARD_RADIUS = "20px"
+NAV_RADIUS = "14px"
 
 # Paleta veche (GitHub dark) → token. Culorile care nu sunt aici rămân neschimbate.
 LEGACY = {
@@ -74,7 +75,7 @@ DF_UP = "#3A8854"
 DF_DOWN = "#E82C2C"
 DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
-DF_HIGHLIGHT_BG = "rgba(198, 244, 50, 0.16)"   # rândul evidențiat (compania analizată, mediana): lime translucid
+DF_HIGHLIGHT_BG = "rgba(124, 196, 232, 0.18)"  # rândul evidențiat (compania analizată, mediana): albastru translucid, lizibil în ambele moduri
 
 def df_colors(mode):
     """(câștig, pierdere, neutru) pentru tabele, după modul temei (`st.context.theme.type`).

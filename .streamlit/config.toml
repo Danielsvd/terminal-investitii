@@ -1,38 +1,44 @@
 # Tema aplicației: două moduri, comutate din meniul ⋮ → Settings → Theme.
-# Valorile și rolul fiecăreia sunt în DESIGN.md (paleta „Neon Carbon”, varianta 5 de pe canvas, în probă pe 25.11.2026 față de Nordic Frost).
+# Decizia lui Daniel (27.11.2026): NOAPTEA = partea întunecată din „Nordic Frost” (varianta 6),
+# ZIUA = partea luminoasă din „Neon Carbon” (varianta 5). Rolurile culorilor sunt în DESIGN.md.
 # Aceleași culori sunt în ui/theme.py (TOKENS); testul tests/test_theme.py verifică să coincidă.
 # Aici NU se pun chei sau secrete: acestea stau în .streamlit/secrets.toml (ignorat de git).
 
 [theme]
-# Inter (text) și Space Grotesk (titluri) de la Google Fonts; dacă nu vin, rămâne fontul de sistem
-font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
-headingFont = "'Space Grotesk':https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap, sans-serif"
 baseFontSize = 15
-baseRadius = "12px"
-buttonRadius = "full"
 metricValueFontSize = "26px"
 metricValueFontWeight = 650
 showWidgetBorder = true
 
 [theme.dark]
-# lime electric pe butonul principal; textul butonului e închis (ui/theme.py, tokenul on-accent)
-primaryColor = "#C6F432"
-backgroundColor = "#0A0C0B"
-secondaryBackgroundColor = "#151917"
-textColor = "#F1F5F2"
-borderColor = "#262D29"
-linkColor = "#C6F432"
-greenColor = "#4ADE80"
-redColor = "#FF6B6B"
-yellowColor = "#FFD166"
-blueColor = "#7DB7FF"
-dataframeBorderColor = "#262D29"
-dataframeHeaderBackgroundColor = "#1C211E"
-dataframeHeaderTextColor = "#9AA59D"
-chartCategoricalColors = ["#C6F432", "#7DB7FF", "#FFB86B", "#C792EA", "#5EEAD4", "#9AA59D"]
+# Nordic Frost: ardezie + albastru-gheață; Manrope (Google Fonts, rezervă: fontul de sistem)
+font = "Manrope:https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Manrope:https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&display=swap, sans-serif"
+baseRadius = "10px"
+buttonRadius = "full"
+# albastru fiord pe butonul principal (text alb 5,5:1); gheața deschisă e accentul de text și bare
+primaryColor = "#1F6F99"
+backgroundColor = "#0E1620"
+secondaryBackgroundColor = "#16212D"
+textColor = "#E8EEF4"
+borderColor = "#273647"
+linkColor = "#9AD3F0"
+greenColor = "#6EE7B7"
+redColor = "#FCA5A5"
+yellowColor = "#FCD34D"
+blueColor = "#7CC4E8"
+dataframeBorderColor = "#273647"
+dataframeHeaderBackgroundColor = "#1D2A38"
+dataframeHeaderTextColor = "#9DAEC0"
+chartCategoricalColors = ["#7CC4E8", "#F4B26A", "#B4A7F5", "#F49AC1", "#9CCB9A", "#9DAEC0"]
 
 [theme.light]
-# cerneală pe butonul principal, cu text lime (on-accent)
+# Neon Carbon: gri-verzui + cerneală, accent lime; Inter (text) + Space Grotesk (titluri)
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "'Space Grotesk':https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap, sans-serif"
+baseRadius = "12px"
+buttonRadius = "full"
+# cerneală pe butonul principal, cu text lime (tokenul on-accent din ui/theme.py)
 primaryColor = "#0F1411"
 backgroundColor = "#EEF1EC"
 secondaryBackgroundColor = "#FFFFFF"
