@@ -22,9 +22,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from analytics import insiders  # noqa: E402
 from analytics import xbrl_facts as xf  # noqa: E402
 from analytics.growth import cagr  # noqa: E402
-from data import sec_edgar, sec_xbrl  # noqa: E402
+from data import sec_edgar, sec_insiders, sec_xbrl  # noqa: E402
 
 YAHOO_ROWS = {
     "revenue": ("financials", ("Total Revenue", "Operating Revenue")),
@@ -99,8 +100,12 @@ def growth(table, col, years):
     return cagr(s[end], s[old[0]], years) if old else None
 
 
-def probe_symbol(client, symbol, use_yahoo, detail):
-    cik, cf = sec_xbrl.load_for_symbol(client, symbol)
+def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
+    if tickers is None:
+        cik, cf = sec_xbrl.load_for_symbol(client, symbol)
+    else:
+        cik = insiders.cik_for_ticker(tickers, symbol)
+        cf = sec_xbrl.load_companyfacts(client, cik) if cik is not None else None
     if cik is None:
         return {"symbol": symbol, "kind": "fără CIK"}
     kind = xf.filer_kind(cf)
@@ -161,10 +166,11 @@ def main(argv=None):
     detail = {s.upper() for s in args.detaliu}
     print(f"Simboluri ({len(symbols)}): {', '.join(symbols)}")
     client = sec_edgar.EdgarClient(ua)
+    tickers = client.get_json(sec_insiders.COMPANY_TICKERS_URL)      # o singură dată, nu pe fiecare simbol
     results = []
     for sym in symbols:
         try:
-            r = probe_symbol(client, sym, not args.fara_yahoo, sym in detail)
+            r = probe_symbol(client, sym, not args.fara_yahoo, sym in detail, tickers)
         except sec_edgar.EdgarError as exc:
             r = {"symbol": sym, "kind": f"EROARE SEC: {exc}"}
         results.append(r)
