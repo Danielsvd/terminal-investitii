@@ -20,7 +20,9 @@ Reguli (D2–D5), corectate după proba din 27.11.2026 (52 de simboluri):
     corectează cu un multiplu de 1.000 când profit / EPS raportat confirmă scara (`scale_fixed`).
   * Lipsă = None / NaN, niciodată 0.
 """
+import bisect
 import math
+from contextlib import contextmanager
 from datetime import date, timedelta
 
 import pandas as pd
@@ -243,6 +245,52 @@ def filer_kind(cf):
     return None
 
 
+# --- Memorare opțională (testul istoric: aceeași companie la zeci de date) -------------------------------------
+# Rezultatul lui `annual` / `instants` depinde doar de faptele indicatorului cunoscute la `asof`, deci de ultima dată
+# `available_on` ≤ `asof` a acelor fapte. În `memo_scope()` rezultatele se refolosesc pe cheia (JSON, indicator,
+# formulare, acea dată). În afara lui (aplicația, jobul) nu se schimbă nimic. Valorile întoarse nu trebuie modificate.
+_MEMO = None
+
+
+@contextmanager
+def memo_scope():
+    """Activează memorarea pentru apelurile din bloc (aceleași rezultate, mai puține recalculări)."""
+    global _MEMO
+    old, _MEMO = _MEMO, {}
+    try:
+        yield
+    finally:
+        _MEMO = old
+
+
+def _effective(cf, indicator, asof, forms):
+    """Cheia de memorare: ultima dată `available_on` ≤ `asof` a faptelor indicatorului (None = niciuna / toate)."""
+    key = ("dates", id(cf), indicator, forms)
+    dates = _MEMO.get(key)
+    if dates is None:
+        unit, _, concepts = CONCEPTS[indicator]
+        facts = (cf or {}).get("facts") or {}
+        ds = set()
+        for tax, name in concepts:
+            for r in ((facts.get(tax) or {}).get(name) or {}).get("units", {}).get(unit) or []:
+                if r.get("form") in forms and r.get("filed"):
+                    ds.add(available_on(r["filed"]))
+        dates = _MEMO[key] = sorted(ds)
+    if asof is None:
+        return "all"
+    i = bisect.bisect_right(dates, _day(asof)) - 1
+    return dates[i] if i >= 0 else "none"
+
+
+def _memo_get(cf, kind, indicator, asof, forms, compute):
+    if _MEMO is None:
+        return compute()
+    key = (kind, id(cf), indicator, forms, _effective(cf, indicator, asof, forms))
+    if key not in _MEMO:
+        _MEMO[key] = compute()
+    return _MEMO[key]
+
+
 def raw_facts(cf, indicator, asof=None, forms=FORMS):
     """Toate valorile brute ale indicatorului (toate etichetele lui), ca DataFrame cu coloanele
     `prio, concept, start, end, days, val, form, filed, accn`. Cu `asof`: doar valorile cunoscute la acea dată."""
@@ -341,9 +389,12 @@ def annual(cf, indicator, asof=None):
     Coloane: `val, start, filed, accn, concept, conflict`."""
     if CONCEPTS[indicator][1] != "duration":
         raise ValueError(f"{indicator}: indicator de bilanț; folosește balance_at_year_end()")
-    raw = raw_facts(cf, indicator, asof, forms=ANNUAL_FORMS)
-    raw = raw[raw["days"].apply(lambda d: _in(d, FY_DAYS))]
-    return _frame(_resolve(raw, anchor_max=indicator in ANCHOR_MAX))
+
+    def compute():
+        raw = raw_facts(cf, indicator, asof, forms=ANNUAL_FORMS)
+        raw = raw[raw["days"].apply(lambda d: _in(d, FY_DAYS))]
+        return _frame(_resolve(raw, anchor_max=indicator in ANCHOR_MAX))
+    return _memo_get(cf, "annual", indicator, asof, ANNUAL_FORMS, compute)
 
 
 def fiscal_year_ends(cf, asof=None):
@@ -358,10 +409,13 @@ def instants(cf, indicator, asof=None):
     """Valorile de bilanț (la o dată), indexate pe dată, ultima versiune cunoscută la `asof`."""
     if CONCEPTS[indicator][1] != "instant":
         raise ValueError(f"{indicator}: indicator de flux; folosește annual() / quarterly()")
-    df = raw_facts(cf, indicator, asof)
-    if df.empty:
-        return _empty()
-    return _frame(_resolve(df.assign(start=None)))
+
+    def compute():
+        df = raw_facts(cf, indicator, asof)
+        if df.empty:
+            return _empty()
+        return _frame(_resolve(df.assign(start=None)))
+    return _memo_get(cf, "instants", indicator, asof, FORMS, compute)
 
 
 def balance_at_year_end(cf, indicator, asof=None, ends=None):

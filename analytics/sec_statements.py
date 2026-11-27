@@ -33,6 +33,7 @@ calculează o versiune pe dată, `version_at` ia ultima versiune ≤ t. Rezultat
 """
 import bisect
 import math
+from datetime import date
 
 import pandas as pd
 
@@ -213,13 +214,33 @@ def statements_from_facts(cf, asof=None, splits=None):
 
 # --- Incremental: o versiune pe fiecare dată la care se poate schimba ceva -------------------------------------
 
-def change_dates(cf, indicators=SOURCE_INDICATORS):
+def _instant_signature(by_period, near):
+    """Ce iese din `xf._resolve` la perioadele de lângă încheierile de exercițiu: (dată, etichetă, valoare, conflict,
+    factor de split), cu aceeași regulă de ancorare și de cusătură. Perioadele trimestriale contează doar prin
+    eticheta pe care o impun drumului (și prin controlul cusăturii)."""
+    periods = sorted(by_period, key=lambda p: (p[1], p[0] or date.min), reverse=True)
+    sig, current = [], None
+    for p in periods:
+        avail = by_period[p]
+        conflict = False
+        if current is None or current not in avail:
+            new = min(avail)
+            if current is not None:
+                conflict = xf._seam_conflict(by_period, periods, p, current, new)
+            current = new
+        if p[1] in near:
+            r = avail[current]
+            sig.append((p[1], current, r["val"], conflict, r["f"]))
+    return tuple(sig)
+
+
+def change_dates(cf, indicators=SOURCE_INDICATORS, splits=None):
     """Datele (`available_on`) la care situațiile „cunoscute la t” se pot schimba, crescător.
 
     * toate depunerile 10-K / 10-K/A ale indicatorilor citiți;
-    * din 10-Q: valorile de bilanț noi sau schimbate (retratări în coloanele comparative) — la indicatorii cu o
-      singură etichetă doar cele de lângă o încheiere de exercițiu, la cei cu mai multe etichete toate (eticheta
-      perioadei celei mai noi decide ancora, vezi `xf._resolve`);
+    * bilanțul (10-K și 10-Q): datele la care se schimbă ce alege `xf._resolve` la perioadele de lângă o încheiere
+      de exercițiu (valoare retratată, altă etichetă ancoră, alt marcaj de cusătură; la acțiunile de bilanț și alt
+      factor de split al datei de depunere) — calculat pe structuri mici, fără pandas;
     * din 10-Q: dividendele trimestriale noi sau schimbate, doar dacă vreun an nu are dividendul anual.
     Valorile de flux din 10-Q nu intră în anual (`xf.annual` citește doar 10-K)."""
     facts = (cf or {}).get("facts") or {}
@@ -227,11 +248,11 @@ def change_dates(cf, indicators=SOURCE_INDICATORS):
     dps_years = set(xf.annual(cf, "dps").index)
     use_q_dps = any(e not in dps_years for e in ends)
     tol = xf.FY_END_TOL_DAYS
-    dates, tracked = set(), []
+    dates, dps_rows = set(), []
     for ind in indicators:
         unit, kind, concepts = xf.CONCEPTS[ind]
-        multi = len(concepts) > 1
-        for tax, name in concepts:
+        inst_rows = []
+        for prio, (tax, name) in enumerate(concepts):
             for r in ((facts.get(tax) or {}).get(name) or {}).get("units", {}).get(unit) or []:
                 form = r.get("form")
                 if form not in xf.FORMS:
@@ -242,12 +263,28 @@ def change_dates(cf, indicators=SOURCE_INDICATORS):
                 if form in xf.ANNUAL_FORMS:
                     dates.add(xf.available_on(filed))
                 if kind == "instant":
-                    if multi or any(abs((end - e).days) <= tol for e in ends):
-                        tracked.append(((name, None, end), filed, form, val))
+                    inst_rows.append((filed, str(r.get("accn") or ""), prio, end, val))
                 elif ind == "dps" and use_q_dps:
-                    tracked.append(((name, xf._day(r.get("start")), end), filed, form, val))
+                    dps_rows.append(((name, xf._day(r.get("start")), end), filed, str(r.get("accn") or ""), val))
+        if not inst_rows:
+            continue
+        inst_rows.sort(key=lambda x: (x[0], x[1]))
+        by_period, prev = {}, ()
+        i = 0
+        while i < len(inst_rows):
+            filed = inst_rows[i][0]
+            while i < len(inst_rows) and inst_rows[i][0] == filed:       # o depunere = un pas
+                _, _, prio, end, val = inst_rows[i]
+                f = xf.split_factor_after(splits, filed) if ind == "shares_out_bs" else None
+                by_period.setdefault((None, end), {})[prio] = {"val": val, "f": f}
+                i += 1
+            near = {p[1] for p in by_period if any(abs((p[1] - e).days) <= tol for e in ends)}
+            sig = _instant_signature(by_period, near)
+            if sig != prev:
+                dates.add(xf.available_on(filed))
+            prev = sig
     last = {}
-    for key, filed, form, val in sorted(tracked, key=lambda x: (x[1], x[2] in xf.ANNUAL_FORMS)):
+    for key, filed, _, val in sorted(dps_rows, key=lambda x: (x[1], x[2])):
         if key not in last or last[key] != val:
             dates.add(xf.available_on(filed))
         last[key] = val
@@ -257,10 +294,11 @@ def change_dates(cf, indicators=SOURCE_INDICATORS):
 def asof_versions(cf, splits=None, dates=None):
     """[(dată, situații)] crescător: situațiile cunoscute de la fiecare dată din `change_dates` (sau `dates`)."""
     out = []
-    for d in (change_dates(cf) if dates is None else dates):
-        st = statements_from_facts(cf, asof=d, splits=splits)
-        if st is not None:
-            out.append((pd.Timestamp(d), st))
+    with xf.memo_scope():                         # indicatorii neschimbați între două date nu se recalculează
+        for d in (change_dates(cf, splits=splits) if dates is None else dates):
+            st = statements_from_facts(cf, asof=d, splits=splits)
+            if st is not None:
+                out.append((pd.Timestamp(d), st))
     return out
 
 
