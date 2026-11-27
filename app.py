@@ -67,8 +67,8 @@ from analytics import ideas as ideas_calc
 from analytics import bvb_fundamental as bvb_calc
 from analytics import pilon2 as p2_calc
 from data import pilon2 as pilon2_data
-from analytics import sec_13f, sec_view, insiders
-from data import sec_edgar, sec_funds, cusip_map, sec_insiders
+from analytics import sec_13f, sec_view, insiders, schedule13
+from data import sec_edgar, sec_funds, cusip_map, sec_insiders, sec_ownership
 from data.ucits import ucits_for, ucits_symbols, ucits_currency
 from analytics import events as events_calc
 from data import entities as entities_data
@@ -5315,6 +5315,92 @@ def render_sec_insiders_card(real_sym):
                 column_config={"Plan 10b5-1": st.column_config.CheckboxColumn(help=INSIDER_HELP["plan"])})
 
 
+HOLDERS_HELP = {
+    "card": ("Cine deține peste 5% dintr-o clasă de acțiuni cu drept de vot, din formularele SEC Schedule 13D și "
+             "13G despre companie, depuse în ultimii 3 ani. Pentru fiecare depunător contează **ultima** lui "
+             "depunere.\n\n**13D = activist:** poate urmări influențarea companiei (consiliu, strategie, vânzare); "
+             "depus în 5 zile lucrătoare de la prag. **13G = pasiv:** fonduri index, instituții, investitori fără "
+             "intenție de control; termene mai lungi (45 de zile după trimestru la instituții).\n\n"
+             "O depunere în grup (fondul, administratorul, persoanele care îl controlează) raportează aceleași "
+             "acțiuni de mai multe ori: procentul arătat e **maximul** pe persoane, nu suma. Depunerile dinainte de "
+             "18.12.2024 nu au format structurat: apar cu numele, procent N/A.\n\n**Netestat:** context, nu verdict."),
+    "peste": ("Depunătorii a căror ultimă depunere arată ≥ 5% (sau procent N/A, la depunerile vechi). Cei care au "
+              "raportat ieșirea sub 5% sunt numărați separat."),
+    "activisti": ("Depunătorii peste prag cu ultima depunere 13D. „13G → 13D” = un investitor pasiv a devenit "
+                  "activist: în literatură, unul dintre cele mai urmărite evenimente din 13D."),
+    "noi": "13D noi (nu amendamente) sau treceri 13G → 13D depuse în ultimele 90 de zile.",
+}
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def sec_load_holders(symbol, user_agent, today_iso):
+    """13D/13G despre simbolul american, depuse în ultimii 3 ani. Cache 12 h (cheia include ziua).
+    Întoarce (tabel deținători, nr. depuneri citite, probleme, trunchiat, eroare sau None)."""
+    empty = schedule13.current_holders([])
+    try:
+        client = sec_client(user_agent)
+        cik = sec_insiders.ticker_cik(client, symbol)
+        if cik is None:
+            return empty, 0, [], False, f"{symbol} nu apare în lista SEC de simboluri"
+        docs, problems, truncated = sec_ownership.load_schedules(client, cik, today=pd.Timestamp(today_iso).date())
+    except (sec_edgar.EdgarError, ValueError) as exc:
+        logger.warning("13D/G %s: %s", symbol, exc)
+        return empty, 0, [], False, str(exc)
+    return schedule13.current_holders(docs, issuer_cik=cik), len(docs), problems, truncated, None
+
+
+def render_sec_holders_card(real_sym):
+    """Card „Deținători peste 5% (13D/13G)” în Analiză companie, doar pentru acțiunile americane.
+    Se încarcă la buton (prima dată ~3–10 s); după aceea simbolul rămâne încărcat în sesiune (cache 12 h)."""
+    sym = str(real_sym).upper()
+    if "." in sym or "=" in sym or "^" in sym or sym.endswith("-USD"):
+        return
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    st.subheader("🗂️ Deținători peste 5% (13D/13G)", help=HOLDERS_HELP["card"])
+    loaded = st.session_state.setdefault("own_loaded", set())
+    if sym not in loaded:
+        st.caption("Depunerile 13D/13G nu sunt încărcate pentru acest simbol (~3–10 s).")
+        if not st.button("Încarcă deținătorii peste 5%", key=f"own_load_{sym}"):
+            return
+        loaded.add(sym)
+        st.rerun()                # redesenează fără buton; datele se încarcă la rularea următoare
+    today = now_ro().date()
+    with st.spinner("Citesc depunerile 13D/13G de la SEC..."):
+        h, n_docs, problems, truncated, err = sec_load_holders(sym, ua, today.isoformat())
+    if err:
+        st.caption(f"13D/13G N/A: {err}")
+        return
+    s = schedule13.holders_summary(h, pd.Timestamp(today))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Peste 5%", f"{s['peste_prag']}",
+              f"{s['fara_procent']} cu procent N/A" if s["fara_procent"] else None, delta_color="off",
+              help=HOLDERS_HELP["peste"])
+    c2.metric("Activiști (13D)", f"{s['activisti']}", f"pasivi (13G): {s['pasivi']}", delta_color="off",
+              help=HOLDERS_HELP["activisti"])
+    c3.metric("13D nou (90 de zile)", "DA" if s["d13_noi"] else "NU",
+              ", ".join(str(x) for x in s["d13_noi"])[:60] or None, delta_color="off", help=HOLDERS_HELP["noi"])
+    last = s["ultima_depunere"]
+    notes = [f"{n_docs} depuneri 13D/13G citite (ultimii 3 ani)",
+             f"ultima: {last:%d.%m.%Y}" if last is not None else "",
+             f"ieșiți sub 5%: {s['sub_prag']}" if s["sub_prag"] else "",
+             f"{len(problems)} depuneri nu s-au putut citi" if problems else "",
+             "doar cele mai noi 60 de depuneri" if truncated else "", "netestat: context, nu verdict"]
+    st.caption(" · ".join(x for x in notes if x))
+    if h.empty:
+        st.caption(f"Nicio depunere 13D/13G despre {sym} în ultimii 3 ani.")
+        return
+    st.dataframe(text_frame(schedule13.display_frame(h),
+        {"Procent": lambda v: format_ro(v, 1, "%"), "Acțiuni": lambda v: format_ro(v, 0),
+         "Eveniment": lambda d: f"{d:%d.%m.%Y}", "Depus": lambda d: f"{d:%d.%m.%Y}"}),
+        hide_index=True, width='stretch')
+    if problems:
+        with st.expander(f"Depuneri necitite ({len(problems)})"):
+            for p in problems:
+                st.caption(f"• {p}")
+
+
 def render_sec_portfolio_signals():
     """Expander în Portofoliu: semnalele 13F pe acțiunile americane deținute (fondurile concentrate)."""
     ua = sec_secret("sec_user_agent")
@@ -5994,6 +6080,8 @@ def main():
             render_sec_company_card(real_sym)
             # 2b-bis. Insiderii (Form 4, 90 de zile; doar SUA; context, netestat)
             render_sec_insiders_card(real_sym)
+            # 2b-ter. Deținătorii peste 5% (13D/13G; doar SUA; context, netestat)
+            render_sec_holders_card(real_sym)
             # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
             global_decision = render_global_decision(real_sym, info, hist, risk_stats)
             # „Verdict final” refolosește exact acest rezultat (nu recalculează)

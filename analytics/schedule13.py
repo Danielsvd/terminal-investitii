@@ -274,3 +274,19 @@ def holders_summary(holders, today, recent_days=90):
         "ultima_depunere": dates.max() if len(dates) else None,
         "start": start,
     }
+
+
+def display_frame(holders):
+    """Tabelul din card (valori brute; formatarea o face aplicația): Deținător, Tip (cu trecerea 13G → 13D),
+    Procent, Acțiuni, Sub 5%, Eveniment, Depus, Forma, Persoane, Depuneri."""
+    cols = ["Deținător", "Tip", "Procent", "Acțiuni", "Sub 5%", "Eveniment", "Depus", "Forma", "Persoane", "Depuneri"]
+    h = holders if holders is not None else pd.DataFrame(columns=HOLDER_COLUMNS)
+    if h.empty:
+        return pd.DataFrame(columns=cols)
+    tip = [KIND_LABELS.get(k, k) + (f" · {t}" if isinstance(t, str) and t else "") for k, t in zip(h["Tip"], h["Trecere"])]
+    return pd.DataFrame({
+        "Deținător": h["Detinator"].map(lambda v: v if isinstance(v, str) and v else "N/A"), "Tip": tip,
+        "Procent": pd.to_numeric(h["Procent"], errors="coerce"), "Acțiuni": pd.to_numeric(h["Actiuni"], errors="coerce"),
+        "Sub 5%": h["Sub_prag"].map(lambda v: "da" if v is True else ""),
+        "Eveniment": h["Data_eveniment"], "Depus": h["Data_depunere"], "Forma": h["Forma"],
+        "Persoane": h["Persoane"], "Depuneri": h["Depuneri"]}, columns=cols).reset_index(drop=True)
