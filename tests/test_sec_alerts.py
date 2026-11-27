@@ -231,3 +231,11 @@ def test_run_proba_writes_nothing(monkeypatch, tmp_path, capsys):
     assert sa.JOURNAL_SHEET not in sheets and sent == [] and not (tmp_path / "state.json").exists()
     out = capsys.readouterr().out
     assert "Probă: 1 rânduri noi" in out and "Rulare inițială" in out
+
+
+def test_usd_format_ro():
+    # 213.437×142,9122 + 341.423×143,6841 + 295.240×144,6068 ≈ 122.254.xxx $ (Form 4 PLTR, 20.11.2026)
+    assert sa._usd(122_254_123.0) == "122,25 mil. $"
+    assert sa._usd(1_234_567_890.0) == "1.234,57 mil. $"
+    assert sa._usd(320_900.0) == "320.900 $"
+    assert sa._usd(None) == "N/A"

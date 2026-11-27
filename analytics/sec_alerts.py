@@ -124,7 +124,8 @@ def _usd(v):
     if v is None:
         return "N/A"
     if abs(v) >= 1e6:
-        return f"{v / 1e6:,.2f} mil. $".replace(",", "X").replace(".", ",").replace("X", ".")
+        num = f"{v / 1e6:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{num} mil. $"           # sufixul se adaugă după conversie: punctul din „mil.” nu devine virgulă
     return f"{v:,.0f} $".replace(",", ".")
 
 
