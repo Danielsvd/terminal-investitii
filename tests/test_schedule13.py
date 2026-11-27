@@ -242,3 +242,12 @@ def test_load_schedules_problem_and_truncation():
     assert docs == [] and len(problems) == 2 and not truncated                      # antet lipsă + XML invalid
     _d, _p, truncated = so.load_schedules(c, "320193", today=date(2026, 11, 27), max_filings=1)
     assert truncated
+
+
+def test_display_frame():
+    v = s.display_frame(s.current_holders(_docs(), issuer_cik="320193"))
+    assert v["Deținător"].tolist() == ["VANGUARD GROUP INC", "Activ Capital", "BLACKROCK INC", "Iesit LP"]
+    assert v["Tip"].tolist()[:2] == ["13G (pasiv)", "13D (activist) · 13G → 13D"]
+    assert v["Procent"].iloc[0] == 8.9 and pd.isna(v["Procent"].iloc[2])            # N/A rămâne NaN, nu 0
+    assert v["Sub 5%"].tolist() == ["", "", "", "da"]
+    assert s.display_frame(s.current_holders([])).empty
