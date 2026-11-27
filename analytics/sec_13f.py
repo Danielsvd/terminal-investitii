@@ -296,15 +296,18 @@ def fund_positions(holdings):
 
 
 def conviction_mask(book, floor=CONVICTION_MIN_WEIGHT):
-    """Poziție de convingere: pondere ≥ max(1/N, 1%), unde N = pozițiile fondului rândului. Cu coloana `CIK`, N se
-    numără pe fiecare fond; fără ea, `book` e portofoliul unui singur fond și N = len(book)."""
+    """Poziție de convingere, pe rând: ponderea EMITENTULUI (clasele de acțiuni adunate, cheia `CUSIP6`) în fond
+    ≥ max(1/N, 1%), unde N = pozițiile fondului (CUSIP-uri). Așa, GOOG și GOOGL primesc aceeași bifă, ca în consens
+    și în „Cine deține”. Cu coloana `CIK`, totul se calculează pe fiecare fond; fără ea, `book` e un singur fond."""
     if book is None or book.empty:
         return pd.Series(dtype=bool)
+    keys = ["CIK", "CUSIP6"] if "CIK" in book.columns else ["CUSIP6"]
+    issuer_w = book.groupby(keys)["Pondere"].transform(lambda x: x.sum(min_count=1))
     if "CIK" in book.columns:
         n = book["CIK"].map(fund_positions(book))
     else:
         n = pd.Series(float(book["CUSIP"].nunique()), index=book.index)
-    return book["Pondere"].ge(conviction_threshold(n, floor))
+    return issuer_w.ge(conviction_threshold(n, floor))
 
 
 # --------------------------------------------------------------------------- mișcări trimestriale

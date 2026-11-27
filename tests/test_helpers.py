@@ -335,3 +335,15 @@ def test_slice_window_max_intoarce_toata_seria():
     assert len(slice_window(s, "5A")) < 2000          # 5A taie, Max nu
     assert slice_window(pd.Series(dtype=float), "Max").empty
     assert slice_window(None, "Max") is None
+
+
+def test_na_safe_frame_only_columns_with_gaps_become_text():
+    import numpy as np
+    import pandas as pd
+    from data.helpers import na_safe_frame, ro_spec
+    df = pd.DataFrame({"Mișcare": ["Nouă", None], "Δ": [np.nan, 12.4], "Pondere": [0.23, 1.77]})
+    out, rest = na_safe_frame(df, {"Δ": ro_spec(",.1f"), "Pondere": ro_spec(",.2f")})
+    assert out["Δ"].tolist() == ["N/A", "12,4"]                  # avea lipsă → text, fără „None”
+    assert out["Pondere"].tolist() == [0.23, 1.77] and list(rest) == ["Pondere"]   # rămâne numerică (sortare)
+    assert out["Mișcare"].tolist() == ["Nouă", "N/A"]
+    assert df["Δ"].isna().iloc[0]                                  # originalul neatins
