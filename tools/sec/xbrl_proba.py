@@ -34,7 +34,6 @@ YAHOO_ROWS = {
     "capex": ("cashflow", ("Capital Expenditure",)),
 }
 DIFF_TOL = 0.02
-EPS_TOL = 0.02
 MATCH_DAYS = 40
 
 
@@ -120,14 +119,15 @@ def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
         return {"symbol": symbol, "kind": "10-K, fără ani"}
     last = t.iloc[-1]
     conflicts = sum(len(c) for c in t["conflicts"])
-    eps_bad = int((t["eps_check"] > EPS_TOL).sum())
+    eps_bad = int((t["eps_check"] > xf.EPS_TOL).sum())
+    scale_fixed = int(t["scale_fixed"].sum())
     ttm_rev = xf.ttm(cf, "revenue")
     diffs, compared = compare(t, yahoo) if yahoo else ([], 0)
     res = {
         "symbol": symbol, "kind": "10-K", "cik": cik, "years": len(t),
         "first": t.index[0].year, "last": t.index[-1], "filed": last["filed"],
         "revenue": last["revenue"], "net_income": last["net_income"], "eps": last["eps"], "fcf": last["fcf"],
-        "conflicts": conflicts, "eps_bad": eps_bad,
+        "conflicts": conflicts, "eps_bad": eps_bad, "scale_fixed": scale_fixed,
         "ttm_check": None if ttm_rev is None else ttm_rev["check"],
         "diffs": diffs, "compared": compared,
         "rev5": growth(t, "revenue", 5), "rev10": growth(t, "revenue", 10),
@@ -150,6 +150,8 @@ def main(argv=None):
     p.add_argument("--secrets", default=str(ROOT / ".streamlit" / "secrets.toml"))
     p.add_argument("--fara-yahoo", action="store_true", help="fără comparația cu Yahoo")
     p.add_argument("--detaliu", nargs="*", default=[], help="tabelul anual complet pentru aceste simboluri")
+    p.add_argument("--diagnostic", nargs="*", default=[],
+                   help="etichetele găsite în JSON (pe formular), pentru simbolurile fără ani / cu probleme")
     args = p.parse_args(argv)
 
     from tools.sec.run import held_us_symbols, read_secrets, watchlist_symbols
@@ -180,6 +182,8 @@ def main(argv=None):
         flags = []
         if r["conflicts"]:
             flags.append(f"{r['conflicts']} conflicte de etichete")
+        if r["scale_fixed"]:
+            flags.append(f"scara acțiunilor corectată în {r['scale_fixed']} ani")
         if r["eps_bad"]:
             flags.append(f"EPS calculat ≠ raportat în {r['eps_bad']} ani")
         if r["ttm_check"] is not None and r["ttm_check"] > xf.TTM_CHECK_TOL:
@@ -192,6 +196,22 @@ def main(argv=None):
               f"EPS {_pct(r['eps5'])} / {_pct(r['eps10'])} | " + ("; ".join(flags) if flags else "fără probleme"))
         for ind, yr, s, y, d in r["diffs"]:
             print(f"    {ind} {yr}: SEC {_f(s)} vs Yahoo {_f(y)} mld. ({_pct(d)})")
+
+    for sym in [x.upper() for x in args.diagnostic]:
+        cik = insiders.cik_for_ticker(tickers, sym)
+        print(f"\n--- {sym}: diagnostic (CIK {cik}) ---")
+        if cik is None:
+            continue
+        try:
+            full = client.get_json(sec_xbrl.companyfacts_url(cik))
+        except sec_edgar.EdgarError as exc:
+            print(f"  EROARE SEC: {exc}")
+            continue
+        print(f"  taxonomii: {', '.join(sorted((full.get('facts') or {}).keys()))}")
+        found, extra = xf.diagnose(full)
+        for ind, name, unit, forms in found:
+            print(f"  {ind:18} {name} [{unit}]: " + ", ".join(f"{k} {v}" for k, v in sorted(forms.items(), key=str)))
+        print(f"  alte etichete de venit/profit: {', '.join(extra) or '—'}")
 
     ok = [r for r in results if r["kind"] == "10-K"]
     print("\n--- Rezumat ---")
@@ -206,7 +226,8 @@ def main(argv=None):
         if comp:
             print(f"Comparații cu Yahoo: {comp}, diferențe > 2%: {nd} ({nd / comp * 100:.1f}%)".replace(".", ","))
         print(f"Simboluri cu conflicte de etichete: {sum(1 for r in ok if r['conflicts'])}; "
-              f"cu EPS calculat ≠ raportat: {sum(1 for r in ok if r['eps_bad'])}")
+              f"cu EPS calculat ≠ raportat: {sum(1 for r in ok if r['eps_bad'])}; "
+              f"cu scara acțiunilor corectată: {sum(1 for r in ok if r['scale_fixed'])}")
     print("Nimic scris.")
     return 0
 

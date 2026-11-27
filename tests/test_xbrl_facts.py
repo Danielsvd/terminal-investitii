@@ -78,13 +78,32 @@ def test_annual_point_in_time():
     assert a.loc[D("2017-12-31"), "val"] == 90.0 and a.loc[D("2017-12-31"), "concept"] == "SalesRevenueNet"
 
 
-def test_conflict_intre_etichete_peste_1_la_suta():
+def test_conflict_doar_la_cusatura_dintre_etichete():
+    # 2019: ambele etichete (Revenues 110, contract 104: 5,5%); 2018: doar contract → cusătură în conflict
     cf = cf_of(
-        RevenueFromContractWithCustomerExcludingAssessedTax=[F("2018-01-01", "2018-12-31", 100.0, "2019-02-20")],
-        Revenues=[F("2018-01-01", "2018-12-31", 103.0, "2019-02-20")],
+        Revenues=[F("2019-01-01", "2019-12-31", 110.0, "2020-02-20")],
+        RevenueFromContractWithCustomerExcludingAssessedTax=[F("2019-01-01", "2019-12-31", 104.0, "2020-02-20"),
+                                                             F("2018-01-01", "2018-12-31", 100.0, "2019-02-20")],
     )
     a = xf.annual(cf, "revenue")
+    assert a.loc[D("2019-12-31"), "val"] == 110.0 and not a.loc[D("2019-12-31"), "conflict"]
     assert a.loc[D("2018-12-31"), "val"] == 100.0 and bool(a.loc[D("2018-12-31"), "conflict"])
+    # aceeași perioadă cu două etichete, fără schimbare în timp: nu e conflict (se ia eticheta prioritară)
+    cf2 = cf_of(Revenues=[F("2019-01-01", "2019-12-31", 110.0, "2020-02-20")],
+                RevenueFromContractWithCustomerExcludingAssessedTax=[F("2019-01-01", "2019-12-31", 104.0, "2020-02-20")])
+    assert not xf.annual(cf2, "revenue")["conflict"].any()
+
+
+def test_ancora_pe_eticheta_recenta_nu_alterneaza():
+    # eticheta prioritară (Revenues) apare doar în 2017; seria rămâne pe eticheta anului recent (contract)
+    cf = cf_of(
+        Revenues=[F("2017-01-01", "2017-12-31", 95.0, "2018-02-20")],
+        RevenueFromContractWithCustomerExcludingAssessedTax=[F(f"{y}-01-01", f"{y}-12-31", v, f"{y + 1}-02-20")
+                                                             for y, v in ((2016, 80.0), (2017, 90.0), (2018, 100.0))],
+    )
+    a = xf.annual(cf, "revenue")
+    assert list(a["val"]) == [80.0, 90.0, 100.0]
+    assert set(a["concept"]) == {"RevenueFromContractWithCustomerExcludingAssessedTax"}
 
 
 def test_alta_unitate_si_formular_strain_ignorate():
@@ -222,3 +241,72 @@ def test_slim_pastreaza_doar_etichetele_folosite():
 
 def test_companyfacts_url():
     assert sec_xbrl.companyfacts_url(320193) == "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"
+
+
+# --- reparațiile după proba din 27.11.2026 -----------------------------------
+
+def test_split_dupa_data_depunerii_nu_dubla_ajustare():
+    # 2019 retratat în 10-K-ul din 2021 (deja după split-ul 4:1 din 31.08.2020): 400 acțiuni, EPS 0,50
+    cf = _full_cf()
+    cf["facts"]["us-gaap"]["WeightedAverageNumberOfDilutedSharesOutstanding"]["units"]["shares"].append(
+        F("2019-01-01", "2019-12-31", 400.0, "2021-02-19"))
+    cf["facts"]["us-gaap"]["EarningsPerShareDiluted"]["units"]["USD/shares"].append(
+        F("2019-01-01", "2019-12-31", 0.5, "2021-02-19"))
+    t = xf.annual_table(cf, splits=pd.Series({pd.Timestamp("2020-08-31"): 4.0}))
+    r = t.loc[D("2019-12-31")]
+    assert r["shares_diluted"] == 400.0 and r["eps"] == pytest.approx(0.5) and r["eps_reported"] == pytest.approx(0.5)
+    # cunoscut la 30.06.2020 (înainte de split și de retratare): 100 acțiuni, ajustate ×4 = 400
+    t0 = xf.annual_table(cf, asof="2020-06-30", splits=pd.Series({pd.Timestamp("2020-08-31"): 4.0}))
+    assert t0.loc[D("2019-12-31"), "shares_diluted"] == 400.0
+
+
+def test_scara_actiunilor_corectata():
+    cf = _full_cf()
+    sh = cf["facts"]["us-gaap"]["WeightedAverageNumberOfDilutedSharesOutstanding"]["units"]["shares"]
+    sh[0] = F("2019-01-01", "2019-12-31", 0.1, "2020-02-20")          # raportat „în mii”: 0,1 în loc de 100
+    t = xf.annual_table(cf)
+    r = t.loc[D("2019-12-31")]
+    assert bool(r["scale_fixed"]) and r["shares_diluted"] == pytest.approx(100.0) and r["eps"] == pytest.approx(2.0)
+    assert not bool(t.loc[D("2020-12-31"), "scale_fixed"])
+    assert xf.scale_correction(100.0, 100.0) == 1.0
+    assert xf.scale_correction(100.0, 130.0) == 1.0                    # diferență reală, nu de scară
+    assert xf.scale_correction(100e6, 100e3) == 0.001
+
+
+def test_cifre_pe_12_luni_din_10q_ignorate():
+    # Amazon pune în 10-Q și fluxul de numerar pe ultimele 12 luni: nu e un an fiscal
+    cf = _full_cf()
+    cf["facts"]["us-gaap"]["NetCashProvidedByUsedInOperatingActivities"]["units"]["USD"].append(
+        F("2019-10-01", "2020-09-30", 999.0, "2020-10-30", form="10-Q"))
+    cf["facts"]["us-gaap"]["NetIncomeLoss"]["units"]["USD"].append(
+        F("2019-10-01", "2020-09-30", 999.0, "2020-10-30", form="10-Q"))
+    t = xf.annual_table(cf)
+    assert list(t.index) == [D("2019-12-31"), D("2020-12-31")]
+    assert D("2020-09-30") not in xf.quarterly(cf, "cfo").index
+
+
+def test_eps_pe_profitul_actionarilor_comuni():
+    # bancă cu dividende preferențiale: EPS = (profit − dividende preferențiale) / acțiuni
+    cf = _full_cf()
+    cf["facts"]["us-gaap"]["NetIncomeLossAvailableToCommonStockholdersDiluted"] = {"units": {"USD": [
+        F("2020-01-01", "2020-12-31", 220.0, "2021-02-19")]}}
+    cf["facts"]["us-gaap"]["EarningsPerShareDiluted"]["units"]["USD/shares"][1] = F(
+        "2020-01-01", "2020-12-31", 0.55, "2021-02-19")
+    r = xf.annual_table(cf).loc[D("2020-12-31")]
+    assert r["net_income"] == 240.0 and r["eps"] == pytest.approx(0.55) and r["eps_check"] == pytest.approx(0.0)
+
+
+def test_software_capitalizat_adaugat_la_capex_ppe():
+    cf = _full_cf()
+    cf["facts"]["us-gaap"]["PaymentsToDevelopSoftware"] = {"units": {"USD": [
+        F("2020-01-01", "2020-12-31", 10.0, "2021-02-19")]}}
+    r = xf.annual_table(cf).loc[D("2020-12-31")]
+    assert r["capex"] == 70.0 and r["fcf"] == 260.0
+
+
+def test_diagnose():
+    out, extra = xf.diagnose({"facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": [{"form": "10-K"}, {"form": "10-K"}, {"form": "8-K"}]}},
+        "RevenueFromRelatedParties": {"units": {}}}}})
+    assert ("net_income", "NetIncomeLoss", "USD", {"10-K": 2, "8-K": 1}) in out
+    assert extra == ["RevenueFromRelatedParties"]
