@@ -29,13 +29,16 @@ def form4_filings(submissions, since, max_filings=MAX_FILINGS):
     return rows[:max_filings], len(rows) > max_filings
 
 
-def load_form4(client, cik, days=insiders.WINDOW_DAYS + 5, today=None, max_filings=MAX_FILINGS):
+def load_form4(client, cik, days=insiders.WINDOW_DAYS + 5, today=None, max_filings=MAX_FILINGS, skip=()):
     """Form 4-urile emitentului depuse în ultimele `days` zile, parsate. Întoarce (docs, probleme, trunchiat).
-    O depunere care nu se descarcă sau nu se parsează intră la probleme, nu oprește restul."""
+    O depunere care nu se descarcă sau nu se parsează intră la probleme, nu oprește restul.
+    `skip`: numerele de accession deja citite (jobul de pe server); nu se mai descarcă."""
     today = today or date.today()
     since = (today - timedelta(days=days)).isoformat()
     subs = client.get_json(sec_edgar.submissions_url(cik))
     filings, truncated = form4_filings(subs, since, max_filings)
+    skip = set(skip or ())
+    filings = [f for f in filings if f["accession"] not in skip]
     docs, problems = [], []
     for f in filings:
         name = insiders.raw_xml_name(f["primary_document"])

@@ -442,3 +442,17 @@ def text_frame(df, formats, na="N/A"):
         out[col] = [na if v is None or (not isinstance(v, str) and pd.isna(v)) else fn(v)
                     for v in out[col]]
     return out
+
+
+def na_safe_frame(df, formats, na="N/A"):
+    """Tabelul pentru `st.dataframe(out.style.format(rest))`, fără celule „None”.
+
+    Doar coloanele care chiar au lipsuri devin text (prin `text_frame`, cu `na` în locul lipsei); celelalte rămân
+    numerice, deci se sortează corect. Coloanele text fără formatare primesc `na` la lipsă.
+    Întoarce (tabel, formatările rămase pentru Styler)."""
+    na_cols = {c: f for c, f in formats.items() if c in df.columns and df[c].isna().any()}
+    out = text_frame(df, na_cols, na) if na_cols else df.copy()
+    for c in out.columns:
+        if c not in formats and (out[c].dtype == object or pd.api.types.is_string_dtype(out[c])) and out[c].isna().any():
+            out[c] = [na if v is None or (not isinstance(v, str) and pd.isna(v)) else v for v in out[c]]
+    return out, {c: f for c, f in formats.items() if c not in na_cols}

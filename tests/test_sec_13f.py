@@ -169,12 +169,16 @@ def test_classify_manager():
 def _holdings():
     rows = [
         # CIK, Fond, Clasa, CUSIP, Emitent, Pondere, Rang
+        # F1: 20 de poziții → prag max(1/20, 1%) = 5%
         ("1", "F1", "Concentrat", "000001AA1", "AAA", 0.50, 1),
-        ("1", "F1", "Concentrat", "000002BB2", "BBB", 0.02, 12),
-        ("1", "F1", "Concentrat", "000002BB9", "BBB", 0.02, 13),     # clasele BBB adunate: 4% → convingere
-        ("2", "F2", "Concentrat", "000001AA1", "AAA", 0.01, 50),      # deține, fără convingere
+        ("1", "F1", "Concentrat", "000002BB2", "BBB", 0.03, 12),
+        ("1", "F1", "Concentrat", "000002BB9", "BBB", 0.03, 13),     # clasele BBB adunate: 6% ≥ 5% → convingere
+        # F2: 8 poziții → prag 12,5%; AAA 0,97% pe locul 8 (cazul Himalaya/AAPL): deține, fără convingere
+        ("2", "F2", "Concentrat", "000001AA1", "AAA", 0.0097, 8),
         ("3", "F3", "Larg", "000001AA1", "AAA", 0.001, 2000),         # exclus din consens
     ]
+    rows += [("1", "F1", "Concentrat", f"9{i:05d}XX1", f"F1_{i}", 0.44 / 17, 14 + i) for i in range(17)]
+    rows += [("2", "F2", "Concentrat", f"8{i:05d}XX1", f"F2_{i}", 0.9903 / 7, 1 + i) for i in range(7)]
     df = pd.DataFrame(rows, columns=["CIK", "Fond", "Clasa", "CUSIP", "Emitent", "Pondere", "Rang"])
     df["CUSIP6"] = df["CUSIP"].str[:6]
     df["Actiuni"] = 1.0
@@ -199,7 +203,43 @@ def test_consensus_share_classes_and_exclusions():
 def test_who_holds_order_and_conviction():
     w = s.who_holds(_holdings(), "000001")
     assert w["Fond"].tolist() == ["F1", "F2", "F3"]
-    assert w["Convingere"].tolist() == [True, False, False]      # F2: rang 50, 1%; F3: rang 2000, 0,1%
+    assert w["Convingere"].tolist() == [True, False, False]      # F2: 0,97% < 12,5% (deși e în top 10); F3: 0,1%
+    assert s.who_holds(_holdings(), "000002")["Convingere"].tolist() == [True]   # BBB: 3% + 3% ≥ 5%
+
+
+def test_conviction_threshold():
+    assert s.conviction_threshold(8) == pytest.approx(0.125)        # Himalaya: 8 poziții
+    assert s.conviction_threshold(16) == pytest.approx(0.0625)      # Pershing
+    assert s.conviction_threshold(30) == pytest.approx(1 / 30)      # Berkshire: 3,33%
+    assert s.conviction_threshold(100) == pytest.approx(0.01)
+    assert s.conviction_threshold(150) == pytest.approx(0.01)       # minimul de 1%
+    assert np.isnan(s.conviction_threshold(0)) and np.isnan(s.conviction_threshold(np.nan))
+    thr = s.conviction_threshold(pd.Series([8, 150], index=["a", "b"]))
+    assert thr.index.tolist() == ["a", "b"] and thr.tolist() == pytest.approx([0.125, 0.01])
+
+
+def test_conviction_mask_single_fund_cases():
+    # 8 poziții (prag 12,5%): 24,2% da; 12,5% exact da; 0,97% pe locul 8 nu (regula veche: da, prin top 10)
+    w8 = [0.242, 0.20, 0.15, 0.125, 0.12, 0.10, 0.0533, 0.0097]
+    b8 = _book([(f"{i:06d}XX1", f"E{i}", 1, w * 1000) for i, w in enumerate(w8)])
+    assert s.conviction_mask(b8).tolist() == [True, True, True, True, False, False, False, False]
+    # 150 de poziții (prag 1%): 3,5% pe locul 12 da (regula „top 10 ȘI ≥ 1%” l-ar fi pierdut); 0,5% nu
+    w150 = [0.05] * 11 + [0.035] + [0.01] + [(1 - 0.55 - 0.035 - 0.01) / 137] * 137
+    b150 = _book([(f"{i:06d}XX1", f"E{i}", 1, w * 1e6) for i, w in enumerate(w150)])
+    m = s.conviction_mask(b150)
+    assert bool(m.iloc[11]) and bool(m.iloc[12]) and not m.iloc[13:].any()
+    # pondere lipsă → nu e convingere
+    b = b8.copy()
+    b.loc[0, "Pondere"] = np.nan
+    assert not bool(s.conviction_mask(b).iloc[0])
+
+
+def test_conviction_mask_multi_fund_counts_per_fund():
+    h = _holdings()
+    m = s.conviction_mask(h)
+    assert bool(m[(h["CIK"] == "1") & (h["CUSIP"] == "000001AA1")].iloc[0])        # 50% ≥ 5%
+    assert m[(h["CIK"] == "1") & (h["Emitent"] == "BBB")].all()                     # clasele adunate: 3% + 3% ≥ 5%
+    assert not bool(m[(h["CIK"] == "2") & (h["CUSIP"] == "000001AA1")].iloc[0])    # 0,97% < 12,5%
 
 
 def test_issuer_key_funds_use_full_cusip():
@@ -227,3 +267,13 @@ def test_detect_thousands():
     small["Valoare_raportata"] = small["Valoare_raportata"] / 1000    # 0,01 $ / acțiune → raportat în mii
     assert s.detect_thousands(small, 1.0)
     assert not s.detect_thousands(small.iloc[:2], 1.0)                # prea puține rânduri: nu decide
+
+
+def test_conviction_mask_share_classes_same_flag():
+    # Berkshire-like: 30 de poziții (prag 3,33%); GOOGL 8,91% + GOOG 3,05% = 11,96% → ambele clase bifate
+    w = [0.2495, 0.0891, 0.0305] + [(1 - 0.2495 - 0.0891 - 0.0305) / 27] * 27
+    b = _book([(f"{i:06d}XX1", f"E{i}", 1, x * 1e6) for i, x in enumerate(w)])
+    b.loc[b["Emitent"] == "E2", "CUSIP6"] = b.loc[b["Emitent"] == "E1", "CUSIP6"].iloc[0]   # E1/E2 = același emitent
+    m = s.conviction_mask(b).set_axis(b["Emitent"])
+    assert m["E1"] and m["E2"]                                   # E2 singur (3,05%) ar fi sub 3,33%
+    assert not m.drop(["E0", "E1", "E2"]).any()                  # restul: 2,34% < 3,33%

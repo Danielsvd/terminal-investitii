@@ -91,7 +91,7 @@ def test_holdings_signals():
                          "3": sec_13f.quarter_moves(p1, c1)})
     cmap = {"037833100": "AAPL", "594918104": "MSFT"}
     sig = v.holdings_signals(["AAPL", "MSFT", "VG"], cmap, hold, mov, {"1", "2"}).set_index("Simbol")
-    assert sig.loc["AAPL", ["Detin", "Convingere", "Intrari", "Reduceri"]].tolist() == [2, 2, 1, 1]   # F2: rang 2 ≤ 10
+    assert sig.loc["AAPL", ["Detin", "Convingere", "Intrari", "Reduceri"]].tolist() == [2, 1, 1, 1]   # F2: 2,5% < max(1/2, 1%) = 50%
     assert sig.loc["AAPL", "Fonduri"] == "F1, F2" and "F2: Redusă" in sig.loc["AAPL", "Miscari"]
     assert sig.loc["MSFT", ["Detin", "Iesiri"]].tolist() == [1, 1]          # ieșirea F2 se vede, deși nu mai deține
     assert sig.loc["VG", ["Detin", "Intrari"]].tolist() == [0, 0] and sig.loc["VG", "Fonduri"] == ""
