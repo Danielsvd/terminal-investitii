@@ -34,3 +34,16 @@ doar pe server și nu intră niciodată în repo.
 - NN publică pe pagină doar raportul curent; lunile vechi se scot din arhiva `.zip` a fondului Pilon II
   („…fond pensii private 2021 - 2026.zip”; pagina are și arhivele NN Activ/Optim, excluse prin `filtru_zip`).
   Arhiva se păstrează în `pdf/nn/_arhiva.zip` + `_arhiva.url` și se descarcă din nou cel mult o dată la 30 de zile.
+
+## Jobul SEC (insideri + fonduri 13F → jurnal + Telegram)
+
+- Cod: `tools/sec/run.py` (logica în `analytics/sec_alerts.py`). Folosește mediul jobului Pilon II
+  (`~/apps/pilon2/.venv`: aceleași pachete) și botul lui (`~/apps/pilon2/telegram.json`). Starea alertelor 13F:
+  `~/apps/sec/state.json` (creat la prima rulare).
+- Ce face, luni–vineri la 07:43: ia acțiunile americane deținute (`Tranzactii`) + `watchlist`; scrie în foaia
+  `SEC_insideri_jurnal` (creată la prima rulare) tranzacțiile din rapoartele Form 4 noi; trimite pe Telegram doar
+  dacă: un insider a cumpărat pe piață (cod P) ≥ 50.000 $ într-un raport, sau un fond concentrat (13F) a deschis
+  sau închis poziția. Prima rulare doar înregistrează (mesaj „Rulare inițială”).
+- Probă fără scriere și fără Telegram (afișează mesajul care ar pleca):
+  `cd ~/apps/terminal-investitii && ~/apps/pilon2/.venv/bin/python -m tools.sec.run --state-dir ~/apps/sec --proba`.
+- Programare: `systemd/sec-snapshot.timer`. Jurnal: `journalctl -u sec-snapshot -n 80 --no-pager`.

@@ -1,0 +1,18 @@
+# Jobul SEC (Form 4 + 13F → SEC_insideri_jurnal + alerte Telegram) pe serverul lui Daniel.
+# Copie în /etc/systemd/system/ (vezi deploy/README.md). Rulează din checkout-ul main, cu mediul jobului Pilon II.
+[Unit]
+Description=SEC: Form 4 si 13F pe actiunile americane detinute si din watchlist -> jurnal + Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=svd
+Group=svd
+WorkingDirectory=/home/svd/apps/terminal-investitii
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/svd/apps/pilon2/.venv/bin/python -m tools.sec.run --state-dir /home/svd/apps/sec --secrets /home/svd/apps/terminal-investitii/.streamlit/secrets.toml --telegram /home/svd/apps/pilon2/telegram.json
+TimeoutStartSec=20min
+MemoryMax=1G
+Nice=10
+NoNewPrivileges=true
