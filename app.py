@@ -22,6 +22,7 @@ try:
 except (AttributeError, RuntimeError):
     _THEME_TYPE = None
 DF_UP, DF_DOWN, DF_MUTED = ui_theme.df_colors(_THEME_TYPE)
+CORR_SCALE, CORR_TEXT = ui_theme.corr_heatmap_colors(_THEME_TYPE)   # matricile de corelație, după mod
 sign_color = lambda v: ui_theme.sign_css(v, DF_UP, DF_DOWN)  # celule text „+x” verde, „-x” roșu
 import os
 import time
@@ -279,7 +280,7 @@ st.markdown("""
         box-shadow: 0 0 5px rgba(255,255,255,0.8); z-index: 10; transform: translateX(-50%);
     }
     .analyst-labels {
-        display: flex; justify-content: space-between; font-size: 10px; color: #8B949E; margin-top: 5px;
+        display: flex; justify-content: space-between; font-size: 12px; color: #8B949E; margin-top: 5px;
     }
 
     /* Sentiment Tags */
@@ -348,9 +349,10 @@ def plot_ro(fig, **kwargs):
     """st.plotly_chart cu separatori românești: punct la mii, virgulă la zecimale („1.234,5”).
     Se aplică axelor, etichetelor și casetelor de hover; nu schimbă datele graficului.
     Culorile scrise pentru fundal închis (fundal #0E1117, grilă #30363D, galben, cyan) trec pe valori
-    vizibile în ambele teme (ui/theme.theme_figure_dict); restul stilului vine din tema Streamlit."""
+    vizibile în ambele teme (ui/theme.theme_figure_dict); cu modul temei cunoscut, liniile vechi (portocaliu,
+    violet, gri deschis, chihlimbar) primesc nuanța modului (PLOT_TOKENS). Restul stilului vine din tema Streamlit."""
     fig.update_layout(separators=",.")
-    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict(), up=DF_UP))
+    fig = go.Figure(ui_theme.theme_figure_dict(fig.to_dict(), up=DF_UP, mode=_THEME_TYPE))
     return st.plotly_chart(fig, **kwargs)
 
 def format_large_currency(val):
@@ -1795,11 +1797,11 @@ def plot_correlation_matrix(tickers, show_cards=True):
             z=corr_matrix.values,
             x=corr_matrix.columns,
             y=corr_matrix.columns,
-            colorscale=[[0.0, '#3987e5'], [0.5, '#383835'], [1.0, '#d95926']],
+            colorscale=CORR_SCALE,
             zmin=-1, zmax=1, xgap=2, ygap=2,
             text=text_matrix,
             texttemplate="%{text}",
-            textfont=dict(color='#ffffff'),
+            textfont=dict(color=CORR_TEXT),
             colorbar=dict(title="Corelație"),
             hovertemplate="%{y} ↔ %{x}<br>Corelație: %{z:.2f}<extra></extra>"
         ))
@@ -5983,15 +5985,15 @@ def main():
                     <div style="background:#161B22; padding:20px; border-radius:15px; border:1px solid #30363D; margin-bottom:20px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                             <div style="flex: 1; min-width: 100px;">
-                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Țintă Intrare</p>
+                                <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Țintă Intrare</p>
                                 <h2 style="color:var(--tk-text); margin:5px 0; font-size:22px;">{target_text} <span style="font-size:12px; color:#8B949E;">{info.get('currency', 'USD')}</span></h2>
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: center; border-left: 1px solid #30363D; border-right: 1px solid #30363D;">
-                                <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
+                                <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Preț Live</p>
                                 <h2 style="color:{t_color}; margin:5px 0; font-size:28px;">{ro(curr_price):.2f}</h2>
                             </div>
                             <div style="flex: 1; min-width: 100px; text-align: right;">
-                                <p style="color:#F85149; margin:0; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Stop-Loss (Exit)</p>
+                                <p style="color:#F85149; margin:0; font-size:12px; text-transform:uppercase; letter-spacing:1px;">Stop-Loss (Exit)</p>
                                 <h2 style="color:#F85149; margin:5px 0; font-size:22px;">{sl_display}</h2>
                                 <small style="color:#8B949E;">{sl_risk_display}</small>
                             </div>
@@ -6415,7 +6417,7 @@ def main():
                     else:
                         df_peers[p_label] = [format_peer_value(p_label, v) for v in df_peers[p_label]]
                 st.dataframe(df_peers.style.apply(
-                    lambda row: ["font-weight: bold; background-color: rgba(59, 130, 246, 0.14)" if row.name < 2 else "" for _ in row], axis=1),
+                    lambda row: [f"font-weight: bold; background-color: {ui_theme.DF_HIGHLIGHT_BG}" if row.name < 2 else "" for _ in row], axis=1),
                     width='stretch', hide_index=True)
                 p_counts = ", ".join(f"{label.replace(' (%)', '')} n={medians[label][1]}" for _, label, _ in PEER_METRICS)
                 p_note = (f"Mediana e calculată din {len(peer_rows)} comparabili, fără {real_sym}; observații pe indicator: {p_counts}. "
@@ -6505,7 +6507,7 @@ def main():
                     v_color = "#3FB950" if rvol > 1.5 else ("#F85149" if rvol < 0.7 else "#8B949E")
                     st.markdown(f"""
                         <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {v_color}; text-align:center;">
-                            <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Volum Relativ (RVOL)</p>
+                            <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;">Volum Relativ (RVOL)</p>
                             <h1 style="color:{v_color}; margin:10px 0;">{ro(rvol):.2f}x</h1>
                         </div>
                     """, unsafe_allow_html=True)
@@ -6546,7 +6548,7 @@ def main():
                 with c_ceo:
                     st.markdown(f"""
                     <div style='background:#161B22; padding:20px; border-radius:15px; border-top: 4px solid #58A6FF; text-align:center; height:130px;'>
-                        <p style='color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;'>Director Executiv (CEO)</p>
+                        <p style='color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;'>Director Executiv (CEO)</p>
                         <h3 style='margin:10px 0; color:var(--tk-text); font-size:18px;'>{ceo_name}</h3>
                     </div>
                     """, unsafe_allow_html=True)
@@ -6556,7 +6558,7 @@ def main():
                     i_col = "#3FB950" if inst_percent > 50 else "#D29922"
                     st.markdown(f"""
                     <div style='background:#161B22; padding:20px; border-radius:15px; border-top: 4px solid {i_col}; text-align:center; height:130px;'>
-                        <p style='color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;'>Dețineri Instituționale Totale</p>
+                        <p style='color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;'>Dețineri Instituționale Totale</p>
                         <h2 style='margin:10px 0; color:{i_col};'>{ro(inst_percent):.2f}%</h2>
                     </div>
                     """, unsafe_allow_html=True)
@@ -6882,7 +6884,7 @@ def main():
                 az_title = f"Altman {altman_res['variant']}" if altman_res["variant"] else "Altman Z"
                 st.markdown(f"""
                 <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {altman_res['color']}; text-align:center;">
-                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">{az_title}</p>
+                    <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;">{az_title}</p>
                     <h1 style="color:{altman_res['color']}; margin:10px 0; font-size:40px;">{az_value}</h1>
                     <p style="color:{altman_res['color']}; font-weight:bold; font-size:12px; margin:0;">{altman_res['label']}</p>
                 </div>
@@ -6938,7 +6940,7 @@ def main():
                         pio_label = f"emitent financiar: {9 - pio['evaluable']} criterii nu se aplică, fără verdict"
                 st.markdown(f"""
                 <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {pio_color}; text-align:center;">
-                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Criterii trecute</p>
+                    <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;">Criterii trecute</p>
                     <h1 style="color:{pio_color}; margin:10px 0; font-size:40px;">{pio_value}</h1>
                     <p style="color:#C9D1D9; font-size:12px; margin:0;">{pio_label}</p>
                 </div>
@@ -6991,7 +6993,7 @@ def main():
             with c_left:
                 st.markdown(f"""
                 <div style="background:#161B22; padding:30px; border-radius:15px; border:2px solid {h_color}; text-align:center;">
-                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Scor Sănătate Financiară</p>
+                    <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;">Scor Sănătate Financiară</p>
                     <h1 style="color:{h_color}; margin:15px 0; font-size:54px;">{h_display}<span style="font-size:18px;">/10</span></h1>
                     <hr style="border-color:#30363D;">
                     <p style="font-size:13px; color:#8B949E;">Beta: {display_beta} | Alpha: {display_alpha}</p>
@@ -7041,7 +7043,7 @@ def main():
                 with m_col1:
                     st.markdown(f"""
                     <div style="background:#161B22; padding:25px; border-radius:15px; border:2px solid {mos_color}; text-align:center;">
-                        <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Margin of Safety</p>
+                        <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;">Margin of Safety</p>
                         <h1 style="color:{mos_color}; margin:10px 0; font-size:40px;">{ro(mos_val):.1f}%</h1>
                     </div>
                     """, unsafe_allow_html=True)
@@ -7078,7 +7080,7 @@ def main():
                 # Vizualizare principală scor cash
                 st.markdown(f"""
                 <div style="background:#161B22; padding:20px; border-radius:15px; border:2px solid {q_color}; text-align:center;">
-                    <p style="color:#8B949E; margin:0; font-size:11px; text-transform:uppercase;">Cash-to-Income Ratio</p>
+                    <p style="color:#8B949E; margin:0; font-size:12px; text-transform:uppercase;">Cash-to-Income Ratio</p>
                     <h1 style="color:{q_color}; margin:10px 0; font-size:35px;">{q_display}</h1>
                     <p style="font-size:12px; color:#8B949E;">Plată Dividend (Payout): {p_display}</p>
                 </div>
@@ -7200,7 +7202,7 @@ def main():
                 
                 st.markdown(f"""
                 <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {regime_color}; margin-bottom: 20px;'>
-                    <p style='margin:0; color:#8B949E; font-size: 11px; text-transform: uppercase; font-weight: bold; letter-spacing:1px;'>Radar AI: Clasificare Regim (K-Means)</p>
+                    <p style='margin:0; color:#8B949E; font-size: 12px; text-transform: uppercase; font-weight: bold; letter-spacing:1px;'>Radar AI: Clasificare Regim (K-Means)</p>
                     <h3 style='margin:10px 0; color:{regime_color}; font-size: 22px;'>{regime_msg}</h3>
                     <div style='background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border: 1px dashed {regime_color}55;'>
                         <p style='margin:0; font-size:13px; color:#C9D1D9;'>{backtest_info}</p>
@@ -7230,11 +7232,11 @@ def main():
                         <div style='background:#161B22; padding:20px; border-radius:15px; border-left: 5px solid {c_ai}; text-align:center;'>
                             <h1 style='color:{c_ai}; margin:0; font-size:48px;'>{"N/A" if s_score is None else f"{ro(s_score):.2f}"}</h1>
                             <div style='color:{c_ai}; font-weight:bold; font-size:18px; margin-top:5px;'>{status_text}</div>
-                            <p style='color:#8B949E; font-size:11px; margin-top:10px;'>{news_txt} · netestat</p>
+                            <p style='color:#8B949E; font-size:12px; margin-top:10px;'>{news_txt} · netestat</p>
                         </div>
 
                         <div style='margin-top: 15px; padding: 15px; background: #21262D; border-radius: 10px; border-left: 3px solid #58A6FF;'>
-                            <p style='color:#8B949E; font-size: 11px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Cum se calculează (scală −1 la +1)</p>
+                            <p style='color:#8B949E; font-size: 12px; margin:0 0 8px 0; text-transform: uppercase; font-weight: bold;'>Cum se calculează (scală −1 la +1)</p>
                             <div style='color:#C9D1D9; font-size: 13px; line-height: 1.8;'>
                                 <div>Media pe titluri: +încrederea FinBERT la „pozitiv”, −încrederea la „negativ”, 0 la „neutru”. Nu e o probabilitate.</div>
                                 <div><span style='color:#3FB950;'>■</span> <b>≥ +0,25:</b> Euforie media</div>
@@ -7333,7 +7335,7 @@ def main():
                     <div style="background:{opt_data['gex_color']}22; padding:25px; border-radius:15px; border-left: 10px solid {opt_data['gex_color']}; margin-bottom:25px; border: 1px solid {opt_data['gex_color']}44;">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:bold;">Expunere netă la gamma (GEX, estimare) · {opt_data['gex_n']} contracte</p>
+                                <p style="margin:0; color:#8B949E; text-transform:uppercase; font-size:12px; letter-spacing:1px; font-weight:bold;">Expunere netă la gamma (GEX, estimare) · {opt_data['gex_n']} contracte</p>
                                 <h1 style="margin:10px 0; color:{opt_data['gex_color']}; font-size:36px;">{gex_txt}</h1>
                             </div>
                             <div style="text-align:right;">
@@ -8941,7 +8943,7 @@ def main():
                 # Randăm cardul consolidat cu HTML/CSS
                 st.markdown(f"""
                     <div style="background-color: #161B22; padding: 22px; border-radius: 12px; border: 1px solid #30363D; height: 100%;">
-                        <div style="color: #8B949E; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
+                        <div style="color: #8B949E; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; font-weight: bold;">
                             Trend Rotație (1 lună)
                         </div>
                         <div style="font-size: 22px; font-weight: bold; color: var(--tk-text); margin-bottom: 18px;">
@@ -9121,11 +9123,11 @@ def main():
                         z=corr_matrix.values,
                         x=corr_matrix.columns,
                         y=corr_matrix.columns,
-                        colorscale=[[0.0, '#3987e5'], [0.5, '#383835'], [1.0, '#d95926']], 
+                        colorscale=CORR_SCALE,
                         zmin=-1, zmax=1, xgap=2, ygap=2,
                         text=text_matrix,
                         texttemplate="%{text}",
-                        textfont=dict(color='#ffffff'),
+                        textfont=dict(color=CORR_TEXT),
                         hovertemplate="%{y} ↔ %{x}<br>Corelație: %{z:.2f}<extra></extra>"
                     ))
                     

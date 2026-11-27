@@ -1,8 +1,8 @@
 # DESIGN.md — Terminal Investiții PRO
 
-> **Decizia finală (27.11.2026): noaptea = partea întunecată „Nordic Frost”, ziua = partea luminoasă „Neon Carbon”.** Fiecare mod își are culorile, fontul (noaptea Manrope; ziua Inter + titluri Space Grotesk) și colțurile widgeturilor (10px / 12px) în `.streamlit/config.toml`. Cardurile au colțuri comune de 20px și meniul de 14px (CSS nu le poate alege după mod). Noaptea: umbră moale și gradient fin; ziua: carduri plate. Butonul principal: alb pe albastru fiord noaptea, lime pe cerneală ziua (tokenul `on-accent`). Valorile din tabelul §1.0 sunt valabile pentru coloana „Întunecat”; coloana „Luminos” e în `ui/theme.py`.
+> **Decizia finală (27.11.2026): noaptea = partea întunecată „Nordic Frost”, ziua = partea luminoasă „Neon Carbon”.** Fiecare mod își are culorile, fontul (noaptea Manrope; ziua Inter + titluri Space Grotesk) și colțurile widgeturilor (10px / 12px) în `.streamlit/config.toml`. Cardurile au colțuri comune de 20px și meniul de 14px (CSS nu le poate alege după mod). Noaptea: umbră moale și gradient fin; ziua: carduri plate. Butonul principal: alb pe albastru fiord noaptea, lime pe cerneală ziua (tokenul `on-accent`). Tabelul §1.0 are ambele coloane la zi (27.11, după #264/#265).
 
-Direcția: **„Nordic Frost”** (varianta 6 de pe canvasul de redesign, aleasă de Daniel pe 25.11.2026 după proba Swiss Bank, **în probă pe test1**): ardezie și albastru-gheață, carduri moi cu umbră fină, mult aer, font Manrope. Înlocuiește „Indigo profund” (#169) și Swiss Bank (#248, respinsă); Indigo e păstrat mai jos ca istoric. Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
+Direcția: **„Nordic Frost” noaptea + „Neon Carbon” ziua** (variantele 6 și 5 de pe canvasul de redesign; Daniel, 27.11.2026). Înlocuiește „Indigo profund” (#169, păstrat mai jos ca istoric), Swiss Bank (#248, respinsă) și partea luminoasă Nordic (25.11). Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
 Baza e Bleumarin: un terminal sobru, cu margini fine și densitate mare pe tabele. Din stilul Revolut se iau doar cifra mare de sus, colțurile mari și cardurile fără margine pe ecranele de sinteză, plus butonul principal complet rotunjit.
 Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #166 (tokenuri light-dark), #167 (banner mobil), #168 (iconuri).
 
@@ -24,22 +24,25 @@ Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #
 
 ## 1. Culoare
 
-### 1.0 Paleta curentă — „Nordic Frost” (25.11.2026, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
+### 1.0 Paleta curentă — „Nordic Frost” noaptea, „Neon Carbon” ziua (27.11.2026; sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`, verificat de `tests/test_theme.py`)
 
-| Token | Întunecat | Luminos | Rol |
+| Token | Întunecat (Nordic Frost) | Luminos (Neon Carbon) | Rol |
 |---|---|---|---|
-| `bg` | `#0E1620` | `#EDF2F7` | fundalul paginii, cu strălucire rece discretă `glow` |
-| `surface` / `surface-top` | `#16212D` / `#1A2734` | `#FFFFFF` / `#FFFFFF` | carduri: gradient fin de sus în jos |
-| `surface-2` | `#1D2A38` | `#F2F6FA` | antet de tabel, interiorul unui card |
-| `border` / `border-strong` | `#273647` / `#34485C` | `#D9E2EB` / `#C3D0DC` | contur de 1px, hover |
-| `text` / `muted` | `#E8EEF4` / `#9DAEC0` | `#0F1E2C` / `#526477` | text și etichete |
-| `accent` / `accent-text` | `#7CC4E8` / `#9AD3F0` | `#1F6F99` / `#1A6489` | accent / linkuri; butonul principal `#1F6F99` în ambele moduri (text alb 5,5:1) |
-| `up` / `down` / `warn` | `#6EE7B7` / `#FCA5A5` / `#FCD34D` | `#0B7A55` / `#B42318` / `#8F5B00` | câștig / pierdere / atenție |
-| `highlight`, `shadow`, `glow` | `#FFFFFF0D`, `#02081266`, `#7CC4E812` | `#FFFFFFE6`, `#0F1E2C14`, `#1F6F990D` | linia luminoasă sus, umbra moale, strălucirea paginii |
+| `bg` | `#0E1620` | `#EEF1EC` | fundalul paginii; noaptea cu strălucire rece discretă `glow` |
+| `surface` / `surface-top` | `#16212D` / `#1A2734` | `#FFFFFF` / `#FFFFFF` | carduri: noaptea gradient fin de sus în jos, ziua plat |
+| `surface-2` | `#1D2A38` | `#F4F6F2` | antet de tabel, interiorul unui card, mijlocul scalei de corelație |
+| `border` / `border-strong` | `#273647` / `#34485C` | `#DCE2DA` / `#C6CFC3` | contur de 1px, hover |
+| `text` / `muted` | `#E8EEF4` / `#9DAEC0` | `#0F1411` / `#566059` | text și etichete |
+| `accent` / `accent-text` | `#7CC4E8` / `#9AD3F0` | `#0F1411` / `#3D5E0B` | accent (bare, selecție) / linkuri; ziua accentul e cerneala |
+| `on-accent` | `#FFFFFF` | `#C6F432` | textul butonului principal: alb pe fiord `#1F6F99` noaptea (5,5:1), lime pe cerneală ziua (14,5:1) |
+| `up` / `down` / `warn` | `#6EE7B7` / `#FCA5A5` / `#FCD34D` | `#116B37` / `#C0262D` / `#8A5A00` | câștig / pierdere / atenție |
+| `on-fill` | `#0E1620` | `#FFFFFF` | text pe un fundal plin colorat (verdict, GEX) |
+| `highlight`, `shadow`, `glow` | `#FFFFFF0D`, `#02081266`, `#7CC4E812` | transparente | noaptea: linia luminoasă sus, umbra moale, strălucirea paginii; ziua: plat |
 
-- Colțuri: carduri, metrici și expandere `CARD_RADIUS` = 18px; meniul lateral `NAV_RADIUS` = 12px; widgeturi `baseRadius` = 10px; butoane `full`.
-- Font: **Manrope** de la Google Fonts prin `theme.font` (rezervă: fontul de sistem). Este prima sursă externă de font (excepție de la §2, aprobată odată cu varianta).
-- Contrast (calculat): text / muted / accent-text / up / down / warn ≥ 4,75 pe bg, surface și surface-2 în ambele moduri.
+- Colțuri: carduri, metrici și expandere `CARD_RADIUS` = 20px; meniul lateral `NAV_RADIUS` = 14px (comune ambelor moduri); widgeturi `baseRadius` = 10px noaptea, 12px ziua; butoane `full`.
+- Fonturi (Google Fonts prin `theme.font` / `theme.headingFont`, rezervă: fontul de sistem): noaptea Manrope; ziua Inter, cu titluri Space Grotesk.
+- Contrast (calculat pe bg, surface și surface-2, minimul): ziua text 16,3 · muted 5,7 · accent-text 6,6 · up 5,8 · down 5,2 · warn 5,2; noaptea text 12,5 · muted 6,4 · accent-text 9,0 · up 9,6 · down 7,7 · warn 10,1.
+- Tabele (canvas, fără `var()`): `df_colors(mode)` dă `up`/`down`/`muted` ale modului; rândul evidențiat `DF_HIGHLIGHT_BG` = `rgba(124, 196, 232, 0.18)`.
 
 ### 1.0b Paleta anterioară — „Indigo profund” (#169, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
 
@@ -122,11 +125,16 @@ Reguli:
 
 Implementat (#166): Streamlit aplică deja tema lui peste șablonul figurii, așa că `plot_ro()` corectează doar culorile scrise pentru fundal închis, prin `ui_theme.theme_figure_dict()` (§7.2).
 
+Implementat (27.11, #264, #265) — paleta curentă:
+- Seriile categoriale vin din `chartCategoricalColors` din `config.toml` (noaptea `#7CC4E8`, `#F4B26A`, `#B4A7F5`, `#F49AC1`, `#9CCB9A`, `#9DAEC0`; ziua `#3D5E0B`, `#1D4ED8`, `#B45309`, `#7C3AED`, `#0F766E`, `#566059`). Valorile din primul punct de mai sus sunt istoric (Bleumarin).
+- Culorile scrise direct în cod pentru fundal închis (portocaliu, `purple`, `cyan`, `yellow`, `red`, `green`, `#FFAB00`, `#58A6FF`, `#C9D1D9`, `#8B949E`, `#BF91FF`...) primesc, cu modul temei cunoscut, nuanța modului din `PLOT_TOKENS` (`PLOT_MODE_MAP`): contrast ≥ 3:1 pe bg și card în ambele moduri (WCAG pentru obiecte grafice). Paletele de categorii scrise în cod (Pilon II, sectoare, Monte Carlo) rămân neatinse.
+- Corelații: `corr_heatmap_colors(mode)` — albastru `#3987E5` (−1) → `surface-2` (0) → portocaliu `#D95926` (+1); textul din celule e `text` ziua (≥ 4,7:1) și alb noaptea.
+
 ---
 
 ## 2. Tipografie
 
-- **Familie (decis 10.11):** fontul de sistem (`font = "sans-serif"` în tema Streamlit). Nu se adaugă fonturi externe acum: Google Fonts ar fi o sursă externă nouă. Poate fi discutat separat.
+- **Familie (27.11):** noaptea Manrope; ziua Inter, cu titluri Space Grotesk (Google Fonts, cu rezervă fontul de sistem; §1.0). Decizia din 10.11 (fontul de sistem) e înlocuită.
 - **Cifre tabulare peste tot:** `font-variant-numeric: tabular-nums;` pe metrici, tabele și cardurile HTML, ca zecimalele să stea aliniate.
 - **Format numeric românesc:** neschimbat (`ro()`, `separators=",."`).
 
@@ -141,7 +149,7 @@ Implementat (#166): Streamlit aplică deja tema lui peste șablonul figurii, aș
 | Etichetă | 13px / 1,3 | 500 | etichete de metrică, cipuri |
 | Notă | 12px / 1,4 | 400 | sursă, dată, „proxy”, număr de observații |
 
-Nu se folosește text sub 12px. Eticheta de 10px de la bara analiștilor urcă la 12px.
+Nu se folosește text sub 12px. Din #265, etichetele de 10–11px din cardurile HTML au trecut la 12px (testul `test_app_resturi_tema` verifică).
 
 ---
 
@@ -233,61 +241,19 @@ Pe telefon (sub 640px), spațiul interior al cardurilor coboară cu un pas (20 �
 
 ---
 
-## 7. Implementare în Streamlit 1.65 (de făcut după aprobare)
+## 7. Implementare în Streamlit 1.65
 
 Verificat în pachetul `streamlit==1.65.0`, versiunea fixată în `requirements.txt`: există secțiunile `[theme.light]` și `[theme.dark]` și `st.context.theme.type` (`"light"`/`"dark"`).
 
-### 7.1 `.streamlit/config.toml` (fișier nou)
-```toml
-[theme]
-font = "sans-serif"
-baseFontSize = 15
-baseRadius = "10px"
-buttonRadius = "full"
-metricValueFontSize = "24px"
-metricValueFontWeight = 600
-showWidgetBorder = true
-
-[theme.dark]
-primaryColor = "#3B82F6"
-backgroundColor = "#0B1220"
-secondaryBackgroundColor = "#111A2E"
-textColor = "#E5ECF6"
-borderColor = "#1F2A44"
-linkColor = "#60A5FA"
-greenColor = "#22C55E"
-redColor = "#F87171"
-yellowColor = "#FBBF24"
-blueColor = "#3B82F6"
-dataframeBorderColor = "#1F2A44"
-dataframeHeaderBackgroundColor = "#18233B"
-dataframeHeaderTextColor = "#8A97AD"
-chartCategoricalColors = ["#3B82F6", "#F59E0B", "#14B8A6", "#A78BFA", "#F472B6", "#94A3B8"]
-
-[theme.light]
-primaryColor = "#1D4ED8"
-backgroundColor = "#F3F5F9"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#0F172A"
-borderColor = "#DCE2EC"
-linkColor = "#1D4ED8"
-greenColor = "#15803D"
-redColor = "#B91C1C"
-yellowColor = "#B45309"
-blueColor = "#1D4ED8"
-dataframeBorderColor = "#DCE2EC"
-dataframeHeaderBackgroundColor = "#F8FAFC"
-dataframeHeaderTextColor = "#526079"
-chartCategoricalColors = ["#1D4ED8", "#B45309", "#0F766E", "#7C3AED", "#BE185D", "#475569"]
-```
-Verificat la rulare cu `streamlit==1.65.0`: cheile sunt valide. `base` NU se pune în `[theme.light]` / `[theme.dark]` (avertisment „not a valid config option”).
+### 7.1 `.streamlit/config.toml`
+Fișierul din repo e sursa de adevăr (culori, fonturi, colțuri pe fiecare mod); `tests/test_theme.py` verifică să coincidă cu `TOKENS`. Copia inițială din 10.11 (Bleumarin) nu mai e valabilă și a fost scoasă de aici. `base` NU se pune în `[theme.light]` / `[theme.dark]` (avertisment „not a valid config option”).
 
 ### 7.2 Tokenuri CSS pentru cardurile HTML proprii (făcut, PR #166)
 - `ui/theme.py` (pur, cu teste în `tests/test_theme.py`): `TOKENS` (luminos, întunecat) și `root_css()`, care scrie `:root { --tk-*: light-dark(luminos, întunecat); }`.
 - Streamlit pune `color-scheme: light|dark` pe containerul aplicației, deci `light-dark()` alege singur valoarea, și imediat după schimbarea temei din meniu, fără rerulare. `st.context.theme.type` NU se folosește: documentația Streamlit spune că poate fi greșit la prima încărcare și la schimbarea temei.
 - `themed_html()` înlocuiește la afișare culorile paletei vechi (GitHub dark: `#161B22`, `#8B949E`, `#3FB950`...) cu `var(--tk-*)`, iar `rgba(...)` vechi cu `color-mix(...)`. `install()` trece prin ea tot ce se afișează cu `markdown(..., unsafe_allow_html=True)`. Codul care produce HTML-ul nu se schimbă.
-- Tabelele (`st.dataframe` cu Styler) se desenează pe canvas, unde `var()` nu merge: folosesc culori de mijloc `DF_UP #3A8854`, `DF_DOWN #E82C2C`, cu contrast ≈ 4:1 pe ambele fundaluri (sub 4,5, asumat), iar rândul evidențiat e `rgba(59,130,246,0.14)`.
-- Graficele Plotly: `plot_ro()` trece figura prin `theme_figure_dict()`. Fundalul `#0E1117` devine transparent, grila `#30363D` devine gri translucid, iar galbenul și cyanul pur trec pe chihlimbar și turcoaz. Restul stilului vine din tema Streamlit.
+- Tabelele (`st.dataframe` cu Styler) se desenează pe canvas, unde `var()` nu merge. Din #170, `df_colors(st.context.theme.type)` dă culorile pline ale modului; doar cu mod necunoscut se folosesc culorile de mijloc `DF_UP #3A8854`, `DF_DOWN #E82C2C`. Rândul evidențiat: `DF_HIGHLIGHT_BG` (#265). Aici, ca și la grafice, modul vine din `st.context.theme.type` (canvasul și SVG-ul nu pot folosi `light-dark()`); dacă e greșit imediat după schimbarea temei, se corectează la următoarea rerulare.
+- Graficele Plotly: `plot_ro()` trece figura prin `theme_figure_dict(..., up=DF_UP, mode=_THEME_TYPE)`. Fundalul `#0E1117` devine transparent, grila `#30363D` / `#446E9E` devine gri translucid, iar culorile vechi de linie primesc nuanța modului (§1.5, #264). Restul stilului vine din tema Streamlit.
 - Browsere: `light-dark()` cere Chrome 123+ / Safari 17.5+ (Mac și Android actualizate).
 
 ### 7.3 Ordinea PR-urilor (fiecare verificat pe test1)
@@ -297,6 +263,10 @@ Verificat la rulare cu `streamlit==1.65.0`: cheile sunt valide. `base` NU se pun
 4. Cardul de sinteză (Revolut) pe Rezumatul zilei și pe antetul Portofoliului.
 5. Cardurile HTML rămase (verdicte, scor macro, ghid), pe rând, câte un tab pe PR.
 6. ✅ #168 — iconuri Material în meniu și pe taburile fără piață (doar etichete, prin `format_func`; §6).
+7. #264 — culorile liniilor din grafice după modul temei (`PLOT_TOKENS`).
+8. #265 — corelațiile după mod, rândul evidențiat `DF_HIGHLIGHT_BG`, etichetele ≥ 12px.
+
+Decis 27.11 (Daniel): cele ~300 de culori vechi din cardurile HTML rămân în cod; `themed_html()` le traduce corect la afișare, iar mutarea lor nu ar schimba nimic vizibil.
 
 În plus: #167 — bannerul macro pe telefon (verdictul nu se mai rupe în cuvânt, `clamp()` + `flex-wrap`).
 

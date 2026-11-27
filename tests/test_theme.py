@@ -274,3 +274,89 @@ def test_noapte_nordic_zi_neon_fonturi_si_adancime():
     assert cfg["dark"]["font"].startswith("Manrope:https://fonts.googleapis.com/")
     assert cfg["light"]["font"].startswith("Inter:https://fonts.googleapis.com/")
     assert cfg["light"]["headingFont"].startswith("'Space Grotesk':https://fonts.googleapis.com/")
+
+
+def test_theme_figure_dict_dupa_mod():
+    fig = {"layout": {"paper_bgcolor": "#0E1117", "yaxis": {"gridcolor": "#446E9E"}},
+           "data": [{"line": {"color": "orange"}}, {"line": {"color": "purple"}}, {"line": {"color": "yellow"}},
+                    {"line": {"color": "#C9D1D9"}}, {"fillcolor": "rgba(191, 145, 255, 0.05)", "line": {"color": "#BF91FF"}},
+                    {"marker": {"colors": ["#FFAB00", "#58A6FF", "#8B949E"]}},
+                    {"marker": {"color": ["#3987e5", "#d95926", "#199e70"]}},          # paletă de categorii: neatinsă
+                    {"textfont": {"color": "#ffffff"}}]}
+    for mode, i in (("light", 0), ("dark", 1)):
+        out = theme.theme_figure_dict(fig, up=theme.TOKENS["up"][i], mode=mode)
+        d = out["data"]
+        assert out["layout"]["paper_bgcolor"] == "rgba(0,0,0,0)"
+        assert out["layout"]["yaxis"]["gridcolor"] == "rgba(128,128,128,0.25)"
+        assert d[0]["line"]["color"] == theme.PLOT_TOKENS["amber"][i]
+        assert d[1]["line"]["color"] == theme.PLOT_TOKENS["violet"][i]
+        assert d[2]["line"]["color"] == theme.TOKENS["warn"][i]
+        assert d[3]["line"]["color"] == theme.TOKENS["text"][i]
+        r, g, b = (int(theme.PLOT_TOKENS["violet"][i][k:k + 2], 16) for k in (1, 3, 5))
+        assert d[4]["fillcolor"] == f"rgba({r}, {g}, {b}, 0.05)"                    # transparența păstrată
+        assert d[5]["marker"]["colors"] == [theme.TOKENS["warn"][i], theme.PLOT_TOKENS["blue"][i], theme.TOKENS["muted"][i]]
+        assert d[6]["marker"]["color"] == ["#3987e5", "#d95926", "#199e70"]
+        assert d[7]["textfont"]["color"] == "#ffffff"
+    # mod necunoscut: exact ca înainte (galben → chihlimbar fix, portocaliu și violet neatinse)
+    out = theme.theme_figure_dict(fig)
+    assert out["data"][0]["line"]["color"] == "orange" and out["data"][2]["line"]["color"] == "#F59E0B"
+
+
+def test_plot_tokens_contrast_linii():
+    # liniile și barele (obiecte grafice): ≥ 3:1 pe fundalul paginii și pe card, în ambele moduri
+    for tok, pair in theme.PLOT_TOKENS.items():
+        if tok in ("surface", "surface-2", "border-strong"):
+            continue
+        for i in (0, 1):
+            for bg in (theme.TOKENS["bg"][i], theme.TOKENS["surface"][i]):
+                assert contrast(pair[i], bg) >= 3.0, (tok, i, pair[i], bg)
+
+
+def test_plot_ro_trimite_modul():
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "theme_figure_dict(fig.to_dict(), up=DF_UP, mode=_THEME_TYPE)" in src
+
+
+def test_plot_tokens_din_paleta_config():
+    cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
+    for tok in ("blue", "amber", "violet", "teal"):
+        for mode, i in (("light", 0), ("dark", 1)):
+            assert theme.PLOT_TOKENS[tok][i] in cfg[mode]["chartCategoricalColors"] + [cfg[mode]["blueColor"]], (tok, mode)
+
+
+def test_figura_plotly_valida_dupa_mod():
+    go = pytest.importorskip("plotly.graph_objects")
+    from plotly.subplots import make_subplots
+    fig = make_subplots(rows=3, cols=1)
+    x = [1, 2, 3]
+    for c in ("orange", "cyan", "purple", "#F85149"):
+        fig.add_trace(go.Scatter(x=x, y=x, line=dict(color=c)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=x, y=x, line=dict(color="yellow")), row=2, col=1)
+    fig.add_hline(y=2, line_color="red", row=2, col=1)
+    fig.add_hline(y=1, line_color="green", row=2, col=1)
+    fig.add_trace(go.Scatter(x=x, y=x, line=dict(color="#00E5FF")), row=3, col=1)
+    fig.add_trace(go.Scatter(x=x, y=x, line=dict(color="#FFAB00"),
+                             marker=dict(color="#FFAB00", line=dict(color="white"))), row=3, col=1)
+    fig.add_trace(go.Pie(labels=["a", "b"], values=[1, 2], marker=dict(colors=["#FFAB00", "#58A6FF"])))
+    fig.update_layout(template="plotly_dark", paper_bgcolor="#0E1117", plot_bgcolor="#0E1117")
+    for mode in ("light", "dark", None):
+        go.Figure(theme.theme_figure_dict(fig.to_dict(), up=theme.DF_UP, mode=mode))   # nu aruncă
+
+
+def test_corr_heatmap_colors_dupa_mod():
+    for mode, i in (("light", 0), ("dark", 1)):
+        scale, txt = theme.corr_heatmap_colors(mode)
+        assert [p for p, _ in scale] == [0.0, 0.5, 1.0]
+        assert scale[1][1] == theme.TOKENS["surface-2"][i]
+        # textul din celule se citește pe capete și pe mijloc (≥ 3,6:1; ziua ≥ 4,7:1)
+        for _, col in scale:
+            assert contrast(txt, col) >= (4.7 if mode == "light" else 3.6), (mode, col)
+    assert theme.corr_heatmap_colors(None) == ([[0.0, "#3987E5"], [0.5, "#383835"], [1.0, "#D95926"]], "#FFFFFF")
+
+
+def test_app_resturi_tema():
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert src.count("colorscale=CORR_SCALE") == 2 and src.count("textfont=dict(color=CORR_TEXT)") == 2
+    assert "'#383835'" not in src
+    assert "rgba(59, 130, 246, 0.14)" not in src and "ui_theme.DF_HIGHLIGHT_BG" in src
+    assert not re.search(r"font-size: ?(?:[0-9]|1[01])px", src)       # DESIGN §2: niciun text sub 12px
