@@ -5325,7 +5325,9 @@ HOLDERS_HELP = {
              "acțiuni de mai multe ori: procentul arătat e **maximul** pe persoane, nu suma. Depunerile dinainte de "
              "18.12.2024 nu au format structurat: apar cu numele, procent N/A.\n\n**Netestat:** context, nu verdict."),
     "peste": ("Depunătorii a căror ultimă depunere arată ≥ 5% (sau procent N/A, la depunerile vechi). Cei care au "
-              "raportat ieșirea sub 5% sunt numărați separat."),
+              "raportat ieșirea sub 5% sunt numărați separat.\n\n**Procent N/A** = ultima depunere e dinainte de "
+              "18.12.2024 (fără format structurat). Deținerea poate fi acum și sub 5%: din 2024, un amendament se "
+              "depune doar la o schimbare semnificativă. Verifică în cardul 13F sau pe sec.gov."),
     "activisti": ("Depunătorii peste prag cu ultima depunere 13D. „13G → 13D” = un investitor pasiv a devenit "
                   "activist: în literatură, unul dintre cele mai urmărite evenimente din 13D."),
     "noi": "13D noi (nu amendamente) sau treceri 13G → 13D depuse în ultimele 90 de zile.",

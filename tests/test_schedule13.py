@@ -251,3 +251,39 @@ def test_display_frame():
     assert v["Procent"].iloc[0] == 8.9 and pd.isna(v["Procent"].iloc[2])            # N/A rămâne NaN, nu 0
     assert v["Sub 5%"].tolist() == ["", "", "", "da"]
     assert s.display_frame(s.current_holders([])).empty
+
+
+# Antetul `.hdr.sgml` real are etichete SGML, nu „FILED BY:” (cauza celor 3 depuneri necitite pe AAPL, 27.11).
+HDR_TAGGED = """<SEC-HEADER>0001086364-24-006980.hdr.sgml : 20240212
+<ACCEPTANCE-DATETIME>20240212100000
+<ACCESSION-NUMBER>0001086364-24-006980
+<TYPE>SC 13G/A
+<PUBLIC-DOCUMENT-COUNT>1
+<FILING-DATE>20240212
+<DATE-OF-FILING-DATE-CHANGE>20240212
+<SUBJECT-COMPANY>
+<COMPANY-DATA>
+<CONFORMED-NAME>X Inc
+<CIK>0000320193
+</COMPANY-DATA>
+<FILING-VALUES>
+<FORM-TYPE>SC 13G/A
+</FILING-VALUES>
+</SUBJECT-COMPANY>
+<FILED-BY>
+<COMPANY-DATA>
+<CONFORMED-NAME>BlackRock Inc.
+<CIK>0001364742
+</COMPANY-DATA>
+</FILED-BY>
+</SEC-HEADER>
+"""
+
+
+def test_parse_sgml_header_tagged():
+    d = s.parse_sgml_header(HDR_TAGGED.encode(), accession="0001086364-24-006980", filing_date="2024-02-12")
+    assert d["kind"] == "13G" and d["amendment"] and d["form"] == "SC 13G/A"
+    assert d["filer_cik"] == "1364742" and d["issuer_cik"] == "320193"
+    assert d["persons"][0]["name"] == "BlackRock Inc." and d["persons"][0]["percent"] is None
+    crlf = HDR_TAGGED.replace("\n", "\r\n")                          # terminații Windows
+    assert s.parse_sgml_header(crlf)["persons"][0]["name"] == "BlackRock Inc."
