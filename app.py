@@ -5300,13 +5300,14 @@ def render_sec_insiders_card(real_sym):
     w = df[(df["Data_tranz"] > s["start"]) & (df["Data_tranz"] <= s["end"])] if not df.empty else df
     if not w.empty:
         with st.expander(f"Toate tranzacțiile ({len(w)})"):
-            st.dataframe(pd.DataFrame({
+            # text_frame: st.dataframe arată celulele nule ca „None” chiar cu Styler(na_rep); lipsa devine „N/A”
+            st.dataframe(text_frame(pd.DataFrame({
                 "Data": w["Data_tranz"].dt.strftime("%d.%m.%Y"), "Depus": w["Data_depunere"].dt.strftime("%d.%m.%Y"),
                 "Insider": w["Insider"], "Funcție": w["Functie"], "Cod": w["Cod"], "Tip": w["Tip"],
                 "Plan 10b5-1": w["Plan_10b5_1"], "Acțiuni": w["Actiuni"].astype(float), "Preț $": w["Pret"].astype(float),
-                "Valoare $": w["Valoare_USD"].astype(float), "Deținere după": w["Detinere_dupa"].astype(float)}).style.format(
-                    {"Acțiuni": ro_spec(",.0f"), "Preț $": ro_spec(",.2f"), "Valoare $": ro_spec(",.0f"),
-                     "Deținere după": ro_spec(",.0f")}, na_rep="N/A"),
+                "Valoare $": w["Valoare_USD"].astype(float), "Deținere după": w["Detinere_dupa"].astype(float)}),
+                {"Acțiuni": ro_spec(",.0f"), "Preț $": ro_spec(",.2f"), "Valoare $": ro_spec(",.0f"),
+                 "Deținere după": ro_spec(",.0f")}),
                 hide_index=True, width='stretch',
                 column_config={"Plan 10b5-1": st.column_config.CheckboxColumn(help=INSIDER_HELP["plan"])})
 
