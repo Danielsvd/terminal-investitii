@@ -6067,7 +6067,9 @@ def main():
             if show_macd:
                 fig.add_trace(go.Scatter(x=subset.index, y=subset['MACD'], line=dict(color='#00E5FF'), name='MACD'), row=current_row, col=1)
                 fig.add_trace(go.Scatter(x=subset.index, y=subset['Signal'], line=dict(color='#FFAB00'), name='Signal'), row=current_row, col=1)
-                fig.add_trace(go.Bar(x=subset.index, y=subset['MACD']-subset['Signal'], name='Hist'), row=current_row, col=1)
+                macd_hist = subset['MACD'] - subset['Signal']
+                fig.add_trace(go.Bar(x=subset.index, y=macd_hist, name='Hist',   # verde peste 0, roșu sub 0, după tema activă
+                                     marker_color=ui_theme.sign_colors(macd_hist, DF_UP, DF_DOWN, DF_MUTED)), row=current_row, col=1)
 
             fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified", paper_bgcolor='#0E1117', plot_bgcolor='#0E1117')
             plot_ro(fig, width='stretch')
