@@ -1,6 +1,8 @@
 # DESIGN.md — Terminal Investiții PRO
 
-Direcția: **Bleumarin + Revolut** (aleasă de Daniel pe 10.11.2026), cu **paleta „Indigo profund”** (schimbată de Daniel pe 10.11, 19:12; PR #169). Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
+> **Decizia finală (27.11.2026): noaptea = partea întunecată „Nordic Frost”, ziua = partea luminoasă „Neon Carbon”.** Fiecare mod își are culorile, fontul (noaptea Manrope; ziua Inter + titluri Space Grotesk) și colțurile widgeturilor (10px / 12px) în `.streamlit/config.toml`. Cardurile au colțuri comune de 20px și meniul de 14px (CSS nu le poate alege după mod). Noaptea: umbră moale și gradient fin; ziua: carduri plate. Butonul principal: alb pe albastru fiord noaptea, lime pe cerneală ziua (tokenul `on-accent`). Valorile din tabelul §1.0 sunt valabile pentru coloana „Întunecat”; coloana „Luminos” e în `ui/theme.py`.
+
+Direcția: **„Nordic Frost”** (varianta 6 de pe canvasul de redesign, aleasă de Daniel pe 25.11.2026 după proba Swiss Bank, **în probă pe test1**): ardezie și albastru-gheață, carduri moi cu umbră fină, mult aer, font Manrope. Înlocuiește „Indigo profund” (#169) și Swiss Bank (#248, respinsă); Indigo e păstrat mai jos ca istoric. Valorile curente sunt în §1.0; tabelele §1.1–§1.4 descriu rolurile.
 Baza e Bleumarin: un terminal sobru, cu margini fine și densitate mare pe tabele. Din stilul Revolut se iau doar cifra mare de sus, colțurile mari și cardurile fără margine pe ecranele de sinteză, plus butonul principal complet rotunjit.
 Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #166 (tokenuri light-dark), #167 (banner mobil), #168 (iconuri).
 
@@ -22,7 +24,24 @@ Starea documentului: **aprobat** (10.11.2026). Pe test1: #165 (`config.toml`), #
 
 ## 1. Culoare
 
-### 1.0 Paleta curentă — „Indigo profund” (#169, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
+### 1.0 Paleta curentă — „Nordic Frost” (25.11.2026, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
+
+| Token | Întunecat | Luminos | Rol |
+|---|---|---|---|
+| `bg` | `#0E1620` | `#EDF2F7` | fundalul paginii, cu strălucire rece discretă `glow` |
+| `surface` / `surface-top` | `#16212D` / `#1A2734` | `#FFFFFF` / `#FFFFFF` | carduri: gradient fin de sus în jos |
+| `surface-2` | `#1D2A38` | `#F2F6FA` | antet de tabel, interiorul unui card |
+| `border` / `border-strong` | `#273647` / `#34485C` | `#D9E2EB` / `#C3D0DC` | contur de 1px, hover |
+| `text` / `muted` | `#E8EEF4` / `#9DAEC0` | `#0F1E2C` / `#526477` | text și etichete |
+| `accent` / `accent-text` | `#7CC4E8` / `#9AD3F0` | `#1F6F99` / `#1A6489` | accent / linkuri; butonul principal `#1F6F99` în ambele moduri (text alb 5,5:1) |
+| `up` / `down` / `warn` | `#6EE7B7` / `#FCA5A5` / `#FCD34D` | `#0B7A55` / `#B42318` / `#8F5B00` | câștig / pierdere / atenție |
+| `highlight`, `shadow`, `glow` | `#FFFFFF0D`, `#02081266`, `#7CC4E812` | `#FFFFFFE6`, `#0F1E2C14`, `#1F6F990D` | linia luminoasă sus, umbra moale, strălucirea paginii |
+
+- Colțuri: carduri, metrici și expandere `CARD_RADIUS` = 18px; meniul lateral `NAV_RADIUS` = 12px; widgeturi `baseRadius` = 10px; butoane `full`.
+- Font: **Manrope** de la Google Fonts prin `theme.font` (rezervă: fontul de sistem). Este prima sursă externă de font (excepție de la §2, aprobată odată cu varianta).
+- Contrast (calculat): text / muted / accent-text / up / down / warn ≥ 4,75 pe bg, surface și surface-2 în ambele moduri.
+
+### 1.0b Paleta anterioară — „Indigo profund” (#169, sursa de adevăr: `ui/theme.py` TOKENS = `.streamlit/config.toml`)
 
 | Token | Întunecat | Luminos | Rol |
 |---|---|---|---|

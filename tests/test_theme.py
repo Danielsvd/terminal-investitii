@@ -73,12 +73,13 @@ def test_premium_css_tinteste_cardurile_inline_dar_nu_surface_2():
     assert "surface-2)\"]" not in css
 
 
-def test_accentul_principal_cu_text_alb():
+def test_accentul_principal_cu_textul_lui():
     import tomllib as _t
     cfg = _t.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
-    for mode in ("light", "dark"):
-        # butonul principal Streamlit are text alb pe primaryColor
-        assert contrast("#FFFFFF", cfg[mode]["primaryColor"]) >= 4.4, mode
+    for mode, i in (("light", 0), ("dark", 1)):
+        # textul butonului principal vine din on-accent (premium_css), nu e albul implicit Streamlit
+        assert contrast(theme.TOKENS["on-accent"][i], cfg[mode]["primaryColor"]) >= 4.5, mode
+    assert "var(--tk-on-accent)" in theme.premium_css()
 
 
 def test_var_token_necunoscut():
@@ -261,3 +262,15 @@ def test_premium_css_centreaza_bannerul_macro_pe_telefon():
     assert "@media (max-width: 640px)" in css
     assert ".macro-hero { justify-content: center !important; text-align: center; }" in css
     assert ".macro-hero > div { flex-basis: 100% !important; }" in css
+
+
+def test_noapte_nordic_zi_neon_fonturi_si_adancime():
+    # 27.11: noaptea Nordic Frost (Manrope, umbră), ziua Neon Carbon (Inter + Space Grotesk, plat)
+    css = theme.premium_css()
+    assert f"border-radius: {theme.CARD_RADIUS};" in css and f"border-radius: {theme.NAV_RADIUS};" in css
+    light_shadow, dark_shadow = theme.TOKENS["shadow"]
+    assert light_shadow.endswith("00") and not dark_shadow.endswith("00")
+    cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
+    assert cfg["dark"]["font"].startswith("Manrope:https://fonts.googleapis.com/")
+    assert cfg["light"]["font"].startswith("Inter:https://fonts.googleapis.com/")
+    assert cfg["light"]["headingFont"].startswith("'Space Grotesk':https://fonts.googleapis.com/")

@@ -65,7 +65,7 @@ def _ohlcv(sym, n, tz=None):
 def _n_rows(period=None, start=None):
     if start is not None:
         return max(len(pd.bdate_range(pd.Timestamp(start).tz_localize(None), TODAY)), 2)
-    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "2y": 504, "3y": 756, "5y": 1260}.get(period, 252)
+    return {"1d": 1, "5d": 5, "1mo": 22, "3mo": 64, "6mo": 127, "1y": 252, "2y": 504, "3y": 756, "5y": 1260, "11y": 2772}.get(period, 252)
 
 
 RICH_INFO = dict(
@@ -132,6 +132,11 @@ class FakeTicker:
             df = df.assign(Close=4.2)
         if self.ticker == "^IRX":      # titluri SUA 3 luni, în procente
             df = df.assign(Close=3.9)
+        if k.get("auto_adjust") is False and k.get("actions"):   # cardul „Creștere”: preț ajustat + dividende
+            ix = df.index.tz_localize(None).to_series()
+            q = (ix.dt.month.isin([3, 6, 9, 12]) & ~ix.dt.to_period("M").duplicated()).to_numpy()
+            df = df.assign(Dividends=np.where(q, 0.25, 0.0))
+            df["Adj Close"] = df["Close"] * (1.01 ** (np.arange(len(df)) / 252))   # ~1%/an din dividende reinvestite
         df.index.name = "Date"
         return df
 
@@ -419,11 +424,11 @@ class FakeWorksheet:
 
     def append_row(self, row, *a, **k):
         APPENDED.append((self.name, list(row)))
-        if self.name in ("Idei_jurnal", "Evenimente_jurnal"):   # jurnalele: rândul rămâne în foaie (se citește înapoi)
+        if self.name in ("Idei_jurnal", "Evenimente_jurnal", "CUSIP_map"):   # rândul rămâne în foaie (se citește înapoi)
             SHEETS[self.name].append(list(row))
 
     def append_rows(self, rows, *a, **k):
-        if self.name == "Evenimente_jurnal":    # jurnalul radarului: rândurile rămân în foaie
+        if self.name in ("Evenimente_jurnal", "CUSIP_map"):    # jurnalul radarului / harta CUSIP: rămân în foaie
             SHEETS[self.name].extend(list(r) for r in rows)
             APPENDED.extend((self.name, list(r)) for r in rows)
 
@@ -699,8 +704,59 @@ def _collect_app_warnings():
     return found
 
 
+# --------------------------------------------------------------------------
+# SEC EDGAR / OpenFIGI (Fonduri SUA): rapoarte 13F sintetice, fără rețea
+# --------------------------------------------------------------------------
+def _info_xml(rows):
+    items = "".join(
+        f"<infoTable><nameOfIssuer>{n}</nameOfIssuer><titleOfClass>{c}</titleOfClass><cusip>{cu}</cusip>"
+        f"<value>{v}</value><shrsOrPrnAmt><sshPrnamt>{sh}</sshPrnamt><sshPrnamtType>SH</sshPrnamtType></shrsOrPrnAmt>"
+        f"{'<putCall>' + pc + '</putCall>' if pc else ''}<investmentDiscretion>SOLE</investmentDiscretion></infoTable>"
+        for n, c, cu, v, sh, pc in rows)
+    return f'<informationTable xmlns="x">{items}</informationTable>'.encode()
+
+
+SEC_CURR = [("APPLE INC", "COM", "037833100", 6_000_000_000, 20_000_000, None),
+            ("ALPHABET INC", "CAP STK CL A", "02079K305", 2_000_000_000, 8_000_000, None),
+            ("ALPHABET INC", "CAP STK CL C", "02079K107", 1_000_000_000, 4_000_000, None),
+            ("NECUNOSCUT CO", "COM", "999999999", 500_000_000, 1_000_000, None),
+            ("APPLE INC", "COM", "037833100", 10_000_000, 30_000, "Call")]
+SEC_PREV = [("APPLE INC", "COM", "037833100", 5_000_000_000, 22_000_000, None),
+            ("ALPHABET INC", "CAP STK CL A", "02079K305", 900_000_000, 4_000_000, None),
+            ("VECHI CORP", "COM", "888888888", 300_000_000, 3_000_000, None)]
+SEC_CALLS = []
+
+
+def _install_sec_fakes():
+    from analytics import sec_13f
+    from data import cusip_map, sec_edgar, sec_funds
+
+    names = dict(zip(sec_funds.managers_frame()["CIK"], sec_funds.managers_frame()["Fond"]))
+
+    def fake_load_manager(client, cik, n=2):
+        SEC_CALLS.append(cik)
+        assert client.user_agent == "Terminal Investitii test@exemplu.ro"
+        if cik == "1040273":                       # Third Point: ramura de eroare
+            raise sec_edgar.EdgarError("HTTP 503 în testul de fum")
+        name = "ALT NUME LLC" if cik == "1061768" else names[cik].upper() + " LLC"   # Baupost: CIK de verificat
+        qs = []
+        for period, filed, rows in (("2026-09-30", "2026-11-14", SEC_CURR), ("2026-06-30", "2026-08-14", SEC_PREV)):
+            qs.append({"period": period, "filing_date": filed, "last_filing_date": filed, "accession": "x",
+                       "filer_name": name, "info": sec_13f.parse_info_table(_info_xml(rows)), "problems": []})
+        return name, qs[:n], []
+
+    def fake_openfigi(cusips, api_key=None, session=None, sleep=None):
+        known = {"037833100": ("AAPL", "APPLE INC"), "02079K305": ("GOOGL", "ALPHABET INC-CL A"),
+                 "02079K107": ("GOOG", "ALPHABET INC-CL C")}
+        return {c: known[c] for c in cusips if c in known}, [c for c in cusips if c not in known]
+
+    sec_funds.load_manager = fake_load_manager
+    cusip_map.openfigi_lookup = fake_openfigi
+
+
 def main():
     install_fakes()
+    _install_sec_fakes()
     app_warnings = _collect_app_warnings()
     from streamlit.testing.v1 import AppTest
 
@@ -724,6 +780,7 @@ def main():
     at = AppTest.from_file(os.path.join(APP_DIR, "app.py"), default_timeout=300)
     at.secrets["gcp_service_account"] = {"type": "service_account"}
     at.secrets["FRED_API_KEY"] = FAKE_FRED_KEY   # cheie falsă: calendarul macro rulează pe răspunsul fals de mai sus
+    at.secrets["sec_user_agent"] = "Terminal Investitii test@exemplu.ro"
     at.run()
     check(at, "1. Știri")
 
@@ -807,6 +864,12 @@ def main():
             print(f"EURO.PA E/P: {ep_txt}")
         if sym in ("TLV.RO", "SNP.RO"):
             assert not has_global(), f"secțiunea Scor fundamental nu trebuie să apară la {sym}"
+        if sym in ("SAP.DE", "SNP.RO", "LOSS"):      # cardul „Creștere și sursa randamentului”
+            assert any("Creștere și sursa randamentului" in str(h.value) for h in at.subheader), f"lipsește cardul Creștere la {sym}"
+            tb = next((d.value for d in at.dataframe if "Diferență (pp/an)" in getattr(d.value, "columns", [])), None)
+            ta = next((d.value for d in at.dataframe if "Măsură" in getattr(d.value, "columns", [])), None)
+            assert tb is not None and list(tb["Perioada"]) == ["3 ani", "5 ani", "10 ani"], tb
+            print(f"Creștere {sym}: B={tb.to_dict('records')[:1]} | A={None if ta is None else ta.head(3).to_dict('records')}")
         if sym in curve_expect:
             assert curve_expect[sym] in page_text(), f"lipsește curba pieței în ratingul {sym}"
         if sym in ("SAP.DE", "SNP.RO"):
@@ -1220,6 +1283,41 @@ def main():
     mk = next((d.value for d in at.dataframe if "Flux net (lei)" in getattr(d.value, "columns", [])), None)
     assert mk is not None and list(mk["Simbol"]) == ["TLV"], mk
     print("Pilon II, tabel pe fonduri:", ft[["Fond", "Acțiuni", "Etichetă"]].to_dict("records"))
+
+    radio().set_value("12. Fonduri SUA").run()
+    check(at, "12. Fonduri SUA")
+    assert [t.label for t in at.tabs][:4] == [":material/list: Prezentare", ":material/account_balance: Fond",
+                                              ":material/groups: Consens", ":material/person_search: Cine deține"]
+    assert "1350694" not in SEC_CALLS, "Fonduri SUA: un fond Larg (Bridgewater) a fost descărcat automat"
+    ov = next(d.value for d in at.dataframe if "Top deținere" in getattr(d.value, "columns", []))
+    assert len(ov) == 20 and "AAPL" in str(ov.iloc[0]["Top deținere"]), ov.head(3)
+    cmap_rows = [r for name, r in APPENDED if name == "CUSIP_map"]
+    assert sorted(r[1] for r in cmap_rows if r[0] != "CUSIP") == ["AAPL", "GOOG", "GOOGL"], cmap_rows
+    cons = next(d.value for d in at.dataframe if "Convingere" in getattr(d.value, "columns", [])
+                and "Fonduri" in getattr(d.value, "columns", []))
+    assert "GOOG/GOOGL" in set(cons["Simbol"]), cons.head()      # clasele adunate pe emitent
+    held = [str(d.value) for d in at.dataframe if "Pondere %" in getattr(d.value, "columns", [])]
+    assert held, "Fonduri SUA: lipsește tabelul de dețineri"
+    at.selectbox(key="sec_fund_pick").set_value("1350694").run()
+    check(at, "12. Fonduri SUA (fond Larg nedescărcat)")
+    at.button(key="sec_load_1350694").click().run()
+    check(at, "12. Fonduri SUA (fond Larg încărcat)")
+    assert "1350694" in SEC_CALLS
+    at.text_input(key="sec_who_sym").set_value("GOOG").run()
+    check(at, "12. Fonduri SUA (cine deține GOOG)")
+    print(f"Fonduri SUA: {len(set(SEC_CALLS))} administratori încărcați; harta CUSIP: {len(cmap_rows)} rânduri scrise")
+    with_sig = [d.value for d in at.dataframe if "Ieșiri" in getattr(d.value, "columns", [])]
+    assert with_sig, "Fonduri SUA: lipsește tabelul „Deținerile mele”"
+
+    radio().set_value("2. Analiză Companie").run()          # sesiunea e încărcată → cardul 13F se afișează direct
+    check(at, "2. Companie AAPL (card Fonduri SUA)")
+    assert any("Fonduri SUA (13F)" in str(h.value) for h in at.subheader), "lipsește cardul Fonduri SUA la AAPL"
+    m13 = [m for m in at.metric if m.label == "Dețin (concentrați)"]
+    assert m13 and m13[0].value.endswith("din 14"), [(m.label, m.value) for m in at.metric][-6:]
+    radio().set_value("3. Portofoliu").run()
+    check(at, "3. Portofoliu (semnale SEC)")
+    assert any("Semnale SEC" in str(e.label) for e in at.expander), "lipsește expanderul Semnale SEC în Portofoliu"
+    print(f"Card 13F AAPL: {m13[0].value}")
 
     radio().set_value("9. Glosar Economic").run()
     check(at, "9. Glosar Economic")

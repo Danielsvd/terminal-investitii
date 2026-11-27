@@ -15,30 +15,34 @@ Funcții pure, fără `st.*`, cu teste în tests/test_theme.py. Singura legătur
 """
 import re
 
-# (luminos, întunecat) — valorile și rolurile sunt în DESIGN.md §1 (paleta „Indigo profund”, aleasă pe 10.11)
+# (luminos, întunecat) — luminos = „Neon Carbon”, întunecat = „Nordic Frost” (decizia din 27.11, DESIGN.md §1.0)
 TOKENS = {
-    "bg": ("#F4F4FB", "#141230"),
-    "surface": ("#FFFFFF", "#1C1940"),
-    "surface-top": ("#FFFFFF", "#221F4C"),      # capătul de sus al gradientului fin de pe carduri
-    "surface-2": ("#F8F8FD", "#242150"),
-    "border": ("#E3E1F3", "#2E2A5C"),
-    "border-strong": ("#CFCCE8", "#3D3874"),
-    "text": ("#16133A", "#ECEAFB"),
-    "muted": ("#5F5A8A", "#A09BC8"),
-    "accent": ("#4F46E5", "#818CF8"),
-    "accent-text": ("#4338CA", "#A5B4FC"),
-    "up": ("#047857", "#34D399"),
-    "down": ("#B91C1C", "#F87171"),
-    "warn": ("#B45309", "#FBBF24"),
-    # textul de pe un fundal plin colorat (verdict, GEX): alb pe culorile închise din modul luminos,
-    # indigo închis pe culorile luminoase din modul întunecat
-    "on-fill": ("#FFFFFF", "#141230"),
-    # adâncime: linia luminoasă de pe muchia de sus, umbra de sub card, strălucirea din capul paginii
-    # (hex cu 8 cifre = culoare + transparență; nu sunt atinse de themed_html)
-    "highlight": ("#FFFFFFE6", "#FFFFFF0F"),
-    "shadow": ("#16133A12", "#05041473"),
-    "glow": ("#4F46E50F", "#818CF81A"),
+    "bg": ("#EEF1EC", "#0E1620"),
+    "surface": ("#FFFFFF", "#16212D"),
+    "surface-top": ("#FFFFFF", "#1A2734"),      # ziua plat; noaptea gradient fin de sus în jos
+    "surface-2": ("#F4F6F2", "#1D2A38"),
+    "border": ("#DCE2DA", "#273647"),
+    "border-strong": ("#C6CFC3", "#34485C"),
+    "text": ("#0F1411", "#E8EEF4"),
+    "muted": ("#566059", "#9DAEC0"),
+    "accent": ("#0F1411", "#7CC4E8"),          # ziua: cerneală; noaptea: albastru-gheață
+    "accent-text": ("#3D5E0B", "#9AD3F0"),
+    "on-accent": ("#C6F432", "#FFFFFF"),       # textul butonului principal: lime pe cerneală / alb pe fiord
+    "up": ("#116B37", "#6EE7B7"),
+    "down": ("#C0262D", "#FCA5A5"),
+    "warn": ("#8A5A00", "#FCD34D"),
+    # textul de pe un fundal plin colorat (verdict, GEX)
+    "on-fill": ("#FFFFFF", "#0E1620"),
+    # adâncime: ziua plat (transparente); noaptea linie luminoasă sus, umbră moale, strălucire rece
+    "highlight": ("#FFFFFF00", "#FFFFFF0D"),
+    "shadow": ("#00000000", "#02081266"),
+    "glow": ("#00000000", "#7CC4E812"),
 }
+
+# Colțurile cardurilor, metricilor și expanderelor și ale opțiunilor din meniu: comune celor două moduri
+# (CSS nu poate alege o lungime după mod), la mijloc între Nordic (18/12) și Neon (24/16)
+CARD_RADIUS = "20px"
+NAV_RADIUS = "14px"
 
 # Paleta veche (GitHub dark) → token. Culorile care nu sunt aici rămân neschimbate.
 LEGACY = {
@@ -71,7 +75,7 @@ DF_UP = "#3A8854"
 DF_DOWN = "#E82C2C"
 DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
-DF_HIGHLIGHT_BG = "rgba(59, 130, 246, 0.14)"   # rândul evidențiat (compania analizată, mediana)
+DF_HIGHLIGHT_BG = "rgba(124, 196, 232, 0.18)"  # rândul evidențiat (compania analizată, mediana): albastru translucid, lizibil în ambele moduri
 
 def df_colors(mode):
     """(câștig, pierdere, neutru) pentru tabele, după modul temei (`st.context.theme.type`).
@@ -129,10 +133,11 @@ _CARD_SHADOW = "inset 0 1px 0 var(--tk-highlight), 0 1px 2px var(--tk-shadow), 0
 
 def premium_css():
     """Tratamentul „premium” al suprafețelor (DESIGN.md §4): gradient fin pe carduri, contur de 1px,
-    linie luminoasă sus, umbră moale, colțuri de 14px și o strălucire discretă în capul paginii.
+    linie luminoasă sus, umbră moale, colțuri `CARD_RADIUS` și o strălucire discretă în capul paginii
+    (valorile în TOKENS: highlight, shadow, glow).
     Se injectează DUPĂ CSS-ul vechi din app.py, ca să-l înlocuiască la aceeași specificitate."""
     card = ("background: linear-gradient(180deg, var(--tk-surface-top) 0%, var(--tk-surface) 100%);"
-            " border: 1px solid var(--tk-border); border-radius: 14px;"
+            f" border: 1px solid var(--tk-border); border-radius: {CARD_RADIUS};"
             f" box-shadow: {_CARD_SHADOW};")
     # cardurile HTML vechi au fundalul scris inline; după themed_html() el conține „var(--tk-surface)”
     inline = ", ".join(f'div[style*="{p}var(--tk-surface)"]' for p in (
@@ -158,7 +163,7 @@ def premium_css():
         ' [data-testid="stTooltipContent"] { max-width: min(560px, calc(100vw - 24px)) !important;'
         " white-space: normal !important; overflow-wrap: anywhere; }"
         " .fin-card:hover, .news-card:hover { border-color: var(--tk-border-strong); }"
-        ' [data-testid="stExpander"] details { border: 1px solid var(--tk-border); border-radius: 14px;'
+        f' [data-testid="stExpander"] details {{ border: 1px solid var(--tk-border); border-radius: {CARD_RADIUS};'
         " background: var(--tk-surface); }"
         f" {inline} {{ box-shadow: {_CARD_SHADOW}; }}"
         # bannerul „Mediul de piață SUA”: pe telefon verdictul și scorul se pun unul sub altul, centrate,
@@ -168,9 +173,12 @@ def premium_css():
         # meniul lateral: fiecare opțiune e un rând de min. 44px (ținta de atingere pe telefon), text mai mare,
         # fundal la hover și rândul ales evidențiat cu accentul (cerut de Daniel pe 15.11). Streamlit 1.65 desenează
         # radio-ul cu react-aria: grupul = stRadioGroup, opțiunea = <label data-testid="stRadioOption"> cu data-selected
+        # butonul principal: textul din on-accent (Streamlit îl face alb; pe lime nu s-ar citi)
+        ' [data-testid^="stBaseButton-primary"], [data-testid^="stBaseButton-primary"] p {'
+        " color: var(--tk-on-accent) !important; }"
         f' {_NAV} [data-testid="stRadioGroup"] {{ align-items: stretch; gap: 4px; }}'
         f' {_NAV} [data-testid="stRadioOption"] {{ width: 100%; min-height: 44px; display: flex; align-items: center;'
-        " box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; border-radius: 10px;"
+        f" box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; border-radius: {NAV_RADIUS};"
         " transition: background-color .15s, border-color .15s; }"
         f' {_NAV} [data-testid="stRadioOption"]:hover {{ background: var(--tk-surface-2); }}'
         f' {_NAV} [data-testid="stRadioOption"][data-selected] {{'

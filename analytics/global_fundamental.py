@@ -21,7 +21,8 @@ Bănci și asigurători (bilanțul lor nu se citește ca al unei companii indust
   Rentabilitate  ROE față de costul capitalului propriu ke (CAPM)
 
 O componentă fără date e None și nu intră în medie; nu devine 0. Scorul cere cel puțin
-doi piloni cu date.
+doi piloni cu date; verdictul (eticheta) îi cere pe toți: cu un pilon lipsă scorul se arată ca „FĂRĂ VERDICT”
+(decizia din 27.11.2026).
 """
 import math
 
@@ -46,6 +47,8 @@ PIOTROSKI_MIN_EVALUABLE = 6
 PBV_RATIO_SCALE = (1.3, 0.7)         # P/BV / P/BV justificat ≥ 1,3 → 0; ≤ 0,7 → 1
 ROE_SPREAD_SCALE = (-0.05, 0.05)     # ROE − ke: −5 pp → 0; +5 pp → 1
 MIN_PILLARS = 2
+NO_VERDICT_LABEL = "FĂRĂ VERDICT"   # scor cu piloni lipsă (decizia din 27.11): cifra da, eticheta nu
+NO_VERDICT_COLOR = "#8B949E"
 
 PILLAR_LABELS = {"evaluare": "Evaluare", "calitate": "Calitate", "sanatate": "Sănătate financiară",
                  "rentabilitate": "Rentabilitate"}
@@ -418,6 +421,16 @@ def fundamental_score(inp):
         return out
     score = round(sum(present) / len(present) * 100, 1)
     out.update(score=score, note=TEST_NOTE)
+    missing = [p["label"] for p in pillars if not _num(p["score"])]
+    out["missing_pillars"] = missing
+    if missing:
+        # Decizia lui Daniel (27.11.2026): scorul se arată, dar fără verdict când lipsește un pilon. Media pe pilonii
+        # cu date poate sări peste o treaptă doar pentru că pilonul slab n-a avut date (AAPL: 66,7 NEUTRU cu 3 piloni,
+        # 100 FAVORABIL fără Evaluare, când Yahoo n-a trimis datele).
+        out.update(label=NO_VERDICT_LABEL, color=NO_VERDICT_COLOR,
+                   note=f"Verdict: N/A — lipsește pilonul {', '.join(missing)} (fără date). Scorul e media celor "
+                        f"{len(present)} piloni cu date și s-ar putea schimba cu pilonul lipsă. " + TEST_NOTE)
+        return out
     for floor, label, color in VERDICT_BANDS:
         if score >= floor:
             out.update(label=label, color=color)

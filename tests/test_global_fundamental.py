@@ -216,3 +216,16 @@ def test_statement_cagr_pe_2_sau_3_ani():
     assert fund.statement_cagr(inc.iloc[:, :2], fund.REVENUE_ROWS) is None    # un singur an: prea scurt
     neg = inc.copy(); neg.iloc[0, 3] = -5.0
     assert fund.statement_cagr(neg, fund.REVENUE_ROWS) is None               # capăt ≤ 0: CAGR nedefinit
+
+
+def test_pilon_lipsa_scor_fara_verdict():
+    # Decizia din 27.11: cu toți pilonii → verdict din benzi; fără Evaluare (DCF N/A, fără PEG) → scorul
+    # pe 2 piloni, eticheta „FĂRĂ VERDICT”, nota numește pilonul lipsă.
+    full = fundamental_score(_industrial())
+    assert full["label"] != "FĂRĂ VERDICT" and full["missing_pillars"] == []
+    part = fundamental_score(_industrial(price=None, dcf_na="test", pe=None, eps_growth=None))
+    pil = {p["key"]: p["score"] for p in part["pillars"]}
+    assert pil["evaluare"] is None and pil["calitate"] is not None and pil["sanatate"] is not None
+    assert part["score"] == pytest.approx(round((pil["calitate"] + pil["sanatate"]) / 2 * 100, 1))
+    assert part["label"] == "FĂRĂ VERDICT" and part["missing_pillars"] == ["Evaluare"]
+    assert "lipsește pilonul Evaluare" in part["note"]

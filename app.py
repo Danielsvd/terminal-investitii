@@ -53,6 +53,7 @@ from analytics import portfolio_day as pday_calc
 from analytics import scanner as scanner_calc
 from analytics.earnings import earnings_table
 from analytics import watchlist as watchlist_calc
+from analytics import growth
 from analytics.portfolio import value_positions, portfolio_curve as build_portfolio_curve, positions_detail
 from analytics import portfolio as pf_calc
 from analytics import fundamentals as fund
@@ -66,6 +67,8 @@ from analytics import ideas as ideas_calc
 from analytics import bvb_fundamental as bvb_calc
 from analytics import pilon2 as p2_calc
 from data import pilon2 as pilon2_data
+from analytics import sec_13f, sec_view, insiders
+from data import sec_edgar, sec_funds, cusip_map, sec_insiders
 from data.ucits import ucits_for, ucits_symbols, ucits_currency
 from analytics import events as events_calc
 from data import entities as entities_data
@@ -4954,8 +4957,775 @@ def render_pilon2_page():
         _pilon2_market(panel, df)
 
 
+# ==================================================
+# FONDURI SUA (13F) — propunerea din 25.11.2026 (claude/propunere_date_sec_2026-11-25.md)
+# ==================================================
+SEC_NOTE = ("Rapoartele 13F ale administratorilor americani (SEC EDGAR): pozițiile long în acțiuni SUA la sfârșitul "
+            "trimestrului, depuse în cel mult 45 de zile. Nu arată short-urile, acoperirile, pozițiile din afara SUA "
+            "sau pe cele confidențiale. Descriu ce dețineau fondurile atunci, nu acum: context, nu semnal de moment. "
+            "Netestat.")
+
+SEC_HELP = {
+    "pozitii": ("**Ce e:** numărul de titluri distincte (CUSIP) din portofoliul pe acțiuni.\n\n"
+                "**Calcul:** rândurile SH fără opțiuni, adunate pe CUSIP. Opțiunile și obligațiunile (PRN) sunt separat."),
+    "valoare": ("**Ce e:** valoarea portofoliului pe acțiuni declarată în raport, la prețurile de la sfârșitul trimestrului.\n\n"
+                "**Atenție:** fără opțiuni și fără pozițiile din afara SUA."),
+    "top": "**Ce e:** cea mai mare poziție și ponderea ei în portofoliul pe acțiuni al fondului.",
+    "perioada": ("**Perioada:** sfârșitul trimestrului raportat. **Depus:** data ultimei depuneri (inclusiv amendamente). "
+                 "**Decalaj:** zilele până la raportul de bază (legal: 45; dacă termenul cade în weekend sau sărbătoare, "
+                 "prima zi lucrătoare)."),
+    "clasa": ("**Concentrat:** ≤ 100 de poziții sau primele 10 ≥ 50% din valoare (calculat din raport). "
+              "**Larg:** fonduri cantitative / multi-strategie, cu mii de poziții: nu reflectă convingere și sunt excluse "
+              "din consens."),
+    "convingere": "**Poziție de convingere:** pondere ≥ 3% sau în primele 10 poziții ale fondului.",
+    "miscari": ("**Mișcarea** se judecă pe numărul de acțiuni, ajustat cu split-urile din trimestru (Yahoo): Nouă, "
+                "Închisă, Mărită (> +5%), Redusă (< −5%), Păstrată.\n\n"
+                "**Valoare tranzacționată (proxy):** Δ acțiuni × media închiderilor din trimestru (nu prețul real). "
+                "**Impact:** |valoarea tranzacționată| / valoarea portofoliului — cât a contat mișcarea pentru fond."),
+    "consens": ("**Dețin:** administratori concentrați care au emitentul (clasele de acțiuni adunate: GOOG + GOOGL). "
+                "**Convingere:** câți îl au ca poziție de convingere. **Cumpărări:** câți l-au cumpărat nou sau au mărit "
+                "cu ≥ +50% în ultimul trimestru, cu pondere finală ≥ 1%.\n\n**Netestat:** context, nu semnal."),
+}
+
+
+def sec_secret(key):
+    """Un secret pentru datele SEC (`sec_user_agent`, `openfigi_api_key`) sau None. Nu se afișează."""
+    try:
+        val = st.secrets.get(key)
+    except (FileNotFoundError, KeyError) as exc:   # fără secrets.toml (rulare locală)
+        logger.info("%s indisponibil: %s", key, type(exc).__name__)
+        return None
+    val = str(val).strip() if val else ""
+    return val or None
+
+
+@st.cache_resource(show_spinner=False)
+def sec_client(user_agent):
+    """Un singur client EDGAR pe proces: limita de 8 cereri/s e comună tuturor încărcărilor."""
+    return sec_edgar.EdgarClient(user_agent)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def sec_load_manager(cik, user_agent, n=2):
+    """Ultimele `n` trimestre 13F ale unui administrator. Întoarce (nume SEC, trimestre, probleme, eroare sau None)."""
+    try:
+        name, quarters, problems = sec_funds.load_manager(sec_client(user_agent), cik, n)
+        return name, quarters, problems, None
+    except (sec_edgar.EdgarError, ValueError) as e:   # rețea / XML: mesaj în pagină, restul fondurilor continuă
+        logger.warning(f"13F {cik} nu a putut fi încărcat: {e}")
+        return None, [], [], str(e)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def sec_load_cusip_map():
+    """Foaia `CUSIP_map` → (dict CUSIP → simbol, eroare sau None). Foaia lipsă = hartă goală."""
+    try:
+        ws = connect_to_gsheets(cusip_map.MAP_SHEET)
+        if ws is None:
+            return {}, None
+        return cusip_map.parse_map(ws.get_all_values()), None
+    except gspread.exceptions.GSpreadException as e:
+        logger.warning(f"CUSIP_map nu a putut fi citită: {e}")
+        return {}, f"CUSIP_map nu a putut fi citită: {e}"
+
+
+def sec_resolve_cusips(cusips):
+    """Harta CUSIP → simbol pentru codurile date: foaia `CUSIP_map`, iar codurile lipsă de la OpenFIGI, scrise apoi în
+    foaie (creată la prima scriere, aprobat 25.11.2026). Codurile negăsite nu se reîncearcă în aceeași sesiune.
+    Întoarce (hartă, coduri netraduse, eroare sau None)."""
+    cmap, err = sec_load_cusip_map()
+    failed = st.session_state.setdefault("sec_figi_failed", set())
+    missing = sorted(c for c in set(cusips) - set(cmap) if c not in failed)
+    if missing:
+        found, bad = cusip_map.openfigi_lookup(missing, api_key=sec_secret("openfigi_api_key"))
+        failed.update(bad)
+        if found:
+            try:
+                ws = connect_to_gsheets(cusip_map.MAP_SHEET)
+                if ws is None:
+                    ws = _get_spreadsheet().add_worksheet(cusip_map.MAP_SHEET, rows=2000, cols=len(cusip_map.MAP_COLUMNS))
+                    ws.append_row(cusip_map.MAP_COLUMNS)
+                ws.append_rows(cusip_map.map_rows(found), value_input_option="RAW")
+                sec_load_cusip_map.clear()
+            except (gspread.exceptions.GSpreadException, AttributeError) as e:
+                logger.warning(f"CUSIP_map nu a putut fi scrisă: {e}")
+                err = f"CUSIP_map nu a putut fi scrisă (traducerile rămân doar în sesiune): {e}"
+            cmap = {**cmap, **{c: sym for c, (sym, _name) in found.items()}}
+    return cmap, sorted(failed & set(cusips)), err
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def sec_prices(symbols, start):
+    """Închiderile (auto_adjust=False; Yahoo le ajustează totuși pentru split) și split-urile de la `start` până azi.
+    Întoarce (close, splits, eroare sau None)."""
+    syms = list(symbols)
+    try:
+        raw = yf.download(syms, start=start, auto_adjust=False, actions=True, progress=False, threads=False)
+    except Exception as e:   # rețea / Yahoo: mișcările rămân fără valoare tranzacționată
+        logger.warning(f"13F: prețurile nu au venit: {e}")
+        return None, None, str(e)
+    close, splits = close_frame(raw, syms), field_frame(raw, "Stock Splits", syms)
+    for fr in (close, splits):
+        if fr is not None and not fr.empty and getattr(fr.index, "tz", None) is not None:
+            fr.index = fr.index.tz_localize(None)
+    return close, splits, None
+
+
+def _sec_books(quarters):
+    """(portofoliul curent, cel anterior, opțiunile curente) din trimestrele încărcate; lipsă = tabel gol."""
+    empty = pd.DataFrame(columns=sec_13f.BOOK_COLUMNS)
+    curr = sec_13f.equity_book(quarters[0]["info"], 1.0) if quarters else empty
+    prev = sec_13f.equity_book(quarters[1]["info"], 1.0) if len(quarters) > 1 else empty
+    opts = sec_13f.options_book(quarters[0]["info"], 1.0) if quarters else pd.DataFrame(columns=sec_13f.OPTION_COLUMNS)
+    return curr, prev, opts
+
+
+def _sec_moves(curr, prev, quarters, cmap, with_prices=True):
+    """Mișcările între ultimele două trimestre, cu split-uri și prețuri medii din Yahoo când `with_prices`."""
+    if len(quarters) < 2 or prev.empty:
+        return None, None
+    split, avg, perr = {}, {}, None
+    if with_prices:
+        c2s = {c: cmap.get(c) for c in set(curr["CUSIP"]) | set(prev["CUSIP"]) if cmap.get(c)}
+        if c2s:
+            start = (pd.Timestamp(quarters[1]["period"]) - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+            close, splits, perr = sec_prices(tuple(sorted(set(c2s.values()))), start)
+            split, avg = sec_13f.period_inputs(close, splits, quarters[1]["period"], quarters[0]["period"], c2s)
+    return sec_13f.quarter_moves(prev, curr, split_factor=split, avg_price=avg), perr
+
+
+def _pct(v, dec=1):
+    return format_ro(v * 100, dec, "%") if v is not None and pd.notna(v) else "N/A"
+
+
+def _usd_big(v):
+    if v is None or pd.isna(v):
+        return "N/A"
+    return format_ro(v / 1e9, 1, " mld. $") if abs(v) >= 1e9 else format_ro(v / 1e6, 1, " mil. $")
+
+
+def sec_snapshot(ua):
+    """Datele comune ale paginii Fonduri SUA, ale cardului din Analiză companie și ale semnalelor din Portofoliu:
+    (administratori, încărcate, portofolii, hartă CUSIP, coduri netraduse, eroare hartă). Fondurile concentrate se
+    încarcă automat (cache 24 h); cele Larg doar dacă au fost cerute în sesiune. Marchează sesiunea ca încărcată."""
+    mg = sec_funds.managers_frame()
+    larg_loaded = st.session_state.setdefault("sec_larg_loaded", set())
+    to_load = [c for c in mg["CIK"] if mg.set_index("CIK").at[c, "Clasa"] == sec_funds.CONCENTRAT or c in larg_loaded]
+    loaded = {}
+    prog = st.progress(0.0, text="Rapoartele 13F de la SEC…")
+    for i, cik in enumerate(to_load):
+        loaded[cik] = sec_load_manager(cik, ua)
+        prog.progress((i + 1) / len(to_load), text=f"Rapoartele 13F de la SEC… {i + 1}/{len(to_load)}")
+    prog.empty()
+    books = {cik: _sec_books(v[1]) for cik, v in loaded.items()}
+    need = set()
+    for cik, (curr, prev, _o) in books.items():
+        is_larg = cik in larg_loaded
+        for b in (curr, prev):
+            need |= set(b.nsmallest(100, "Rang")["CUSIP"] if is_larg else b["CUSIP"])
+    with st.spinner("Traduc codurile CUSIP în simboluri (OpenFIGI; prima dată poate dura câteva minute)…"):
+        cmap, unmapped, cerr = sec_resolve_cusips(tuple(sorted(need)))
+    st.session_state["sec_loaded"] = True
+    return mg, loaded, books, cmap, unmapped, cerr
+
+
+def _sec_conc_panels(mg, loaded, books, cmap):
+    """(panoul deținerilor tuturor fondurilor încărcate, panoul mișcărilor concentraților — cu split-urile verificate,
+    mulțimea CIK-urilor concentrate)."""
+    holdings = sec_view.holdings_panel({c: b[0] for c, b in books.items()}, mg)
+    moves = sec_view.moves_panel(_sec_conc_moves(mg, loaded, books, cmap))
+    conc = set(mg.loc[mg["Clasa"] == sec_funds.CONCENTRAT, "CIK"]) & set(loaded)
+    return holdings, moves, conc
+
+
+SEC_SIGNAL_HELP = ("**Dețin:** fondurile concentrate urmărite care au acțiunea în ultimul raport 13F (clasele de acțiuni "
+                   "adunate). **Convingere:** câte o au ca poziție de convingere (≥ 3% sau top 10). **Intrări / Măriri / "
+                   "Reduceri / Ieșiri:** mișcările față de trimestrul anterior, pe acțiuni (> ±5%), cu split-urile "
+                   "verificate la creșterile ≥ +50%.\n\n**Limite:** 13F e depus cu până la 45 de zile întârziere, doar "
+                   "pozițiile long din SUA. Context, nu semnal de moment. Netestat.")
+
+
+def _sec_signal_table(sig):
+    st.dataframe(pd.DataFrame({
+        "Simbol": sig["Simbol"], "Dețin": sig["Detin"], "Convingere": sig["Convingere"], "Intrări": sig["Intrari"],
+        "Măriri": sig["Mariri"], "Reduceri": sig["Reduceri"], "Ieșiri": sig["Iesiri"], "Mișcări": sig["Miscari"],
+        "Fonduri": sig["Fonduri"]}), hide_index=True, width='stretch',
+        column_config={"Dețin": st.column_config.NumberColumn(help=SEC_SIGNAL_HELP, format="%d")})
+
+
+def sec_my_us_symbols():
+    """Simbolurile americane deținute acum, din registrul `Tranzactii` (moneda USD, fără sufix de bursă, fără cripto)."""
+    values = load_ledger_values()
+    if values is None:
+        return []
+    ledger_df, _ = ledger_calc.parse_ledger(values)
+    if ledger_df.empty:
+        return []
+    positions, _ = ledger_calc.build_positions(ledger_df)
+    held = positions[(positions["Quantity"] > ledger_calc.QTY_EPS) & positions["Currency"].astype(str).str.upper().eq("USD")]
+    return sorted({str(x).upper() for x in held["Symbol"]
+                   if "." not in str(x) and "=" not in str(x) and not str(x).upper().endswith("-USD")})
+
+
+def render_sec_company_card(real_sym):
+    """Card scurt „Fonduri SUA (13F)” în Analiză companie, doar pentru acțiunile americane (fără sufix de bursă).
+    Datele se încarcă automat dacă au fost deja încărcate în sesiune; altfel la buton (prima încărcare durează)."""
+    sym = str(real_sym).upper()
+    if "." in sym or "=" in sym or "^" in sym or sym.endswith("-USD"):
+        return
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    st.subheader("🏛️ Fonduri SUA (13F)", help=SEC_SIGNAL_HELP)
+    if not st.session_state.get("sec_loaded"):
+        st.caption("Rapoartele 13F nu sunt încărcate în această sesiune (prima încărcare durează ~20–60 s).")
+        if not st.button("Încarcă fondurile care dețin acțiunea", key="sec_card_load"):
+            return
+        sec_snapshot(ua)          # încarcă și marchează sesiunea, apoi redesenează fără buton
+        st.rerun()
+    mg, loaded, books, cmap, _unmapped, _cerr = sec_snapshot(ua)
+    holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
+    sig = sec_view.holdings_signals([sym], cmap, holdings, moves, conc).iloc[0]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Dețin (concentrați)", f"{sig['Detin']} din {len(conc)}", help=SEC_SIGNAL_HELP)
+    c2.metric("Cu convingere", f"{sig['Convingere']}", help=SEC_HELP["convingere"])
+    c3.metric("Ultimul trimestru", f"+{sig['Intrari']} / ↑{sig['Mariri']} / ↓{sig['Reduceri']} / −{sig['Iesiri']}",
+              help="Intrări (poziții noi) / măriri / reduceri / ieșiri (poziții închise) ale fondurilor concentrate. "
+                   + SEC_HELP["miscari"])
+    keys = sec_view.keys_for_symbol(sym, cmap, holdings, moves)
+    if sig["Detin"]:
+        w = pd.concat([sec_13f.who_holds(holdings[holdings["CIK"].isin(conc)], k) for k in keys], ignore_index=True)
+        mv = sec_view.issuer_moves(moves[moves["CUSIP6"].isin(keys)]).groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
+        w = w.join(mv, on="CIK")
+        st.dataframe(pd.DataFrame({
+            "Fond": w["Fond"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"], "Convingere": w["Convingere"],
+            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}).style.format(
+                {"Pondere %": ro_spec(",.2f"), "Δ acțiuni %": ro_spec("+,.1f")}),
+            hide_index=True, width='stretch',
+            column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"])})
+    elif sig["Iesiri"]:
+        st.caption(f"Niciun fond concentrat nu mai deține {sym}; ieșiri în ultimul trimestru: {sig['Miscari']}.")
+    else:
+        st.caption(f"{sym} nu apare în rapoartele fondurilor concentrate urmărite (sau codul CUSIP nu a fost tradus).")
+    periods = sorted({q[0]["period"] for _n, q, _p, _e in loaded.values() if q})
+    st.caption(f"Rapoarte 13F pentru {', '.join(periods[-2:]) if periods else 'N/A'} · detalii: meniul „Fonduri SUA (13F)”.")
+
+
+INSIDER_HELP = {
+    "card": ("Tranzacțiile insiderilor (directori, ofițeri, acționari > 10%) din formularele SEC Form 4, depuse în "
+             "2 zile lucrătoare. Fereastra: ultimele 90 de zile, după data tranzacției.\n\n"
+             "**În semnal intră doar** cumpărările pe piață (cod P) și vânzările (cod S). Vânzările cu bifa 10b5-1 "
+             "(sau cu nota „10b5-1”) sunt **prin plan**, stabilite dinainte, deci aproape fără informație. "
+             "Exercitările (M), impozitele reținute (F), acordările (A) și cadourile (G) apar în tabel, nu în semnal.\n\n"
+             "Un 4/A înlocuiește raportul inițial al aceluiași insider pentru aceeași dată (proxy). "
+             "**Netestat:** context, nu verdict. Literatura: cumpărările pe piață, mai ales în grup, au avut putere "
+             "de predicție; vânzările mult mai puțin."),
+    "p": ("Cumpărări pe piață (cod P) în 90 de zile: numărul de tranzacții, câți insideri distincți (un raport "
+          "depus în comun = un insider) și valoarea = acțiuni × prețul raportat. Tranzacțiile fără preț nu intră în "
+          "valoare."),
+    "s": ("Vânzări (cod S) fără bifa sau nota 10b5-1: decise de insider la momentul vânzării. Pot avea motive "
+          "personale (impozite, diversificare), deci sunt un semnal mai slab decât cumpărările."),
+    "plan": ("Vânzări prin plan 10b5-1: programate dinainte (ex. aceeași cantitate în fiecare săptămână). "
+             "Nu spun nimic despre ce crede insiderul acum."),
+    "grup": ("Grup = cel puțin 3 insideri distincți au cumpărat pe piață în 90 de zile. % din deținere = mediana "
+             "cumpărării raportate la deținerea dinaintea ei (doar cumpărările cu deținere anterioară > 0)."),
+}
+
+
+def _usd_small(v):
+    if v is None or pd.isna(v):
+        return "N/A"
+    return _usd_big(v) if abs(v) >= 1e6 else format_ro(v / 1e3, 0, " mii $")
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def sec_load_insiders(symbol, user_agent, today_iso):
+    """Form 4 pentru simbolul american, depuse în ultimele 95 de zile. Cache 12 h (cheia include ziua).
+    Întoarce (tabel tranzacții, nr. rapoarte, probleme, trunchiat, eroare sau None)."""
+    empty = insiders.transactions_frame([])
+    try:
+        client = sec_client(user_agent)
+        cik = sec_insiders.ticker_cik(client, symbol)
+        if cik is None:
+            return empty, 0, [], False, f"{symbol} nu apare în lista SEC de simboluri"
+        docs, problems, truncated = sec_insiders.load_form4(client, cik, today=pd.Timestamp(today_iso).date())
+    except (sec_edgar.EdgarError, ValueError) as exc:
+        logger.warning("Form 4 %s: %s", symbol, exc)
+        return empty, 0, [], False, str(exc)
+    return insiders.transactions_frame(docs), len(docs), problems, truncated, None
+
+
+def render_sec_insiders_card(real_sym):
+    """Card „Insideri (Form 4, 90 de zile)” în Analiză companie, doar pentru acțiunile americane.
+    Se încarcă la buton (prima dată ~5–15 s); după aceea simbolul rămâne încărcat în sesiune (cache 12 h)."""
+    sym = str(real_sym).upper()
+    if "." in sym or "=" in sym or "^" in sym or sym.endswith("-USD"):
+        return
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    st.subheader("🧑‍💼 Insideri (Form 4, 90 de zile)", help=INSIDER_HELP["card"])
+    loaded = st.session_state.setdefault("ins_loaded", set())
+    if sym not in loaded:
+        st.caption("Tranzacțiile insiderilor nu sunt încărcate pentru acest simbol (~5–15 s).")
+        if not st.button("Încarcă tranzacțiile insiderilor", key=f"ins_load_{sym}"):
+            return
+        loaded.add(sym)
+        st.rerun()                # redesenează fără buton; datele se încarcă la rularea următoare
+    today = now_ro().date()
+    with st.spinner("Citesc rapoartele Form 4 de la SEC..."):
+        df, n_docs, problems, truncated, err = sec_load_insiders(sym, ua, today.isoformat())
+    if err:
+        st.caption(f"Form 4 N/A: {err}")
+        return
+    s = insiders.window_summary(df, today)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Cumpărări pe piață (P)", f"{s['nr_P']} · {s['cumparatori']} insideri", _usd_small(s["valoare_P"]),
+              delta_color="off", help=INSIDER_HELP["p"])
+    c2.metric("Vânzări discreționare", f"{s['nr_S_discretionar']}", _usd_small(s["valoare_S_discretionar"]),
+              delta_color="off", help=INSIDER_HELP["s"])
+    c3.metric("Vânzări prin plan 10b5-1", f"{s['nr_S_plan']}", _usd_small(s["valoare_S_plan"]),
+              delta_color="off", help=INSIDER_HELP["plan"])
+    c4.metric("Grup de cumpărători", "DA" if s["grup"] else "NU",
+              f"% din deținere: {_pct(s['pct_din_detinere_P'])}" if s["pct_din_detinere_P"] is not None else None,
+              delta_color="off", help=INSIDER_HELP["grup"])
+    st.caption(insiders.describe(s, _usd_small).replace("$", "\\$"))   # „$ … $” ar fi citit ca formulă LaTeX
+    other = ", ".join(f"{k} ({insiders.CODE_LABELS.get(k, k)}): {v}" for k, v in sorted(s["alte_coduri"].items()))
+    notes = [f"{s['start']:%d.%m.%Y} → {s['end']:%d.%m.%Y}", f"{n_docs} rapoarte Form 4",
+             f"în afara semnalului: {other}" if other else "",
+             f"tranzacții P/S fără preț: {s['fara_pret']}" if s["fara_pret"] else "",
+             f"{len(problems)} rapoarte nu s-au putut citi" if problems else "",
+             "doar cele mai noi 80 de rapoarte" if truncated else "", "netestat: context, nu verdict"]
+    st.caption(" · ".join(x for x in notes if x))
+    w = df[(df["Data_tranz"] > s["start"]) & (df["Data_tranz"] <= s["end"])] if not df.empty else df
+    if not w.empty:
+        with st.expander(f"Toate tranzacțiile ({len(w)})"):
+            # text_frame: st.dataframe arată celulele nule ca „None” chiar cu Styler(na_rep); lipsa devine „N/A”
+            st.dataframe(text_frame(pd.DataFrame({
+                "Data": w["Data_tranz"].dt.strftime("%d.%m.%Y"), "Depus": w["Data_depunere"].dt.strftime("%d.%m.%Y"),
+                "Insider": w["Insider"], "Funcție": w["Functie"], "Cod": w["Cod"], "Tip": w["Tip"],
+                "Plan 10b5-1": w["Plan_10b5_1"], "Acțiuni": w["Actiuni"].astype(float), "Preț $": w["Pret"].astype(float),
+                "Valoare $": w["Valoare_USD"].astype(float), "Deținere după": w["Detinere_dupa"].astype(float)}),
+                {"Acțiuni": ro_spec(",.0f"), "Preț $": ro_spec(",.2f"), "Valoare $": ro_spec(",.0f"),
+                 "Deținere după": ro_spec(",.0f")}),
+                hide_index=True, width='stretch',
+                column_config={"Plan 10b5-1": st.column_config.CheckboxColumn(help=INSIDER_HELP["plan"])})
+
+
+def render_sec_portfolio_signals():
+    """Expander în Portofoliu: semnalele 13F pe acțiunile americane deținute (fondurile concentrate)."""
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        return
+    with st.expander("🏛️ Semnale SEC pe deținerile mele (fonduri SUA, 13F)"):
+        syms = sec_my_us_symbols()
+        if not syms:
+            st.caption("Nicio acțiune americană deschisă în registrul `Tranzactii`.")
+            return
+        if not st.session_state.get("sec_loaded"):
+            st.caption(f"Rapoartele 13F nu sunt încărcate în această sesiune ({len(syms)} acțiuni americane deținute).")
+            if not st.button("Încarcă rapoartele 13F", key="sec_pf_load"):
+                return
+            sec_snapshot(ua)
+            st.rerun()
+        mg, loaded, books, cmap, _unmapped, _cerr = sec_snapshot(ua)
+        holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
+        _sec_signal_table(sec_view.holdings_signals(syms, cmap, holdings, moves, conc))
+        st.caption(f"Fondurile concentrate urmărite ({len(conc)}); acțiunile americane deschise din registrul `Tranzactii`. "
+                   "Context, nu semnal. Detalii: meniul „Fonduri SUA (13F)”.")
+
+
+def render_sec_funds_page():
+    st.title("🏛️ Fonduri SUA (13F)")
+    st.caption(SEC_NOTE)
+    ua = sec_secret("sec_user_agent")
+    if not ua or "@" not in ua:
+        st.info("Lipsește `sec_user_agent` în Secrets (ex. „Terminal Investitii nume@domeniu.ro”): SEC cere un contact.")
+        return
+    if st.button("🔄 Reîncarcă de la SEC", key="sec_reload"):
+        sec_load_manager.clear()
+        sec_load_cusip_map.clear()
+        st.session_state.pop("sec_figi_failed", None)
+        st.rerun()
+
+    mg, loaded, books, cmap, unmapped, cerr = sec_snapshot(ua)
+    if cerr:
+        st.warning(cerr)
+    if unmapped:
+        st.caption(f"{len(unmapped)} coduri CUSIP fără simbol american la OpenFIGI: apar cu numele emitentului.")
+
+    t_over, t_fund, t_cons, t_who = st.tabs([":material/list: Prezentare", ":material/account_balance: Fond",
+                                             ":material/groups: Consens", ":material/person_search: Cine deține"])
+    with t_over:
+        _sec_overview(mg, loaded, books, cmap)
+    with t_fund:
+        _sec_fund(mg, loaded, books, cmap, ua)
+    with t_cons:
+        _sec_consensus(mg, loaded, books, cmap)
+    with t_who:
+        _sec_who(mg, loaded, books, cmap)
+
+
+def _dash(col, fmt=str):
+    """Coloană text pentru afișare: valorile lipsă (fond nedescărcat) apar ca „—”, nu „None”."""
+    if col is None:
+        return None
+    return pd.Series([fmt(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else "—" for v in col],
+                     index=col.index, dtype=object)
+
+
+def _sec_overview(mg, loaded, books, cmap):
+    rows, warn = [], []
+    for _, m in mg.iterrows():
+        cik = m["CIK"]
+        if cik not in loaded:
+            rows.append({**m.to_dict(), "Nume_SEC": None, "Perioada": None, "Pozitii": np.nan,
+                         "Valoare_USD": np.nan, "Top": "nedescărcat (Larg) — tabul Fond", "Top_pondere": np.nan})
+            continue
+        name, quarters, problems, err = loaded[cik]
+        curr, prev, _o = books[cik]
+        r = sec_view.overview_row(m, name, quarters[0] if quarters else None, prev, curr, cmap)
+        rows.append({**r, "CIK": cik})
+        if err:
+            warn.append(f"{m['Fond']}: {err}")
+        if r["Nume_ok"] is False:
+            warn.append(f"{m['Fond']}: la CIK {cik} SEC are numele „{name}” — CIK-ul trebuie verificat.")
+        warn += [f"{m['Fond']}: {p}" for p in problems + [p for q in quarters for p in q["problems"]]]
+        warn += [f"{m['Fond']}: {p}" for q in quarters for p in q.get("notes", [])]
+    df = pd.DataFrame(rows)
+    stale = sec_view.stale_periods(df["Perioada"].tolist())
+    for f, p in zip(df["Fond"], df["Perioada"]):
+        if p in stale:
+            warn.append(f"{f}: ultimul raport e pentru {p}, rămas în urmă față de ceilalți — fondul nu a depus încă "
+                        "raportul nou (depunere întârziată) sau depune sub alt CIK; verifică pe EDGAR.")
+    view = pd.DataFrame({
+        "Fond": df["Fond"], "Administrator": df["Administrator"], "Stil": df["Stil"],
+        "Clasa": [c if not isinstance(a, str) or a == c else f"{c} (auto: {a})"
+                  for c, a in zip(df["Clasa"], df.get("Clasa_auto", pd.Series([None] * len(df))))],
+        "Perioada": _dash(df["Perioada"]), "Depus": _dash(df.get("Depus")),
+        "Decalaj (zile)": _dash(df.get("Decalaj_zile"), lambda v: format_ro(v, 0)),
+        "Poziții": _dash(df["Pozitii"], lambda v: format_ro(v, 0)), "Valoare": df["Valoare_USD"].map(_usd_big),
+        "Top deținere": [f"{t} ({_pct(p)})" if pd.notna(p) else t for t, p in zip(df["Top"], df["Top_pondere"])],
+    })
+    st.dataframe(view, hide_index=True, width='stretch',
+                 column_config={"Poziții": st.column_config.TextColumn(help=SEC_HELP["pozitii"]),
+                                "Clasa": st.column_config.TextColumn(help=SEC_HELP["clasa"]),
+                                "Perioada": st.column_config.TextColumn(help=SEC_HELP["perioada"]),
+                                "Valoare": st.column_config.TextColumn(help=SEC_HELP["valoare"]),
+                                "Top deținere": st.column_config.TextColumn(help=SEC_HELP["top"])})
+    if warn:
+        with st.expander(f"⚠️ Probleme la încărcare ({len(warn)})"):
+            for w in warn:
+                st.write("• " + w)
+
+
+def _sec_fund(mg, loaded, books, cmap, ua):
+    labels = {r["CIK"]: f"{r['Fond']} — {r['Administrator']}" + (" (Larg)" if r["Clasa"] == sec_funds.LARG else "")
+              for _, r in mg.iterrows()}
+    cik = st.selectbox("Fondul", list(labels), format_func=labels.get, key="sec_fund_pick")
+    meta = mg.set_index("CIK").loc[cik]
+    if cik not in loaded:
+        st.info("Fond „Larg” (cantitativ / multi-strategie): mii de poziții, fără convingere; nu intră în consens. "
+                   "Încărcarea poate dura 1–2 minute.")
+        if st.button("Încarcă raportul", key=f"sec_load_{cik}"):
+            st.session_state["sec_larg_loaded"].add(cik)
+            st.rerun()
+        return
+    name, quarters, problems, err = loaded[cik]
+    if err or not quarters:
+        st.info(err or "Niciun raport 13F găsit.")
+        return
+    q = quarters[0]
+    curr, prev, opts = books[cik]
+    if curr.empty:
+        st.warning("Raportul curent nu a trecut validarea: " + "; ".join(q["problems"]))
+        return
+    top = curr.iloc[0]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Poziții", format_ro(len(curr), 0), help=SEC_HELP["pozitii"])
+    c2.metric("Valoare (acțiuni)", _usd_big(curr["Valoare_USD"].sum()), help=SEC_HELP["valoare"])
+    c3.metric("Top deținere", cmap.get(top["CUSIP"]) or str(top["Emitent"])[:18], _pct(top["Pondere"]),
+              delta_color="off", help=SEC_HELP["top"])
+    c4.metric("Perioada / depus", str(q["period"]), f"depus {q['last_filing_date']} · "
+              f"{sec_view.delay_days(q['period'], q['filing_date'])} zile", delta_color="off", help=SEC_HELP["perioada"])
+    st.caption(f"{meta['Stil']} · la SEC: {name} (CIK {cik}). Clasa calculată: {sec_13f.classify_manager(curr)}.")
+
+    h = sec_view.with_symbols(curr, cmap)
+    h["Convingere"] = sec_13f.conviction_mask(h)
+    st.markdown("**Deținerile pe acțiuni**")
+    st.dataframe(pd.DataFrame({
+        "#": h["Rang"], "Simbol": h["Symbol"].fillna("—"), "Emitent": h["Emitent"], "Clasă": h["Clasa_titlu"],
+        "Pondere %": h["Pondere"] * 100, "Valoare (mil. $)": h["Valoare_USD"] / 1e6, "Acțiuni": h["Actiuni"],
+        "Convingere": h["Convingere"]}).style.format({
+            "Pondere %": ro_spec(",.2f"), "Valoare (mil. $)": ro_spec(",.1f"), "Acțiuni": ro_spec(",.0f")}),
+        hide_index=True, width='stretch', height=420,
+        column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"])})
+    if not opts.empty:
+        st.markdown("**Opțiuni în raport** (valoarea acțiunilor din spate, cum a raportat-o fondul; nu intră în ponderi)")
+        o = sec_view.with_symbols(opts, cmap)
+        st.dataframe(pd.DataFrame({"Simbol": o["Symbol"].fillna("—"), "Emitent": o["Emitent"], "Tip": o["PutCall"],
+                                   "Valoare (mil. $)": o["Valoare_USD"] / 1e6, "Acțiuni": o["Actiuni"]}).style.format(
+            {"Valoare (mil. $)": ro_spec(",.1f"), "Acțiuni": ro_spec(",.0f")}), hide_index=True, width='stretch')
+
+    is_larg = meta["Clasa"] == sec_funds.LARG
+    moves, perr = _sec_moves(curr, prev, quarters, cmap, with_prices=not is_larg)
+    st.markdown(f"**Mișcări față de trimestrul anterior** ({quarters[1]['period'] if len(quarters) > 1 else 'N/A'} → "
+                f"{q['period']}; doar acțiunile, fără opțiuni)", help=SEC_HELP["miscari"])
+    if moves is None:
+        st.info("Nu există un raport anterior valid pentru comparație.")
+        return
+    cnt = sec_13f.move_counts(moves)
+    ok = cnt["Nouă"] + cnt["Mărită"] + cnt["Redusă"] + cnt["Păstrată"] == len(curr)
+    st.caption(f"{cnt['Nouă']} noi · {cnt['Închisă']} închise · {cnt['Mărită']} mărite · {cnt['Redusă']} reduse · "
+               f"{cnt['Păstrată']} păstrate (±5% în acțiuni)" + (" · verificare: închide ✓" if ok else " · verificare: NU închide"))
+    if perr:
+        st.caption(f"Prețurile Yahoo nu au venit ({perr}): fără split-uri și fără valoare tranzacționată.")
+    elif is_larg:
+        st.caption("Fond „Larg”: fără prețuri și split-uri (prea multe titluri); mișcările nu sunt ajustate pentru split.")
+    mv = sec_view.with_symbols(moves, cmap)
+    st.dataframe(pd.DataFrame({
+        "Mișcare": mv["Actiune"], "Simbol": mv["Symbol"].fillna("—"), "Emitent": mv["Emitent"],
+        "Acțiuni înainte": mv["Actiuni_ant"], "Acțiuni acum": mv["Actiuni"], "Δ acțiuni %": mv["Delta_pct"] * 100,
+        "Pondere înainte %": mv["Pondere_ant"] * 100, "Pondere acum %": mv["Pondere"] * 100, "Δ pp": mv["Delta_pp"],
+        "Preț mediu (proxy)": mv["Pret_mediu"], "Valoare tranz. (mil. $, proxy)": mv["Valoare_tranzactionata"] / 1e6,
+        "Impact %": mv["Impact"] * 100}).style.format({
+            "Acțiuni înainte": ro_spec(",.0f"), "Acțiuni acum": ro_spec(",.0f"), "Δ acțiuni %": ro_spec(",.1f"),
+            "Pondere înainte %": ro_spec(",.2f"), "Pondere acum %": ro_spec(",.2f"), "Δ pp": ro_spec("+,.2f"),
+            "Preț mediu (proxy)": ro_spec(",.2f"), "Valoare tranz. (mil. $, proxy)": ro_spec("+,.1f"),
+            "Impact %": ro_spec(",.2f")}),
+        hide_index=True, width='stretch', height=420)
+
+
+def _sec_conc_moves(mg, loaded, books, cmap):
+    """Mișcările administratorilor concentrați; cei cu creșteri ≥ +50% sunt recalculați cu split-urile Yahoo."""
+    conc = set(mg.loc[mg["Clasa"] == sec_funds.CONCENTRAT, "CIK"]) & set(loaded)
+    raw = {cik: _sec_moves(books[cik][0], books[cik][1], loaded[cik][1], cmap, with_prices=False)[0] for cik in conc}
+    cands = sec_view.split_check_cusips(sec_view.moves_panel(raw))
+    c2s = {c: cmap[c] for c in cands if cmap.get(c)}
+    if not c2s:
+        return raw
+    periods = [loaded[c][1][1]["period"] for c in conc if len(loaded[c][1]) > 1]
+    start = (pd.Timestamp(min(periods)) - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+    close, splits, _err = sec_prices(tuple(sorted(set(c2s.values()))), start)
+    out = {}
+    for cik, m in raw.items():
+        qs = loaded[cik][1]
+        if m is None or not set(m["CUSIP"]) & set(c2s):
+            out[cik] = m
+            continue
+        split, _avg = sec_13f.period_inputs(close, splits, qs[1]["period"], qs[0]["period"], c2s)
+        out[cik] = sec_13f.quarter_moves(books[cik][1], books[cik][0], split_factor=split)
+    return out
+
+
+def _sec_consensus(mg, loaded, books, cmap):
+    st.caption("Doar administratorii concentrați. Fondurile au perioade de raportare apropiate, dar nu neapărat identice "
+               "(vezi Prezentare).")
+    conc_mg = mg[mg["Clasa"] == sec_funds.CONCENTRAT]
+    holdings = sec_view.holdings_panel({c: books[c][0] for c in conc_mg["CIK"] if c in books}, conc_mg)
+    if holdings.empty:
+        st.info("Nu există deținuri încărcate.")
+        return
+    moves = sec_view.moves_panel(_sec_conc_moves(mg, loaded, books, cmap))
+    cons = sec_13f.consensus(holdings, moves)
+    sym6 = sec_view.symbols_by_key(cmap, holdings)
+    cons["Simbol"] = cons["CUSIP6"].map(sym6).fillna("—")
+    cfg = {"Dețin": st.column_config.NumberColumn(help=SEC_HELP["consens"], format="%d"),
+           "Convingere": st.column_config.NumberColumn(help=SEC_HELP["consens"], format="%d"),
+           "Cumpărări": st.column_config.NumberColumn(help=SEC_HELP["consens"], format="%d")}
+
+    def _show(df):
+        st.dataframe(pd.DataFrame({"Simbol": df["Simbol"], "Emitent": df["Emitent"], "Dețin": df["Detinatori"],
+                                   "Convingere": df["Convingere"], "Cumpărări": df["Cumparari_convingere"],
+                                   "Fonduri": df["Fonduri"]}), hide_index=True, width='stretch', column_config=cfg)
+
+    st.markdown(f"**Poziții de convingere la ≥ 2 administratori** (din {conc_mg['CIK'].isin(list(books)).sum()} concentrați)",
+                help=SEC_HELP["consens"])
+    _show(cons[cons["Convingere"] >= 2].head(40))
+    st.markdown("**Cumpărări de convingere în ultimul trimestru** (nouă sau ≥ +50% în acțiuni, pondere ≥ 1%)",
+                help=SEC_HELP["consens"])
+    buys = cons[cons["Cumparari_convingere"] >= 1].sort_values(["Cumparari_convingere", "Convingere"], ascending=False)
+    _show(buys.head(40))
+
+
+def _sec_who(mg, loaded, books, cmap):
+    sym = st.text_input("Simbol (SUA)", value="AAPL", key="sec_who_sym").strip().upper()
+    holdings, moves, conc = _sec_conc_panels(mg, loaded, books, cmap)
+    keys = sec_view.keys_for_symbol(sym, cmap, holdings, moves)
+    if not sym:
+        return
+    w = pd.concat([sec_13f.who_holds(holdings, k) for k in keys], ignore_index=True) if keys else pd.DataFrame()
+    if w.empty:
+        st.info(f"{sym} nu apare în deținerile fondurilor încărcate (sau codul lui CUSIP nu a fost tradus).")
+    else:
+        mv = sec_view.issuer_moves(moves[moves["CUSIP6"].isin(keys)]).groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
+        w = w.join(mv, on="CIK")
+        n_conc = int((w["Clasa"] == sec_funds.CONCENTRAT).sum())
+        st.markdown(f"**{n_conc} administratori concentrați dețin {sym}** (din {len(conc)} urmăriți)")
+        st.dataframe(pd.DataFrame({
+            "Fond": w["Fond"], "Clasa": w["Clasa"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"],
+            "Valoare (mil. $)": w["Valoare_USD"] / 1e6, "Acțiuni": w["Actiuni"], "Convingere": w["Convingere"],
+            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}).style.format({
+                "Pondere %": ro_spec(",.2f"), "Valoare (mil. $)": ro_spec(",.1f"), "Acțiuni": ro_spec(",.0f"),
+                "Δ acțiuni %": ro_spec("+,.1f")}),
+            hide_index=True, width='stretch',
+            column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"]),
+                           "Clasa": st.column_config.TextColumn(help=SEC_HELP["clasa"])})
+        st.caption("Mișcarea e doar pentru fondurile concentrate (split-uri verificate la creșterile ≥ +50%).")
+
+    with st.expander("Deținerile mele în portofoliile fondurilor concentrate"):
+        syms = sec_my_us_symbols()
+        if syms:
+            _sec_signal_table(sec_view.holdings_signals(syms, cmap, holdings, moves, conc))
+            st.caption("Acțiunile americane deschise din registrul `Tranzactii` (moneda USD, fără sufix de bursă).")
+        else:
+            st.caption("Nicio acțiune americană deschisă în registrul `Tranzactii`.")
+
+
+# ==================================================
+# CREȘTERE ȘI SURSA RANDAMENTULUI (CAGR) — decizia lui Daniel, 25.11.2026: A + B + C
+# ==================================================
+GROWTH_HELP = {
+    "card": ("**Ce arată:** cât a crescut afacerea (A), cât a câștigat acționarul (B) și de unde a venit câștigul (C).\n\n"
+             "**CAGR** = (valoarea finală ÷ valoarea inițială)^(1/n) − 1. Un capăt lipsă sau ≤ 0 (pierdere, FCF negativ) "
+             "dă N/A. Informativ: nu intră în scor (momentul e deja în pasul tehnic)."),
+    "a": ("**Pe acțiune** = indicatorul ÷ numărul de acțiuni (diluate la SUA/UE; emise, din fișier, la BVB). Contează "
+          "pentru acționar: diluarea îl scade, răscumpărările îl cresc. **Total** = suma pentru toată compania.\n\n"
+          "Dacă numărul de acțiuni s-a schimbat mult între capete (raport în afara 0,8–1,25: split, acțiuni gratuite, "
+          "majorare), valorile pe acțiune sunt N/A (nu se „corectează”).\n\n"
+          "**Surse:** SUA/UE — situațiile anuale Yahoo (~4 ani → 3 ani); 5 și 10 ani vin după Faza 3 (date SEC). "
+          "Dividendul SUA/UE — plățile Yahoo, pe ani calendaristici încheiați. BVB — fișierele „Analiză companii” "
+          "(foaia anuală): dividend pe acțiune = profit distribuit ÷ acțiuni emise."),
+    "b": ("**Randament total anualizat** = CAGR-ul prețului ajustat pentru dividende și split (dividendele reinvestite), "
+          "pe ani calendaristici până la ultima cotație. **Benchmark** din aceeași piață și valută, tot cu dividende. "
+          "**Diferența** e în puncte procentuale pe an. Randamentul trecut e context, nu semnal."),
+    "c": ("**Identitate:** (1 + randament total) = (1 + creșterea EPS) × (1 + schimbarea P/E) × (1 + contribuția "
+          "dividendului), între cele două date fiscale (prețul de la data situației). Creșterea EPS e partea care se "
+          "poate repeta; schimbarea P/E e re-evaluarea pieței (nu se repetă la nesfârșit). Suma componentelor e o "
+          "aproximare a totalului: diferența se arată."),
+}
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def get_growth_history(symbol):
+    """Istoricul pe 11 ani: Close (ajustat doar pentru split), Adj Close (și pentru dividende), Dividends.
+    Întoarce (DataFrame, eroare sau None)."""
+    if not symbol:
+        return pd.DataFrame(), "fără simbol"
+    try:
+        h = yf.Ticker(symbol).history(period="11y", auto_adjust=False, actions=True)
+    except Exception as e:   # rețea / Yahoo: cardul arată N/A
+        logger.warning(f"istoricul de creștere {symbol}: {e}")
+        return pd.DataFrame(), str(e)
+    if h is None or h.empty or "Close" not in h:
+        return pd.DataFrame(), "Yahoo nu a trimis istoricul"
+    if getattr(h.index, "tz", None) is not None:
+        h.index = h.index.tz_localize(None)
+    if "Adj Close" not in h:
+        return pd.DataFrame(), "Yahoo nu a trimis prețul ajustat pentru dividende"
+    return h, None
+
+
+def _g(v):
+    return _pct(v) if v is not None else "N/A"
+
+
+def render_growth_card(real_sym, info):
+    """Cardul „📈 Creștere și sursa randamentului” (analytics/growth.py)."""
+    sym = str(real_sym).upper()
+    st.subheader("📈 Creștere și sursa randamentului", help=GROWTH_HELP["card"])
+    st.caption("Informativ, nu intră în scor. A: cât a crescut afacerea · B: cât a câștigat acționarul · "
+               "C: de unde a venit câștigul.")
+    hist, herr = get_growth_history(sym)
+    dec_in = None
+
+    # ---------- A. creșterea afacerii
+    rows, period_note = [], ""
+    if sym.endswith(".RO"):
+        files, ferr = list_company_files()
+        data = None if ferr else build_bvb_dataset(tuple((f["id"], f["name"], f["modified"]) for f in files))
+        fg = growth.file_growth((data or {}).get("companii", {}).get(sym[:-3])) if data else None
+        if fg is None:
+            st.caption(f"{sym[:-3]} nu are fișier în „{COMPANY_FOLDER_NAME}” cu date anuale: creșterea afacerii N/A.")
+        else:
+            rows.extend(growth.file_growth_table(fg, _g))
+            period_note = (f"Fișierul „Analiză companii”, foaia anuală: ultimul an {fg['year_new']}. "
+                           + " ".join(f"{n} ani: {t}." for n, t in fg["notes"].items()))
+            dec_in = (fg.get("eps_new"), fg.get("eps_old"), fg.get("date_new"), fg.get("date_old"))
+    else:
+        fin = get_financial_statements(sym)
+        sg = growth.statement_growth(fin.get("income"), fin.get("cashflow"))
+        if sg is None:
+            st.caption("Situațiile anuale Yahoo nu au două capete utilizabile: creșterea afacerii N/A.")
+        else:
+            for name, r in sg["rows"].items():
+                if name != "EPS diluat":
+                    rows.append({"Indicator": name, "Măsură": "total", "3 ani": _g(r["total"]),
+                                 "5 ani": "după Faza 3", "10 ani": "după Faza 3", "Notă": ""})
+                rows.append({"Indicator": name, "Măsură": "pe acțiune", "3 ani": _g(r["per_share"]),
+                             "5 ani": "după Faza 3", "10 ani": "după Faza 3", "Notă": r["note"]})
+            period_note = (f"Situațiile anuale Yahoo: {sg['date_old']:%d.%m.%Y} → {sg['date_new']:%d.%m.%Y} "
+                           f"({sg['years']} ani fiscali).")
+            dec_in = (sg.get("eps_new"), sg.get("eps_old"), sg["date_new"], sg["date_old"])
+        y_ref, dg = growth.dividend_growth(hist["Dividends"] if "Dividends" in hist else None, now_ro(),
+                                           history_start=hist.index.min() if not hist.empty else None)
+        if y_ref is not None:
+            rows.append({"Indicator": "Dividend pe acțiune (Yahoo)", "Măsură": "pe acțiune",
+                         **{f"{n} ani": _g(dg[n]) for n in (3, 5, 10)}, "Notă": f"ani calendaristici până în {y_ref}"})
+    if rows:
+        st.markdown("**A. Creșterea afacerii (CAGR)**", help=GROWTH_HELP["a"])
+        st.dataframe(pd.DataFrame(rows).reindex(columns=["Indicator", "Măsură", "3 ani", "5 ani", "10 ani", "Notă"])
+                     .fillna(""), hide_index=True, width='stretch')
+        if period_note:
+            st.caption(period_note)
+
+    # ---------- B. randament total față de benchmark
+    st.markdown("**B. Randament total anualizat (prețul + dividendele reinvestite)**", help=GROWTH_HELP["b"])
+    bench_sym, bench_name = growth.tr_benchmark(sym, info.get("currency"))
+    bhist, _berr = get_growth_history(bench_sym) if bench_sym else (pd.DataFrame(), None)
+    if hist.empty:
+        st.caption(f"Istoricul de preț nu a venit ({herr}): randamentul total N/A.")
+    else:
+        brows = []
+        for n in growth.HORIZONS:
+            own = growth.total_return(hist["Adj Close"], n)
+            ben = growth.total_return(bhist["Adj Close"], n, end=own["end"]) if own and not bhist.empty else None
+            diff = (own["cagr"] - ben["cagr"]) * 100 if own and ben and own["cagr"] is not None and ben["cagr"] is not None else None
+            brows.append({"Perioada": f"{n} ani", "Acțiunea": _g(own["cagr"]) if own else "N/A (istoric scurt)",
+                          "Benchmark": _g(ben["cagr"]) if ben else (
+                              (growth.short_history_note(bhist["Adj Close"], n, end=own["end"]) if own and not bhist.empty
+                               else None) or "N/A"),
+                          "Diferență (pp/an)": format_ro(diff, 1, " pp") if diff is not None else "N/A",
+                          "Cotații": format_ro(own["n_obs"], 0) if own else "—"})
+        st.dataframe(pd.DataFrame(brows), hide_index=True, width='stretch')
+        st.caption(f"Benchmark: {bench_name or 'N/A (piață fără benchmark de randament total)'}. "
+                   "„Cotații” = zilele cu preț în fereastră; la BVB istoricul Yahoo are goluri.")
+
+    # ---------- C. sursa randamentului
+    st.markdown("**C. De unde a venit randamentul (perioada situațiilor financiare)**", help=GROWTH_HELP["c"])
+    d = None
+    if dec_in and not hist.empty and dec_in[0] is not None and dec_in[2] is not None:
+        d = growth.decompose(hist["Close"], hist["Adj Close"], *dec_in)
+    if d is None:
+        st.caption("N/A: lipsește EPS la un capăt, EPS ≤ 0, numărul de acțiuni s-a schimbat mult sau lipsește prețul "
+                   "de la data situației.")
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Creștere EPS", _g(d["eps"]) + "/an", help=GROWTH_HELP["c"])
+    c2.metric("Schimbarea P/E", _g(d["pe"]) + "/an",
+              f"P/E {format_ro(d['pe_old'], 1)} → {format_ro(d['pe_new'], 1)}", delta_color="off", help=GROWTH_HELP["c"])
+    c3.metric("Dividende", _g(d["div"]) + "/an", help=GROWTH_HELP["c"])
+    c4.metric("Randament total", _g(d["total"]) + "/an", f"suma componentelor {_g(d['eps'] + d['pe'] + d['div'])}",
+              delta_color="off", help=GROWTH_HELP["c"])
+    st.caption(f"{dec_in[3]:%d.%m.%Y} → {dec_in[2]:%d.%m.%Y} ({d['years']} ani). Verificare: (1 + EPS) × (1 + P/E) × "
+               f"(1 + dividend) − 1 = {_g((1 + d['eps']) * (1 + d['pe']) * (1 + d['div']) - 1)} = randamentul total. "
+               "Prețul de la datele situațiilor, nu de azi.")
+
+
 # --- MAIN APP ---
 def main():
+    # Căutarea (doar în Analiză companie) stă deasupra meniului: locul se rezervă aici, conținutul se scrie în secțiune.
+    search_slot = st.sidebar.container()
     st.sidebar.title("Navigare")
     # Valorile rămân „1. Agregator Știri” etc. (toate condițiile `sectiune == ...` le folosesc);
     # doar eticheta afișată are icon Material și nu mai are număr (DESIGN.md §6, decis 10.11).
@@ -4963,6 +5733,7 @@ def main():
         "1. Agregator Știri": ":material/newspaper: Știri",
         "2. Analiză Companie": ":material/query_stats: Analiză companie",
         "11. Fonduri de Pensii": ":material/savings: Fonduri de pensii",
+        "12. Fonduri SUA": ":material/account_balance: Fonduri SUA (13F)",
         "3. Portofoliu": ":material/account_balance_wallet: Portofoliu",
         "4. Piață Globală": ":material/public: Piață globală",
         "5. Import Date": ":material/upload_file: Import date",
@@ -5018,15 +5789,17 @@ def main():
     # 2. ANALIZĂ COMPANIE (VERSIUNE INTEGRALĂ REPARATĂ)
     # ==================================================
     elif sectiune == "2. Analiză Companie":
-        st.sidebar.header("Căutare")
-        sym = st.sidebar.text_input("Simbol (ex: AAPL, TLV):", "AAPL").upper()
-        
-        st.sidebar.markdown("### Indicatori Grafic")
-        show_sma20 = st.sidebar.checkbox("SMA 20", value=True)
-        show_sma50 = st.sidebar.checkbox("SMA 50", value=True)
-        show_sma200 = st.sidebar.checkbox("SMA 200", value=True)
-        show_rsi = st.sidebar.checkbox("RSI 14", value=True)
-        show_macd = st.sidebar.checkbox("MACD", value=True)
+        with search_slot:
+            st.header("Căutare")
+            sym = st.text_input("Simbol (ex: AAPL, TLV):", "AAPL").upper()
+            # Indicatorii graficului, restrânși implicit (se deschid și se închid la click)
+            with st.expander("📈 Indicatori grafic", expanded=False):
+                show_sma20 = st.checkbox("SMA 20", value=True)
+                show_sma50 = st.checkbox("SMA 50", value=True)
+                show_sma200 = st.checkbox("SMA 200", value=True)
+                show_rsi = st.checkbox("RSI 14", value=True)
+                show_macd = st.checkbox("MACD", value=True)
+            st.markdown("---")
 
         # Timpul rulării complete (Etapa 5): se scrie la final, ca viteza paginii să se poată măsura.
         _an_t0 = time.perf_counter()
@@ -5214,10 +5987,17 @@ def main():
             bvb_decision = render_bvb_decision(real_sym, hist)
             # 2b'. Deținerile fondurilor de pensii Pilon II (doar .RO; informativ, netestat)
             render_pilon2_card(real_sym, info)
+            # 2b''. Fondurile SUA (13F) care dețin acțiunea (doar SUA; context, netestat)
+            render_sec_company_card(real_sym)
+            # 2b-bis. Insiderii (Form 4, 90 de zile; doar SUA; context, netestat)
+            render_sec_insiders_card(real_sym)
             # 2c. Scor fundamental pentru acțiunile din afara BVB (descriptiv: testul pe SUA nu a găsit putere de predicție)
             global_decision = render_global_decision(real_sym, info, hist, risk_stats)
             # „Verdict final” refolosește exact acest rezultat (nu recalculează)
             score_decision = bvb_decision or global_decision
+
+            # 2d. Creștere (CAGR) și sursa randamentului (informativ, nu intră în scor)
+            render_growth_card(real_sym, info)
 
             # 3. Indicatori Fundamentali (Cele 4 coloane originale)
             st.subheader("📊 Indicatori Fundamentali")
@@ -6871,6 +7651,7 @@ def main():
         # Toată pagina folosește pozițiile din registrul `Tranzactii` (exporturile brokerilor);
         # foaia Portofoliu nu mai alimentează pagina.
         ledger_positions = render_ledger_results()
+        render_sec_portfolio_signals()
         df_pf = ledger_calc.tab_frame(ledger_positions)
         st.markdown("---")
 
@@ -9455,6 +10236,9 @@ def main():
 
     elif sectiune == "11. Fonduri de Pensii":
         render_pilon2_page()
+
+    elif sectiune == "12. Fonduri SUA":
+        render_sec_funds_page()
 
     elif sectiune == "9. Glosar Economic":
         glosar.render(st)
