@@ -124,6 +124,64 @@ CONCEPTS = {
         ("us-gaap", "CommonStockSharesOutstanding"),
     ]),
 }
+# Indicatorii de mai sus servesc cardul Creștere și sunt singurii păstrați de `sec_xbrl.slim()` implicit (memoria
+# aplicației). Cei de mai jos (Faza 3c) servesc doar adaptorul SEC → situații în formatul Yahoo
+# (`analytics/sec_statements.py`), folosit de testul istoric; aceleași reguli (ancorare, cusătură 1%, USD, ani din 10-K).
+CARD_INDICATORS = tuple(CONCEPTS)
+STATEMENT_CONCEPTS = {
+    "assets": ("USD", "instant", [("us-gaap", "Assets")]),
+    "assets_current": ("USD", "instant", [("us-gaap", "AssetsCurrent")]),
+    "liabilities_current": ("USD", "instant", [("us-gaap", "LiabilitiesCurrent")]),
+    "liabilities": ("USD", "instant", [("us-gaap", "Liabilities")]),
+    # rezerva datoriilor totale: (datorii + capitaluri) − capitaluri inclusiv minoritarii (marcată în adaptor)
+    "liabilities_and_equity": ("USD", "instant", [("us-gaap", "LiabilitiesAndStockholdersEquity")]),
+    "equity_total": ("USD", "instant", [
+        ("us-gaap", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"),
+    ]),
+    "retained_earnings": ("USD", "instant", [("us-gaap", "RetainedEarningsAccumulatedDeficit")]),
+    "inventory": ("USD", "instant", [("us-gaap", "InventoryNet")]),
+    "st_investments": ("USD", "instant", [
+        ("us-gaap", "ShortTermInvestments"),
+        ("us-gaap", "MarketableSecuritiesCurrent"),
+    ]),
+    # datoria curentă: DebtCurrent include împrumuturile pe termen scurt; altfel partea curentă a datoriei pe termen
+    # lung + împrumuturile pe termen scurt (sau, fără ele, efectele comerciale) — regula e în adaptor
+    "debt_current": ("USD", "instant", [("us-gaap", "DebtCurrent")]),
+    "ltd_current": ("USD", "instant", [
+        ("us-gaap", "LongTermDebtCurrent"),
+        ("us-gaap", "LongTermDebtAndCapitalLeaseObligationsCurrent"),
+    ]),
+    "st_borrowings": ("USD", "instant", [("us-gaap", "ShortTermBorrowings")]),
+    "commercial_paper": ("USD", "instant", [("us-gaap", "CommercialPaper")]),
+    "ltd_noncurrent": ("USD", "instant", [
+        ("us-gaap", "LongTermDebtNoncurrent"),
+        ("us-gaap", "LongTermDebtAndCapitalLeaseObligations"),
+    ]),
+    # acțiunile în circulație la data bilanțului (NU dei:EntityCommonStockSharesOutstanding, care e la data copertei)
+    "shares_out_bs": ("shares", "instant", [("us-gaap", "CommonStockSharesOutstanding")]),
+    "operating_income": ("USD", "duration", [("us-gaap", "OperatingIncomeLoss")]),
+    "gross_profit": ("USD", "duration", [("us-gaap", "GrossProfit")]),
+    "cost_of_revenue": ("USD", "duration", [
+        ("us-gaap", "CostOfRevenue"),
+        ("us-gaap", "CostOfGoodsAndServicesSold"),
+    ]),
+    "interest_expense": ("USD", "duration", [
+        ("us-gaap", "InterestExpense"),
+        ("us-gaap", "InterestExpenseNonoperating"),
+        ("us-gaap", "InterestExpenseDebt"),
+    ]),
+    "pretax_income": ("USD", "duration", [
+        ("us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"),
+        ("us-gaap", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"),
+    ]),
+    "tax_provision": ("USD", "duration", [("us-gaap", "IncomeTaxExpenseBenefit")]),
+    "dna": ("USD", "duration", [
+        ("us-gaap", "DepreciationDepletionAndAmortization"),
+        ("us-gaap", "DepreciationAndAmortization"),
+        ("us-gaap", "DepreciationAmortizationAndAccretionNet"),
+    ]),
+}
+CONCEPTS.update(STATEMENT_CONCEPTS)
 PPE_CAPEX = "PaymentsToAcquirePropertyPlantAndEquipment"
 # indicatori la care ancora e eticheta cu valoarea (absolută) cea mai mare în perioada recentă, nu prima din listă:
 # la petrol și gaze, capex-ul pe proprietăți petroliere e mai mare decât cel pe PP&E (DVN: 7,45 vs. 3,65 mld.)

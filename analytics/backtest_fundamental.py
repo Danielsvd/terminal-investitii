@@ -155,15 +155,17 @@ def beta_as_of(close_adj, bench_adj, date, window=BETA_WINDOW, min_weeks=BETA_MI
 
 # --- Intrarea scorului la o dată -----------------------------------------------
 
-def inputs_at(date, price, income, balance, cashflow, sector, symbol, rf, beta, aaa_pct):
+def inputs_at(date, price, income, balance, cashflow, sector, symbol, rf, beta, aaa_pct, lag=PUBLICATION_LAG):
     """Intrarea pentru `fundamental_score`, doar din situațiile publicate până la `date`.
 
     `price`: închiderea la dată (pe aceeași bază de split ca acțiunile din situații).
     `rf`: fracție (0,042); `aaa_pct`: procente (5,3). Întoarce (inp, fiscal_year) sau (None, motiv).
+    `lag`: decalajul de publicare (Yahoo: 90 de zile). Situațiile SEC sunt deja „cunoscute la dată” (depunere + o zi
+    lucrătoare, `analytics.sec_statements`), deci se trimite `pd.DateOffset(days=0)`.
     """
-    inc = statements_as_of(income, date)
-    bal = statements_as_of(balance, date)
-    cf = statements_as_of(cashflow, date)
+    inc = statements_as_of(income, date, lag)
+    bal = statements_as_of(balance, date, lag)
+    cf = statements_as_of(cashflow, date, lag)
     if inc is None or bal is None:
         return None, "nicio situație anuală publicată la dată"
     if not _num(price) or price <= 0:

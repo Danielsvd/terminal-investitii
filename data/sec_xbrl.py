@@ -12,13 +12,15 @@ def companyfacts_url(cik):
     return f"{sec_edgar.DATA_BASE}/api/xbrl/companyfacts/CIK{sec_edgar.cik10(cik)}.json"
 
 
-def slim(cf):
-    """Copie a JSON-ului `companyfacts` cu doar etichetele din `xbrl_facts.CONCEPTS` și marcajul taxonomiilor prezente
-    (pentru `filer_kind`). Restul câmpurilor de identificare (cik, entityName) se păstrează."""
+def slim(cf, indicators=None):
+    """Copie a JSON-ului `companyfacts` cu doar etichetele indicatorilor dați și marcajul taxonomiilor prezente
+    (pentru `filer_kind`). Restul câmpurilor de identificare (cik, entityName) se păstrează.
+    `indicators=None` = indicatorii cardului Creștere (`xbrl_facts.CARD_INDICATORS`), ca până acum; testul istoric
+    trimite `tuple(xbrl_facts.CONCEPTS)` (și etichetele de bilanț ale adaptorului)."""
     facts = (cf or {}).get("facts") or {}
     keep = {}
-    for _, (_, _, concepts) in xbrl_facts.CONCEPTS.items():
-        for tax, name in concepts:
+    for ind in (xbrl_facts.CARD_INDICATORS if indicators is None else indicators):
+        for tax, name in xbrl_facts.CONCEPTS[ind][2]:
             node = (facts.get(tax) or {}).get(name)
             if node is not None:
                 keep.setdefault(tax, {})[name] = {"units": node.get("units") or {}}
@@ -29,9 +31,9 @@ def slim(cf):
     return {"cik": cf.get("cik"), "entityName": cf.get("entityName"), "facts": keep}
 
 
-def load_companyfacts(client, cik):
-    """JSON-ul `companyfacts` redus (`slim`). Ridică `sec_edgar.EdgarError` (ex. 404 = emitent fără XBRL)."""
-    return slim(client.get_json(companyfacts_url(cik)))
+def load_companyfacts(client, cik, indicators=None):
+    """JSON-ul `companyfacts` redus (`slim`, cu `indicators`). Ridică `sec_edgar.EdgarError` (ex. 404 = fără XBRL)."""
+    return slim(client.get_json(companyfacts_url(cik)), indicators)
 
 
 # Reorganizări care au mutat emitentul pe un CIK nou (societate-mamă nouă): istoria rămâne pe CIK-ul vechi.
@@ -69,9 +71,10 @@ def load_for_symbol(client, symbol):
     return cik, load_with_predecessors(client, cik, symbol)
 
 
-def load_with_predecessors(client, cik, symbol):
-    """`companyfacts` redus al CIK-ului, cu istoria CIK-urilor vechi din `PREDECESSORS` lipită (vezi load_for_symbol)."""
-    cf = load_companyfacts(client, cik)
+def load_with_predecessors(client, cik, symbol, indicators=None):
+    """`companyfacts` redus al CIK-ului, cu istoria CIK-urilor vechi din `PREDECESSORS` lipită (vezi load_for_symbol).
+    `indicators`: ca la `slim` (None = indicatorii cardului)."""
+    cf = load_companyfacts(client, cik, indicators)
     used = []
     for old_cik, word in PREDECESSORS.get(str(symbol).upper(), []):
         try:
@@ -80,7 +83,7 @@ def load_with_predecessors(client, cik, symbol):
             continue
         if word not in str(old.get("entityName") or "").upper():
             continue
-        cf = merge_facts(cf, slim(old))
+        cf = merge_facts(cf, slim(old, indicators))
         used.append(old_cik)
     cf["predecessors"] = used
     return cf
