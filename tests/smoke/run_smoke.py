@@ -124,6 +124,10 @@ class FakeTicker:
     def __init__(self, sym, *a, **k):
         self.ticker = sym
 
+    @property
+    def splits(self):                       # cardul „Creștere” (SEC): fără split-uri în datele false
+        return pd.Series(dtype=float)
+
     def history(self, period="1mo", **k):
         if self.ticker in NO_DATA or self.ticker == "INVALID":
             return pd.DataFrame()
@@ -753,6 +757,31 @@ def _install_sec_fakes():
     sec_funds.load_manager = fake_load_manager
     cusip_map.openfigi_lookup = fake_openfigi
 
+    from data import sec_xbrl
+
+    def fake_xbrl(client, symbol):
+        """AAPL: 11 exerciții sintetice în formatul companyfacts (venit +10%/an); restul: simbol absent din lista SEC."""
+        if symbol != "AAPL":
+            return None, None
+        def fy(y, v, unit_scale=1.0):
+            return {"start": f"{y}-01-01", "end": f"{y}-12-31", "val": v * unit_scale, "form": "10-K",
+                    "filed": f"{y + 1}-02-20", "accn": f"a{y}"}
+        ys = range(2015, 2026)
+        g = {
+            "Revenues": {"USD": [fy(y, 100e9 * 1.10 ** (y - 2015)) for y in ys]},
+            "NetIncomeLoss": {"USD": [fy(y, 20e9 * 1.08 ** (y - 2015)) for y in ys]},
+            "EarningsPerShareDiluted": {"USD/shares": [fy(y, 2.0 * 1.08 ** (y - 2015)) for y in ys]},
+            "WeightedAverageNumberOfDilutedSharesOutstanding": {"shares": [fy(y, 10e9) for y in ys]},
+            "NetCashProvidedByUsedInOperatingActivities": {"USD": [fy(y, 30e9 + 1e9 * (y - 2015)) for y in ys]},
+            "PaymentsToAcquirePropertyPlantAndEquipment": {"USD": [fy(y, 5e9) for y in ys]},
+            "CommonStockDividendsPerShareDeclared": {"USD/shares": [fy(y, 0.5 + 0.05 * (y - 2015)) for y in ys]},
+            "StockholdersEquity": {"USD": [{"end": f"{y}-12-31", "val": 50e9 + 5e9 * (y - 2015), "form": "10-K",
+                                            "filed": f"{y + 1}-02-20", "accn": f"a{y}"} for y in ys]},
+        }
+        return 320193, {"facts": {"us-gaap": {k: {"units": v} for k, v in g.items()}}}
+
+    sec_xbrl.load_for_symbol = fake_xbrl
+
 
 def main():
     install_fakes()
@@ -841,6 +870,14 @@ def main():
     assert "SPY" in alpha_help and "rată fără risc" in alpha_help, f"alpha AAPL: {alpha_help!r}"
     print(f"AAPL alpha: {alpha_help}")
     master_matches_top("AAPL")
+    # Faza 3b: cardul „Creștere” la AAPL din 10-K-urile SEC (false): 3/5/10 ani + consecvență, sursa SEC
+    ta = next((d.value for d in at.dataframe if "Consecvență" in getattr(d.value, "columns", [])), None)
+    assert ta is not None, "cardul Creștere AAPL fără tabelul SEC (coloana Consecvență)"
+    rev = ta[(ta["Indicator"] == "Cifră de afaceri") & (ta["Măsură"] == "total")].iloc[0]
+    assert (rev["3 ani"], rev["5 ani"], rev["10 ani"], rev["Consecvență"]) == ("10,0%", "10,0%", "10,0%",
+                                                                                "10 din 10 ani"), rev.to_dict()
+    assert "rapoartele 10-K depuse la SEC" in page_text(), "lipsește sursa SEC sub tabelul A"
+    print(f"Creștere AAPL (SEC): {ta.head(4).to_dict('records')}")
     for sym in ("TLV.RO", "SNP.RO", "SAP.DE", "EURO.PA", "LOSS", "NEWCO", "EMPTY", "INVALID"):
         at.sidebar.text_input[0].set_value(sym).run()
         check(at, f"2. Companie {sym}")
