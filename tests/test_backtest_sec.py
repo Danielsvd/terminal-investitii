@@ -199,3 +199,13 @@ def _read_iv(path):
     iv["de_la"] = pd.to_datetime(iv["de_la"])
     iv["pana_la"] = pd.to_datetime(iv["pana_la"])
     return iv
+
+
+def test_preturile_din_cache_propriu(monkeypatch):
+    """Cache-ul comun `tools/cache/` are fișiere ale altor teste care încep mai târziu (ex. SPY din 2018):
+    testul SEC citește prețurile din `tools/cache/sec/preturi/`."""
+    import tools.backtest_sec as tb
+    seen = {}
+    monkeypatch.setattr(tb, "_download", lambda sym, s, e, r, cache_dir=None: seen.update(dir=cache_dir) or "ok")
+    assert tb.download("SPY", "2009-01-01", "2020-01-01") == "ok"
+    assert seen["dir"] == tb.PRICES_DIR and tb.PRICES_DIR.parts[-2:] == ("sec", "preturi")

@@ -277,6 +277,8 @@ def test_slim_implicit_neschimbat_si_cu_toti_indicatorii():
     (1311, "Energy", None),
     (3571, "Technology", None),                # calculatoare (AAPL)
     (3674, "Technology", None),                # semiconductori (NVDA)
+    (3600, "Industrials", None),               # GE (SIC 3600)
+    (3661, "Technology", None),                # echipamente de comunicații
     (2834, "Healthcare", None),
     (3841, "Healthcare", None),
     (5331, "Consumer Defensive", None),        # magazine cu reducere

@@ -50,7 +50,8 @@ from analytics.global_fundamental import fundamental_score  # noqa: E402
 from analytics.insiders import cik_for_ticker  # noqa: E402
 from analytics.sic_sector import sic_sector  # noqa: E402
 from tools.backtest_fundamental import FRED_LAG, download_fred  # noqa: E402
-from tools.backtest_scor import CACHE, download  # noqa: E402
+from tools.backtest_scor import CACHE  # noqa: E402
+from tools.backtest_scor import download as _download  # noqa: E402
 
 UNIV = ROOT / "tools" / "univers"
 SEC_DIR = CACHE / "sec"
@@ -59,6 +60,7 @@ HORIZONS = (1, 3, 6, 12)
 MAIN_HORIZONS = (6, 12)
 BENCH, RF_SYMBOL = "SPY", "^TNX"
 DL_START = "2009-01-01"
+PRICES_DIR = CACHE / "sec" / "preturi"      # cache separat: fișierele altor teste încep mai târziu (ex. 2018)
 NO_SCORE_LAG = pd.DateOffset(days=0)        # situațiile SEC sunt deja „cunoscute la dată”
 
 
@@ -77,6 +79,11 @@ def read_alias(path=UNIV / "sp500_alias.csv"):
     a = pd.read_csv(path, comment="#", dtype=str).fillna("")
     return {r["simbol_istoric"].strip().upper(): (r["simbol_actual"].strip().upper(), r["cik"].strip() or None)
             for _, r in a.iterrows()}
+
+
+def download(symbol, start, end, refresh=False):
+    """Prețurile Yahoo din cache-ul propriu al testului (de la `DL_START`), nu din cel comun `tools/cache/`."""
+    return _download(symbol, start, end, refresh, cache_dir=PRICES_DIR)
 
 
 def download_splits(symbol, refresh=False):
@@ -288,6 +295,11 @@ def main(argv=None):
     if bench_adj is None:
         print("Lipsește SPY: nu se pot stabili datele de sfârșit de lună.")
         return 1
+    late = [n for n, ser in ((BENCH, bench_adj), (RF_SYMBOL, tnx_close))
+            if ser is not None and ser.index[0] > pd.Timestamp(start) - pd.DateOffset(years=2)]
+    if late or tnx_close is None:
+        print(f"ATENȚIE: {', '.join(late) or RF_SYMBOL} nu acoperă 2 ani înainte de {start} → beta / WACC lipsesc la început. "
+              "Rulează cu --reincarca.")
     data_end = bench_adj.index[-1]
     horizon_limit = min(horizon_limit_phase, data_end)
     months = month_end_dates(bench_adj.index, start, end)
