@@ -238,7 +238,7 @@ def test_conviction_mask_multi_fund_counts_per_fund():
     h = _holdings()
     m = s.conviction_mask(h)
     assert bool(m[(h["CIK"] == "1") & (h["CUSIP"] == "000001AA1")].iloc[0])        # 50% ≥ 5%
-    assert not m[(h["CIK"] == "1") & (h["Emitent"] == "BBB")].any()                 # pe clase separate: 3% < 5%
+    assert m[(h["CIK"] == "1") & (h["Emitent"] == "BBB")].all()                     # clasele adunate: 3% + 3% ≥ 5%
     assert not bool(m[(h["CIK"] == "2") & (h["CUSIP"] == "000001AA1")].iloc[0])    # 0,97% < 12,5%
 
 
@@ -267,3 +267,13 @@ def test_detect_thousands():
     small["Valoare_raportata"] = small["Valoare_raportata"] / 1000    # 0,01 $ / acțiune → raportat în mii
     assert s.detect_thousands(small, 1.0)
     assert not s.detect_thousands(small.iloc[:2], 1.0)                # prea puține rânduri: nu decide
+
+
+def test_conviction_mask_share_classes_same_flag():
+    # Berkshire-like: 30 de poziții (prag 3,33%); GOOGL 8,91% + GOOG 3,05% = 11,96% → ambele clase bifate
+    w = [0.2495, 0.0891, 0.0305] + [(1 - 0.2495 - 0.0891 - 0.0305) / 27] * 27
+    b = _book([(f"{i:06d}XX1", f"E{i}", 1, x * 1e6) for i, x in enumerate(w)])
+    b.loc[b["Emitent"] == "E2", "CUSIP6"] = b.loc[b["Emitent"] == "E1", "CUSIP6"].iloc[0]   # E1/E2 = același emitent
+    m = s.conviction_mask(b).set_axis(b["Emitent"])
+    assert m["E1"] and m["E2"]                                   # E2 singur (3,05%) ar fi sub 3,33%
+    assert not m.drop(["E0", "E1", "E2"]).any()                  # restul: 2,34% < 3,33%

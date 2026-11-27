@@ -87,7 +87,7 @@ from analytics.peers import PEERS, METRICS as PEER_METRICS, peer_region, peer_li
 from analytics.peers import BVB_REGION, bvb_sector, bvb_sector_peers, bvb_regional_peers, peer_symbols, sheet_peer_row, format_peer_value, split_financial_peers
 from data.bvb_sheet import parse_bvb_sheet, bvb_symbol, reprice as reprice_bvb, unmapped_info_keys
 from data import bnr as bnr_data
-from data.helpers import format_ro, score_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, price_ro, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame
+from data.helpers import format_ro, score_ro, num, close_frame, field_frame, slice_window, now_ro, struct_time_utc_to_ro, smart_to_float, parse_ecb_csv, parse_ecb_series, parse_eurostat_monthly, positive_or_none, price_ro, entry_target_view, scale_number, watchlist_status, target_zone, NEAR_TARGET_PCT, ro, ro_spec, md_bold_html, text_frame, na_safe_frame
 
 # =============================================================================
 # ARHITECTURĂ #5: RATE LIMITER YAHOO FINANCE
@@ -5200,10 +5200,11 @@ def render_sec_company_card(real_sym):
         w = pd.concat([sec_13f.who_holds(holdings[holdings["CIK"].isin(conc)], k) for k in keys], ignore_index=True)
         mv = sec_view.issuer_moves(moves[moves["CUSIP6"].isin(keys)]).groupby("CIK").agg(Mișcare=("Actiune", "first"), Delta=("Delta_pct", "first"))
         w = w.join(mv, on="CIK")
-        st.dataframe(pd.DataFrame({
+        tbl, fmt = na_safe_frame(pd.DataFrame({
             "Fond": w["Fond"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"], "Convingere": w["Convingere"],
-            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}).style.format(
-                {"Pondere %": ro_spec(",.2f"), "Δ acțiuni %": ro_spec("+,.1f")}),
+            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}),
+            {"Pondere %": ro_spec(",.2f"), "Δ acțiuni %": ro_spec("+,.1f")})
+        st.dataframe(tbl.style.format(fmt),
             hide_index=True, width='stretch',
             column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"])})
     elif sig["Iesiri"]:
@@ -5543,7 +5544,8 @@ def _sec_fund(mg, loaded, books, cmap, ua):
 
     h = sec_view.with_symbols(curr, cmap)
     h["Convingere"] = sec_13f.conviction_mask(h)
-    st.markdown("**Deținerile pe acțiuni**")
+    st.markdown("**Deținerile pe acțiuni**", help="Convingerea se judecă pe emitent: clasele aceluiași emitent "
+                "(ex. GOOG + GOOGL) se adună și primesc aceeași bifă, ca în consens și în „Cine deține”.")
     st.dataframe(pd.DataFrame({
         "#": h["Rang"], "Simbol": h["Symbol"].fillna("—"), "Emitent": h["Emitent"], "Clasă": h["Clasa_titlu"],
         "Pondere %": h["Pondere"] * 100, "Valoare (mil. $)": h["Valoare_USD"] / 1e6, "Acțiuni": h["Actiuni"],
@@ -5574,17 +5576,17 @@ def _sec_fund(mg, loaded, books, cmap, ua):
     elif is_larg:
         st.caption("Fond „Larg”: fără prețuri și split-uri (prea multe titluri); mișcările nu sunt ajustate pentru split.")
     mv = sec_view.with_symbols(moves, cmap)
-    st.dataframe(pd.DataFrame({
+    tbl, fmt = na_safe_frame(pd.DataFrame({
         "Mișcare": mv["Actiune"], "Simbol": mv["Symbol"].fillna("—"), "Emitent": mv["Emitent"],
         "Acțiuni înainte": mv["Actiuni_ant"], "Acțiuni acum": mv["Actiuni"], "Δ acțiuni %": mv["Delta_pct"] * 100,
         "Pondere înainte %": mv["Pondere_ant"] * 100, "Pondere acum %": mv["Pondere"] * 100, "Δ pp": mv["Delta_pp"],
         "Preț mediu (proxy)": mv["Pret_mediu"], "Valoare tranz. (mil. $, proxy)": mv["Valoare_tranzactionata"] / 1e6,
-        "Impact %": mv["Impact"] * 100}).style.format({
+        "Impact %": mv["Impact"] * 100}), {
             "Acțiuni înainte": ro_spec(",.0f"), "Acțiuni acum": ro_spec(",.0f"), "Δ acțiuni %": ro_spec(",.1f"),
             "Pondere înainte %": ro_spec(",.2f"), "Pondere acum %": ro_spec(",.2f"), "Δ pp": ro_spec("+,.2f"),
             "Preț mediu (proxy)": ro_spec(",.2f"), "Valoare tranz. (mil. $, proxy)": ro_spec("+,.1f"),
-            "Impact %": ro_spec(",.2f")}),
-        hide_index=True, width='stretch', height=420)
+            "Impact %": ro_spec(",.2f")})
+    st.dataframe(tbl.style.format(fmt), hide_index=True, width='stretch', height=420)
 
 
 def _sec_conc_moves(mg, loaded, books, cmap):
@@ -5653,12 +5655,13 @@ def _sec_who(mg, loaded, books, cmap):
         w = w.join(mv, on="CIK")
         n_conc = int((w["Clasa"] == sec_funds.CONCENTRAT).sum())
         st.markdown(f"**{n_conc} administratori concentrați dețin {sym}** (din {len(conc)} urmăriți)")
-        st.dataframe(pd.DataFrame({
+        tbl, fmt = na_safe_frame(pd.DataFrame({
             "Fond": w["Fond"], "Clasa": w["Clasa"], "Pondere %": w["Pondere"] * 100, "Rang": w["Rang"],
             "Valoare (mil. $)": w["Valoare_USD"] / 1e6, "Acțiuni": w["Actiuni"], "Convingere": w["Convingere"],
-            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}).style.format({
+            "Mișcare": w["Mișcare"], "Δ acțiuni %": w["Delta"] * 100}), {
                 "Pondere %": ro_spec(",.2f"), "Valoare (mil. $)": ro_spec(",.1f"), "Acțiuni": ro_spec(",.0f"),
-                "Δ acțiuni %": ro_spec("+,.1f")}),
+                "Δ acțiuni %": ro_spec("+,.1f")})
+        st.dataframe(tbl.style.format(fmt),
             hide_index=True, width='stretch',
             column_config={"Convingere": st.column_config.CheckboxColumn(help=SEC_HELP["convingere"]),
                            "Clasa": st.column_config.TextColumn(help=SEC_HELP["clasa"])})
