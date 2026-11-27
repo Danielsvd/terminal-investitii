@@ -174,6 +174,7 @@ def holdings_signals(symbols, cmap, holdings, moves, concentrated):
     conc = set(concentrated)
     h = holdings[holdings["CIK"].isin(conc)] if holdings is not None and not holdings.empty else holdings
     m = issuer_moves(moves[moves["CIK"].isin(conc)]) if moves is not None and not moves.empty else None
+    n_pos = sec_13f.fund_positions(h)
     fund_of = {}
     if holdings is not None and not holdings.empty:
         fund_of = dict(zip(holdings["CIK"], holdings["Fond"]))
@@ -183,7 +184,7 @@ def holdings_signals(symbols, cmap, holdings, moves, concentrated):
         hh = h[h["CUSIP6"].isin(keys)] if h is not None and not h.empty else pd.DataFrame(columns=["CIK"])
         mm = m[m["CUSIP6"].isin(keys)] if m is not None and not m.empty else pd.DataFrame(columns=["CIK", "Actiune"])
         per = hh.groupby("CIK").agg(Pondere=("Pondere", "sum"), Rang=("Rang", "min")) if not hh.empty else None
-        n_conv = int((per["Pondere"].ge(sec_13f.CONVICTION_WEIGHT) | per["Rang"].le(sec_13f.CONVICTION_TOP_N)).sum()) \
+        n_conv = int(per["Pondere"].ge(sec_13f.conviction_threshold(per.index.to_series().map(n_pos))).sum()) \
             if per is not None else 0
         acts = mm.groupby("CIK")["Actiune"].first() if not mm.empty else pd.Series(dtype=object)
         cnt = acts.value_counts()

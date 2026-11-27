@@ -4977,7 +4977,10 @@ SEC_HELP = {
     "clasa": ("**Concentrat:** ≤ 100 de poziții sau primele 10 ≥ 50% din valoare (calculat din raport). "
               "**Larg:** fonduri cantitative / multi-strategie, cu mii de poziții: nu reflectă convingere și sunt excluse "
               "din consens."),
-    "convingere": "**Poziție de convingere:** pondere ≥ 3% sau în primele 10 poziții ale fondului.",
+    "convingere": ("**Poziție de convingere:** pondere ≥ max(1/N, 1%), unde N = numărul de poziții pe acțiuni ale "
+                   "fondului: o poziție peste media propriului portofoliu (8 poziții → 12,5%; 30 → 3,33%; 100 sau mai "
+                   "multe → 1%). Clasele de acțiuni ale aceluiași emitent se adună.\n\n**Limită:** nu corectează "
+                   "mărimea companiei (AAPL apare la mulți doar pentru că e mare). Netestat."),
     "miscari": ("**Mișcarea** se judecă pe numărul de acțiuni, ajustat cu split-urile din trimestru (Yahoo): Nouă, "
                 "Închisă, Mărită (> +5%), Redusă (< −5%), Păstrată.\n\n"
                 "**Valoare tranzacționată (proxy):** Δ acțiuni × media închiderilor din trimestru (nu prețul real). "
@@ -5139,7 +5142,7 @@ def _sec_conc_panels(mg, loaded, books, cmap):
 
 
 SEC_SIGNAL_HELP = ("**Dețin:** fondurile concentrate urmărite care au acțiunea în ultimul raport 13F (clasele de acțiuni "
-                   "adunate). **Convingere:** câte o au ca poziție de convingere (≥ 3% sau top 10). **Intrări / Măriri / "
+                   "adunate). **Convingere:** câte o au ca poziție de convingere (pondere ≥ max(1/N, 1%)). **Intrări / Măriri / "
                    "Reduceri / Ieșiri:** mișcările față de trimestrul anterior, pe acțiuni (> ±5%), cu split-urile "
                    "verificate la creșterile ≥ +50%.\n\n**Limite:** 13F e depus cu până la 45 de zile întârziere, doar "
                    "pozițiile long din SUA. Context, nu semnal de moment. Netestat.")

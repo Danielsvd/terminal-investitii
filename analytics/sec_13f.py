@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 
 DOLLAR_VALUES_FROM = date(2023, 1, 3)   # de la această dată de depunere, `value` e în dolari (înainte: mii)
 MOVE_THRESHOLD = 0.05                   # |Δ acțiuni| ≤ 5% → „Păstrată”
-CONVICTION_WEIGHT = 0.03                # poziție de convingere: pondere ≥ 3% ...
-CONVICTION_TOP_N = 10                   # ... sau în primele 10
+CONVICTION_MIN_WEIGHT = 0.01            # poziție de convingere: pondere ≥ max(1/N, 1%), N = pozițiile fondului
 CONCENTRATED_MAX_POSITIONS = 100        # administrator concentrat: ≤ 100 de poziții ...
 CONCENTRATED_TOP10_SHARE = 0.50         # ... sau primele 10 ≥ 50% din valoare
 CONVICTION_BUY_GROWTH = 0.50            # cumpărare de convingere: nouă sau mărită ≥ +50% ...
@@ -280,9 +279,32 @@ def classify_manager(book, max_positions=CONCENTRATED_MAX_POSITIONS, top10_share
     return "Larg"
 
 
-def conviction_mask(book, min_weight=CONVICTION_WEIGHT, top_n=CONVICTION_TOP_N):
-    """Poziție de convingere: pondere ≥ 3% sau în primele 10."""
-    return book["Pondere"].ge(min_weight) | book["Rang"].le(top_n)
+def conviction_threshold(n_positions, floor=CONVICTION_MIN_WEIGHT):
+    """Pragul de convingere al unui fond cu N poziții pe acțiuni: max(1/N, 1%), adică peste media propriului
+    portofoliu (8 poziții → 12,5%; 30 → 3,33%; ≥ 100 → 1%). N lipsă sau ≤ 0 → NaN (nicio poziție nu trece)."""
+    n = pd.to_numeric(pd.Series(n_positions), errors="coerce")
+    thr = np.maximum(1.0 / n.where(n > 0), floor)
+    return thr if isinstance(n_positions, pd.Series) else float(thr.iloc[0])
+
+
+def fund_positions(holdings):
+    """Numărul de poziții pe acțiuni (CUSIP-uri distincte) al fiecărui fond, {CIK: N}, din deținerile COMPLETE
+    (înainte de orice filtrare pe emitent)."""
+    if holdings is None or holdings.empty:
+        return pd.Series(dtype=float)
+    return holdings.groupby("CIK")["CUSIP"].nunique()
+
+
+def conviction_mask(book, floor=CONVICTION_MIN_WEIGHT):
+    """Poziție de convingere: pondere ≥ max(1/N, 1%), unde N = pozițiile fondului rândului. Cu coloana `CIK`, N se
+    numără pe fiecare fond; fără ea, `book` e portofoliul unui singur fond și N = len(book)."""
+    if book is None or book.empty:
+        return pd.Series(dtype=bool)
+    if "CIK" in book.columns:
+        n = book["CIK"].map(fund_positions(book))
+    else:
+        n = pd.Series(float(book["CUSIP"].nunique()), index=book.index)
+    return book["Pondere"].ge(conviction_threshold(n, floor))
 
 
 # --------------------------------------------------------------------------- mișcări trimestriale
@@ -356,17 +378,16 @@ def consensus(holdings, moves=None):
               („Concentrat”/„Larg”). Clasele de acțiuni ale aceluiași emitent se adună pe administrator.
     moves:    opțional, mișcările din ultimul trimestru, cu `CIK` → cumpărările de convingere.
     Coloane: CUSIP6, Emitent, Detinatori (administratori concentrați care dețin), Convingere (cu poziție de
-    convingere), Cumparari_convingere (nouă sau mărită ≥ +50%, cu pondere finală ≥ 1%), Fonduri."""
+    convingere: ponderea emitentului, clasele adunate, ≥ max(1/N, 1%)), Cumparari_convingere (nouă sau mărită ≥ +50%, cu pondere finală ≥ 1%), Fonduri."""
     cols = ["CUSIP6", "Emitent", "Detinatori", "Convingere", "Cumparari_convingere", "Fonduri"]
     if holdings is None or holdings.empty:
         return pd.DataFrame(columns=cols)
     h = holdings[holdings["Clasa"].eq("Concentrat")].copy()
     if h.empty:
         return pd.DataFrame(columns=cols)
-    h["_conv"] = conviction_mask(h)
     per = h.groupby(["CUSIP6", "CIK"]).agg(Emitent=("Emitent", "first"), Fond=("Fond", "first"),
-                                          Pondere=("Pondere", "sum"), conv=("_conv", "max")).reset_index()
-    per["conv"] = per["conv"] | per["Pondere"].ge(CONVICTION_WEIGHT)
+                                          Pondere=("Pondere", "sum")).reset_index()
+    per["conv"] = per["Pondere"].ge(conviction_threshold(per["CIK"].map(fund_positions(h))))
     out = per.groupby("CUSIP6").agg(
         Emitent=("Emitent", "first"), Detinatori=("CIK", "nunique"), Convingere=("conv", "sum"),
         Fonduri=("Fond", lambda s: ", ".join(sorted(set(s)))),
@@ -388,6 +409,7 @@ def who_holds(holdings, cusip6):
     cols = ["CIK", "Fond", "Clasa", "Actiuni", "Valoare_USD", "Pondere", "Rang", "Convingere"]
     if holdings is None or holdings.empty:
         return pd.DataFrame(columns=cols)
+    n_pos = fund_positions(holdings)
     h = holdings[holdings["CUSIP6"].eq(str(cusip6))]
     if h.empty:
         return pd.DataFrame(columns=cols)
@@ -395,7 +417,7 @@ def who_holds(holdings, cusip6):
                              Actiuni=("Actiuni", lambda s: s.sum(min_count=1)),
                              Valoare_USD=("Valoare_USD", lambda s: s.sum(min_count=1)),
                              Pondere=("Pondere", "sum"), Rang=("Rang", "min")).reset_index()
-    g["Convingere"] = g["Pondere"].ge(CONVICTION_WEIGHT) | g["Rang"].le(CONVICTION_TOP_N)
+    g["Convingere"] = g["Pondere"].ge(conviction_threshold(g["CIK"].map(n_pos)))
     g["_c"] = g["Clasa"].eq("Concentrat")
     return g.sort_values(["_c", "Pondere"], ascending=False).drop(columns="_c").reset_index(drop=True)[cols]
 
