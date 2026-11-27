@@ -31,6 +31,7 @@ FOREIGN_FORMS = ("20-F", "20-F/A", "40-F", "40-F/A")
 SEAM_TOL = 0.01                 # la schimbarea etichetei: diferență > 1% între etichete → conflict
 TTM_CHECK_TOL = 0.005           # TTM la încheierea anului vs. valoarea anuală
 EPS_TOL = 0.02                  # EPS calculat vs. raportat
+BASIC_EPS_TOL = 0.005           # EPS de bază = EPS diluat (rotunjite la cenți) → acțiunile de bază țin loc de diluate
 SCALE_TOL = 0.05                # scara acțiunilor: raportul trebuie să fie 1.000^k cu cel mult 5% abatere
 Q_DAYS = (80, 100)
 H_DAYS = (170, 190)
@@ -62,6 +63,14 @@ CONCEPTS = {
     "shares_diluted": ("shares", "duration", [
         ("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding"),
         ("us-gaap", "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),   # ex. XOM: o singură cifră
+    ]),
+    # acțiunile medii DE BAZĂ și EPS-ul de bază: folosite doar când acțiunile diluate lipsesc și EPS diluat = EPS de bază
+    # (XOM din 2014 raportează doar media de bază; diluarea e zero) — vezi `annual_table`
+    "shares_basic": ("shares", "duration", [
+        ("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"),
+    ]),
+    "eps_basic": ("USD/shares", "duration", [
+        ("us-gaap", "EarningsPerShareBasic"),
     ]),
     # rezerva profitului atribuibil (unele companii nu etichetează NetIncomeLoss: AVGO, OXY, VG):
     # profitul total minus partea minoritarilor
@@ -124,7 +133,7 @@ DURATION_INDICATORS = tuple(k for k, v in CONCEPTS.items() if v[1] == "duration"
 INSTANT_INDICATORS = tuple(k for k, v in CONCEPTS.items() if v[1] == "instant")
 # nu se adună pe trimestre: EPS-ul anual ≠ suma EPS-urilor trimestriale; acțiunile sunt medii.
 # Dividendul pe acțiune SE adună (plățile din an).
-NON_ADDITIVE = ("eps_diluted", "shares_diluted")
+NON_ADDITIVE = ("eps_diluted", "shares_diluted", "eps_basic", "shares_basic")
 
 _COLS = ["prio", "concept", "start", "end", "days", "val", "form", "filed", "accn"]
 _OUT = ["val", "start", "filed", "accn", "concept", "conflict"]
@@ -417,7 +426,8 @@ def annual_table(cf, asof=None, splits=None):
     eps (= profit pentru acționarii comuni / acțiuni), eps_reported (ajustat), eps_check, revenue_ps, fcf_ps, bvps,
     dps (ajustat; din trimestre când lipsește anualul), filed (cel mai recent raport folosit), conflicts (indicatorii
     cu cusătură în conflict), scale_fixed (scara acțiunilor corectată), ni_proxy (profitul = profit total − partea
-    minoritarilor, fiindcă NetIncomeLoss lipsește). Lipsă = NaN."""
+    minoritarilor, fiindcă NetIncomeLoss lipsește), shares_basic_used (acțiunile diluate lipsesc; s-au luat cele de
+    bază, fiindcă EPS diluat raportat = EPS de bază raportat în același an, deci diluarea e nulă). Lipsă = NaN."""
     ends = fiscal_year_ends(cf, asof)
     if not ends:
         return pd.DataFrame()
@@ -439,6 +449,24 @@ def annual_table(cf, asof=None, splits=None):
     for ind in ("revenue", "net_income", "net_income_common", "cfo", "capex", "capex_software", "sbc",
                 "eps_diluted", "shares_diluted", "dps"):
         put(ind, annual(cf, ind, asof))
+
+    # acțiunile diluate lipsă: media de bază, DOAR dacă EPS diluat raportat = EPS de bază raportat (diluare nulă,
+    # inclusiv anii cu pierdere, unde diluatul = baza prin definiție). Altfel rămân lipsă (nu se presupune diluare 0).
+    sb, eb = annual(cf, "shares_basic", asof), annual(cf, "eps_basic", asof)
+    t["shares_basic_used"] = False
+    used = []
+    for e in ends:
+        if (not pd.isna(t.loc[e, "shares_diluted"]) or e not in sb.index or e not in eb.index
+                or pd.isna(t.loc[e, "eps_diluted"])):
+            continue
+        if abs(eb.loc[e, "val"] - t.loc[e, "eps_diluted"]) > BASIC_EPS_TOL:
+            continue
+        t.loc[e, "shares_diluted"] = sb.loc[e, "val"]
+        t.loc[e, "shares_basic_used"] = True
+        filed[e] = max(filed[e] or sb.loc[e, "filed"], sb.loc[e, "filed"])
+        used.append(e)
+    if used:                                             # data depunerii acțiunilor de bază → split-urile ulterioare
+        frames["shares_diluted"] = pd.concat([frames["shares_diluted"], sb.loc[used]]).sort_index()
 
     # profitul atribuibil lipsă: profitul total − partea minoritarilor (o singură etichetă sau suma celor două)
     pl = annual(cf, "profit_loss", asof)

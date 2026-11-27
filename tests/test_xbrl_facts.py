@@ -390,3 +390,45 @@ def test_actiuni_de_baza_si_diluate_intr_o_singura_eticheta():
         "units": {"shares": g.pop("WeightedAverageNumberOfDilutedSharesOutstanding")["units"]["shares"]}}
     t = xf.annual_table(cf)
     assert t.loc[D("2020-12-31"), "eps"] == pytest.approx(0.6)
+
+
+# --- acțiunile de bază în locul celor diluate (XOM din 2014) -------------------
+
+def _basic_only_cf(eps_basic_2020=0.6):
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g.pop("WeightedAverageNumberOfDilutedSharesOutstanding")
+    g["WeightedAverageNumberOfSharesOutstandingBasic"] = {"units": {"shares": [
+        F("2019-01-01", "2019-12-31", 100.0, "2020-02-20"), F("2020-01-01", "2020-12-31", 400.0, "2021-02-19")]}}
+    g["EarningsPerShareBasic"] = {"units": {"USD/shares": [
+        F("2019-01-01", "2019-12-31", 2.0, "2020-02-20"), F("2020-01-01", "2020-12-31", eps_basic_2020, "2021-02-19")]}}
+    return cf
+
+
+def test_actiuni_de_baza_cand_eps_diluat_egal_cu_baza():
+    # EPS diluat = EPS de bază în ambii ani → acțiunile de bază țin loc de diluate; split 4:1 după 2019
+    t = xf.annual_table(_basic_only_cf(), splits=pd.Series({pd.Timestamp("2020-08-31"): 4.0}))
+    r19, r20 = t.loc[D("2019-12-31")], t.loc[D("2020-12-31")]
+    assert bool(r19["shares_basic_used"]) and bool(r20["shares_basic_used"])
+    assert r19["shares_diluted"] == 400.0 and r20["shares_diluted"] == 400.0       # 100 × 4; 400 depus după split
+    assert r19["eps"] == pytest.approx(0.5) and r20["eps"] == pytest.approx(0.6)  # 200 / 400; 240 / 400
+    assert r19["bvps"] == pytest.approx(2.0)                                      # 800 / 400
+    assert r19["eps_check"] == 0
+
+
+def test_actiuni_de_baza_refuzate_cand_exista_diluare():
+    # 2020: EPS de bază 0,62 ≠ diluat 0,60 → diluarea nu e nulă: acțiunile rămân lipsă (nu se presupune diluare 0)
+    t = xf.annual_table(_basic_only_cf(eps_basic_2020=0.62))
+    r20 = t.loc[D("2020-12-31")]
+    assert not bool(r20["shares_basic_used"]) and pd.isna(r20["shares_diluted"]) and pd.isna(r20["eps"])
+    assert bool(t.loc[D("2019-12-31"), "shares_basic_used"])
+
+
+def test_actiunile_diluate_raman_prioritare():
+    cf = _full_cf()
+    cf["facts"]["us-gaap"]["WeightedAverageNumberOfSharesOutstandingBasic"] = {"units": {"shares": [
+        F("2020-01-01", "2020-12-31", 390.0, "2021-02-19")]}}
+    cf["facts"]["us-gaap"]["EarningsPerShareBasic"] = {"units": {"USD/shares": [
+        F("2020-01-01", "2020-12-31", 0.6, "2021-02-19")]}}
+    t = xf.annual_table(cf)
+    assert t.loc[D("2020-12-31"), "shares_diluted"] == 400.0 and not t["shares_basic_used"].any()
