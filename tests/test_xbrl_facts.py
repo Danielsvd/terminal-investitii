@@ -364,3 +364,29 @@ def test_predecesori_lipiti_doar_cu_numele_potrivit():
     other = dict(old, entityName="ALTA FIRMA INC")                     # nume diferit → nu se lipește
     _, cf2 = sec_xbrl.load_for_symbol(C(other), "XOM")
     assert cf2["predecessors"] == [] and xf.annual_table(cf2).empty
+
+
+def test_profit_din_profit_total_minus_minoritari():
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g["NetIncomeLoss"]["units"]["USD"] = [F("2019-01-01", "2019-12-31", 200.0, "2020-02-20")]   # 2020 lipsește
+    g["ProfitLoss"] = {"units": {"USD": [F("2020-01-01", "2020-12-31", 250.0, "2021-02-19")]}}
+    g["NetIncomeLossAttributableToRedeemableNoncontrollingInterest"] = {"units": {"USD": [
+        F("2020-01-01", "2020-12-31", 6.0, "2021-02-19")]}}
+    g["NetIncomeLossAttributableToNonredeemableNoncontrollingInterest"] = {"units": {"USD": [
+        F("2020-01-01", "2020-12-31", 4.0, "2021-02-19")]}}
+    t = xf.annual_table(cf)
+    assert t.loc[D("2020-12-31"), "net_income"] == 240.0 and bool(t.loc[D("2020-12-31"), "ni_proxy"])
+    assert not bool(t.loc[D("2019-12-31"), "ni_proxy"])
+    # fără partea minoritarilor: profitul rămâne lipsă (nu se presupune 0)
+    del g["NetIncomeLossAttributableToRedeemableNoncontrollingInterest"]
+    assert pd.isna(xf.annual_table(cf).loc[D("2020-12-31"), "net_income"])
+
+
+def test_actiuni_de_baza_si_diluate_intr_o_singura_eticheta():
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g["WeightedAverageNumberOfShareOutstandingBasicAndDiluted"] = {
+        "units": {"shares": g.pop("WeightedAverageNumberOfDilutedSharesOutstanding")["units"]["shares"]}}
+    t = xf.annual_table(cf)
+    assert t.loc[D("2020-12-31"), "eps"] == pytest.approx(0.6)

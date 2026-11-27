@@ -61,6 +61,21 @@ CONCEPTS = {
     ]),
     "shares_diluted": ("shares", "duration", [
         ("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding"),
+        ("us-gaap", "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"),   # ex. XOM: o singură cifră
+    ]),
+    # rezerva profitului atribuibil (unele companii nu etichetează NetIncomeLoss: AVGO, OXY, VG):
+    # profitul total minus partea minoritarilor
+    "profit_loss": ("USD", "duration", [
+        ("us-gaap", "ProfitLoss"),
+    ]),
+    "nci": ("USD", "duration", [
+        ("us-gaap", "NetIncomeLossAttributableToNoncontrollingInterest"),
+    ]),
+    "nci_redeemable": ("USD", "duration", [
+        ("us-gaap", "NetIncomeLossAttributableToRedeemableNoncontrollingInterest"),
+    ]),
+    "nci_nonredeemable": ("USD", "duration", [
+        ("us-gaap", "NetIncomeLossAttributableToNonredeemableNoncontrollingInterest"),
     ]),
     "cfo": ("USD", "duration", [
         ("us-gaap", "NetCashProvidedByUsedInOperatingActivities"),
@@ -70,6 +85,7 @@ CONCEPTS = {
         ("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment"),
         ("us-gaap", "PaymentsToAcquireProductiveAssets"),
         ("us-gaap", "PaymentsToAcquireOilAndGasPropertyAndEquipment"),
+        ("us-gaap", "PaymentsToAcquireOilAndGasProperty"),
         ("us-gaap", "PaymentsToExploreAndDevelopOilAndGasProperties"),
         ("us-gaap", "PaymentsForProceedsFromProductiveAssets"),
     ]),
@@ -400,7 +416,8 @@ def annual_table(cf, asof=None, splits=None):
     fcf, sbc, equity, cash, debt_lt, shares_diluted (scară corectată, ajustate cu split-urile de după depunere),
     eps (= profit pentru acționarii comuni / acțiuni), eps_reported (ajustat), eps_check, revenue_ps, fcf_ps, bvps,
     dps (ajustat; din trimestre când lipsește anualul), filed (cel mai recent raport folosit), conflicts (indicatorii
-    cu cusătură în conflict), scale_fixed (scara acțiunilor corectată). Lipsă = NaN."""
+    cu cusătură în conflict), scale_fixed (scara acțiunilor corectată), ni_proxy (profitul = profit total − partea
+    minoritarilor, fiindcă NetIncomeLoss lipsește). Lipsă = NaN."""
     ends = fiscal_year_ends(cf, asof)
     if not ends:
         return pd.DataFrame()
@@ -422,6 +439,24 @@ def annual_table(cf, asof=None, splits=None):
     for ind in ("revenue", "net_income", "net_income_common", "cfo", "capex", "capex_software", "sbc",
                 "eps_diluted", "shares_diluted", "dps"):
         put(ind, annual(cf, ind, asof))
+
+    # profitul atribuibil lipsă: profitul total − partea minoritarilor (o singură etichetă sau suma celor două)
+    pl = annual(cf, "profit_loss", asof)
+    nci = annual(cf, "nci", asof)
+    nci_r, nci_n = annual(cf, "nci_redeemable", asof), annual(cf, "nci_nonredeemable", asof)
+    t["ni_proxy"] = False
+    for e in ends:
+        if not pd.isna(t.loc[e, "net_income"]) or e not in pl.index:
+            continue
+        if e in nci.index:
+            minority = nci.loc[e, "val"]
+        elif e in nci_r.index and e in nci_n.index:
+            minority = nci_r.loc[e, "val"] + nci_n.loc[e, "val"]
+        else:
+            continue                                     # partea minoritarilor necunoscută: profitul rămâne lipsă
+        t.loc[e, "net_income"] = pl.loc[e, "val"] - minority
+        t.loc[e, "ni_proxy"] = True
+        filed[e] = max(filed[e] or pl.loc[e, "filed"], pl.loc[e, "filed"])
     for ind in ("equity", "cash", "debt_lt"):
         put(ind, balance_at_year_end(cf, ind, asof, ends))
 
