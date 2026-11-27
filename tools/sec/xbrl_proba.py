@@ -122,6 +122,7 @@ def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
     eps_bad = int((t["eps_check"] > xf.EPS_TOL).sum())
     scale_fixed = int(t["scale_fixed"].sum())
     ni_proxy = int(t["ni_proxy"].sum())
+    basic_used = int(t["shares_basic_used"].sum())
     ttm_rev = xf.ttm(cf, "revenue")
     diffs, compared = compare(t, yahoo) if yahoo else ([], 0)
     res = {
@@ -129,6 +130,7 @@ def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
         "first": t.index[0].year, "last": t.index[-1], "filed": last["filed"],
         "revenue": last["revenue"], "net_income": last["net_income"], "eps": last["eps"], "fcf": last["fcf"],
         "conflicts": conflicts, "eps_bad": eps_bad, "scale_fixed": scale_fixed, "ni_proxy": ni_proxy,
+        "basic_used": basic_used,
         "ttm_check": None if ttm_rev is None else ttm_rev["check"],
         "diffs": diffs, "compared": compared,
         "rev5": growth(t, "revenue", 5), "rev10": growth(t, "revenue", 10),
@@ -187,6 +189,8 @@ def main(argv=None):
             flags.append(f"{r['conflicts']} conflicte de etichete")
         if r["ni_proxy"]:
             flags.append(f"profit = profit total − minoritari în {r['ni_proxy']} ani")
+        if r["basic_used"]:
+            flags.append(f"acțiuni de bază (EPS diluat = de bază) în {r['basic_used']} ani")
         if r["scale_fixed"]:
             flags.append(f"scara acțiunilor corectată în {r['scale_fixed']} ani")
         if r["eps_bad"]:
