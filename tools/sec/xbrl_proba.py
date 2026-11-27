@@ -104,7 +104,7 @@ def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
         cik, cf = sec_xbrl.load_for_symbol(client, symbol)
     else:
         cik = insiders.cik_for_ticker(tickers, symbol)
-        cf = sec_xbrl.load_companyfacts(client, cik) if cik is not None else None
+        cf = sec_xbrl.load_with_predecessors(client, cik, symbol) if cik is not None else None
     if cik is None:
         return {"symbol": symbol, "kind": "fără CIK"}
     kind = xf.filer_kind(cf)
@@ -124,7 +124,7 @@ def probe_symbol(client, symbol, use_yahoo, detail, tickers=None):
     ttm_rev = xf.ttm(cf, "revenue")
     diffs, compared = compare(t, yahoo) if yahoo else ([], 0)
     res = {
-        "symbol": symbol, "kind": "10-K", "cik": cik, "years": len(t),
+        "symbol": symbol, "kind": "10-K", "cik": cik, "years": len(t), "pred": cf.get("predecessors") or [],
         "first": t.index[0].year, "last": t.index[-1], "filed": last["filed"],
         "revenue": last["revenue"], "net_income": last["net_income"], "eps": last["eps"], "fcf": last["fcf"],
         "conflicts": conflicts, "eps_bad": eps_bad, "scale_fixed": scale_fixed,
@@ -180,6 +180,8 @@ def main(argv=None):
             print(f"{sym}: {r['kind']}")
             continue
         flags = []
+        if r["pred"]:
+            flags.append(f"istorie lipită din CIK {', '.join(r['pred'])}")
         if r["conflicts"]:
             flags.append(f"{r['conflicts']} conflicte de etichete")
         if r["scale_fixed"]:

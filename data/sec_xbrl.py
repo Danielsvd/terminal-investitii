@@ -34,9 +34,53 @@ def load_companyfacts(client, cik):
     return slim(client.get_json(companyfacts_url(cik)))
 
 
+# Reorganizări care au mutat emitentul pe un CIK nou (societate-mamă nouă): istoria rămâne pe CIK-ul vechi.
+# simbol → [(CIK vechi, cuvânt obligatoriu în entityName)] — fără potrivirea numelui, CIK-ul vechi NU se lipește.
+# [de verificat cu proba de pe server] XOM: CIK nou 2115436 din 2026, doar 10-Q (presupunere: holding nou).
+PREDECESSORS = {
+    "XOM": [("34088", "EXXON")],
+    "GOOGL": [("1288776", "GOOGLE")],
+    "GOOG": [("1288776", "GOOGLE")],
+    "AVGO": [("1649338", "BROADCOM"), ("1441634", "AVAGO")],
+}
+
+
+def merge_facts(current, older):
+    """Lipește valorile din JSON-ul `older` (CIK-ul vechi) înaintea celor din `current`, pe aceeași etichetă și unitate.
+    Perioadele comune se rezolvă mai departe după data depunerii (ultima versiune câștigă)."""
+    out = {"cik": current.get("cik"), "entityName": current.get("entityName"), "facts": {}}
+    for src in (older, current):
+        for tax, concepts in ((src or {}).get("facts") or {}).items():
+            dst = out["facts"].setdefault(tax, {})
+            for name, node in concepts.items():
+                units = dst.setdefault(name, {"units": {}})["units"]
+                for unit, rows in (node.get("units") or {}).items():
+                    units.setdefault(unit, []).extend(rows)
+    return out
+
+
 def load_for_symbol(client, symbol):
-    """(cik, companyfacts redus) pentru simbolul american; (None, None) dacă simbolul nu e în lista SEC."""
+    """(cik, companyfacts redus) pentru simbolul american; (None, None) dacă simbolul nu e în lista SEC.
+    La reorganizările din `PREDECESSORS`, istoria CIK-ului vechi se lipește (doar dacă numele se potrivește);
+    `cf["predecessors"]` = CIK-urile lipite."""
     cik = sec_insiders.ticker_cik(client, symbol)
     if cik is None:
         return None, None
-    return cik, load_companyfacts(client, cik)
+    return cik, load_with_predecessors(client, cik, symbol)
+
+
+def load_with_predecessors(client, cik, symbol):
+    """`companyfacts` redus al CIK-ului, cu istoria CIK-urilor vechi din `PREDECESSORS` lipită (vezi load_for_symbol)."""
+    cf = load_companyfacts(client, cik)
+    used = []
+    for old_cik, word in PREDECESSORS.get(str(symbol).upper(), []):
+        try:
+            old = client.get_json(companyfacts_url(old_cik))
+        except sec_edgar.EdgarError:
+            continue
+        if word not in str(old.get("entityName") or "").upper():
+            continue
+        cf = merge_facts(cf, slim(old))
+        used.append(old_cik)
+    cf["predecessors"] = used
+    return cf

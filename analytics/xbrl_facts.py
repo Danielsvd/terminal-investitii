@@ -100,6 +100,10 @@ CONCEPTS = {
     ]),
 }
 PPE_CAPEX = "PaymentsToAcquirePropertyPlantAndEquipment"
+# indicatori la care ancora e eticheta cu valoarea (absolută) cea mai mare în perioada recentă, nu prima din listă:
+# la petrol și gaze, capex-ul pe proprietăți petroliere e mai mare decât cel pe PP&E (DVN: 7,45 vs. 3,65 mld.)
+ANCHOR_MAX = ("capex",)
+NEIGHBOR_SCALE_RANGE = (0.5, 2.0)   # scara acțiunilor confirmată de anii vecini: raport la mediană / 1.000^k
 DURATION_INDICATORS = tuple(k for k, v in CONCEPTS.items() if v[1] == "duration")
 INSTANT_INDICATORS = tuple(k for k, v in CONCEPTS.items() if v[1] == "instant")
 # nu se adună pe trimestre: EPS-ul anual ≠ suma EPS-urilor trimestriale; acțiunile sunt medii.
@@ -207,8 +211,9 @@ def _seam_conflict(by_period, periods, at, old, new):
     return False
 
 
-def _resolve(df):
+def _resolve(df, anchor_max=False):
     """O valoare pe perioadă, ancorată pe eticheta celei mai recente perioade (vezi docstring-ul modulului).
+    `anchor_max`: ancora inițială e eticheta cu valoarea absolută cea mai mare (nu prima din listă).
     Întoarce rândurile alese, cu coloana `conflict` (cusătură cu diferență > SEAM_TOL)."""
     if df.empty:
         return df.assign(conflict=pd.Series(dtype=bool))
@@ -222,7 +227,8 @@ def _resolve(df):
         avail = by_period[p]
         conflict = False
         if current is None or current not in avail:
-            new = min(avail)
+            new = (max(avail, key=lambda k: abs(avail[k]["val"])) if anchor_max and current is None
+                   else min(avail))
             if current is not None:
                 conflict = _seam_conflict(by_period, periods, p, current, new)
             current = new
@@ -254,7 +260,7 @@ def annual(cf, indicator, asof=None):
         raise ValueError(f"{indicator}: indicator de bilanț; folosește balance_at_year_end()")
     raw = raw_facts(cf, indicator, asof, forms=ANNUAL_FORMS)
     raw = raw[raw["days"].apply(lambda d: _in(d, FY_DAYS))]
-    return _frame(_resolve(raw))
+    return _frame(_resolve(raw, anchor_max=indicator in ANCHOR_MAX))
 
 
 def fiscal_year_ends(cf, asof=None):
@@ -305,7 +311,7 @@ def quarterly(cf, indicator, asof=None):
     raw = raw_facts(cf, indicator, asof)
     if not raw.empty:
         raw = raw[~(raw["days"].apply(lambda d: _in(d, FY_DAYS)) & ~raw["form"].isin(ANNUAL_FORMS))]
-    res = _resolve(raw)
+    res = _resolve(raw, anchor_max=indicator in ANCHOR_MAX)
     cols = ["val", "start", "filed", "derived", "conflict"]
     if res.empty:
         return pd.DataFrame(columns=cols).rename_axis("end")
@@ -451,8 +457,22 @@ def annual_table(cf, asof=None, splits=None):
     # scara acțiunilor, confirmată de profit / EPS raportat (din același raport, deci fără ajustare de split)
     scale = pd.Series([scale_correction(s, n / r if r else None)
                        for s, n, r in zip(t["shares_diluted"], numer, eps_rep_raw)], index=t.index)
+    adj = t["shares_diluted"] * scale * sh_f
+    # a doua verificare: anii vecini (EPS-ul raportat e prea rotunjit când profitul e aproape zero, ex. NVDA FY2009)
+    for e in ends:
+        if scale[e] != 1.0 or pd.isna(adj[e]) or adj[e] <= 0:
+            continue
+        others = adj.drop(index=e).dropna()
+        others = others[others > 0]
+        if len(others) < 2:
+            continue
+        r = float(others.median()) / float(adj[e])
+        k = round(math.log10(r) / 3)
+        if k != 0 and NEIGHBOR_SCALE_RANGE[0] <= r / 1000.0 ** k <= NEIGHBOR_SCALE_RANGE[1]:
+            scale[e] = 1000.0 ** k
+            adj[e] = adj[e] * scale[e]
     t["scale_fixed"] = scale != 1.0
-    t["shares_diluted"] = t["shares_diluted"] * scale * sh_f
+    t["shares_diluted"] = adj
     t["eps_reported"] = eps_rep_raw / eps_f
     t["dps"] = t["dps"] / dps_f
     sh = t["shares_diluted"].where(t["shares_diluted"] > 0)
@@ -489,6 +509,12 @@ def diagnose(cf):
                     forms[r.get("form")] = forms.get(r.get("form"), 0) + 1
                 out.append((ind, name, u, forms))
     known = {n for _, _, lst in CONCEPTS.values() for _, n in lst}
-    extra = sorted(n for n in (facts.get("us-gaap") or {}) if n not in known
-                   and any(k in n for k in ("Revenue", "NetIncome", "ProfitLoss")))[:15]
-    return out, extra
+    extra = []
+    for n, node in sorted((facts.get("us-gaap") or {}).items()):
+        if n in known or not any(k in n for k in ("Revenue", "NetIncome", "ProfitLoss", "PaymentsToAcquire",
+                                                  "PaymentsFor", "CapitalExpenditure")):
+            continue
+        n10k = sum(1 for rows in (node.get("units") or {}).values() for r in rows if r.get("form") in ANNUAL_FORMS)
+        if n10k:
+            extra.append(f"{n} (10-K {n10k})")
+    return out, extra[:30]
