@@ -360,3 +360,18 @@ def test_app_resturi_tema():
     assert "'#383835'" not in src
     assert "rgba(59, 130, 246, 0.14)" not in src and "ui_theme.DF_HIGHLIGHT_BG" in src
     assert not re.search(r"font-size: ?(?:[0-9]|1[01])px", src)       # DESIGN §2: niciun text sub 12px
+
+
+def test_sign_colors_histograma_macd():
+    vals = [0.5, -0.2, 0.0, float("nan"), None, -0.0001]
+    assert theme.sign_colors(vals, "U", "D", "N") == ["U", "D", "N", "N", "N", "D"]
+    pd = pytest.importorskip("pandas")
+    assert theme.sign_colors(pd.Series([1.0, -1.0]), "U", "D", "N") == ["U", "D"]
+    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "marker_color=ui_theme.sign_colors(macd_hist, DF_UP, DF_DOWN, DF_MUTED)" in src
+    # culorile reale ale modului: barele au ≥ 3:1 pe fundal și card
+    for mode, i in (("light", 0), ("dark", 1)):
+        up, down, _ = theme.df_colors(mode)
+        for c in (up, down):
+            for bg in (theme.TOKENS["bg"][i], theme.TOKENS["surface"][i]):
+                assert contrast(c, bg) >= 3.0, (mode, c, bg)
