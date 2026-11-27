@@ -247,7 +247,38 @@ PLOT_COLOR_MAP = {
     "CYAN": "#0891B2", "#00E5FF": "#0891B2",
     "RGBA(255, 255, 255, 0.4)": "rgba(128,128,128,0.5)",
     "RGBA(255,255,255,0.08)": "rgba(128,128,128,0.12)",
+    "#446E9E": _GRID,                    # grila albastră a graficului de performanță relativă
 }
+
+# Culorile seriilor în grafice, după modul temei (luminos, întunecat). Liniile trebuie să aibă contrast ≥ 3:1
+# pe fundal (WCAG, obiecte grafice): culorile vechi gândite pentru fundal închis (portocaliu, chihlimbar,
+# gri deschis, violet deschis) dispăreau pe alb, iar `purple` dispărea pe fundalul de noapte.
+# Nuanțele „blue/amber/violet/teal” sunt cele din `chartCategoricalColors` din config.toml.
+PLOT_TOKENS = {
+    "text": TOKENS["text"], "muted": TOKENS["muted"],
+    "surface": TOKENS["surface"], "surface-2": TOKENS["surface-2"], "border-strong": TOKENS["border-strong"],
+    "up": TOKENS["up"], "down": TOKENS["down"], "warn": TOKENS["warn"],
+    "blue": ("#1D4ED8", "#7CC4E8"),
+    "amber": ("#B45309", "#F4B26A"),
+    "violet": ("#7C3AED", "#B4A7F5"),
+    "teal": ("#0F766E", "#7CC4E8"),
+}
+# culoare scrisă în cod → token din PLOT_TOKENS (doar cu modul cunoscut). Paletele de categorii
+# (#3987E5, #199E70, #C98500, #D95926...) NU sunt aici: s-ar contopi seriile între ele.
+PLOT_MODE_MAP = {
+    "#C9D1D9": "text", "#B0B8C4": "text",
+    "#8B949E": "muted", "#6E7681": "muted",
+    "#161B22": "surface", "#21262D": "surface-2", "#484F58": "border-strong",
+    "GREEN": "up",
+    "#F85149": "down", "#DA3633": "down", "RED": "down",
+    "#D29922": "warn", "#DBAB09": "warn", "#FFAB00": "warn", "YELLOW": "warn",
+    "#58A6FF": "blue",
+    "ORANGE": "amber",
+    "PURPLE": "violet", "#BF91FF": "violet", "#A371F7": "violet",
+    "CYAN": "teal", "#00E5FF": "teal",
+}
+_PLOT_MODE_RGB = {tuple(int(h[i:i + 2], 16) for i in (1, 3, 5)): tok
+                  for h, tok in PLOT_MODE_MAP.items() if h.startswith("#")}
 # alb doar unde e contur/tick pe fundalul graficului; textul alb de pe celulele colorate rămâne alb
 _WHITE_KEYS = {"tickcolor"}
 
@@ -264,10 +295,31 @@ def _rgb(hex_color):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def _plot_color(key, val, up=None):
+def _plot_mode_color(val, mode):
+    """Culoarea din PLOT_TOKENS pentru `mode` ("light"/"dark"), sau None dacă `val` nu e în PLOT_MODE_MAP.
+    `rgba(...)` cu nuanța unei culori din hartă păstrează transparența."""
+    i = 0 if mode == "light" else 1
+    norm = val.strip().upper()
+    tok = PLOT_MODE_MAP.get(norm)
+    if tok is not None:
+        return PLOT_TOKENS[tok][i]
+    m = _RGBA_FULL.match(val.strip())
+    if m:
+        tok = _PLOT_MODE_RGB.get(tuple(int(m.group(k)) for k in (1, 2, 3)))
+        if tok is not None:
+            r, g, b = _rgb(PLOT_TOKENS[tok][i])
+            return f"rgba({r}, {g}, {b}, {m.group(4)})"
+    return None
+
+
+def _plot_color(key, val, up=None, mode=None):
     norm = val.strip().upper()
     if norm in ("WHITE", "#FFFFFF"):
         return "rgba(128,128,128,0.6)" if key in _WHITE_KEYS else val
+    if mode in ("light", "dark"):
+        themed = _plot_mode_color(val, mode)
+        if themed is not None:
+            return themed
     if up is not None:
         if norm in PLOT_UP_HEX:
             return up
@@ -278,12 +330,14 @@ def _plot_color(key, val, up=None):
     return PLOT_COLOR_MAP.get(norm, val)
 
 
-def theme_figure_dict(obj, key=None, up=None):
+def theme_figure_dict(obj, key=None, up=None, mode=None):
     """Copie a dicționarului unei figuri Plotly, cu culorile pentru fundal închis înlocuite (PLOT_COLOR_MAP).
     Cu `up` (hex, verdele temei active): verdele vechi de creștere și lumânările în creștere primesc `up`.
+    Cu `mode` ("light"/"dark", din `st.context.theme.type`): culorile din PLOT_MODE_MAP primesc nuanța
+    modului (PLOT_TOKENS); fără mod (necunoscut) rămân ca înainte.
     Nu modifică datele, doar valorile text ale cheilor care conțin „color”."""
     if isinstance(obj, dict):
-        out = {k: theme_figure_dict(v, k, up) for k, v in obj.items()}
+        out = {k: theme_figure_dict(v, k, up, mode) for k, v in obj.items()}
         if up is not None and out.get("type") == "candlestick":
             inc = dict(out.get("increasing") or {})
             line = dict(inc.get("line") or {})
@@ -292,9 +346,9 @@ def theme_figure_dict(obj, key=None, up=None):
             out["increasing"] = inc
         return out
     if isinstance(obj, list):
-        return [theme_figure_dict(v, key, up) for v in obj]
+        return [theme_figure_dict(v, key, up, mode) for v in obj]
     if isinstance(obj, str) and key is not None and "color" in key.lower():
-        return _plot_color(key, obj, up)
+        return _plot_color(key, obj, up, mode)
     return obj
 
 
