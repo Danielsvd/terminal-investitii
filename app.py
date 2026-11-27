@@ -70,6 +70,8 @@ from analytics import pilon2 as p2_calc
 from data import pilon2 as pilon2_data
 from analytics import sec_13f, sec_view, insiders, schedule13
 from data import sec_edgar, sec_funds, cusip_map, sec_insiders, sec_ownership
+from data import sec_xbrl
+from analytics import xbrl_facts
 from data.ucits import ucits_for, ucits_symbols, ucits_currency
 from analytics import events as events_calc
 from data import entities as entities_data
@@ -5689,7 +5691,11 @@ GROWTH_HELP = {
           "pentru acționar: diluarea îl scade, răscumpărările îl cresc. **Total** = suma pentru toată compania.\n\n"
           "Dacă numărul de acțiuni s-a schimbat mult între capete (raport în afara 0,8–1,25: split, acțiuni gratuite, "
           "majorare), valorile pe acțiune sunt N/A (nu se „corectează”).\n\n"
-          "**Surse:** SUA/UE — situațiile anuale Yahoo (~4 ani → 3 ani); 5 și 10 ani vin după Faza 3 (date SEC). "
+          "**Surse:** SUA (emitenți 10-K) — rapoartele 10-K depuse la SEC (XBRL), până la ~19 ani: 3, 5 și 10 ani; "
+          "valorile pe acțiune = totalul ÷ acțiunile diluate, ajustate cu split-urile de după depunere; FCF pe medii de "
+          "3 ani la capete; **Consecvență** = anii cu creștere față de anul anterior din ultimii 10; o etichetă XBRL "
+          "schimbată cu valori diferite în interval → N/A. UE și emitenții străini (20-F) — situațiile anuale Yahoo "
+          "(~4 ani → 3 ani). "
           "Dividendul SUA/UE — plățile Yahoo, pe ani calendaristici încheiați. BVB — fișierele „Analiză companii” "
           "(foaia anuală): dividend pe acțiune = profit distribuit ÷ acțiuni emise."),
     "b": ("**Randament total anualizat** = CAGR-ul prețului ajustat pentru dividende și split (dividendele reinvestite), "
@@ -5726,6 +5732,33 @@ def _g(v):
     return _pct(v) if v is not None else "N/A"
 
 
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def sec_annual_table(symbol, user_agent):
+    """Tabelul anual SEC (XBRL, ultima versiune) al unui emitent american: (tabel, tip emitent, eroare sau None).
+    Tip: "10-K" / "20-F" / None. Split-urile vin din Yahoo; fără ele valorile pe acțiune vechi ar fi greșite → eroare."""
+    try:
+        cik, cf = sec_xbrl.load_for_symbol(sec_client(user_agent), symbol)
+    except sec_edgar.EdgarError as exc:
+        logger.warning("XBRL %s: %s", symbol, exc)
+        return pd.DataFrame(), None, str(exc)
+    if cik is None:
+        return pd.DataFrame(), None, "simbolul nu e în lista SEC"
+    kind = xbrl_facts.filer_kind(cf)
+    if kind != "10-K":
+        return pd.DataFrame(), kind, None
+    try:
+        splits = yf.Ticker(symbol).splits
+    except Exception as exc:   # Yahoo: erori variate; fără split-uri nu se calculează valorile pe acțiune
+        logger.warning("split-uri %s: %s", symbol, exc)
+        return pd.DataFrame(), kind, "split-urile Yahoo indisponibile"
+    return xbrl_facts.annual_table(cf, splits=splits), kind, None
+
+
+def _sec_growth_rows(sgr):
+    return [{**{k: v for k, v in r.items() if not k.endswith(" ani")}, **{f"{n} ani": _g(r[f"{n} ani"]) for n in (3, 5, 10)}}
+            for r in sgr["rows"]]
+
+
 def render_growth_card(real_sym, info):
     """Cardul „📈 Creștere și sursa randamentului” (analytics/growth.py)."""
     sym = str(real_sym).upper()
@@ -5750,27 +5783,50 @@ def render_growth_card(real_sym, info):
             dec_in = (fg.get("eps_new"), fg.get("eps_old"), fg.get("date_new"), fg.get("date_old"))
     else:
         fin = get_financial_statements(sym)
-        sg = growth.statement_growth(fin.get("income"), fin.get("cashflow"))
-        if sg is None:
-            st.caption("Situațiile anuale Yahoo nu au două capete utilizabile: creșterea afacerii N/A.")
+        sgr, sec_note, tbl = None, "", None
+        ua = sec_secret("sec_user_agent")
+        if "." not in sym and "=" not in sym and "^" not in sym and ua and "@" in ua:
+            with st.spinner("Citesc rapoartele 10-K de la SEC..."):
+                tbl, kind, serr = sec_annual_table(sym, ua)
+            if not tbl.empty:
+                sgr = growth.sec_growth(tbl, financial=fund.is_financial_issuer(info.get("sector"), sym))
+            sec_note = (f"SEC: {serr}. " if serr else "") + ("Emitent străin (20-F): " if kind == "20-F" else "")
+        if sgr is not None:
+            rows.extend(_sec_growth_rows(sgr))
+            diffs = growth.sec_yahoo_diffs(tbl, fin.get("income"), fin.get("cashflow"))
+            period_note = (f"Sursa: rapoartele 10-K depuse la SEC (XBRL), exerciții {sgr['first']:%Y}–"
+                           f"{sgr['date_new']:%Y} (ultimul încheiat {sgr['date_new']:%d.%m.%Y}); ultimul raport "
+                           f"folosit depus {pd.Timestamp(sgr['filed']):%d.%m.%Y}.")
+            if diffs:
+                period_note += " Diferențe față de Yahoo pe ultimul an (> 2%): " + "; ".join(
+                    f"{lbl} SEC {format_ro(s / 1e9, 2)} vs. Yahoo {format_ro(y / 1e9, 2)} mld."
+                    + (f" ({_g(d)})" if d is not None else "") for lbl, s, y, d in diffs) + "."
+            if sgr["date_old"] is not None:
+                dec_in = (sgr["eps_new"], sgr["eps_old"], sgr["date_new"], sgr["date_old"])
+        sg = None if sgr is not None else growth.statement_growth(fin.get("income"), fin.get("cashflow"))
+        if sgr is not None:
+            pass
+        elif sg is None:
+            st.caption(sec_note + "Situațiile anuale Yahoo nu au două capete utilizabile: creșterea afacerii N/A.")
         else:
             for name, r in sg["rows"].items():
                 if name != "EPS diluat":
                     rows.append({"Indicator": name, "Măsură": "total", "3 ani": _g(r["total"]),
-                                 "5 ani": "după Faza 3", "10 ani": "după Faza 3", "Notă": ""})
+                                 "5 ani": "N/A (Yahoo ~4 ani)", "10 ani": "N/A (Yahoo ~4 ani)", "Notă": ""})
                 rows.append({"Indicator": name, "Măsură": "pe acțiune", "3 ani": _g(r["per_share"]),
-                             "5 ani": "după Faza 3", "10 ani": "după Faza 3", "Notă": r["note"]})
-            period_note = (f"Situațiile anuale Yahoo: {sg['date_old']:%d.%m.%Y} → {sg['date_new']:%d.%m.%Y} "
+                             "5 ani": "N/A (Yahoo ~4 ani)", "10 ani": "N/A (Yahoo ~4 ani)", "Notă": r["note"]})
+            period_note = (sec_note + f"Situațiile anuale Yahoo: {sg['date_old']:%d.%m.%Y} → {sg['date_new']:%d.%m.%Y} "
                            f"({sg['years']} ani fiscali).")
             dec_in = (sg.get("eps_new"), sg.get("eps_old"), sg["date_new"], sg["date_old"])
         y_ref, dg = growth.dividend_growth(hist["Dividends"] if "Dividends" in hist else None, now_ro(),
                                            history_start=hist.index.min() if not hist.empty else None)
-        if y_ref is not None:
+        if y_ref is not None and sgr is None:          # cu SEC, dividendul vine din 10-K (rândul de mai sus)
             rows.append({"Indicator": "Dividend pe acțiune (Yahoo)", "Măsură": "pe acțiune",
                          **{f"{n} ani": _g(dg[n]) for n in (3, 5, 10)}, "Notă": f"ani calendaristici până în {y_ref}"})
     if rows:
         st.markdown("**A. Creșterea afacerii (CAGR)**", help=GROWTH_HELP["a"])
-        st.dataframe(pd.DataFrame(rows).reindex(columns=["Indicator", "Măsură", "3 ani", "5 ani", "10 ani", "Notă"])
+        st.dataframe(pd.DataFrame(rows).reindex(columns=["Indicator", "Măsură", "3 ani", "5 ani", "10 ani",
+                                                         "Consecvență", "Notă"])
                      .fillna(""), hide_index=True, width='stretch')
         if period_note:
             st.caption(period_note)
