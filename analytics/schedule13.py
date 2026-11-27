@@ -150,33 +150,41 @@ def parse_schedule_xml(body, accession=None, filing_date=None, form=None):
     }
 
 
-_HDR_SECTION_RE = re.compile(r"^(SUBJECT COMPANY|FILED BY|FILER|REPORTING-OWNER)\s*:", re.M)
-_HDR_NAME_RE = re.compile(r"COMPANY CONFORMED NAME:\s*(.+)")
-_HDR_CIK_RE = re.compile(r"CENTRAL INDEX KEY:\s*(\d+)")
-_HDR_TYPE_RE = re.compile(r"CONFORMED SUBMISSION TYPE:\s*(.+)")
-_HDR_PERIOD_RE = re.compile(r"CONFORMED PERIOD OF REPORT:\s*(\d{8})")
+# Antetul apare în două forme: cu etichete SGML (`<accession>.hdr.sgml`: <FILED-BY>, <CONFORMED-NAME>, <CIK>) și ca
+# text (`<accession>.txt`: „FILED BY:”, „COMPANY CONFORMED NAME:”, „CENTRAL INDEX KEY:”). Se acceptă amândouă.
+_SECTIONS = {"SUBJECT COMPANY": "SUBJECT", "SUBJECT-COMPANY": "SUBJECT", "FILED BY": "FILED", "FILED-BY": "FILED",
+             "FILER": "FILER", "REPORTING-OWNER": "OWNER"}
+_HDR_SECTION_RE = re.compile(r"^\s*(?:<(SUBJECT-COMPANY|FILED-BY|FILER|REPORTING-OWNER)>"
+                             r"|(SUBJECT COMPANY|FILED BY|FILER|REPORTING-OWNER)\s*:)", re.M)
+_HDR_NAME_RE = re.compile(r"(?:<CONFORMED-NAME>|COMPANY CONFORMED NAME:)[ \t]*([^\r\n<]+)")
+_HDR_CIK_RE = re.compile(r"(?:<CIK>|CENTRAL INDEX KEY:)[ \t]*(\d+)")
+_HDR_TYPE_RE = re.compile(r"^\s*(?:<TYPE>|CONFORMED SUBMISSION TYPE:)[ \t]*([^\r\n<]+)", re.M)
+_HDR_PERIOD_RE = re.compile(r"(?:<PERIOD>|CONFORMED PERIOD OF REPORT:)[ \t]*(\d{8})")
 
 
 def parse_sgml_header(text, accession=None, filing_date=None, form=None):
-    """Antetul SGML al unei depuneri (`<accession>.hdr.sgml`) → același dicționar, fără procente.
+    """Antetul SGML al unei depuneri (`<accession>.hdr.sgml` sau începutul lui `<accession>.txt`) → același
+    dicționar, fără procente.
 
     Pentru depunerile vechi SC 13D / SC 13G (text sau HTML): numele și CIK-ul depunătorului („FILED BY”) și ale
     emitentului („SUBJECT COMPANY”). Procentul și acțiunile rămân None („N/A”)."""
     if isinstance(text, bytes):
         text = text.decode("latin-1", errors="replace")
     text = str(text or "")
-    sub = (_HDR_TYPE_RE.search(text).group(1).strip() if _HDR_TYPE_RE.search(text) else None) or form
+    m_type = _HDR_TYPE_RE.search(text)
+    sub = (m_type.group(1).strip() if m_type else None) or form
     kind = form_kind(sub)
     if kind is None:
         raise ParseScheduleError(f"antet fără Schedule 13D/13G (tip: {sub!r})")
     sections = {}
     marks = list(_HDR_SECTION_RE.finditer(text))
     for i, m in enumerate(marks):
+        key = _SECTIONS[m.group(1) or m.group(2)]
         chunk = text[m.end(): marks[i + 1].start() if i + 1 < len(marks) else len(text)]
         name, cik = _HDR_NAME_RE.search(chunk), _HDR_CIK_RE.search(chunk)
-        sections.setdefault(m.group(1), (name.group(1).strip() if name else None, _cik(cik.group(1)) if cik else None))
-    filer_name, filer_cik = sections.get("FILED BY") or sections.get("FILER") or (None, None)
-    _subj_name, subj_cik = sections.get("SUBJECT COMPANY", (None, None))
+        sections.setdefault(key, (name.group(1).strip() if name else None, _cik(cik.group(1)) if cik else None))
+    filer_name, filer_cik = sections.get("FILED") or sections.get("FILER") or (None, None)
+    _subj_name, subj_cik = sections.get("SUBJECT", (None, None))
     if filer_name is None and filer_cik is None:
         raise ParseScheduleError("antet fără „FILED BY”")
     period = _HDR_PERIOD_RE.search(text)
