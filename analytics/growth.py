@@ -315,3 +315,136 @@ def decompose(close, adj_close, eps_new, eps_old, date_new, date_old):
     g_div = (1 + g_tr) / (1 + g_p) - 1
     return {"years": years, "total": g_tr, "price": g_p, "eps": g_e, "pe": g_pe, "div": g_div,
             "pe_old": p0 / e0, "pe_new": p1 / e1, "residual": g_tr - (g_e + g_pe + g_div)}
+
+
+# --------------------------------------------------------------------------- A. SEC XBRL (SUA, emitenți 10-K) — Faza 3b
+
+SEC_MATCH_DAYS = 45              # capătul vechi: exercițiul încheiat la n ani (± 45 de zile) înaintea celui recent
+SEC_CONSISTENCY_YEARS = 10       # consecvența: anii cu creștere din ultimii 10
+SEC_DIFF_TOL = 0.02              # SEC vs. Yahoo pe ultimul an: diferență afișată peste 2%
+FCF_AVG_YEARS = 3                # FCF: CAGR între medii pe 3 ani la capete (FCF-ul variază mult de la an la an)
+
+# (eticheta, coloana din xbrl_facts.annual_table, măsura, metoda: "end" = capete / "avg3" = medii pe 3 ani)
+SEC_ROWS = (
+    ("Cifră de afaceri", "revenue", "total", "end"),
+    ("Cifră de afaceri", "revenue_ps", "pe acțiune", "end"),
+    ("Profit net", "net_income", "total", "end"),
+    ("EPS diluat", "eps", "pe acțiune", "end"),
+    ("FCF (CFO − capex)", "fcf", "total", "avg3"),
+    ("FCF (CFO − capex)", "fcf_ps", "pe acțiune", "avg3"),
+    ("FCF − compensarea în acțiuni (informativ)", "fcf_sbc_ps", "pe acțiune", "avg3"),
+    ("Dividend pe acțiune", "dps", "pe acțiune", "end"),
+    ("Valoare contabilă pe acțiune", "bvps", "pe acțiune", "end"),
+)
+SEC_FINANCIAL_SKIP = ("fcf", "fcf_ps", "fcf_sbc_ps")      # bănci / asigurători: FCF fără sens
+# indicatorul XBRL din care vine fiecare coloană (pentru conflictele de etichete din `conflicts`)
+SEC_SOURCES = {"revenue": ("revenue",), "revenue_ps": ("revenue",), "net_income": ("net_income",),
+               "eps": ("net_income", "net_income_common"), "fcf": ("cfo", "capex"), "fcf_ps": ("cfo", "capex"),
+               "fcf_sbc_ps": ("cfo", "capex", "sbc"), "dps": ("dps",), "bvps": ("equity",)}
+
+
+def _sec_old_end(index, end, years):
+    """Data încheierii exercițiului de acum `years` ani (± SEC_MATCH_DAYS) sau None."""
+    cands = [e for e in index if abs((pd.Timestamp(end) - pd.Timestamp(e)).days - years * 365.25) <= SEC_MATCH_DAYS]
+    return cands[0] if cands else None
+
+
+def _sec_avg(series, end, n=FCF_AVG_YEARS):
+    """Media ultimilor `n` exerciții până la `end` inclusiv; None dacă lipsește vreunul."""
+    s = series.loc[:end].tail(n)
+    if len(s) < n or s.isna().any():
+        return None
+    return float(s.mean())
+
+
+def _sec_conflict_between(table, col, old, new):
+    srcs = SEC_SOURCES.get(col, ())
+    part = table.loc[old:new, "conflicts"]
+    return any(any(x in srcs for x in c) for c in part)
+
+
+def sec_growth(table, financial=False, horizons=HORIZONS):
+    """Creșterea afacerii din tabelul anual SEC (`xbrl_facts.annual_table`, ultima versiune).
+
+    Întoarce {"rows": [{Indicator, Măsură, "3 ani", "5 ani", "10 ani" (CAGR sau None), Notă, "Consecvență"}],
+    "date_new", "date_old" (capătul pe 3 ani), "eps_new", "eps_old" (pentru descompunerea C), "years"} sau None.
+    Reguli: CAGR = (final / inițial)^(1/n) − 1; un capăt lipsă sau ≤ 0 → None; FCF pe medii de 3 ani la capete;
+    o etichetă XBRL în conflict în interval → None („etichete în conflict”); consecvența = ani cu creștere față de
+    anul anterior din ultimii 10 (pe valorile pe acțiune / total, ca în rând)."""
+    if table is None or table.empty or len(table) < 2:
+        return None
+    t = table.copy()
+    t["fcf_sbc_ps"] = (t["fcf"] - t["sbc"]) / t["shares_diluted"].where(t["shares_diluted"] > 0)
+    end = t.index[-1]
+    rows = []
+    for label, col, measure, method in SEC_ROWS:
+        if financial and col in SEC_FINANCIAL_SKIP:
+            continue
+        if col not in t.columns or t[col].dropna().empty:
+            continue
+        s = t[col]
+        out = {"Indicator": label, "Măsură": measure}
+        notes = []
+        for n in horizons:
+            old = _sec_old_end(t.index, end, n)
+            key = f"{n} ani"
+            if old is None:
+                out[key] = None
+                continue
+            if _sec_conflict_between(t, col, old, end):
+                out[key] = None
+                notes.append(f"{n} ani: etichete XBRL în conflict")
+                continue
+            if method == "avg3":
+                v_new, v_old = _sec_avg(s, end), _sec_avg(s, old)
+            else:
+                v_new, v_old = _num(s.get(end)), _num(s.get(old))
+            out[key] = cagr(v_new, v_old, n)
+            if out[key] is None and v_new is not None and v_old is not None and min(v_new, v_old) <= 0:
+                notes.append(f"{n} ani: valoare ≤ 0 la un capăt")
+        up, cmp = _consistency_tail(s)
+        out["Consecvență"] = f"{up} din {cmp} ani" if cmp else "N/A"
+        if method == "avg3":
+            notes.insert(0, "medii pe 3 ani la capete")
+        out["Notă"] = "; ".join(dict.fromkeys(notes))
+        rows.append(out)
+    if not rows:
+        return None
+    old3 = _sec_old_end(t.index, end, 3)
+    eps_new = _num(t.at[end, "eps"]) if "eps" in t else None
+    eps_old = _num(t.at[old3, "eps"]) if old3 is not None and "eps" in t else None
+    return {"rows": rows, "date_new": pd.Timestamp(end), "date_old": pd.Timestamp(old3) if old3 is not None else None,
+            "eps_new": eps_new, "eps_old": eps_old, "years": len(t), "first": pd.Timestamp(t.index[0]),
+            "filed": t["filed"].dropna().max() if "filed" in t else None}
+
+
+def _consistency_tail(series, years=SEC_CONSISTENCY_YEARS):
+    vals = [_num(v) for v in series.tail(years + 1)]
+    pairs = [(a, b) for a, b in zip(vals, vals[1:]) if a is not None and b is not None]
+    return sum(1 for a, b in pairs if b > a), len(pairs)
+
+
+def sec_yahoo_diffs(table, income, cashflow, tol=SEC_DIFF_TOL):
+    """Diferențele SEC vs. Yahoo pe ultimul exercițiu comun (± 40 de zile): [(indicator, sec, yahoo, diferență)] cu
+    |diferență| > tol, pentru cifra de afaceri, profitul net, CFO și capex. Lista goală dacă nu există an comun."""
+    if table is None or table.empty:
+        return []
+    checks = (("Cifră de afaceri", "revenue", income, fund.REVENUE_ROWS),
+              ("Profit net", "net_income", income, fund.NET_INCOME_ROWS),
+              ("CFO", "cfo", cashflow, fund.CFO_ROWS),
+              ("Capex", "capex", cashflow, fund.CAPEX_ROWS))
+    out = []
+    end = table.index[-1]
+    for label, col, df, yrows in checks:
+        pts = _points(df, yrows)
+        if not pts:
+            continue
+        y = _match(pts, pd.Timestamp(end))
+        s = _num(table.at[end, col]) if col in table else None
+        if y is None or s is None:
+            continue
+        y = abs(y) if col == "capex" else y
+        den = max(abs(s), abs(y))
+        if den and abs(s - y) / den > tol:
+            out.append((label, s, y, (s - y) / abs(y) if y else None))
+    return out

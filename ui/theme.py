@@ -77,6 +77,20 @@ DF_MUTED = "#707A8F"
 DF_WARN = "#A0701C"
 DF_HIGHLIGHT_BG = "rgba(124, 196, 232, 0.18)"  # rândul evidențiat (compania analizată, mediana): albastru translucid, lizibil în ambele moduri
 
+def sign_colors(values, up, down, neutral):
+    """Câte o culoare pentru fiecare valoare, după semn: > 0 → `up`, < 0 → `down`, 0 sau lipsă (None/NaN) →
+    `neutral` (DESIGN §1.3: zero și lipsa nu primesc culoare de câștig/pierdere). Folosit la histograma MACD."""
+    out = []
+    for v in values:
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            out.append(neutral)
+            continue
+        out.append(up if x > 0 else down if x < 0 else neutral)   # NaN: ambele comparații False → neutral
+    return out
+
+
 CORR_NEG = "#3987E5"   # corelație negativă (pozițiile se compensează): albastru
 CORR_POS = "#D95926"   # corelație pozitivă (se mișcă împreună): portocaliu
 
