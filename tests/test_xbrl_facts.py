@@ -307,6 +307,86 @@ def test_software_capitalizat_adaugat_la_capex_ppe():
 def test_diagnose():
     out, extra = xf.diagnose({"facts": {"us-gaap": {
         "NetIncomeLoss": {"units": {"USD": [{"form": "10-K"}, {"form": "10-K"}, {"form": "8-K"}]}},
-        "RevenueFromRelatedParties": {"units": {}}}}})
+        "RevenueFromRelatedParties": {"units": {"USD": [{"form": "10-K"}]}},
+        "PaymentsToAcquireBusinessesNetOfCashAcquired": {"units": {"USD": [{"form": "10-Q"}]}}}}})
     assert ("net_income", "NetIncomeLoss", "USD", {"10-K": 2, "8-K": 1}) in out
-    assert extra == ["RevenueFromRelatedParties"]
+    assert extra == ["RevenueFromRelatedParties (10-K 1)"]          # doar etichetele cu valori în 10-K
+
+
+def test_scara_confirmata_de_anii_vecini():
+    # profit aproape zero: EPS raportat −0,00 nu poate confirma scara; anii vecini o confirmă (ca NVDA FY2009)
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g["Revenues"]["units"]["USD"].append(F("2021-01-01", "2021-12-31", 1300.0, "2022-02-18"))
+    g["NetIncomeLoss"]["units"]["USD"].append(F("2021-01-01", "2021-12-31", -0.4, "2022-02-18"))
+    g["EarningsPerShareDiluted"]["units"]["USD/shares"].append(F("2021-01-01", "2021-12-31", -0.0, "2022-02-18"))
+    g["WeightedAverageNumberOfDilutedSharesOutstanding"]["units"]["shares"].append(
+        F("2021-01-01", "2021-12-31", 0.41, "2022-02-18"))           # „în mii”: 0,41 în loc de 410
+    t = xf.annual_table(cf, splits=pd.Series({pd.Timestamp("2020-08-31"): 4.0}))
+    r = t.loc[D("2021-12-31")]
+    assert bool(r["scale_fixed"]) and r["shares_diluted"] == pytest.approx(410.0)
+
+
+def test_capex_ancorat_pe_eticheta_cea_mai_mare():
+    # petrol și gaze: PP&E 3,65 și proprietăți petroliere 7,45 în același an → capex = 7,45 (ancora), nu 3,65
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g["PaymentsToAcquirePropertyPlantAndEquipment"]["units"]["USD"] = [
+        F("2019-01-01", "2019-12-31", 30.0, "2020-02-20"), F("2020-01-01", "2020-12-31", 36.5, "2021-02-19")]
+    g["PaymentsToAcquireOilAndGasPropertyAndEquipment"] = {"units": {"USD": [
+        F("2019-01-01", "2019-12-31", 70.0, "2020-02-20"), F("2020-01-01", "2020-12-31", 74.5, "2021-02-19")]}}
+    t = xf.annual_table(cf)
+    assert list(t["capex"]) == [70.0, 74.5]
+
+
+def test_predecesori_lipiti_doar_cu_numele_potrivit():
+    from data import sec_xbrl
+
+    new = {"cik": 2115436, "entityName": "Exxon Mobil Holding", "facts": {"us-gaap": {"NetIncomeLoss": {"units": {
+        "USD": [F("2026-01-01", "2026-03-31", 5.0, "2026-05-01", form="10-Q")]}}}}}
+    old = _full_cf()
+    old["entityName"] = "EXXON MOBIL CORP"
+
+    class C:
+        def __init__(self, old_json):
+            self.old_json = old_json
+
+        def get_json(self, url):
+            if "company_tickers" in url:
+                return {"0": {"cik_str": 2115436, "ticker": "XOM", "title": "Exxon"}}
+            if "CIK0000034088" in url:
+                return self.old_json
+            return new
+
+    cik, cf = sec_xbrl.load_for_symbol(C(old), "XOM")
+    assert cik == "2115436" and cf["predecessors"] == ["34088"]
+    assert list(xf.annual_table(cf).index) == [D("2019-12-31"), D("2020-12-31")]
+    other = dict(old, entityName="ALTA FIRMA INC")                     # nume diferit → nu se lipește
+    _, cf2 = sec_xbrl.load_for_symbol(C(other), "XOM")
+    assert cf2["predecessors"] == [] and xf.annual_table(cf2).empty
+
+
+def test_profit_din_profit_total_minus_minoritari():
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g["NetIncomeLoss"]["units"]["USD"] = [F("2019-01-01", "2019-12-31", 200.0, "2020-02-20")]   # 2020 lipsește
+    g["ProfitLoss"] = {"units": {"USD": [F("2020-01-01", "2020-12-31", 250.0, "2021-02-19")]}}
+    g["NetIncomeLossAttributableToRedeemableNoncontrollingInterest"] = {"units": {"USD": [
+        F("2020-01-01", "2020-12-31", 6.0, "2021-02-19")]}}
+    g["NetIncomeLossAttributableToNonredeemableNoncontrollingInterest"] = {"units": {"USD": [
+        F("2020-01-01", "2020-12-31", 4.0, "2021-02-19")]}}
+    t = xf.annual_table(cf)
+    assert t.loc[D("2020-12-31"), "net_income"] == 240.0 and bool(t.loc[D("2020-12-31"), "ni_proxy"])
+    assert not bool(t.loc[D("2019-12-31"), "ni_proxy"])
+    # fără partea minoritarilor: profitul rămâne lipsă (nu se presupune 0)
+    del g["NetIncomeLossAttributableToRedeemableNoncontrollingInterest"]
+    assert pd.isna(xf.annual_table(cf).loc[D("2020-12-31"), "net_income"])
+
+
+def test_actiuni_de_baza_si_diluate_intr_o_singura_eticheta():
+    cf = _full_cf()
+    g = cf["facts"]["us-gaap"]
+    g["WeightedAverageNumberOfShareOutstandingBasicAndDiluted"] = {
+        "units": {"shares": g.pop("WeightedAverageNumberOfDilutedSharesOutstanding")["units"]["shares"]}}
+    t = xf.annual_table(cf)
+    assert t.loc[D("2020-12-31"), "eps"] == pytest.approx(0.6)
