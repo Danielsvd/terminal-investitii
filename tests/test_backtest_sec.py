@@ -140,7 +140,7 @@ def test_sector_rank_score():
 
 # --- rulare cap-coadă pe date sintetice ---------------------------------------------
 
-def test_backtest_sec_cap_coada(tmp_path, monkeypatch):
+def _run_synthetic(tmp_path, monkeypatch, tst_interval="TST,2010-01-04,"):
     import tools.backtest_sec as tb
     from tests.test_sec_statements import Q_EXTRA, _company
 
@@ -157,7 +157,7 @@ def test_backtest_sec_cap_coada(tmp_path, monkeypatch):
     (sec_dir / "company_tickers.json").write_text(json.dumps({"0": {"cik_str": 1, "ticker": "TST"}}))
     univ = tmp_path / "univ"
     univ.mkdir()
-    (univ / "sp500_intervale.csv").write_text("# test\nsimbol,de_la,pana_la\nTST,2010-01-04,\nOLD,2010-01-04,2014-01-02\n")
+    (univ / "sp500_intervale.csv").write_text(f"# test\nsimbol,de_la,pana_la\n{tst_interval}\nOLD,2010-01-04,2014-01-02\n")
     (univ / "sp500_alias.csv").write_text("simbol_istoric,simbol_actual,cik,nota\n")
 
     idx = pd.bdate_range("2009-01-02", "2020-06-30")
@@ -174,6 +174,11 @@ def test_backtest_sec_cap_coada(tmp_path, monkeypatch):
         5.0, index=pd.date_range("2009-01-01", "2020-06-01", freq="MS")))
     out = tmp_path / "rez"
     assert tb.main(["--faza", "construire", "--out-dir", str(out), "--procese", "1"]) == 0
+    return out
+
+
+def test_backtest_sec_cap_coada(tmp_path, monkeypatch):
+    out = _run_synthetic(tmp_path, monkeypatch)
     obs = pd.read_csv(out / "observatii_construire.csv")
     # primul 10-K (FY2013) e depus marți 18.02.2014, cunoscut din 19.02 → prima lună cu scor: februarie 2014
     assert obs["date"].min() == "2014-02-28" and obs["date"].max() == "2019-12-31"
@@ -193,6 +198,22 @@ def test_backtest_sec_cap_coada(tmp_path, monkeypatch):
     c2015 = cov[(cov["univers"] == "C") & (cov["an"] == 2015)].iloc[0]
     assert c2015["membri"] == 1.0 and c2015["pct_cu_scor"] == 100.0       # OLD a ieșit în ian. 2014
     assert (out / "rezumat_construire.csv").exists()
+    sect = pd.read_csv(out / "sectoare_construire.csv")
+    assert sect["sector"].tolist() == ["Technology"] and sect["N"].iloc[0] == fs.notna().sum()
+
+
+def test_membru_b_intrat_recent_ramane_in_b(tmp_path, monkeypatch):
+    # TST intră în indice în 2018-06, dar ultimul 10-K sintetic e depus în 2016 → protecția lui C îl respinge;
+    # în B (simbolul de azi = compania de azi) rămâne, pe toată perioada
+    out = _run_synthetic(tmp_path, monkeypatch, "TST,2018-06-01,")
+    obs = pd.read_csv(out / "observatii_construire.csv")
+    assert obs["in_B"].all() and not obs["in_C"].any() and obs["date"].min() == "2014-02-28"
+    miss = pd.read_csv(out / "fara_date_construire.csv")
+    row = miss[miss["simbol"] == "TST"].iloc[0]
+    assert bool(row["folosit_doar_in_B"]) and row["motiv"].startswith("CIK fără 10-K")
+    cov = pd.read_csv(out / "acoperire_construire.csv")
+    assert cov[(cov["univers"] == "B") & (cov["an"] == 2015)]["acceptati"].iloc[0] == 1.0
+    assert cov[(cov["univers"] == "C") & (cov["an"] == 2018)]["acceptati"].iloc[0] == 0.0
 
 
 def _read_iv(path):
