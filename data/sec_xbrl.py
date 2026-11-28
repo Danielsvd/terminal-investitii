@@ -44,6 +44,7 @@ PREDECESSORS = {
     "GOOGL": [("1288776", "GOOGLE")],
     "GOOG": [("1288776", "GOOGLE")],
     "AVGO": [("1649338", "BROADCOM"), ("1441634", "AVAGO")],
+    "MRVL": [("1058057", "MARVELL")],       # redomiciliere 2021 (CIK nou 1835632) [de verificat: CIK-ul vechi]
 }
 
 

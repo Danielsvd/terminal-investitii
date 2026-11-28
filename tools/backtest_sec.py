@@ -214,6 +214,21 @@ def summarize(df):
     return pd.DataFrame(rows), pd.DataFrame(years)
 
 
+def sector_table(df, univ="C", h=12):
+    """Pe sector: observații, scorul mediu, ponderea FAVORABIL și randamentul mediu la `h` luni în exces față de
+    mediana universului — arată dacă IC-ul scorului vine din alegerea sectoarelor."""
+    data = df[df[f"in_{univ}"]].copy()
+    if data.empty:
+        return pd.DataFrame()
+    data = bs.add_median_excess(data, f"fwd_{h}m", by=("date",), suffix="_exu")
+    data["fav"] = pd.to_numeric(data["fund_score"], errors="coerce") >= 70
+    g = data.groupby(data["sector"].fillna("(fără sector)"))
+    out = pd.DataFrame({"N": g["fund_score"].count(), "scor_mediu": g["fund_score"].mean(),
+                        "pct_favorabil": g["fav"].mean() * 100, f"exces_{h}m_mediu": g[f"fwd_{h}m_exu"].mean(),
+                        f"exces_{h}m_median": g[f"fwd_{h}m_exu"].median()}).reset_index()
+    return out.sort_values("scor_mediu", ascending=False).round(4)
+
+
 def coverage(status, months, intervals, b_set):
     """Pe an: membri medii pe lună (C) și câți au CIK, situații, prețuri acceptate și scor; B la fel."""
     out = []
@@ -230,7 +245,7 @@ def coverage(status, months, intervals, b_set):
                     acc["membri"] += 1
                     acc["cu_cik"] += bool(st.get("cik"))
                     acc["cu_situatii"] += bool(st.get("facts"))
-                    acc["acceptati"] += bool(st.get("accepted"))
+                    acc["acceptati"] += bool(st.get("accepted_c" if univ == "C" else "accepted_b"))
                     acc["cu_scor"] += d in st.get("scored_dates", set())
             out.append({"univers": univ, "an": y, **{k: round(v / len(ds), 1) for k, v in acc.items()},
                         "pct_cu_scor": round(acc["cu_scor"] / acc["membri"] * 100, 1) if acc["membri"] else None})
@@ -327,17 +342,24 @@ def main(argv=None):
         adj = None if prices.empty else prices["adj"].dropna()
         raw = None if prices.empty else prices["raw"].dropna()
         first = None if adj is None or adj.empty else adj.index[0]
-        ok, why = bs.accept_mapping(intervals[intervals["simbol"] == sym], sec_bulk.annual_filed_dates(cf),
-                                    first, start)
-        st["accepted"] = ok
-        if not ok:
+        filed = sec_bulk.annual_filed_dates(cf)
+        # C: protecția la simboluri refolosite pe intervalele de apartenență. B: simbolul de azi desemnează compania
+        # de azi (nu e refolosit), deci ajung CIK-ul, un 10-K și prețurile — altfel membrii intrați recent
+        # (CIEN, VEEV, BNY…) și cei cu simbol refolosit de altă companie în trecut (FOXA, IR) ar lipsi din B.
+        ok_c, why = bs.accept_mapping(intervals[intervals["simbol"] == sym], filed, first, start)
+        ok_b = sym in b_set and first is not None and bool(filed)
+        st.update(accepted=ok_c or ok_b, accepted_c=ok_c, accepted_b=ok_b)
+        if not (ok_c or ok_b):
             st["reason"] = why
             continue
+        if not ok_c:
+            st["reason_c"] = why
         sub = bulk.submission(cik) or {}
         sector, industry = sic_sector(sub.get("sic"))
         st.update(sic=sub.get("sic"), sector=sector, name=sub.get("name"))
         splits = download_splits(ysym, args.reincarca)
-        jobs.append((sym, ysym, cik, bulk.facts_cache_path(cik, ysym), adj, raw, sector, industry, sub, splits))
+        jobs.append((sym, ysym, cik, bulk.facts_cache_path(cik, ysym), adj, raw, sector, industry, sub, splits,
+                     ok_c, ok_b))
         del cf                                            # memoria: situațiile se recitesc din cache la nevoie
         if i % 50 == 0:
             print(f"[{i}/{len(symbols)}] pregătit; {time.time() - t_start:.0f} s")
@@ -357,12 +379,12 @@ def main(argv=None):
             _versions_worker((j[3], j[2], j[1], j[9]))
 
     # 3) scorul la fiecare sfârșit de lună
-    for i, (sym, ysym, cik, facts_path, adj, raw, sector, industry, sub, splits) in enumerate(jobs, 1):
+    for i, (sym, ysym, cik, facts_path, adj, raw, sector, industry, sub, splits, ok_c, ok_b) in enumerate(jobs, 1):
         st = status[sym]
         versions = cached_versions(None, cik, ysym, splits, facts_path)
         n = 0
         for d in months:
-            in_c, in_b = sym in members[d], sym in b_set
+            in_c, in_b = ok_c and sym in members[d], ok_b and sym in b_set
             if not (in_c or in_b):
                 continue
             stm = ss.version_at(versions, d)
@@ -404,8 +426,10 @@ def main(argv=None):
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = args.faza
-    missing = pd.DataFrame([{"simbol": s, "yahoo": v.get("yahoo"), "cik": v.get("cik"), "motiv": v.get("reason")}
-                            for s, v in status.items() if v.get("reason")])
+    missing = pd.DataFrame([{"simbol": s, "yahoo": v.get("yahoo"), "cik": v.get("cik"),
+                             "motiv": v.get("reason") or v.get("reason_c"),
+                             "folosit_doar_in_B": bool(v.get("reason_c")) and not v.get("reason")}
+                            for s, v in status.items() if v.get("reason") or v.get("reason_c")])
     missing.to_csv(out_dir / f"fara_date_{tag}.csv", index=False)
     cov = coverage(status, months, intervals, b_set)
     cov.to_csv(out_dir / f"acoperire_{tag}.csv", index=False)
@@ -417,6 +441,8 @@ def main(argv=None):
     rez, years = summarize(df)
     rez.to_csv(out_dir / f"rezumat_{tag}.csv", index=False)
     years.to_csv(out_dir / f"cincimi_pe_ani_{tag}.csv", index=False)
+    sect = sector_table(df)
+    sect.to_csv(out_dir / f"sectoare_{tag}.csv", index=False)
 
     print(f"\nObservații: {len(df)} | simboluri cu scor: {df['symbol'].nunique()} | fără date: {len(missing)} | "
           f"cu datorie = 0 presupusă: {int(df['debt_zero'].sum())} ({df.loc[df['debt_zero'], 'symbol'].nunique()} simboluri)")
@@ -433,8 +459,11 @@ def main(argv=None):
     if not comp.empty:
         print("\nIC la 12 luni pe piloni și componente (C, cu trunchiate) — baza variantei (4):")
         print(comp[["scor", "N", "ic_mediu", "ic_t_nw", "ic_sector_mediu"]].to_string(index=False))
+    if not sect.empty:
+        print("\nPe sectoare (C): scorul mediu și randamentul mediu la 12 luni în exces față de mediana universului")
+        print(sect.to_string(index=False))
     print(f"\nScris în {out_dir}: observatii_{tag}.csv, rezumat_{tag}.csv, cincimi_pe_ani_{tag}.csv, "
-          f"acoperire_{tag}.csv, fara_date_{tag}.csv")
+          f"acoperire_{tag}.csv, fara_date_{tag}.csv, sectoare_{tag}.csv")
     return 0
 
 

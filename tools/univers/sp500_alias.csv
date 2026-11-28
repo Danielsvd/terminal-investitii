@@ -2,12 +2,14 @@
 # simbol_actual = simbolul pentru Yahoo și pentru lista SEC; cik = gol → se caută după simbol_actual.
 # Se completează după prima rulare (fișierul fara_date_construire.csv). Fiecare pereche trece oricum prin protecția
 # la simboluri refolosite (10-K în perioada de apartenență + istoric Yahoo de dinainte de intrare).
-# [de verificat la prima rulare] toate perechile de mai jos (scrise din memorie, nu verificate pe sec.gov).
+# [de verificat la prima rulare] perechile scrise din memorie (nu verificate pe sec.gov).
+# Scoase după rularea din 28.11.2026: COG→CTRA (Coterra a ieșit din indice pe 07.05.2026, fără prețuri Yahoo),
+# FISV→FI (Fiserv a revenit la FISV pe 11.11.2025), DISCA/DISCK→WBD (istoricul Yahoo al WBD începe în 2022).
+# Adăugate din aceeași rulare: schimbările de simbol din 2025–2026 din sursa fja05680 (ieșire și intrare în aceeași zi).
 simbol_istoric,simbol_actual,cik,nota
 FB,META,1326801,Facebook → Meta Platforms (2022)
 ANTM,ELV,1156039,Anthem → Elevance Health (2022)
 UTX,RTX,101829,United Technologies → Raytheon Technologies / RTX (2020)
-COG,CTRA,858470,Cabot Oil & Gas → Coterra Energy (2021)
 PKI,RVTY,31791,PerkinElmer → Revvity (2023)
 ABC,COR,1140859,AmerisourceBergen → Cencora (2023)
 FLT,CPAY,1175454,FleetCor → Corpay (2024)
@@ -22,6 +24,8 @@ RE,EG,1095073,Everest Re → Everest Group (2023)
 BLL,BALL,9389,Ball Corp (simbol schimbat 2022)
 FBHS,FBIN,1519751,Fortune Brands Home & Security → Fortune Brands Innovations (2022)
 ADS,BFH,1101215,Alliance Data → Bread Financial (2022)
-FISV,FI,798354,Fiserv (simbol schimbat 2023)
-DISCA,WBD,1437107,Discovery → Warner Bros. Discovery (2022)
-DISCK,WBD,1437107,Discovery (clasa C) → Warner Bros. Discovery (2022)
+FI,FISV,,Fiserv: FI (2023–2025) → FISV (11.11.2025)
+BK,BNY,,Bank of New York Mellon: BK → BNY (21.05.2026)
+MMC,MRSH,,Marsh McLennan: MMC → MRSH (14.01.2026)
+EQR,VMRK,,Equity Residential → VMRK (18.08.2026; AVB iese în aceeași zi) [de verificat]
+SATS,ECHO,,EchoStar: SATS → ECHO (24.06.2026) [de verificat]
